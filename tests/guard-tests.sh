@@ -2,6 +2,11 @@
 # Guard verification matrix. Usage: guard-tests.sh <hooks-dir>
 # Prints one line per case; exits 1 if any expectation fails.
 set -u
+# The matrix tests the guards as they ship, whatever the caller exported. An
+# inherited HOOK_ALLOW_* turns every block case of that guard into exit 0, so
+# clear them all before any case runs. The override cases below set their own,
+# per case, after this.
+for v in $(compgen -v HOOK_ALLOW_); do unset "$v"; done
 HOOKS="${1:?usage: guard-tests.sh <hooks-dir>}"
 # Absolute, because the relative-path cases below run `t` from a different cwd.
 # Left relative, `bash "$HOOKS/guard-paths.sh"` would resolve against THAT cwd

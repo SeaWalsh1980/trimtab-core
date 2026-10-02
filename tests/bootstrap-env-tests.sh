@@ -2,6 +2,10 @@
 # Bootstrap writes TRIMTAB_INSTANCE (its own checkout) into the generated
 # settings, and owns that key over machine.json (stage S2, PR 2).
 set -euo pipefail
+# Tests the guards as they ship, whatever the caller exported: bootstrap's
+# self-probe expects guard-security to block, and an inherited HOOK_ALLOW_*
+# makes it return 0. Clear them all before bootstrap runs.
+for v in $(compgen -v HOOK_ALLOW_); do unset "$v"; done
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 home=$(mktemp -d -t bootstrap-env.XXXXXX)
 trap 'rm -rf "$home"' EXIT
