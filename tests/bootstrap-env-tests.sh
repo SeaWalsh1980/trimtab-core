@@ -5,7 +5,7 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 home=$(mktemp -d -t bootstrap-env.XXXXXX)
 trap 'rm -rf "$home"' EXIT
-CLAUDE_CONFIG_DIR="$home" "$repo/bootstrap.sh" --no-timer --allow-worktree >/dev/null
+out=$(CLAUDE_CONFIG_DIR="$home" "$repo/bootstrap.sh" --no-timer --allow-worktree)
 python3 - "$home/settings.json" "$repo" <<'PY'
 import json, sys
 settings, repo = json.load(open(sys.argv[1])), sys.argv[2]
@@ -17,3 +17,11 @@ declared = json.load(open(f"{repo}/settings.base.json")).get("env", {}).get("TRI
 assert env.get("TRIMTAB_SECRET_PACKS") == declared, env
 print("PASS  bootstrap writes TRIMTAB_INSTANCE and the declared pack switch")
 PY
+# The observer self-probe measures a file in the checkout. If that file is one
+# the checkout does not have (trimtab-core ships no CLAUDE.md), the probe notes
+# a failure on every run and bootstrap is never idempotent.
+if grep -q 'rule-usage observer wrote no usable record' <<<"$out"; then
+  echo "FAIL  bootstrap's rule-usage observer probe wrote no usable record in this checkout"
+  exit 1
+fi
+echo "PASS  bootstrap's rule-usage observer probe records in this checkout"
