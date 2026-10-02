@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly Claude Code rule-usage report
+# Installed by bootstrap as a symlink into the checkout that ships it.
+
+[Service]
+Type=oneshot
+ExecStart=%h/.claude/bin/rule-usage-weekly.sh
+# The report is written into the log directory, not mailed or posted. Whoever
+# reads it reads it there; nothing here reaches the network.

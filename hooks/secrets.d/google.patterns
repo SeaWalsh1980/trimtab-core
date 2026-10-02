@@ -1,0 +1,22 @@
+# Neither pattern ends in \b: the last character class includes '-', and a key
+# ending in '-' followed by a quote has no word boundary there, so a trailing
+# \b would let it through (the matrix pins this).
+#
+# Google API key: "AIza" then 35 of [0-9A-Za-z_-]. No Google page states the
+# format; two widely used scanner rules agree (stage S2, spec S2-4):
+#   gitleaks cmd/generate/config/rules/gcp.go, rule gcp-api-key:
+#     utils.GenerateUniqueTokenRegex(`AIza[\w-]{35}`, false)
+#     https://raw.githubusercontent.com/gitleaks/gitleaks/master/cmd/generate/config/rules/gcp.go
+#   gitleaks config/gitleaks.toml:
+#     regex = '''\b(AIza[\w-]{35})(?:[\x60'"\s;]|\\[nr]|$)'''
+#     https://raw.githubusercontent.com/gitleaks/gitleaks/master/config/gitleaks.toml
+\bAIza[0-9A-Za-z_-]{35}	a Google API key
+#
+# Google OAuth client secret: "GOCSPX-" then 28 of [a-zA-Z0-9_-]. Google's own
+# scanner (google/osv-scalibr, veles/secrets/gcpoauth2client/detector.go) uses
+#     clientSecretRe = regexp.MustCompile(`\bGOCSPX-[a-zA-Z0-9_-]{28}`)
+# and says of it: "There is no clear documentation on the exact format of GCP
+# OAuth2 client secrets. But most online references suggest they start with
+# "GOCSPX-" prefix." The prefix is a convention, not a documented contract.
+#     https://raw.githubusercontent.com/google/osv-scalibr/main/veles/secrets/gcpoauth2client/detector.go
+\bGOCSPX-[0-9A-Za-z_-]{28}	a Google OAuth client secret

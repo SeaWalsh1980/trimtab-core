@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Trimtab's command line: `trimtab <command> --help` for each command.
+#
+# Resolves through the ~/.claude/bin symlink to the checkout that holds the
+# `trimtab` package, so it runs the same code from anywhere. Standard library
+# plus PyYAML only (plan section 4).
+set -euo pipefail
+here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+PYTHONPATH="$here/..${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m trimtab "$@"
