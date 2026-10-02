@@ -319,7 +319,10 @@ unset pem
 # record with a measured size on it.
 if [[ -x "$CLAUDE_HOME/hooks/rule-usage.sh" ]]; then
   probe_log=$(mktemp -t rule-usage-probe.XXXXXX)
-  probe='{"hook_event_name":"InstructionsLoaded","session_id":"bootstrap-probe","cwd":"/","file_path":"'"$REPO/CLAUDE.md"'","memory_type":"User","load_reason":"session_start"}'
+  # Any file in the checkout will do, as long as it exists: the observer
+  # records its size, and a missing file records null, which reads as failure.
+  # README.md is the one every checkout has (trimtab-core ships no CLAUDE.md).
+  probe='{"hook_event_name":"InstructionsLoaded","session_id":"bootstrap-probe","cwd":"/","file_path":"'"$REPO/README.md"'","memory_type":"User","load_reason":"session_start"}'
   set +e
   printf '%s' "$probe" \
     | CLAUDE_RULE_USAGE_LOG="$probe_log" "$CLAUDE_HOME/hooks/rule-usage.sh" >/dev/null 2>&1
