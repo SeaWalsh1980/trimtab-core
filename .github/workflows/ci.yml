@@ -1,0 +1,258 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  guard-matrix:
+    name: guard matrix (jq + python3 fallback)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Guard matrix with jq present
+        run: ./tests/guard-tests.sh hooks
+
+      # A fresh machine won't have jq; every guard must fall back to python3 and
+      # still fail closed. Remove jq and run the identical matrix again.
+      - name: Guard matrix with jq removed (python3 fallback)
+        run: |
+          sudo apt-get remove -y jq >/dev/null
+          if command -v jq; then echo "jq still present"; exit 1; fi
+          ./tests/guard-tests.sh hooks
+
+      # The rule-usage observer has its own matrix, so a change to it needs a
+      # gate too. It is hermetic (its own temp log, config directory and project
+      # tree), so it needs no setup.
+      - name: Rule-usage matrix
+        run: ./tests/rule-usage-tests.sh
+
+  bootstrap:
+    name: bootstrap install, idempotency, drift check
+    runs-on: ubuntu-latest
+    env:
+      CLAUDE_CONFIG_DIR: /tmp/claude-ci-home
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Fresh install into a throwaway CLAUDE_CONFIG_DIR
+        run: |
+          ./bootstrap.sh
+          test -L "$CLAUDE_CONFIG_DIR/hooks"
+          test -L "$CLAUDE_CONFIG_DIR/bin"
+          test -f "$CLAUDE_CONFIG_DIR/settings.json"
+
+      - name: Second run is idempotent
+        run: |
+          out=$(./bootstrap.sh)
+          printf '%s\n' "$out"
+          # An arrow marks a change; a second run must make none.
+          if grep -q '→' <<<"$out"; then
+            echo "second run was not idempotent"; exit 1
+          fi
+
+      - name: --check reports in sync (exit 0)
+        run: ./bootstrap.sh --check
+
+      - name: Seeded drift is detected (exit 1)
+        run: |
+          rm "$CLAUDE_CONFIG_DIR/hooks"
+          if ./bootstrap.sh --check; then
+            echo "drift was not detected"; exit 1
+          fi
+
+      # A user timer lives in the operator's own systemd session, which no
+      # CLAUDE_CONFIG_DIR can redirect. Bootstrap once wrote the timer into the
+      # real unit directory even when sandboxed, so on a workstation the live
+      # units ended up pointing into a git worktree. The steps above have already
+      # run bootstrap three times; if the sandbox were leaking, the units would
+      # be here.
+      - name: A sandboxed run leaves the real systemd user directory untouched
+        run: |
+          set -euo pipefail
+          unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+          for u in rule-usage-report.timer rule-usage-report.service; do
+            if [[ -e "$unit_dir/$u" || -L "$unit_dir/$u" ]]; then
+              echo "sandboxed bootstrap wrote $unit_dir/$u — the timer step is"
+              echo "ignoring CLAUDE_CONFIG_DIR again"
+              exit 1
+            fi
+          done
+          echo "no units in $unit_dir — sandbox held"
+
+      # Bootstrap installs the checkout it sits in as the live source. Run from a
+      # worktree and then remove that worktree, and the installed hooks dangle,
+      # which silently disables every guard. It must refuse, and must refuse
+      # before writing anything.
+      - name: Installing from a linked worktree is refused
+        run: |
+          set -euo pipefail
+          probe=/tmp/claude-ci-worktree-probe
+          git worktree add --detach "$probe" HEAD >/dev/null
+          before=$(ls -A "$CLAUDE_CONFIG_DIR" | sort | md5sum)
+          if (cd "$probe" && ./bootstrap.sh); then
+            echo "bootstrap installed from a linked worktree"; exit 1
+          fi
+          after=$(ls -A "$CLAUDE_CONFIG_DIR" | sort | md5sum)
+          if [[ "$before" != "$after" ]]; then
+            echo "refusal happened after touching $CLAUDE_CONFIG_DIR"; exit 1
+          fi
+          # The opt-in must still work, or an operator with a real reason has no
+          # route at all. Sandboxed, so no timer is installed either way.
+          (cd "$probe" && ./bootstrap.sh --allow-worktree >/dev/null)
+          echo "refused by default, allowed with --allow-worktree"
+
+      # The refusal must not fire on a canonical checkout reached through a
+      # symlinked ancestor, as a dotfiles-style layout is. The current directory
+      # as the shell reports it is logical while git reports it physically, so
+      # comparing them directly once refused a plain clone and called it a
+      # worktree. Every other test here uses direct paths, so only this one
+      # would catch that.
+      - name: A canonical checkout behind a symlinked ancestor still installs
+        run: |
+          set -euo pipefail
+          real=/tmp/claude-ci-symlink/real
+          mkdir -p "$real" /tmp/claude-ci-symlink/home
+          git clone -q --no-hardlinks . "$real/repo"
+          ln -sfn "$real" /tmp/claude-ci-symlink/link
+          # Its own clone, so canonical — and sandboxed, so no timer either way.
+          (cd /tmp/claude-ci-symlink/link/repo \
+            && CLAUDE_CONFIG_DIR=/tmp/claude-ci-symlink/home/.claude ./bootstrap.sh >/dev/null)
+          test -L /tmp/claude-ci-symlink/home/.claude/hooks
+          echo "installed through the symlinked path"
+
+  # The guard matrix above only proves the hooks agree with the tests shipped
+  # beside them. A pull request can weaken hooks/ and edit tests/guard-tests.sh
+  # to agree, and it stays green. This job runs the BASE branch's expectations
+  # against the PR's hooks, so a behaviour change has to be argued for rather
+  # than merely accompanied by an edited test.
+  #
+  # There is deliberately no override: no skip label, no env var, no
+  # commit-message token, no marker file. Any of those would be reachable by
+  # the same agent this gate constrains. If a base expectation legitimately
+  # changed, this job goes red and a human merges over it.
+  base-expectations:
+    # Not required directly: the ruleset requires the lint-test rollup below,
+    # which gates on this job's result. The name is still the context shown in
+    # the PR merge box, so keep it meaningful.
+    name: guard matrix (base expectations)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    env:
+      # Prove the control-plane roots are absent rather than relying on the
+      # runner image not happening to have a live install. With no live install
+      # the control-plane code is inert here, which is the point: this job is a
+      # clean regression gate on the rest of the diff.
+      #
+      # A literal path, not ${{ runner.temp }}: the runner context does not
+      # exist in a job-level env block, and using it there fails workflow
+      # validation before any step runs — a 0-second red X with no log. The
+      # bootstrap job above uses a literal path for the same reason.
+      CLAUDE_CONFIG_DIR: /tmp/claude-ci-no-home
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The default depth-1 merge-ref checkout has no origin/<base>, so the
+          # git show below would fail. Only this job needs history.
+          fetch-depth: 0
+
+      - name: Materialise the base branch's guard matrix inside the PR checkout
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
+          # Written into tests/, NOT the runner temp dir: guard-tests.sh finds
+          # the repository root from its own location, so a copy elsewhere
+          # would look in the wrong tree.
+          git show "origin/$GITHUB_BASE_REF:tests/guard-tests.sh" \
+            > tests/base-guard-tests.sh
+          chmod +x tests/base-guard-tests.sh
+
+      - name: Base expectations hold against the PR's hooks (jq present)
+        run: ./tests/base-guard-tests.sh hooks
+
+      - name: Base expectations hold against the PR's hooks (python3 fallback)
+        run: |
+          sudo apt-get remove -y jq >/dev/null
+          if command -v jq; then echo "jq still present"; exit 1; fi
+          ./tests/base-guard-tests.sh hooks
+
+  # The trimtab package's unit tests. This repository has no instance, so the
+  # tests that need one skip themselves and there is no registry or lint step.
+  trimtab:
+    name: trimtab tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: trimtab tests
+        run: python3 -m unittest discover -s tests/trimtab -v
+
+  # Nothing private-looking may reach this public repository, and no workflow
+  # may run fork code with secrets.
+  public-scrub:
+    name: public scrub
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: No private-looking content in the public base
+        run: bin/trimtab scrub --public --tree . --self "$GITHUB_REPOSITORY"
+
+      - name: No workflow runs untrusted fork code with secrets
+        run: python3 .github/scripts/forbidden_triggers.py .github/workflows
+
+  # The single required context for this workflow. The ruleset requires
+  # `lint-test`, not the jobs above, so the check name here is what a
+  # required-status-check context matches on: renaming it silently un-requires
+  # every job it gates. Rename here and in the ruleset together.
+  #
+  # It gates on every entry in `needs`, so a job added there is enforced with
+  # no script change. A job added to this file but NOT to `needs` is ungated.
+  lint-test:
+    name: lint-test
+    needs: [guard-matrix, bootstrap, base-expectations, trimtab, public-scrub]
+    # Run even when a dependency failed or was skipped, so the rollup reports
+    # red rather than being skipped itself — a skipped required check does
+    # not block a merge.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every CI job succeeded
+        env:
+          EVENT: ${{ github.event_name }}
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          # Fail closed on anything unexpected, including an empty or
+          # malformed needs context.
+          count=$(jq 'length' <<<"$NEEDS")
+          if [[ "$count" -lt 5 ]]; then
+            echo "::error::expected at least 5 dependencies, got $count"; exit 1
+          fi
+          fail=0
+          checked=0
+          while IFS=$'\t' read -r job result; do
+            checked=$((checked + 1))
+            if [[ "$result" == success ]]; then
+              echo "$job: success"
+            elif [[ "$job" == base-expectations \
+                    && "$result" == skipped && "$EVENT" == push ]]; then
+              # It runs only on pull_request: on push to main there is no base
+              # branch to compare against.
+              echo "$job: skipped on push (pull_request only)"
+            else
+              echo "::error::$job finished '$result'"
+              fail=1
+            fi
+          done < <(jq -r 'keys[] as $j | [$j, .[$j].result] | @tsv' <<<"$NEEDS")
+          # set -e does not see a failure inside the process substitution: the
+          # loop would run zero times and report green having checked nothing.
+          # Every dependency counted above must have been examined here.
+          if [[ "$checked" -ne "$count" ]]; then
+            echo "::error::examined $checked of $count dependencies"; exit 1
+          fi
+          exit "$fail"
