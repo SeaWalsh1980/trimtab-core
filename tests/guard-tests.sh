@@ -849,6 +849,9 @@ echo "== rules frontmatter =="
 # the end of the previous line (`description: "..." globs:`), which GitHub reports
 # as "did not find expected key while parsing a block mapping at line 1 column 1".
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The base holds no rules/ (an instance does). With no match the glob stays
+# literal and python dies on it, so say why nothing ran instead.
+if compgen -G "$REPO/rules/*.md" >/dev/null; then
 python3 - "$REPO"/rules/*.md <<'PY'
 import os, re, sys
 
@@ -905,6 +908,9 @@ for path in sys.argv[1:]:
 sys.exit(min(fails, 250))
 PY
 fails=$((fails + $?))
+else
+    echo "SKIP  frontmatter     no rules/*.md in this checkout (rules live in an instance)"
+fi
 
 echo "== guard liveness check (SessionStart, settings.base.json) =="
 # The guards fail open when they cannot be found: move the checkout and every
