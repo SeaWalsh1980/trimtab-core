@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly Claude Code rule-usage report
+
+[Timer]
+# Monday morning, so the week it reports on is the week that just ended.
+OnCalendar=Mon 08:00
+# A machine that was off on Monday still gets the report when it comes back.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

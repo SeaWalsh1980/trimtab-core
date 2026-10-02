@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "Per-machine overlay. Copy to machine.json (gitignored) and edit.",
+    "Only put here what genuinely varies between hosts: extra directories,",
+    "env vars, and deliberate per-host opt-ins such as",
+    "skipDangerousModePermissionPrompt. Everything identical on every",
+    "machine belongs in settings.base.json instead.",
+    "Merge semantics: dicts recurse, lists concatenate and dedupe,",
+    "machine.json wins on scalar conflicts.",
+    "NOTE: HOOK_ALLOW_* guard overrides must be exported before",
+    "launching claude, or set in the env block below. An inline prefix on",
+    "a command (HOOK_ALLOW_PATHS=1 cat ...) only affects that command's",
+    "process — the guard hook is a separate process and never sees it."
+  ],
+  "permissions": {
+    "additionalDirectories": [
+      "/home/CHANGEME/path/to/extra/project"
+    ]
+  },
+  "env": {}
+}
