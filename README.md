@@ -38,9 +38,9 @@ The decisions behind this layout, and behind the guards, are recorded in
 
 Work in progress. This repository currently holds the extracted mechanism
 and its tests. **Installing needs an instance**: installing from the base
-arrives with stage S4 of the split, and creating a new instance with stage
-S5. Until then, the base is published for reading and review rather than
-for use.
+alone is not supported yet, and a way to create a new instance is planned
+but not yet available. Until then, the base is published for reading and
+review rather than for use.
 
 ## Platforms
 
