@@ -477,14 +477,28 @@ fi
 # when this script is itself a snapshot under the store (a directory named by
 # its own 40-hex HEAD). It deletes 40-hex directories other than the live one
 # and its predecessor, and nothing else in the store. --check is the dry run.
-if [[ $SINGLE_ROOT -eq 0 && $red -eq 0 ]]; then
+#
+# The store belongs to the live install: its record names the snapshots the live
+# links point into. A sandboxed run (a config dir other than the live one) that
+# did not bring its own XDG_DATA_HOME would reach that store through $HOME, and
+# could overwrite the record or delete a snapshot the live install still uses.
+# It leaves both alone.
+if [[ $SINGLE_ROOT -eq 0 && $red -eq 0 && $SANDBOXED -eq 1 && -z "${XDG_DATA_HOME:-}" ]]; then
+  skip "sandboxed run without its own XDG_DATA_HOME: install record and retention left alone (the store belongs to the live install)"
+elif [[ $SINGLE_ROOT -eq 0 && $red -eq 0 ]]; then
   base_sha=$(git -C "$BASE" rev-parse HEAD 2>/dev/null || true)
   store_phys=$(cd -P "$STORE" 2>/dev/null && pwd -P || true)
   base_parent=$(cd -P "$BASE/.." && pwd -P)
-  # The predecessor is the base the previous record named, read before the
-  # record is rewritten below.
-  prev_base=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("base_sha") or "")' \
-              "$installed_json" 2>/dev/null || true)
+  # The predecessor is the previous *different* base. A re-run from the same base
+  # keeps the one already recorded, or the rollback snapshot would be lost to any
+  # no-op re-run. Read before the record is rewritten below; "-" is an empty field.
+  read -r rec_base rec_prev < <(python3 -c '
+import json, sys
+r = json.load(open(sys.argv[1]))
+print(r.get("base_sha") or "-", r.get("prev_base_sha") or "-")' "$installed_json" 2>/dev/null || echo "- -")
+  [[ "$rec_base" == - ]] && rec_base=""
+  [[ "$rec_prev" == - ]] && rec_prev=""
+  if [[ "$rec_base" == "$base_sha" ]]; then prev_base="$rec_prev"; else prev_base="$rec_base"; fi
   if [[ -n "$store_phys" && "$base_parent" == "$store_phys" \
         && "$base_sha" =~ ^[0-9a-f]{40}$ && "${BASE##*/}" == "$base_sha" ]]; then
     for d in "$STORE"/*/; do
@@ -501,14 +515,15 @@ if [[ $SINGLE_ROOT -eq 0 && $red -eq 0 ]]; then
   if [[ $CHECK_ONLY -eq 0 ]]; then
     inst_sha=$(git -C "$INSTANCE" rev-parse HEAD 2>/dev/null || true)
     mkdir -p "$STORE"
-    python3 - "$installed_json" "$INSTANCE" "$inst_sha" "$base_sha" <<'PY'
+    python3 - "$installed_json" "$INSTANCE" "$inst_sha" "$base_sha" "$prev_base" <<'PY'
 import json, os, sys, tempfile
-path, root, inst, base = sys.argv[1:]
+path, root, inst, base, prev = sys.argv[1:]
 sha = lambda s: s if len(s) == 40 else None
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
 try:
     with os.fdopen(fd, "w") as f:
-        json.dump({"instance_root": root, "instance_sha": sha(inst), "base_sha": sha(base)}, f)
+        json.dump({"instance_root": root, "instance_sha": sha(inst), "base_sha": sha(base),
+                   "prev_base_sha": sha(prev)}, f)
     os.replace(tmp, path)
 finally:
     if os.path.exists(tmp):

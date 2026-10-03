@@ -162,8 +162,9 @@ check_idempotent() {
 # A store holding three snapshots, each a clone of this checkout with the
 # working tree's installer overlaid (so the run under test is the code under
 # test), renamed to its own HEAD. Sets $snap_old, $snap_mid, $snap_new.
+# make_store <store directory>
 make_store() {
-  local h="$1" store="$1/share/trimtab/core" i tmp sha
+  local store="$1" i tmp sha
   mkdir -p "$store"
   local names=()
   for i in 1 2 3; do
@@ -185,7 +186,7 @@ make_store() {
 check_retention_keeps_live_and_predecessor() {
   local h inst store
   h=$(new_home); inst=$(inst_of "$h"); store="$h/share/trimtab/core"
-  make_store "$h"
+  make_store "$store"
   boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
   if [[ $rc -eq 0 && -d "$snap_new" && -d "$snap_old" && ! -e "$snap_mid" \
      && "$out" == *"${snap_mid##*/}"* && -f "$store/notes.txt" && -d "$store/keep-me" ]]; then
@@ -195,10 +196,51 @@ check_retention_keeps_live_and_predecessor() {
   fi
 }
 
+check_rerun_from_same_base_keeps_predecessor() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -eq 0 && -d "$snap_new" && -d "$snap_old" && ! -e "$snap_mid" ]]; then
+    pass "a re-run from the same base keeps the predecessor"
+  else
+    fail "a re-run from the same base keeps the predecessor" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# A sandboxed run (a config dir that is not the live one) with no store of its
+# own would reach the live install's store through HOME. HOME is faked here so
+# a failure cannot touch the operator's real store.
+check_sandbox_without_own_store_leaves_store_alone() {
+  local h inst store before userbase
+  h=$(new_home); inst=$(inst_of "$h")
+  mkdir -p "$h/fakehome"
+  store="$h/fakehome/.local/share/trimtab/core"
+  make_store "$store"
+  before=$(md5sum < "$store/.installed.json")
+  # PYTHONUSERBASE keeps a user-site PyYAML visible under the faked HOME. It is
+  # read first: a substitution inside the assignment list below would already
+  # see the faked HOME.
+  userbase=$(python3 -m site --user-base)
+  set +e
+  out=$(HOME="$h/fakehome" PYTHONUSERBASE="$userbase" \
+        CLAUDE_CONFIG_DIR="$h/sandbox-config" env -u XDG_DATA_HOME \
+        "$snap_new/bootstrap.sh" --no-timer --allow-worktree --instance "$inst" 2>&1)
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 && -d "$snap_mid" && -d "$snap_old" \
+     && "$(md5sum < "$store/.installed.json")" == "$before" ]]; then
+    pass "a sandboxed run without its own XDG_DATA_HOME leaves the store and record alone"
+  else
+    fail "a sandboxed run without its own XDG_DATA_HOME leaves the store and record alone" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
 check_check_is_the_retention_dry_run() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
-  make_store "$h"
+  make_store "$h/share/trimtab/core"
   boot "$h" "$snap_new/bootstrap.sh" --instance "$inst" --check
   if [[ -d "$snap_mid" && "$out" == *"would delete"*"${snap_mid##*/}"* ]]; then
     pass "--check lists the snapshots retention would delete and deletes none"
@@ -210,7 +252,7 @@ check_check_is_the_retention_dry_run() {
 check_red_run_deletes_nothing() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
-  make_store "$h"
+  make_store "$h/share/trimtab/core"
   echo '{"disableAllHooks": true}' > "$inst/machine.json"
   boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
   if [[ $rc -eq 1 && -d "$snap_mid" && -d "$snap_old" ]]; then
@@ -254,6 +296,8 @@ check_registry_failure_installs_nothing
 check_flags_relative_pattern_path
 check_idempotent
 check_retention_keeps_live_and_predecessor
+check_rerun_from_same_base_keeps_predecessor
+check_sandbox_without_own_store_leaves_store_alone
 check_check_is_the_retention_dry_run
 check_red_run_deletes_nothing
 check_no_instance_keeps_single_root
