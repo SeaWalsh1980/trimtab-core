@@ -4,50 +4,163 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # No `ready_for_review`: it does not change the head commit, yet it re-ran
+    # every check on a commit already tested.
+    types: [opened, synchronize, reopened]
+
+# Nothing here writes, and no step reads the PR through the API.
+permissions:
+  contents: read
 
 jobs:
-  guard-matrix:
-    name: guard matrix (jq + python3 fallback)
+  # The single required context, and the only job: each separate job was
+  # billed a whole minute for seconds of work. Each step keeps the name of the
+  # job it came from. Every check step runs whatever an earlier one did
+  # (`!cancelled()`), so one failure does not hide the next, and the job fails
+  # if any did. Never add `continue-on-error`: it would leave that step
+  # ungated. Removing jq runs last; the base expectations run first and hide jq
+  # around their own fallback run (why is in their comment below). The ruleset
+  # requires `lint-test` by name, so renaming this job silently un-requires
+  # every check in it. Rename here and in the ruleset together.
+  lint-test:
+    name: lint-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The base expectations read the base branch; the default depth-1
+          # merge-ref checkout has no origin/<base>.
+          fetch-depth: 0
 
-      - name: Guard matrix with jq present
-        run: ./tests/guard-tests.sh hooks
-
-      # A fresh machine won't have jq; every guard must fall back to python3 and
-      # still fail closed. Remove jq and run the identical matrix again.
-      - name: Guard matrix with jq removed (python3 fallback)
+      # --- guard matrix (base expectations), pull_request only.
+      # The guard matrix below only proves the hooks agree with the tests
+      # shipped beside them. A pull request can weaken hooks/ and edit
+      # tests/guard-tests.sh to agree, and it stays green. These steps run the
+      # BASE branch's expectations against the PR's hooks, so a behaviour
+      # change has to be argued for rather than merely accompanied by an
+      # edited test.
+      #
+      # First: every step shares this runner, and a step that ran PR code (with
+      # GITHUB_ENV, GITHUB_PATH or sudo) can subvert any step after it. What
+      # this order protects is the base expectations themselves: the base
+      # branch's test file is materialised, and the python3-fallback run
+      # starts, before anything the PR wrote can touch them. Both runs still
+      # execute the PR's hooks; that is what they test. The jq-present run
+      # follows those hooks as they ran in the fallback run, the exposure the
+      # former separate job already had (its fallback followed its jq-present
+      # run). The steps after these run the PR's own code directly anyway
+      # (bin/trimtab, bootstrap.sh, with sudo), so a hook that taints them
+      # gains nothing the PR does not already have.
+      #
+      # There is deliberately no override: no skip label, no env var, no
+      # commit-message token, no marker file. Any of those would be reachable
+      # by the same agent this gate constrains. If a base expectation
+      # legitimately changed, this goes red and a human merges over it.
+      #
+      # CLAUDE_CONFIG_DIR proves the control-plane roots are absent rather
+      # than relying on the runner image not happening to have a live install.
+      # It is per step, so it never reaches a step that did not have it. ---
+      - name: "base expectations: materialise the base branch's guard matrix"
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          CLAUDE_CONFIG_DIR: /tmp/claude-ci-no-home
         run: |
-          sudo apt-get remove -y jq >/dev/null
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
+          # Written into tests/, NOT the runner temp dir: guard-tests.sh finds
+          # the repository root from its own location, so a copy elsewhere
+          # would look in the wrong tree.
+          git show "origin/$GITHUB_BASE_REF:tests/guard-tests.sh" \
+            > tests/base-guard-tests.sh
+          chmod +x tests/base-guard-tests.sh
+
+      # Moved aside, not removed, so it can be put back without the network.
+      # It is removed for good at the end of the job.
+      - name: "hide jq (the base python3 fallback runs next)"
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        run: |
+          set -euo pipefail
+          jq_bin=$(command -v jq)
+          printf '%s\n' "$jq_bin" > "$RUNNER_TEMP/jq.path"
+          sudo mv "$jq_bin" "$RUNNER_TEMP/jq"
           if command -v jq; then echo "jq still present"; exit 1; fi
-          ./tests/guard-tests.sh hooks
+
+      - name: "base expectations: python3 fallback"
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          CLAUDE_CONFIG_DIR: /tmp/claude-ci-no-home
+        run: ./tests/base-guard-tests.sh hooks
+
+      - name: "restore jq"
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        run: |
+          set -euo pipefail
+          sudo mv "$RUNNER_TEMP/jq" "$(cat "$RUNNER_TEMP/jq.path")"
+          jq --version
+
+      - name: "base expectations: hold against the PR's hooks (jq present)"
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          CLAUDE_CONFIG_DIR: /tmp/claude-ci-no-home
+        run: ./tests/base-guard-tests.sh hooks
+
+      # --- trimtab tests. This repository has no instance, so the tests that
+      # need one skip themselves and there is no registry or lint step. Before
+      # the fixture instance and bootstrap, which write outside the checkout;
+      # the untracked tests/base-guard-tests.sh above does not affect them. ---
+      - name: "trimtab: tests"
+        if: ${{ !cancelled() }}
+        run: python3 -m unittest discover -s tests/trimtab -v
+
+      # --- public scrub. Nothing private-looking may reach this public
+      # repository, and no workflow may run fork code with secrets. Before
+      # bootstrap, which writes machine.json into the checkout. The untracked
+      # tests/base-guard-tests.sh is the base branch's own public file. ---
+      - name: "public scrub: no private-looking content in the public base"
+        if: ${{ !cancelled() }}
+        run: bin/trimtab scrub --public --tree . --self "$GITHUB_REPOSITORY"
+
+      - name: "public scrub: no workflow runs untrusted fork code with secrets"
+        if: ${{ !cancelled() }}
+        run: python3 .github/scripts/forbidden_triggers.py .github/workflows
+
+      # --- guard matrix, jq present ---
+      - name: "guard matrix: jq present"
+        if: ${{ !cancelled() }}
+        run: ./tests/guard-tests.sh hooks
 
       # The rule-usage observer has its own matrix, so a change to it needs a
       # gate too. It is hermetic (its own temp log, config directory and project
       # tree), so it needs no setup.
-      - name: Rule-usage matrix
+      - name: "guard matrix: rule-usage matrix"
+        if: ${{ !cancelled() }}
         run: ./tests/rule-usage-tests.sh
 
-  bootstrap:
-    name: bootstrap install, idempotency, drift check
-    runs-on: ubuntu-latest
-    env:
-      CLAUDE_CONFIG_DIR: /tmp/claude-ci-home
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # --- bootstrap install, idempotency, drift check. If one of these
+      # fails, the later ones will likely fail too; that is expected noise. ---
 
       # The installer reads the doctrine and the instance's own settings from an
       # instance, so CI builds a fixture one. The data home is redirected too, so
       # the installed snapshot store stays inside the runner's temp directory.
-      - name: Build a fixture instance
+      # Both values are step outputs, passed to each bootstrap step by name,
+      # not written to GITHUB_ENV: in one job that would reach every later
+      # step, the python3-fallback guard matrix included.
+      - name: "bootstrap: build a fixture instance"
+        id: fixture
+        if: ${{ !cancelled() }}
         run: |
+          set -euo pipefail
           inst=$(python3 tests/trimtab/instance_fixture.py "$RUNNER_TEMP")
-          echo "INSTANCE=$inst" >> "$GITHUB_ENV"
-          echo "XDG_DATA_HOME=$RUNNER_TEMP/share" >> "$GITHUB_ENV"
+          echo "instance=$inst" >> "$GITHUB_OUTPUT"
+          echo "data_home=$RUNNER_TEMP/share" >> "$GITHUB_OUTPUT"
 
-      - name: Fresh install into a throwaway CLAUDE_CONFIG_DIR
+      - name: "bootstrap: fresh install into a throwaway CLAUDE_CONFIG_DIR"
+        if: ${{ !cancelled() }}
+        env:
+          CLAUDE_CONFIG_DIR: /tmp/claude-ci-home
+          INSTANCE: ${{ steps.fixture.outputs.instance }}
+          XDG_DATA_HOME: ${{ steps.fixture.outputs.data_home }}
         run: |
           ./bootstrap.sh --instance "$INSTANCE"
           test -L "$CLAUDE_CONFIG_DIR/hooks"
@@ -55,7 +168,12 @@ jobs:
           test -f "$CLAUDE_CONFIG_DIR/settings.json"
           test "$(readlink -f "$CLAUDE_CONFIG_DIR/rules")" = "$(readlink -f "$INSTANCE/rules")"
 
-      - name: Second run is idempotent
+      - name: "bootstrap: second run is idempotent"
+        if: ${{ !cancelled() }}
+        env:
+          CLAUDE_CONFIG_DIR: /tmp/claude-ci-home
+          INSTANCE: ${{ steps.fixture.outputs.instance }}
+          XDG_DATA_HOME: ${{ steps.fixture.outputs.data_home }}
         run: |
           out=$(./bootstrap.sh --instance "$INSTANCE")
           printf '%s\n' "$out"
@@ -64,10 +182,20 @@ jobs:
             echo "second run was not idempotent"; exit 1
           fi
 
-      - name: --check reports in sync (exit 0)
+      - name: "bootstrap: --check reports in sync (exit 0)"
+        if: ${{ !cancelled() }}
+        env:
+          CLAUDE_CONFIG_DIR: /tmp/claude-ci-home
+          INSTANCE: ${{ steps.fixture.outputs.instance }}
+          XDG_DATA_HOME: ${{ steps.fixture.outputs.data_home }}
         run: ./bootstrap.sh --instance "$INSTANCE" --check
 
-      - name: Seeded drift is detected (exit 1)
+      - name: "bootstrap: seeded drift is detected (exit 1)"
+        if: ${{ !cancelled() }}
+        env:
+          CLAUDE_CONFIG_DIR: /tmp/claude-ci-home
+          INSTANCE: ${{ steps.fixture.outputs.instance }}
+          XDG_DATA_HOME: ${{ steps.fixture.outputs.data_home }}
         run: |
           rm "$CLAUDE_CONFIG_DIR/hooks"
           if ./bootstrap.sh --instance "$INSTANCE" --check; then
@@ -80,7 +208,12 @@ jobs:
       # units ended up pointing into a git worktree. The steps above have already
       # run bootstrap three times; if the sandbox were leaking, the units would
       # be here.
-      - name: A sandboxed run leaves the real systemd user directory untouched
+      - name: "bootstrap: a sandboxed run leaves the real systemd user directory untouched"
+        if: ${{ !cancelled() }}
+        env:
+          CLAUDE_CONFIG_DIR: /tmp/claude-ci-home
+          INSTANCE: ${{ steps.fixture.outputs.instance }}
+          XDG_DATA_HOME: ${{ steps.fixture.outputs.data_home }}
         run: |
           set -euo pipefail
           unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
@@ -97,7 +230,12 @@ jobs:
       # worktree and then remove that worktree, and the installed hooks dangle,
       # which silently disables every guard. It must refuse, and must refuse
       # before writing anything.
-      - name: Installing from a linked worktree is refused
+      - name: "bootstrap: installing from a linked worktree is refused"
+        if: ${{ !cancelled() }}
+        env:
+          CLAUDE_CONFIG_DIR: /tmp/claude-ci-home
+          INSTANCE: ${{ steps.fixture.outputs.instance }}
+          XDG_DATA_HOME: ${{ steps.fixture.outputs.data_home }}
         run: |
           set -euo pipefail
           probe=/tmp/claude-ci-worktree-probe
@@ -121,7 +259,12 @@ jobs:
       # comparing them directly once refused a plain clone and called it a
       # worktree. Every other test here uses direct paths, so only this one
       # would catch that.
-      - name: A canonical checkout behind a symlinked ancestor still installs
+      - name: "bootstrap: a canonical checkout behind a symlinked ancestor still installs"
+        if: ${{ !cancelled() }}
+        env:
+          CLAUDE_CONFIG_DIR: /tmp/claude-ci-home
+          INSTANCE: ${{ steps.fixture.outputs.instance }}
+          XDG_DATA_HOME: ${{ steps.fixture.outputs.data_home }}
         run: |
           set -euo pipefail
           real=/tmp/claude-ci-symlink/real
@@ -136,140 +279,25 @@ jobs:
           echo "installed through the symlinked path"
 
       # bootstrap-env-tests.sh sets its own CLAUDE_CONFIG_DIR and XDG_DATA_HOME
-      # per check; unsetting the job's value keeps it from installing over the
+      # per check; unsetting the step's value keeps it from installing over the
       # sandbox the steps above used.
-      - name: Bootstrap writes the instance's values and refuses a disabling layer
+      - name: "bootstrap: writes the instance's values and refuses a disabling layer"
+        if: ${{ !cancelled() }}
+        env:
+          CLAUDE_CONFIG_DIR: /tmp/claude-ci-home
+          INSTANCE: ${{ steps.fixture.outputs.instance }}
+          XDG_DATA_HOME: ${{ steps.fixture.outputs.data_home }}
         run: env -u CLAUDE_CONFIG_DIR ./tests/bootstrap-env-tests.sh
 
-  # The guard matrix above only proves the hooks agree with the tests shipped
-  # beside them. A pull request can weaken hooks/ and edit tests/guard-tests.sh
-  # to agree, and it stays green. This job runs the BASE branch's expectations
-  # against the PR's hooks, so a behaviour change has to be argued for rather
-  # than merely accompanied by an edited test.
-  #
-  # There is deliberately no override: no skip label, no env var, no
-  # commit-message token, no marker file. Any of those would be reachable by
-  # the same agent this gate constrains. If a base expectation legitimately
-  # changed, this job goes red and a human merges over it.
-  base-expectations:
-    # Not required directly: the ruleset requires the lint-test rollup below,
-    # which gates on this job's result. The name is still the context shown in
-    # the PR merge box, so keep it meaningful.
-    name: guard matrix (base expectations)
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    env:
-      # Prove the control-plane roots are absent rather than relying on the
-      # runner image not happening to have a live install. With no live install
-      # the control-plane code is inert here, which is the point: this job is a
-      # clean regression gate on the rest of the diff.
-      #
-      # A literal path, not ${{ runner.temp }}: the runner context does not
-      # exist in a job-level env block, and using it there fails workflow
-      # validation before any step runs — a 0-second red X with no log. The
-      # bootstrap job above uses a literal path for the same reason.
-      CLAUDE_CONFIG_DIR: /tmp/claude-ci-no-home
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          # The default depth-1 merge-ref checkout has no origin/<base>, so the
-          # git show below would fail. Only this job needs history.
-          fetch-depth: 0
-
-      - name: Materialise the base branch's guard matrix inside the PR checkout
-        run: |
-          set -euo pipefail
-          git fetch --no-tags origin \
-            "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
-          # Written into tests/, NOT the runner temp dir: guard-tests.sh finds
-          # the repository root from its own location, so a copy elsewhere
-          # would look in the wrong tree.
-          git show "origin/$GITHUB_BASE_REF:tests/guard-tests.sh" \
-            > tests/base-guard-tests.sh
-          chmod +x tests/base-guard-tests.sh
-
-      - name: Base expectations hold against the PR's hooks (jq present)
-        run: ./tests/base-guard-tests.sh hooks
-
-      - name: Base expectations hold against the PR's hooks (python3 fallback)
+      # --- last: remove jq, then the python3 fallback runs. A fresh machine
+      # won't have jq; every guard must fall back to python3 and still fail
+      # closed. ---
+      - name: "remove jq (the python3 fallback runs below)"
+        if: ${{ !cancelled() }}
         run: |
           sudo apt-get remove -y jq >/dev/null
           if command -v jq; then echo "jq still present"; exit 1; fi
-          ./tests/base-guard-tests.sh hooks
 
-  # The trimtab package's unit tests. This repository has no instance, so the
-  # tests that need one skip themselves and there is no registry or lint step.
-  trimtab:
-    name: trimtab tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: trimtab tests
-        run: python3 -m unittest discover -s tests/trimtab -v
-
-  # Nothing private-looking may reach this public repository, and no workflow
-  # may run fork code with secrets.
-  public-scrub:
-    name: public scrub
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: No private-looking content in the public base
-        run: bin/trimtab scrub --public --tree . --self "$GITHUB_REPOSITORY"
-
-      - name: No workflow runs untrusted fork code with secrets
-        run: python3 .github/scripts/forbidden_triggers.py .github/workflows
-
-  # The single required context for this workflow. The ruleset requires
-  # `lint-test`, not the jobs above, so the check name here is what a
-  # required-status-check context matches on: renaming it silently un-requires
-  # every job it gates. Rename here and in the ruleset together.
-  #
-  # It gates on every entry in `needs`, so a job added there is enforced with
-  # no script change. A job added to this file but NOT to `needs` is ungated.
-  lint-test:
-    name: lint-test
-    needs: [guard-matrix, bootstrap, base-expectations, trimtab, public-scrub]
-    # Run even when a dependency failed or was skipped, so the rollup reports
-    # red rather than being skipped itself — a skipped required check does
-    # not block a merge.
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Every CI job succeeded
-        env:
-          EVENT: ${{ github.event_name }}
-          NEEDS: ${{ toJSON(needs) }}
-        run: |
-          set -euo pipefail
-          # Fail closed on anything unexpected, including an empty or
-          # malformed needs context.
-          count=$(jq 'length' <<<"$NEEDS")
-          if [[ "$count" -lt 5 ]]; then
-            echo "::error::expected at least 5 dependencies, got $count"; exit 1
-          fi
-          fail=0
-          checked=0
-          while IFS=$'\t' read -r job result; do
-            checked=$((checked + 1))
-            if [[ "$result" == success ]]; then
-              echo "$job: success"
-            elif [[ "$job" == base-expectations \
-                    && "$result" == skipped && "$EVENT" == push ]]; then
-              # It runs only on pull_request: on push to main there is no base
-              # branch to compare against.
-              echo "$job: skipped on push (pull_request only)"
-            else
-              echo "::error::$job finished '$result'"
-              fail=1
-            fi
-          done < <(jq -r 'keys[] as $j | [$j, .[$j].result] | @tsv' <<<"$NEEDS")
-          # set -e does not see a failure inside the process substitution: the
-          # loop would run zero times and report green having checked nothing.
-          # Every dependency counted above must have been examined here.
-          if [[ "$checked" -ne "$count" ]]; then
-            echo "::error::examined $checked of $count dependencies"; exit 1
-          fi
-          exit "$fail"
+      - name: "guard matrix: python3 fallback"
+        if: ${{ !cancelled() }}
+        run: ./tests/guard-tests.sh hooks
