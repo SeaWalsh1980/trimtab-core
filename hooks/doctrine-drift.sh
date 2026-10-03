@@ -12,5 +12,7 @@ payload=$(cat) || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
 here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
-PYTHONPATH="$here/.." python3 -m trimtab.adapters.doctrine_drift <<<"$payload"
+# -P: never put the working directory on sys.path, so a trimtab/ directory
+# there cannot shadow this checkout's package (it would run instead, silently).
+PYTHONPATH="$here/.." python3 -P -m trimtab.adapters.doctrine_drift <<<"$payload"
 exit 0
