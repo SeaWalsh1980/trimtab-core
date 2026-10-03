@@ -37,11 +37,13 @@ adopted Trimtab), if `"$TRIMTAB" --help` fails, or if either label is missing:
 
 ```bash
 gh api "repos/$REPO/labels/trimtab-ingested" --jq .name
-gh api "repos/$(jq -r .source .claude/trimtab.json)/labels/harness-feedback" --jq .name
+ISSUES=$("$TRIMTAB" instance --repo) && gh api "repos/$ISSUES/labels/harness-feedback" --jq .name
 ```
 
 Each prints the label's name, or exits non-zero with a 404 when it is
-missing. Look labels up by exact name: `gh label list --search` also matches
+missing. Upstream issues go to the instance's repository, which its
+`instance.json` names; `instance --repo` exits non-zero when that file is
+missing or invalid, so stop then too. Look labels up by exact name: `gh label list --search` also matches
 descriptions, so it can report a missing label as present.
 
 Creating a label is the operator's decision, not the loop's. Report what is

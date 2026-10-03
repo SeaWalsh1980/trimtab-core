@@ -6,11 +6,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from instance_fixture import make_instance
-from trimtab import bump
+from instance_fixture import env_for, make_instance
+from trimtab import bump, roots
+from trimtab import instance as instance_file
 from trimtab.capture.prblock import check_body
 from trimtab.items import Item, Strength
 from trimtab.registry.lookup import registry_for
+
+TRIMTAB = roots.code_root() / "bin" / "trimtab"
 
 
 RULE_V1 = """---
@@ -87,8 +90,8 @@ class Bump(unittest.TestCase):
         self.v2 = git(self.base, "rev-parse", "HEAD")
         (self.project / ".claude" / "rules").mkdir(parents=True)
         self.lock = self.project / ".claude" / "trimtab.json"
-        self.lock.write_text('{\n  "source": "owner/repo",\n  "trimtab_sha": "%s",\n'
-                             '  "id_prefix": "SCR",\n  "item_types": ["rule"],\n  "schema_version": 1\n}\n' % self.v1)
+        self.lock.write_text('{\n  "trimtab_sha": "%s",\n'
+                             '  "id_prefix": "SCR",\n  "item_types": ["rule"],\n  "schema_version": 2\n}\n' % self.v1)
         (self.project / ".claude" / "rules" / "overrides.md").write_text(OVERRIDES)
 
     def tearDown(self):
@@ -136,6 +139,33 @@ class Bump(unittest.TestCase):
         self.assertIn("| `TST-3` | text |", body)
         self.assertIn("`TST-3` (overrides.md entry 1): **re-confirm or drop**", body)
         self.assertIn("## Harness items applied", body)
+
+    def cli_dry_run(self):
+        """`trimtab bump` against this instance, with instance.json naming its repository (stage S3 spec, S3-4)."""
+        (self.base / instance_file.FILE).write_text(json.dumps(
+            {"schema_version": 1, "repo": "owner/inst", "base": {"repo": "owner/base", "sha": "0" * 40}}))
+        body = Path(self._tmp.name) / "body.md"
+        done = subprocess.run([str(TRIMTAB), "bump", "--to", self.v2, "--project", str(self.project),
+                               "--instance", str(self.base), "--body-file", str(body)],
+                              capture_output=True, text=True, env=env_for(None))
+        return done, body
+
+    def test_the_dry_runs_compare_link_names_the_instance_repository(self):
+        done, body = self.cli_dry_run()
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn(f"https://github.com/owner/inst/compare/{self.v1}...{self.v2}", body.read_text())
+
+    def test_a_schema_1_lock_still_works_and_warns_that_its_bindings_are_ignored(self):
+        self.lock.write_text(json.dumps({"source": "owner/old", "trimtab_sha": self.v1, "id_prefix": "SCR",
+                                         "schema_version": 1}))
+
+        done, body = self.cli_dry_run()
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("warning:", done.stderr)
+        self.assertIn("source ignored", done.stderr)
+        self.assertNotIn("owner/old", body.read_text())
 
     def test_the_pr_body_passes_check_pr(self):
         registry, _ = registry_for(make_instance(Path(self._tmp.name)))

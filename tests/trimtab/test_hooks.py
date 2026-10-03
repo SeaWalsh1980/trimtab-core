@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from instance_fixture import REPO_NAME, env_for, git, make_instance
+from instance_fixture import env_for, git, make_instance
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -121,8 +121,7 @@ class DoctrineDrift(unittest.TestCase):
         git(self.instance, "commit", "-qm", "change")
 
     def lock(self, **overrides):
-        config = {"source": REPO_NAME, "trimtab_sha": self.installed, "id_prefix": "PRJ",
-                  "schema_version": 1}
+        config = {"trimtab_sha": self.installed, "id_prefix": "PRJ", "schema_version": 2}
         config.update(overrides)
         (self.project / ".claude" / "trimtab.json").write_text(json.dumps(config))
 
@@ -188,11 +187,11 @@ class DoctrineDrift(unittest.TestCase):
         self.assertIn("trimtab_sha", json.loads(done.stdout)["systemMessage"])
 
     def test_an_older_schema_version_warns(self):
-        self.lock(schema_version=0)
+        self.lock(schema_version=1)
 
         done = self.start()
 
-        self.assertIn("schema_version", json.loads(done.stdout)["systemMessage"])
+        self.assertIn("schema_version 1 is behind 2", json.loads(done.stdout)["systemMessage"])
 
     def test_a_malformed_lock_exits_zero(self):
         (self.project / ".claude" / "trimtab.json").write_text("{not json")

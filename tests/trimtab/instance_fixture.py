@@ -23,11 +23,15 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import unittest
 from collections.abc import Mapping
 from pathlib import Path
 
-from trimtab import roots
+if __name__ == "__main__":  # run as a script: import the package from this checkout
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from trimtab import roots  # noqa: E402
 
 ENV = "TRIMTAB_INSTANCE"
 REPO_NAME = "owner/repo"
@@ -64,15 +68,31 @@ def git(root: Path, *args: str) -> str:
                            check=True, capture_output=True, text=True).stdout.strip()
 
 
-def make_instance(parent: Path, *, commit: bool = False) -> Path:
-    """An instance under `parent`: doctrine, a lock naming `owner/repo`, optionally one commit."""
+INSTANCE_JSON = {"schema_version": 1, "repo": REPO_NAME, "base": {"repo": "owner/base", "sha": "0" * 40},
+                 "guards": {"secrets_patterns": "guards/secrets.patterns"}}
+
+
+def make_instance(parent: Path, *, commit: bool = False, harness: bool = False,
+                  instance_json: bool = True) -> Path:
+    """An instance under `parent`: doctrine, a schema 2 lock, and (unless `instance_json` is false)
+    instance.json naming `owner/repo` with the files it declares; optionally HARNESS.md, then one commit."""
     inst = Path(parent) / "instance"
     (inst / "rules").mkdir(parents=True)
     for name, text in DOCTRINE.items():
         (inst / "rules" / name).write_text(text, encoding="utf-8")
     (inst / ".claude").mkdir()
     (inst / ".claude" / "trimtab.json").write_text(json.dumps(
-        {"source": REPO_NAME, "trimtab_sha": "0" * 40, "id_prefix": "INS", "schema_version": 1}))
+        {"trimtab_sha": "0" * 40, "id_prefix": "INS", "schema_version": 2}))
+    if instance_json:
+        (inst / "instance.json").write_text(json.dumps(INSTANCE_JSON, indent=2) + "\n")
+        (inst / "guards").mkdir()
+        (inst / "guards" / "secrets.patterns").write_text("# fixture: no private patterns\n")
+        (inst / "settings.instance.json").write_text(json.dumps({"theme": "dark"}) + "\n")
+        (inst / "CLAUDE.md").write_text("# Fixture instance\n")
+    if harness:
+        # The explicit --instance lets `registry` write HARNESS.md.
+        subprocess.run([str(roots.code_root() / "bin" / "trimtab"), "registry", "--instance", str(inst)],
+                       check=True, capture_output=True, text=True, env=env_for(None))
     if commit:
         git(inst, "init", "-q")
         git(inst, "add", "-A")
@@ -130,3 +150,7 @@ def real_instance(environ: Mapping[str, str] = os.environ, code: Path | None = N
                                f"{instance}; run with {ENV}=\"$PWD\" from {code} to check its doctrine")
     raise unittest.SkipTest(f"instance check, not a unit test: the instance {instance} is not "
                             f"the checkout under test {code}, which holds no rules/ to check")
+
+
+if __name__ == "__main__":  # for bootstrap's tests and CI: python3 tests/trimtab/instance_fixture.py <parent>
+    print(make_instance(Path(sys.argv[1]), commit=True, harness=True))

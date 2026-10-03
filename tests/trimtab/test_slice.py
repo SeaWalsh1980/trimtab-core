@@ -19,8 +19,8 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 TRIMTAB = REPO / "bin" / "trimtab"
 
 CONFIG = {
-    "source": REPO_NAME, "trimtab_sha": "0" * 40, "id_prefix": "SCR",
-    "adopted_at": "2026-09-27T00:00:00Z", "baseline_pr": 100, "schema_version": 1,
+    "trimtab_sha": "0" * 40, "id_prefix": "SCR",
+    "adopted_at": "2026-09-27T00:00:00Z", "baseline_pr": 100, "schema_version": 2,
 }
 
 

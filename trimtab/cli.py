@@ -12,7 +12,7 @@ from pathlib import Path
 
 from trimtab import bump
 from trimtab import config as project_config
-from trimtab import propose, roots, routines, scrub, upstream
+from trimtab import instance, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_body, parse_applied
 from trimtab.capture.sources import (
@@ -105,9 +105,17 @@ def _since(args) -> str | None:
     return (as_of - timedelta(weeks=args.window_weeks)).isoformat()
 
 
+def _lock(project: Path):
+    """The project's lock, with any schema warning printed (stage S3 spec, S3-4)."""
+    config, problems = project_config.load(project)
+    for warning in (config.warnings if config else ()):
+        print(f"warning: {project / project_config.PATH}: {warning}", file=sys.stderr)
+    return config, problems
+
+
 def _setup(args):
     project = Path(args.project)
-    config, problems = project_config.load(project)
+    config, problems = _lock(project)
     if config is None:
         problems = problems or [f"{project / project_config.PATH} not found; the project has not adopted Trimtab"]
         for p in problems:
@@ -225,10 +233,10 @@ def cmd_ingest(args) -> int:
     return 0
 
 
-def _issues(args, config):
+def _issues(args, repo: str):
     if args.issues_fixture:
         return FixtureIssues(Path(args.issues_fixture))
-    return GhIssues(args.issues_repo or config.source)
+    return GhIssues(repo)
 
 
 def cmd_propose(args) -> int:
@@ -237,6 +245,7 @@ def cmd_propose(args) -> int:
         return 1
     config, registry = setup
     source = _source(args)
+    issues_repo = args.issues_repo or roots.instance_repo(_instance(args))  # read once (ENG-6.2)
     try:
         store = _store(args, source, config, registry)
         ledger = store.load()
@@ -250,14 +259,14 @@ def cmd_propose(args) -> int:
     if not args.apply:
         print(f"propose --dry-run: {len(drafts)} proposal(s) at threshold {args.threshold}; nothing opened")
     try:
-        plan = (propose.plan_issues(drafts, _issues(args, config), closed_since=_since(args))
+        plan = (propose.plan_issues(drafts, _issues(args, issues_repo), closed_since=_since(args))
                 if (args.apply or args.check_open) else None)
     except SourceError as err:
         print(f"error: {err}", file=sys.stderr)
         return 2
     if not args.apply:
         for d in drafts:
-            where = f"issue on {config.source}" if d.kind == "issue" else "draft PR in this project (session step)"
+            where = f"issue on {issues_repo}" if d.kind == "issue" else "draft PR in this project (session step)"
             if plan is not None and d.item_id in plan.already_open:
                 where += ", SKIPPED: an issue for this ID is open or was closed within the window"
             labels = f" [labels: {', '.join(d.labels)}]" if d.labels else ""
@@ -271,7 +280,7 @@ def cmd_propose(args) -> int:
                   + (f" --issues-repo {args.issues_repo}" if args.issues_repo else ""))
         return 0
     try:
-        opened = propose.open_issues(plan, _issues(args, config), confirm=args.confirm)
+        opened = propose.open_issues(plan, _issues(args, issues_repo), confirm=args.confirm)
     except propose.StaleProposals as err:
         print(f"aborted: {err}", file=sys.stderr)
         return 3
@@ -287,7 +296,7 @@ def cmd_propose(args) -> int:
 # ---- rules-for / citations -------------------------------------------------
 
 def _rules_dir(project: Path) -> str:
-    config, _ = project_config.load(project)
+    config, _ = _lock(project)
     return config.rules_dir if config else project_config.ProjectConfig.rules_dir
 
 
@@ -348,7 +357,7 @@ def cmd_bump(args) -> int:
     if to.returncode != 0:
         print(f"error: {args.to} is not a commit in the instance {base}", file=sys.stderr)
         return 2
-    config, _ = project_config.load(project)
+    _lock(project)  # for its warnings; bump.plan reads and checks the lock itself
     try:
         todo = bump.plan(project, base, to.stdout.strip())
     except bump.BumpError as err:
@@ -366,7 +375,7 @@ def cmd_bump(args) -> int:
         for item_id, n in todo.flagged:
             print(f"  {item_id} ({bump.OVERRIDES} entry {n})")
         if args.body_file:
-            Path(args.body_file).write_text(bump.pr_body(todo, config.source), encoding="utf-8")
+            Path(args.body_file).write_text(bump.pr_body(todo, roots.instance_repo(base)), encoding="utf-8")
             print(f"PR body written to {args.body_file}")
         token = bump.confirmation(todo)
         print(f"confirm: {token}")
@@ -397,9 +406,6 @@ def cmd_upstream(args) -> int:
     base = _instance(args)
     consumers = Path(args.consumers) if args.consumers else base / upstream.CONSUMERS
     repo = args.repo or roots.instance_repo(base)
-    if repo is None:
-        print("error: no --repo, and the instance's lock names no source", file=sys.stderr)
-        return 2
     try:
         repos = upstream.load_consumers(consumers.read_text(encoding="utf-8"))
         files = FixtureContents(Path(args.files_fixture)) if args.files_fixture else GhContents()
@@ -441,15 +447,26 @@ def cmd_instance(args) -> int:
     if args.root:  # for the agents: the doctrine root, which a lock it cannot read must not block
         print(base)
         return 0
+    if args.json:  # for bootstrap: the validated values it writes (stage S3 spec, section 3)
+        try:
+            found = instance.load(base)
+            patterns = instance.patterns_path(found, base)
+        except instance.InstanceFileError as err:
+            print(f"error: {err}", file=sys.stderr)
+            return 2
+        print(json.dumps({
+            "schema_version": instance.SCHEMA_VERSION, "root": str(base), "repo": found.repo,
+            "base": {"repo": found.base_repo, "sha": found.base_sha},
+            "env": {"TRIMTAB_SECRET_PACKS": instance.packs_env(found),
+                    "TRIMTAB_SECRET_PATTERNS": str(patterns) if patterns else None},
+        }))
+        return 0
     repo = roots.instance_repo(base)
     if args.repo:  # for commands that need the instance's repository, bare
-        if repo is None:
-            print("error: the instance's lock names no source", file=sys.stderr)
-            return 2
         print(repo)
         return 0
     print(f"root: {base}")
-    print(f"repo: {repo or 'none'}")
+    print(f"repo: {repo}")
     return 0
 
 
@@ -495,7 +512,7 @@ def _plugin_cache() -> Path | None:
 
 def cmd_lint(args) -> int:
     project = Path(args.project)
-    config, problems = project_config.load(project)
+    config, problems = _lock(project)
     if problems:
         return _print_problems(problems)
     which = [args.check] if args.check != "all" else ["overrides", "references", "structure"]
@@ -605,7 +622,7 @@ def build_parser() -> argparse.ArgumentParser:
     pro.add_argument("--check-open", action="store_true",
                      help="in a dry run, also read existing issues to show what --apply would skip, and print a token")
     iss = pro.add_mutually_exclusive_group()
-    iss.add_argument("--issues-repo", help="where upstream issues go (default: the lock's `source`)")
+    iss.add_argument("--issues-repo", help="where upstream issues go (default: the instance's repository)")
     iss.add_argument("--issues-fixture", help="JSON file of issues, for scratch runs and tests")
     pro.add_argument("--threshold", type=int, default=THRESHOLD, help=f"distinct PRs per ID (default {THRESHOLD})")
     pro.set_defaults(func=cmd_propose)
@@ -636,7 +653,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     up = sub.add_parser("upstream", parents=[common], help="the config loop's evidence: overrides and reports per base ID (read only)")
     up.add_argument("--consumers", help=f"consumers.json (default: the instance's {upstream.CONSUMERS})")
-    up.add_argument("--repo", help="where harness-feedback issues live (default: the instance's lock `source`)")
+    up.add_argument("--repo", help="where harness-feedback issues live (default: the instance's repository)")
     up.add_argument("--files-fixture", help="directory of consumer files (<owner>/<name>/<path>), for tests")
     up.add_argument("--issues-fixture", help="JSON file of issues, for tests")
     up.add_argument("--threshold", type=int, default=upstream.THRESHOLD, help="distinct consumers per ID (default 2)")
@@ -654,11 +671,13 @@ def build_parser() -> argparse.ArgumentParser:
     lnt.add_argument("--strict", action="store_true", help="exit 1 on structure findings too")
     lnt.set_defaults(func=cmd_lint)
 
-    ins = sub.add_parser("instance", parents=[common], help="print the instance root and repository")
+    ins = sub.add_parser("instance", parents=[common], help="print the instance root and repository, from instance.json")
     only = ins.add_mutually_exclusive_group()
     only.add_argument("--repo", action="store_true", help="print only the instance's repository (owner/name)")
     only.add_argument("--root", action="store_true",
-                      help="print only the instance root (the doctrine); never reads the lock")
+                      help="print only the instance root (the doctrine); never reads instance.json")
+    only.add_argument("--json", action="store_true",
+                      help="print instance.json's validated values and the env bootstrap writes, as JSON (schema 1)")
     ins.set_defaults(func=cmd_instance)
 
     scr = sub.add_parser("scrub", parents=[common], help="check a tree before it is pushed to the public base")

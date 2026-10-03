@@ -35,8 +35,8 @@ paths: [".github/**"]
 
 - **PROHIBIT** unpinned actions.
 """
-LOCK = ('{"source": "owner/repo", "trimtab_sha": "0", "id_prefix": "SCR", '
-        '"schema_version": 1}\n')
+LOCK = ('{"trimtab_sha": "0", "id_prefix": "SCR", '
+        '"schema_version": 2}\n')
 
 
 def plan(*ids):

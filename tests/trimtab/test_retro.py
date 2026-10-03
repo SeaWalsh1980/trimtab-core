@@ -26,8 +26,8 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 REGISTRY = {"TST-2": Item(id="TST-2", prefix="TST", local_id="2", type="rule", source="rules/Example.md",
                           heading="Mocking Policy", strength=Strength.PROHIBIT)}
 AMBIGUOUS = (FIXTURES / "pr-tst2-ambiguous.md").read_text(encoding="utf-8")
-CONFIG = {"source": "owner/repo", "trimtab_sha": "0" * 40, "id_prefix": "SCR",
-          "adopted_at": "2026-09-01T00:00:00Z", "baseline_pr": 100, "schema_version": 1}
+CONFIG = {"trimtab_sha": "0" * 40, "id_prefix": "SCR",
+          "adopted_at": "2026-09-01T00:00:00Z", "baseline_pr": 100, "schema_version": 2}
 
 
 class FakeIssues:
