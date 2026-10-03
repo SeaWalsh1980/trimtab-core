@@ -69,11 +69,11 @@ class Shim(unittest.TestCase):
     def write_instance(self, data):
         (self.inst / "instance.json").write_text(json.dumps(data))
 
-    def run_shim(self, *args, cwd=None, env_extra=None):
+    def run_shim(self, *args, cwd=None, env_extra=None, proc_cwd=None):
         env = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", "XDG_DATA_HOME": str(self.data),
                "SHIM_CALLED": str(self.called), "FAKE_GIT_LOG": str(self.log), **(env_extra or {})}
         return subprocess.run([str((cwd or self.inst) / "bootstrap.sh"), *args], capture_output=True,
-                              text=True, env=env, timeout=60)
+                              text=True, env=env, timeout=60, cwd=proc_cwd)
 
     def test_a_missing_snapshot_is_fetched_verified_and_handed_over(self):
         out = self.run_shim("--check")
@@ -205,6 +205,7 @@ class Shim(unittest.TestCase):
     def test_a_planted_file_hidden_by_the_snapshots_own_exclude_stops_the_shim(self):
         self.run_shim()
         snap = self.store / self.sha
+        (snap / ".git" / "info").mkdir(exist_ok=True)  # the empty template leaves no info/ directory
         with open(snap / ".git" / "info" / "exclude", "a") as f:
             f.write("planted.sh\n")
         (snap / "planted.sh").write_text("echo hi\n")
@@ -226,13 +227,81 @@ class Shim(unittest.TestCase):
         self.run_shim()
         self.assertFalse(marker.exists())
 
-    def test_bytecode_written_by_running_hooks_does_not_stop_the_shim(self):
+    def test_bytecode_written_by_running_hooks_is_removed_and_reported_not_trusted(self):
         self.run_shim()
         cache = self.store / self.sha / "__pycache__"
         cache.mkdir()
         (cache / "x.cpython-313.pyc").write_bytes(b"\0")
         out = self.run_shim()
         self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertFalse(cache.exists())
+        self.assertIn(str(cache), out.stdout)
+
+    def test_a_symlinked_bytecode_directory_is_not_followed_and_stops_the_shim(self):
+        self.run_shim()
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir()
+        (self.store / self.sha / "__pycache__").symlink_to(elsewhere)
+        self.called.unlink()
+        out = self.run_shim()
+        self.assertEqual(out.returncode, 1)
+        self.assertTrue(elsewhere.exists())
+        self.assertFalse(self.called.exists())
+
+    def test_a_replace_ref_cannot_make_a_tampered_tree_match(self):
+        self.run_shim()
+        snap = self.store / self.sha
+        (snap / "bootstrap.sh").write_text("#!/usr/bin/env bash\necho owned\n")
+        git(snap, "add", "bootstrap.sh")
+        forged = git(snap, "commit-tree", git(snap, "write-tree"), "-m", "forged")
+        git(snap, "replace", self.sha, forged)
+        self.called.unlink()
+        out = self.run_shim()
+        self.assertEqual(out.returncode, 1)
+        self.assertFalse(self.called.exists())
+
+    def test_a_hook_in_the_snapshot_git_directory_stops_the_shim(self):
+        self.run_shim()
+        hooks = self.store / self.sha / ".git" / "hooks"
+        hooks.mkdir(exist_ok=True)
+        (hooks / "post-checkout").write_text("#!/usr/bin/env bash\ntrue\n")
+        self.called.unlink()
+        out = self.run_shim()
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("hooks", out.stderr)
+        self.assertFalse(self.called.exists())
+
+    def test_a_template_directory_from_the_environment_installs_no_hook(self):
+        marker = self.tmp / "post-checkout-ran"
+        templates = self.tmp / "templates"
+        (templates / "hooks").mkdir(parents=True)
+        hook = templates / "hooks" / "post-checkout"
+        hook.write_text(f"#!/usr/bin/env bash\ntouch {marker}\n")
+        hook.chmod(0o755)
+        out = self.run_shim(env_extra={"GIT_TEMPLATE_DIR": str(templates)})
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertFalse(marker.exists())
+        self.assertEqual(list((self.store / self.sha / ".git" / "hooks").glob("*"))
+                         if (self.store / self.sha / ".git" / "hooks").exists() else [], [])
+
+    def test_a_module_in_the_working_directory_cannot_stand_in_for_the_validator(self):
+        evil = self.tmp / "evil"
+        evil.mkdir()
+        (evil / "json.py").write_text("import sys\nsys.stderr.write('HIJACKED\\n')\nsys.exit(1)\n")
+        for label, kwargs in (("cwd", {"proc_cwd": evil}), ("PYTHONPATH", {"env_extra": {"PYTHONPATH": str(evil)}})):
+            with self.subTest(via=label):
+                out = self.run_shim("--check", **kwargs)
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertNotIn("HIJACKED", out.stderr)
+
+    def test_a_module_in_the_working_directory_cannot_stand_in_for_the_verifier(self):
+        self.run_shim()
+        evil = self.tmp / "evil"
+        evil.mkdir()
+        (evil / "hashlib.py").write_text("import sys\nsys.stderr.write('HIJACKED\\n')\nsys.exit(1)\n")
+        out = self.run_shim(proc_cwd=evil)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("HIJACKED", out.stderr)
 
     def test_the_shim_and_the_package_accept_and_refuse_the_same_files(self):
         sha = self.sha

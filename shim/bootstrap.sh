@@ -21,12 +21,17 @@ command -v python3 >/dev/null 2>&1 || die "python3 is required"
 # git_safe: git with neither the caller's configuration nor the variables that
 # redirect it (a repository, an object store, config injected through the
 # environment, url.<x>.insteadOf from a user or system file), and with
-# core.fsmonitor off so no command named in a snapshot's own config can run.
+# core.fsmonitor off so no command named in a snapshot's own config can run,
+# and with replace refs and template hooks off, so the commit checked is the
+# commit named. Python is always run with -I (no working directory or PYTHON*
+# variable on its path), so nothing the caller leaves lying about can stand in
+# for the validator or the verifier.
 git_safe() {
   env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
       -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_COMMON_DIR -u GIT_NAMESPACE \
       -u GIT_CONFIG -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT -u GIT_EXEC_PATH \
-      -u GIT_SSL_NO_VERIFY \
+      -u GIT_SSL_NO_VERIFY -u GIT_TEMPLATE_DIR -u GIT_REPLACE_REF_BASE \
+      GIT_NO_REPLACE_OBJECTS=1 \
       GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1 \
       git -c core.fsmonitor=false "$@"
 }
@@ -61,7 +66,7 @@ fi
 
 # 2. Read instance.json and validate it, with the same rules as the base
 #    package's instance reader (a test pins their agreement, key for key).
-fields=$(python3 - "$INSTANCE/instance.json" <<'PY'
+fields=$(python3 -I - "$INSTANCE/instance.json" <<'PY'
 import json, re, sys
 from pathlib import PurePosixPath
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
@@ -129,9 +134,12 @@ owner=${base_repo%%/*}; name=${base_repo#*/}
 # commit holds, and nothing else is there. It reads the commit's tree and the
 # files themselves and ignores the snapshot's index, ignore rules and config, so
 # an excluded or assume-unchanged file cannot hide, and nothing the snapshot's
-# own config names can run. Bytecode written by running the hooks (*.pyc under
-# __pycache__) is the one accepted addition: the OS-boundary iteration is the
-# stronger fix.
+# own config names can run. Nothing is tolerated in the tree, bytecode included:
+# Python runs a compiled file whose header matches, or whose hash is unchecked,
+# without reading its source, so a cache directory is a place to hide code.
+# Running the hooks writes such caches, and they regenerate, so the one repair
+# the shim makes is to delete them first (drop_bytecode_caches), printing each,
+# before it verifies. The snapshot's .git must hold no hooks.
 read -r -d '' VERIFY_PY <<'PY' || true
 import hashlib, os, stat, sys
 root = sys.argv[1]
@@ -169,12 +177,7 @@ def scan(rel):
             continue
         st = e.stat(follow_symlinks=False)
         if stat.S_ISDIR(st.st_mode):
-            if e.name == "__pycache__":
-                for f in os.scandir(e.path):
-                    if not (f.name.endswith(".pyc") and f.is_file(follow_symlinks=False)):
-                        extra.append(f"{r}/{f.name}")
-            else:
-                scan(r)
+            scan(r)
         elif stat.S_ISLNK(st.st_mode) or stat.S_ISREG(st.st_mode):
             check(r, e.path, st)
         else:
@@ -189,7 +192,20 @@ if extra or changed or missing:
     sys.exit(1)
 PY
 verify_tree() {
-  git_safe -C "$1" ls-tree -r -z HEAD | python3 -c "$VERIFY_PY" "$1"
+  if [[ -n "$(ls -A "$1/.git/hooks" 2>/dev/null)" ]]; then
+    echo "  the snapshot's .git/hooks is not empty" >&2
+    return 1
+  fi
+  git_safe -C "$1" ls-tree -r -z HEAD | python3 -I -c "$VERIFY_PY" "$1"
+}
+# drop_bytecode_caches <dir>: delete every __pycache__ directory in the working
+# tree (never through a symlink, never inside .git), printing each.
+drop_bytecode_caches() {
+  local cache
+  while IFS= read -r -d '' cache; do
+    rm -rf -- "$cache" || die "could not delete the bytecode cache $cache"
+    printf '  \033[33m-\033[0m removed bytecode cache %s\n' "$cache"
+  done < <(find "$1" -path "$1/.git" -prune -o -type d -name __pycache__ -prune -print0)
 }
 
 store="${XDG_DATA_HOME:-$HOME/.local/share}/trimtab/core"
@@ -199,12 +215,13 @@ if [[ -e "$snap" || -L "$snap" ]]; then
     || die "the snapshot $snap is not a plain git checkout; stopping (nothing repairs this automatically)"
   head=$(git_safe -C "$snap" rev-parse HEAD 2>/dev/null || true)
   [[ "$head" == "$base_sha" ]] || die "the snapshot $snap is at ${head:-no commit}, not the pin; stopping (nothing repairs this automatically)"
+  drop_bytecode_caches "$snap"
   verify_tree "$snap" || die "the snapshot $snap differs from its pinned commit (see above); stopping (nothing repairs this automatically)"
 else
   mkdir -p "$store"
   tmp=$(mktemp -d "$store/.fetch.XXXXXX")
   trap 'rm -rf -- "$tmp"' EXIT
-  git_safe -C "$tmp" clone --quiet --no-checkout "https://github.com/$base_repo.git" "$tmp/repo" \
+  git_safe -C "$tmp" clone --quiet --no-checkout --template= "https://github.com/$base_repo.git" "$tmp/repo" \
     || die "could not clone the base $base_repo"
   git_safe -C "$tmp/repo" -c advice.detachedHead=false checkout --quiet "$base_sha" \
     || die "the base $base_repo has no commit $base_sha"
