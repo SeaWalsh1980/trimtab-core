@@ -38,16 +38,26 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      # The installer reads the doctrine and the instance's own settings from an
+      # instance, so CI builds a fixture one. The data home is redirected too, so
+      # the installed snapshot store stays inside the runner's temp directory.
+      - name: Build a fixture instance
+        run: |
+          inst=$(python3 tests/trimtab/instance_fixture.py "$RUNNER_TEMP")
+          echo "INSTANCE=$inst" >> "$GITHUB_ENV"
+          echo "XDG_DATA_HOME=$RUNNER_TEMP/share" >> "$GITHUB_ENV"
+
       - name: Fresh install into a throwaway CLAUDE_CONFIG_DIR
         run: |
-          ./bootstrap.sh
+          ./bootstrap.sh --instance "$INSTANCE"
           test -L "$CLAUDE_CONFIG_DIR/hooks"
           test -L "$CLAUDE_CONFIG_DIR/bin"
           test -f "$CLAUDE_CONFIG_DIR/settings.json"
+          test "$(readlink -f "$CLAUDE_CONFIG_DIR/rules")" = "$(readlink -f "$INSTANCE/rules")"
 
       - name: Second run is idempotent
         run: |
-          out=$(./bootstrap.sh)
+          out=$(./bootstrap.sh --instance "$INSTANCE")
           printf '%s\n' "$out"
           # An arrow marks a change; a second run must make none.
           if grep -q '→' <<<"$out"; then
@@ -55,12 +65,12 @@ jobs:
           fi
 
       - name: --check reports in sync (exit 0)
-        run: ./bootstrap.sh --check
+        run: ./bootstrap.sh --instance "$INSTANCE" --check
 
       - name: Seeded drift is detected (exit 1)
         run: |
           rm "$CLAUDE_CONFIG_DIR/hooks"
-          if ./bootstrap.sh --check; then
+          if ./bootstrap.sh --instance "$INSTANCE" --check; then
             echo "drift was not detected"; exit 1
           fi
 
@@ -93,7 +103,7 @@ jobs:
           probe=/tmp/claude-ci-worktree-probe
           git worktree add --detach "$probe" HEAD >/dev/null
           before=$(ls -A "$CLAUDE_CONFIG_DIR" | sort | md5sum)
-          if (cd "$probe" && ./bootstrap.sh); then
+          if (cd "$probe" && ./bootstrap.sh --instance "$INSTANCE"); then
             echo "bootstrap installed from a linked worktree"; exit 1
           fi
           after=$(ls -A "$CLAUDE_CONFIG_DIR" | sort | md5sum)
@@ -102,7 +112,7 @@ jobs:
           fi
           # The opt-in must still work, or an operator with a real reason has no
           # route at all. Sandboxed, so no timer is installed either way.
-          (cd "$probe" && ./bootstrap.sh --allow-worktree >/dev/null)
+          (cd "$probe" && ./bootstrap.sh --instance "$INSTANCE" --allow-worktree >/dev/null)
           echo "refused by default, allowed with --allow-worktree"
 
       # The refusal must not fire on a canonical checkout reached through a
@@ -120,9 +130,16 @@ jobs:
           ln -sfn "$real" /tmp/claude-ci-symlink/link
           # Its own clone, so canonical — and sandboxed, so no timer either way.
           (cd /tmp/claude-ci-symlink/link/repo \
-            && CLAUDE_CONFIG_DIR=/tmp/claude-ci-symlink/home/.claude ./bootstrap.sh >/dev/null)
+            && CLAUDE_CONFIG_DIR=/tmp/claude-ci-symlink/home/.claude \
+               ./bootstrap.sh --instance "$INSTANCE" >/dev/null)
           test -L /tmp/claude-ci-symlink/home/.claude/hooks
           echo "installed through the symlinked path"
+
+      # bootstrap-env-tests.sh sets its own CLAUDE_CONFIG_DIR and XDG_DATA_HOME
+      # per check; unsetting the job's value keeps it from installing over the
+      # sandbox the steps above used.
+      - name: Bootstrap writes the instance's values and refuses a disabling layer
+        run: env -u CLAUDE_CONFIG_DIR ./tests/bootstrap-env-tests.sh
 
   # The guard matrix above only proves the hooks agree with the tests shipped
   # beside them. A pull request can weaken hooks/ and edit tests/guard-tests.sh
