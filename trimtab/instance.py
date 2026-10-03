@@ -46,8 +46,8 @@ def _keys(obj: dict, allowed: set[str], where: str) -> None:
 
 
 def _repo(value: object, key: str) -> str:
-    if not isinstance(value, str) or not REPO.fullmatch(value):
-        raise InstanceFileError(f"{key} must be owner/name, never a URL")
+    if not isinstance(value, str) or not REPO.fullmatch(value) or {".", ".."} & set(value.split("/")):
+        raise InstanceFileError(f"{key} must be owner/name, never a URL, and no part may be . or ..")
     return value
 
 
@@ -75,7 +75,9 @@ def parse(data: object) -> InstanceFile:
     if not isinstance(data, dict):
         raise InstanceFileError(f"{FILE} must hold a JSON object")
     _keys(data, TOP, "")
-    if data.get("schema_version") != SCHEMA_VERSION:
+    version = data.get("schema_version")
+    # True == 1 and 1.0 == 1 in Python; the file means the integer.
+    if type(version) is not int or version != SCHEMA_VERSION:
         raise InstanceFileError(f"schema_version must be {SCHEMA_VERSION}")
     base = data.get("base")
     if not isinstance(base, dict):
