@@ -674,6 +674,14 @@ printf '([\tbroken\n' > "$CPTMP/badre.patterns"
 TRIMTAB_SECRET_PATTERNS="$CPTMP/badre.patterns" t guard-secrets.sh 2 "an invalid ERE fails closed" "$(j Write '{"file_path":"/p/app/x.py","content":"print(42)"}')"
 printf 'INTERNAL-[0-9]{6}\tan internal key\n' > "$CPTMP/ok.patterns"
 TRIMTAB_SECRET_PATTERNS="$CPTMP/ok.patterns" t guard-secrets.sh 2 "a private pattern blocks" "$(j Write '{"file_path":"/p/app/x.py","content":"k = INTERNAL-123456"}')"
+mkdir -p "$CPTMP/rel"
+printf 'INTERNAL-[0-9]{6}\tan internal key\n' > "$CPTMP/rel/ok.patterns"
+pushd "$CPTMP/rel" >/dev/null
+TRIMTAB_SECRET_PATTERNS="ok.patterns" t guard-secrets.sh 2 "a relative private pattern path fails closed, even when it resolves" "$(j Write '{"file_path":"/p/app/x.py","content":"print(42)"}')"
+popd >/dev/null
+TRIMTAB_SECRET_PATTERNS="~/ok.patterns" t guard-secrets.sh 2 "a private pattern path starting with ~ fails closed" "$(j Write '{"file_path":"/p/app/x.py","content":"print(42)"}')"
+TRIMTAB_SECRET_PATTERNS="" t guard-secrets.sh 0 "an empty private pattern path means none declared" "$(j Write '{"file_path":"/p/app/x.py","content":"print(42)"}')"
+TRIMTAB_SECRET_PATTERNS="$CPTMP/ok.patterns" t guard-secrets.sh 0 "an absolute private pattern path still allows benign content" "$(j Write '{"file_path":"/p/app/x.py","content":"print(42)"}')"
 for pack in "$HOOKS"/secrets.d/*.probe; do
   name=${pack##*/}; name=${name%.probe}
   while IFS= read -r first && IFS= read -r rest; do

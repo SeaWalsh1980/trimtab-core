@@ -214,7 +214,7 @@ hit '\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b' \
 # empty means every shipped pack applies (fail-safe: a machine whose settings
 # lack the switch loses nothing); a comma-separated list narrows it; "none"
 # leaves only the built-ins. TRIMTAB_SECRET_PATTERNS names an optional file
-# of private patterns. Each line is "<ERE><TAB><label>". Anything declared
+# of private patterns, given as an absolute path. Each line is "<ERE><TAB><label>". Anything declared
 # but unusable, or a missing secrets.d/, fails closed (ADR 0003).
 here=$(cd -P "${BASH_SOURCE[0]%/*}" 2>/dev/null && pwd -P) \
   || fail_closed "cannot locate its own directory to read signature packs"
@@ -238,6 +238,10 @@ case "${TRIMTAB_SECRET_PACKS:-}" in
     done ;;
 esac
 if [[ -n "${TRIMTAB_SECRET_PATTERNS:-}" ]]; then
+  # Absolute only: a relative value names a different file in every cwd, and
+  # an empty copy there would silently disable every private pattern.
+  [[ "$TRIMTAB_SECRET_PATTERNS" == /* ]] \
+    || fail_closed "TRIMTAB_SECRET_PATTERNS is not an absolute path"
   [[ -r "$TRIMTAB_SECRET_PATTERNS" ]] || fail_closed "TRIMTAB_SECRET_PATTERNS names a file that cannot be read"
   sources+=("$TRIMTAB_SECRET_PATTERNS")
 fi
