@@ -7,10 +7,12 @@
 #
 # The only URL it builds is https://github.com/<base.repo>.git, from a name
 # validated as owner/name. It never takes a URL or a clone source from the
-# environment, instance.json or a flag, and it runs git without the caller's
-# git configuration or git environment. A snapshot that exists but differs from
-# its pinned commit in any file is a tampering signal: it stops, and repairs
-# nothing. The instance is always the directory this script sits in; a
+# environment, instance.json or a flag, and it runs git in an environment it
+# builds itself. A snapshot that exists but differs from its pinned commit in
+# any file, or whose git directory holds anything a clone does not write, is a
+# tampering signal: it stops, and repairs nothing. The one exception is
+# bytecode caches (__pycache__), which running the hooks writes and which it
+# deletes, printing each, before it verifies. The instance is always the directory this script sits in; a
 # caller-supplied --instance is refused.
 set -euo pipefail
 
@@ -18,21 +20,25 @@ die() { printf '  \033[31m✗\033[0m %s\n' "$1" >&2; exit 1; }
 command -v git >/dev/null 2>&1 || die "git is required"
 command -v python3 >/dev/null 2>&1 || die "python3 is required"
 
-# git_safe: git with neither the caller's configuration nor the variables that
-# redirect it (a repository, an object store, config injected through the
-# environment, url.<x>.insteadOf from a user or system file), and with
-# core.fsmonitor off so no command named in a snapshot's own config can run,
-# and with replace refs and template hooks off, so the commit checked is the
-# commit named. Python is always run with -I (no working directory or PYTHON*
-# variable on its path), so nothing the caller leaves lying about can stand in
-# for the validator or the verifier.
+# git_safe: git in an environment built here, not inherited. Nothing of the
+# caller's reaches it (no GIT_* variable, no credential helper or askpass
+# program, no user or system configuration, so no url.<x>.insteadOf), except the
+# proxy and CA-bundle settings a clone may need to reach GitHub at all; the SHA
+# pin makes the transport untrusted anyway. It never prompts. core.fsmonitor is
+# off so no command named in a snapshot's own config can run, and replace refs
+# are off so the commit checked is the commit named. Python is always run with
+# -I (no working directory or PYTHON* variable on its path), so nothing the
+# caller leaves lying about can stand in for the validator or the verifier.
 git_safe() {
-  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
-      -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_COMMON_DIR -u GIT_NAMESPACE \
-      -u GIT_CONFIG -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT -u GIT_EXEC_PATH \
-      -u GIT_SSL_NO_VERIFY -u GIT_TEMPLATE_DIR -u GIT_REPLACE_REF_BASE \
+  local pass=() v
+  for v in HTTPS_PROXY https_proxy ALL_PROXY all_proxy NO_PROXY no_proxy \
+           SSL_CERT_FILE SSL_CERT_DIR CURL_CA_BUNDLE; do
+    if [[ -n "${!v+x}" ]]; then pass+=("$v=${!v}"); fi
+  done
+  env -i PATH="$PATH" HOME=/nonexistent LC_ALL=C GIT_TERMINAL_PROMPT=0 \
       GIT_NO_REPLACE_OBJECTS=1 \
       GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+      ${pass[@]+"${pass[@]}"} \
       git -c core.fsmonitor=false "$@"
 }
 
@@ -191,11 +197,44 @@ if extra or changed or missing:
             print(f"  {label}: {shown}", file=sys.stderr)
     sys.exit(1)
 PY
-verify_tree() {
-  if [[ -n "$(ls -A "$1/.git/hooks" 2>/dev/null)" ]]; then
-    echo "  the snapshot's .git/hooks is not empty" >&2
-    return 1
+# check_git_dir <dir>: the snapshot's own git directory holds nothing that could
+# make git, run later by the installer or the tooling in the snapshot, do
+# something other than read the pinned commit. The verifier below skips .git, so
+# this is where it is looked at: no hooks (and the check fails closed if it
+# cannot read the directory), no alternate object stores, no attributes file, a
+# config limited to the keys a clone writes (so no hooksPath, filter, include or
+# fsmonitor), and every reachable object re-hashed by git fsck.
+check_git_dir() {
+  local gd="$1/.git" found key keys f out
+  if [[ -L "$gd/hooks" ]]; then
+    echo "  .git/hooks is a symlink" >&2; return 1
   fi
+  if [[ -e "$gd/hooks" ]]; then
+    found=$(find "$gd/hooks" -mindepth 1 -print -quit) \
+      || { echo "  .git/hooks could not be read" >&2; return 1; }
+    [[ -z "$found" ]] || { echo "  .git/hooks is not empty" >&2; return 1; }
+  fi
+  for f in objects/info/alternates objects/info/http-alternates info/attributes; do
+    if [[ -e "$gd/$f" || -L "$gd/$f" ]]; then
+      echo "  .git/$f exists, and a snapshot never has one" >&2; return 1
+    fi
+  done
+  keys=$(git_safe config --file "$gd/config" --list --name-only) \
+    || { echo "  .git/config could not be read" >&2; return 1; }
+  while IFS= read -r key; do
+    case "$key" in
+      "") ;;
+      core.repositoryformatversion|core.filemode|core.bare|core.logallrefupdates|core.ignorecase) ;;
+      core.symlinks|core.precomposeunicode|remote.origin.url|remote.origin.fetch) ;;
+      branch.*.remote|branch.*.merge) ;;
+      *) echo "  .git/config sets $key, which a snapshot never needs" >&2; return 1 ;;
+    esac
+  done <<<"$keys"
+  out=$(git_safe -C "$1" fsck --no-dangling --no-progress 2>&1) \
+    || { printf '%s\n' "$out" >&2; echo "  git fsck found a problem in the snapshot's objects" >&2; return 1; }
+}
+verify_tree() {
+  check_git_dir "$1" || return 1
   git_safe -C "$1" ls-tree -r -z HEAD | python3 -I -c "$VERIFY_PY" "$1"
 }
 # drop_bytecode_caches <dir>: delete every __pycache__ directory in the working

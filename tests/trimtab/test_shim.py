@@ -44,11 +44,16 @@ class Shim(unittest.TestCase):
         # A fake git: rewrites the one allowed URL to the fixture, records every URL it saw.
         self.bin = self.tmp / "bin"
         self.bin.mkdir()
+        # The shim hands git a scrubbed environment, so the fake takes its settings from files, not variables.
+        self.env_log = self.tmp / "git-env.log"
+        self.log = self.tmp / "git.log"
         (self.bin / "git").write_text(
             "#!/usr/bin/env bash\n"
-            # FAKE_GIT_FAIL_WORKTREE_PROBE: git cannot answer the worktree question (old git, dubious ownership).
-            '[[ -n "${FAKE_GIT_FAIL_WORKTREE_PROBE:-}" && " $* " == *" --absolute-git-dir "* ]] && exit 1\n'
-            'args=(); for a in "$@"; do printf "%s\\n" "$a" >> "$FAKE_GIT_LOG"; '
+            # fail-probe: git cannot answer the worktree question (old git, dubious ownership).
+            f'[[ -e "{self.tmp}/fail-probe" && " $* " == *" --absolute-git-dir "* ]] && exit 1\n'
+            # what the shim let through to git
+            f'printf "proxy=%s ca=%s askpass=%s\\n" "${{HTTPS_PROXY:-unset}}" "${{SSL_CERT_FILE:-unset}}" "${{GIT_ASKPASS:-unset}}" >> "{self.env_log}"\n'
+            f'args=(); for a in "$@"; do printf "%s\\n" "$a" >> "{self.log}"; '
             f'[[ "$a" == "{URL}" ]] && a="{self.base}"; args+=("$a"); done\n'
             f'exec "{REAL_GIT}" "${{args[@]}}"\n')
         (self.bin / "git").chmod(0o755)
@@ -133,7 +138,8 @@ class Shim(unittest.TestCase):
         self.assertIn("--allow-worktree", self.called.read_text().splitlines())
 
     def test_a_checkout_git_cannot_answer_for_is_refused_not_waved_through(self):
-        out = self.run_shim(env_extra={"FAKE_GIT_FAIL_WORKTREE_PROBE": "1"})
+        (self.tmp / "fail-probe").write_text("")
+        out = self.run_shim()
         self.assertEqual(out.returncode, 1)
         self.assertIn("worktree", out.stderr)
         self.assertFalse(self.store.exists())
@@ -283,6 +289,137 @@ class Shim(unittest.TestCase):
         self.assertFalse(marker.exists())
         self.assertEqual(list((self.store / self.sha / ".git" / "hooks").glob("*"))
                          if (self.store / self.sha / ".git" / "hooks").exists() else [], [])
+
+    def refused_after_planting(self, plant):
+        self.run_shim()
+        plant(self.store / self.sha / ".git")
+        self.called.unlink()
+        out = self.run_shim()
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertFalse(self.called.exists())
+        return out
+
+    def test_a_hooks_path_in_the_snapshot_config_stops_the_shim(self):
+        def plant(dot_git):
+            with open(dot_git / "config", "a") as f:
+                f.write("[core]\n\thooksPath = /attacker/hooks\n")
+        self.assertIn("config", self.refused_after_planting(plant).stderr)
+
+    def test_a_filter_or_include_in_the_snapshot_config_stops_the_shim(self):
+        for section in ('[filter "x"]\n\tclean = true\n', "[include]\n\tpath = /attacker/config\n"):
+            with self.subTest(section=section):
+                self.reset_store()
+                def plant(dot_git, section=section):
+                    with open(dot_git / "config", "a") as f:
+                        f.write(section)
+                self.refused_after_planting(plant)
+
+    def reset_store(self):
+        shutil.rmtree(self.data, ignore_errors=True)
+
+    def test_an_unreadable_hooks_directory_stops_the_shim_rather_than_reading_as_empty(self):
+        if os.geteuid() == 0:
+            self.skipTest("root can read a mode-000 directory")
+        def plant(dot_git):
+            (dot_git / "hooks").mkdir(exist_ok=True)
+            (dot_git / "hooks").chmod(0)
+            self.addCleanup((dot_git / "hooks").chmod, 0o755)
+        self.refused_after_planting(plant)
+
+    def test_alternate_object_stores_in_the_snapshot_stop_the_shim(self):
+        def plant(dot_git):
+            (dot_git / "objects" / "info").mkdir(exist_ok=True)
+            (dot_git / "objects" / "info" / "alternates").write_text("/attacker/objects\n")
+        self.refused_after_planting(plant)
+
+    def test_attributes_in_the_snapshot_git_directory_stop_the_shim(self):
+        def plant(dot_git):
+            (dot_git / "info").mkdir(exist_ok=True)
+            (dot_git / "info" / "attributes").write_text("* filter=x\n")
+        self.refused_after_planting(plant)
+
+    def test_a_corrupted_tree_object_stops_the_shim(self):
+        # A loose tree object rewritten to list a tampered blob, with the tampered file in place: the HEAD
+        # still equals the pin and the working tree matches what ls-tree now says. Only the objects' own
+        # hashes give it away.
+        import zlib
+        def plant(dot_git):
+            snap = dot_git.parent
+            evil = b"#!/usr/bin/env bash\necho owned\n"
+            (snap / "bootstrap.sh").write_bytes(evil)
+            blob = git(snap, "hash-object", "-w", "bootstrap.sh")
+            tree = git(snap, "rev-parse", "HEAD^{tree}")
+            body = b"100755 bootstrap.sh\0" + bytes.fromhex(blob)
+            path = dot_git / "objects" / tree[:2] / tree[2:]
+            path.chmod(0o644)
+            path.write_bytes(zlib.compress(b"tree %d\0" % len(body) + body))
+        self.refused_after_planting(plant)
+
+    def test_a_forged_pack_entry_stops_the_shim(self):
+        # git does not re-hash an object it reads from a pack, so a tree stored under the pinned tree's name
+        # but holding other content passes ls-tree. The snapshot's repository is rewritten as a hand-built
+        # pack: the real commit, an honest tampered blob, and a forged tree under the original tree's name.
+        import hashlib
+        import struct
+        import zlib
+
+        def entry(kind, body):
+            size, first, out = len(body), (kind << 4) | (len(body) & 15), bytearray()
+            size >>= 4
+            while size:
+                out.append(first | 0x80)
+                first, size = size & 0x7F, size >> 7
+            out.append(first)
+            return bytes(out) + zlib.compress(body)
+
+        def plant(dot_git):
+            snap = dot_git.parent
+            evil = b"#!/usr/bin/env bash\necho owned\n"
+            (snap / "bootstrap.sh").write_bytes(evil)
+            blob = bytes.fromhex(git(snap, "hash-object", "bootstrap.sh"))
+            tree = bytes.fromhex(git(snap, "rev-parse", "HEAD^{tree}"))
+            commit = subprocess.run([REAL_GIT, "-C", str(snap), "cat-file", "commit", "HEAD"],
+                                    check=True, capture_output=True).stdout
+            objects = [(1, bytes.fromhex(self.sha), commit),
+                       (2, tree, b"100755 bootstrap.sh\0" + blob),
+                       (3, blob, evil)]
+            data, offsets, crcs = b"PACK" + struct.pack(">II", 2, len(objects)), {}, {}
+            for kind, name, body in objects:
+                packed = entry(kind, body)
+                offsets[name], crcs[name] = len(data), zlib.crc32(packed)
+                data += packed
+            checksum = hashlib.sha1(data).digest()
+            names = sorted(offsets)
+            fanout = [sum(1 for n in names if n[0] <= i) for i in range(256)]
+            idx = (b"\xfftOc" + struct.pack(">I", 2) + struct.pack(">256I", *fanout) + b"".join(names)
+                   + struct.pack(f">{len(names)}I", *(crcs[n] for n in names))
+                   + struct.pack(f">{len(names)}I", *(offsets[n] for n in names)) + checksum)
+            idx += hashlib.sha1(idx).digest()
+            objects_dir = dot_git / "objects"
+            for child in objects_dir.iterdir():
+                if child.name != "info":
+                    shutil.rmtree(child)
+            (objects_dir / "pack").mkdir()
+            (objects_dir / "pack" / f"pack-{checksum.hex()}.pack").write_bytes(data + checksum)
+            (objects_dir / "pack" / f"pack-{checksum.hex()}.idx").write_bytes(idx)
+        self.refused_after_planting(plant)
+
+    def test_proxy_and_ca_settings_reach_git_but_credential_helpers_and_other_variables_do_not(self):
+        self.run_shim(env_extra={"HTTPS_PROXY": "http://proxy.invalid:3128", "SSL_CERT_FILE": "/ca/bundle.pem",
+                                 "GIT_ASKPASS": "/attacker/askpass", "GIT_PROXY_COMMAND": "/attacker/cmd"})
+        lines = set(self.env_log.read_text().splitlines())
+        self.assertEqual(lines, {"proxy=http://proxy.invalid:3128 ca=/ca/bundle.pem askpass=unset"})
+
+    def test_a_ceiling_directory_from_the_environment_cannot_hide_a_worktree(self):
+        wt = self.tmp / "wt"
+        git(self.inst, "worktree", "add", "-q", "--detach", str(wt))
+        sub = wt / "sub"
+        sub.mkdir()
+        shutil.copy(self.inst / "bootstrap.sh", sub / "bootstrap.sh")
+        shutil.copy(self.inst / "instance.json", sub / "instance.json")
+        out = self.run_shim(cwd=sub, env_extra={"GIT_CEILING_DIRECTORIES": str(wt)})
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("worktree", out.stderr)
 
     def test_a_module_in_the_working_directory_cannot_stand_in_for_the_validator(self):
         evil = self.tmp / "evil"
