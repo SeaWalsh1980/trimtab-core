@@ -113,6 +113,51 @@ check_refuses_hooks_replaced() {
   fi
 }
 
+# A guard override in a settings layer's env would be written into the generated
+# settings and lift that guard for every session, while every hook registration
+# still looks intact. It is refused by key, whatever its value, and the value is
+# never printed.
+check_refuses_hook_allow_in_machine_env() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  echo '{"env": {"HOOK_ALLOW_SECURITY": "value-must-not-be-printed"}}' > "$inst/machine.json"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 1 && "$out" == *HOOK_ALLOW_SECURITY* && "$out" == *machine.json* \
+     && "$out" != *value-must-not-be-printed* && ! -e "$h/.claude/settings.json" ]] && no_links "$h"; then
+    pass "refuses a HOOK_ALLOW_* key in machine.json's env, naming the key and not its value"
+  else
+    fail "refuses a HOOK_ALLOW_* key in machine.json's env, naming the key and not its value" "rc=$rc"; echo "$out" | tail -5
+  fi
+}
+
+check_refuses_hook_allow_in_instance_env() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  echo '{"env": {"HOOK_ALLOW_PATHS": "0"}}' > "$inst/settings.instance.json"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 1 && "$out" == *HOOK_ALLOW_PATHS* && "$out" == *settings.instance.json* \
+     && ! -e "$h/.claude/settings.json" ]] && no_links "$h"; then
+    pass "refuses a HOOK_ALLOW_* key in settings.instance.json's env, whatever its value"
+  else
+    fail "refuses a HOOK_ALLOW_* key in settings.instance.json's env, whatever its value" "rc=$rc"; echo "$out" | tail -5
+  fi
+}
+
+# An env that is not an object cannot be checked for overrides, so it is refused
+# by name rather than left to fail somewhere later.
+check_refuses_env_that_is_not_an_object() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  echo '{"env": ["HOOK_ALLOW_SECURITY=1"]}' > "$inst/machine.json"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 1 && "$out" == *machine.json* && "$out" == *'`env`'* && "$out" != *Traceback* \
+     && ! -e "$h/.claude/settings.json" ]] && no_links "$h"; then
+    pass "refuses a layer whose env is not an object, naming the layer"
+  else
+    fail "refuses a layer whose env is not an object, naming the layer" "rc=$rc"; echo "$out" | tail -5
+  fi
+}
+
 check_registry_failure_installs_nothing() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
@@ -494,20 +539,20 @@ check_red_run_deletes_nothing() {
   fi
 }
 
-check_no_instance_keeps_single_root() {
-  local h copy
-  h=$(new_home); copy="$h/single-root"
-  # A single-root install writes machine.json into the checkout it runs from, so
-  # it runs from a copy of the working tree (what is under test, committed or
-  # not), without .git and without a developer's own machine.json.
-  mkdir "$copy"
-  (cd "$repo" && tar --exclude=./.git --exclude=./machine.json -cf - .) | tar -xf - -C "$copy"
-  boot "$h" "$copy/bootstrap.sh"
-  if [[ $rc -eq 0 && "$out" == *"--instance will be required"* \
-     && "$(settings_get "$h" env.TRIMTAB_INSTANCE)" == "$copy" ]]; then
-    pass "without --instance: today's single-root install, with a notice"
+# The base installs an instance, never itself: a run without --instance is a
+# usage error, and it stops before it creates anything.
+check_no_instance_is_refused() {
+  local h err
+  h=$(new_home)
+  set +e
+  err=$(CLAUDE_CONFIG_DIR="$h/.claude" XDG_DATA_HOME="$h/share" \
+        "$live" --no-timer --allow-worktree 2>&1 >/dev/null)
+  rc=$?
+  set -e
+  if [[ $rc -eq 64 && "$err" == *--instance* && ! -e "$h/.claude" && ! -L "$h/.claude" ]]; then
+    pass "without --instance: refused as a usage error, naming --instance, creating nothing"
   else
-    fail "without --instance: today's single-root install, with a notice" "rc=$rc"; echo "$out" | tail -5
+    fail "without --instance: refused as a usage error, naming --instance, creating nothing" "rc=$rc"; echo "$err" | tail -5
   fi
 }
 
@@ -529,6 +574,9 @@ check_writes_instance_values
 check_base_hooks_survive
 check_refuses_disable_all_hooks
 check_refuses_hooks_replaced
+check_refuses_hook_allow_in_machine_env
+check_refuses_hook_allow_in_instance_env
+check_refuses_env_that_is_not_an_object
 check_registry_failure_installs_nothing
 check_flags_relative_pattern_path
 check_idempotent
@@ -549,7 +597,7 @@ check_relative_instance_with_cdpath
 check_checkout_install_leaves_the_record_base_alone
 check_check_is_the_retention_dry_run
 check_red_run_deletes_nothing
-check_no_instance_keeps_single_root
+check_no_instance_is_refused
 check_observer_probe
 
 if [[ $fails -ne 0 ]]; then

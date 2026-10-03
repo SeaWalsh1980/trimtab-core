@@ -1,23 +1,26 @@
 #!/usr/bin/env bash
 # Bootstrap Claude Code config on this machine.
 #
-#   ./bootstrap.sh --instance <dir>  install the instance at <dir> on top of this
-#                             base (the mechanism); it will become required
-#   ./bootstrap.sh --check    report drift, change nothing (exit 1 if drift)
-#   ./bootstrap.sh --no-timer install, but leave the weekly report timer alone
-#   ./bootstrap.sh --allow-worktree  install from a linked git worktree anyway
-#                             (refused by default — see section 0)
+#   ./bootstrap.sh --instance <dir> [--check] [--no-timer] [--allow-worktree]
+#
+#   --instance <dir>  required: install the instance at <dir> on top of this
+#                     base (the mechanism). The base installs an instance,
+#                     never itself; an instance normally runs this through its
+#                     copy of shim/bootstrap.sh, which passes it.
+#   --check           report drift, change nothing (exit 1 if drift)
+#   --no-timer        install, but leave the weekly report timer alone
+#   --allow-worktree  install from a linked git worktree anyway
+#                     (refused by default — see section 0)
 #
 # Exit codes: 0 done or in sync; 1 drift (--check) or a refused install;
-# 64 a usage error.
+# 64 a usage error, including a run without --instance.
 #
 # Idempotent: safe to re-run after every git pull.
 #
 # Two roots. The BASE is this checkout, or a snapshot of it under the store:
 # hooks/ bin/ commands/ agents/ skills/ output-styles/ and settings.base.json.
 # The INSTANCE is the directory given to --instance: rules/, CLAUDE.md,
-# settings.instance.json, machine.json and instance.json. Without --instance
-# the checkout is both (the single-root install this script used to be).
+# settings.instance.json, machine.json and instance.json.
 #
 # Layout:
 #   settings.base.json       the base's, identical on every machine
@@ -48,6 +51,10 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+if [[ -z "$INSTANCE_ARG" ]]; then
+  echo "--instance <dir> is required: the base installs an instance, never itself" >&2
+  exit 64
+fi
 
 drift=0
 # Set by a step that failed without dying (the observer probe). Retention
@@ -120,27 +127,17 @@ unreadable() {
 command -v python3 >/dev/null 2>&1 || die "python3 is required"
 
 BASE="$REPO"   # the mechanism: this checkout, or a snapshot under the store
-INSTANCE=""
-if [[ -n "$INSTANCE_ARG" ]]; then
-  # CDPATH is cleared for the cd: with it set, a relative argument makes cd print
-  # the directory, and INSTANCE would be two lines.
-  INSTANCE=$(CDPATH= cd -P -- "$INSTANCE_ARG" 2>/dev/null && pwd -P) \
-    || die "--instance $INSTANCE_ARG is not a directory"
-  [[ -d "$INSTANCE/rules" ]] || die "--instance $INSTANCE has no rules/, so it is not an instance"
-fi
+# CDPATH is cleared for the cd: with it set, a relative argument makes cd print
+# the directory, and INSTANCE would be two lines.
+INSTANCE=$(CDPATH= cd -P -- "$INSTANCE_ARG" 2>/dev/null && pwd -P) \
+  || die "--instance $INSTANCE_ARG is not a directory"
+[[ -d "$INSTANCE/rules" ]] || die "--instance $INSTANCE has no rules/, so it is not an instance"
 STORE="${XDG_DATA_HOME:-$HOME/.local/share}/trimtab/core"
 
 echo "base:  $BASE"
-echo "instance: ${INSTANCE:-$BASE (single root)}"
+echo "instance: $INSTANCE"
 echo "target: $CLAUDE_HOME"
 echo
-if [[ -z "$INSTANCE" ]]; then
-  skip "no --instance: installing this checkout as both base and instance (deprecated; --instance will be required)"
-  INSTANCE="$REPO"
-  SINGLE_ROOT=1
-else
-  SINGLE_ROOT=0
-fi
 
 # ---- 0. refuse a non-canonical checkout --------------------------------
 # Every step below points the live tree at $REPO: hooks/, bin/, rules/,
@@ -199,30 +196,26 @@ fi
 
 # ---- 1. the doctrine registry check (D10) -----------------------------
 # Before anything is written, machine.json included: a failure leaves the
-# previous install live, and nothing is created, switched or deleted. Only with
-# --instance; the single-root install has no separate doctrine to check.
+# previous install live, and nothing is created, switched or deleted.
 installed_json="$STORE/.installed.json"
 read_record
-values=""
-if [[ $SINGLE_ROOT -eq 0 ]]; then
-  # The checker is run through bash, so a lost exec bit cannot fail it, and its
-  # one third-party dependency is checked here: a missing PyYAML is a missing
-  # dependency, and must not be reported as a fault in the instance's doctrine.
-  TRIMTAB_BIN="$BASE/bin/trimtab"
-  python3 -c 'import yaml' 2>/dev/null \
-    || die "PyYAML is required (the registry check imports it) and python3 cannot import it; nothing was changed"
-  against=()
-  # The baseline is the last installed SHA of this same instance, if one is recorded.
-  [[ "$rec_root" == "$INSTANCE" && "$rec_instance_sha" =~ ^[0-9a-f]{40}$ ]] \
-    && against=(--against "$rec_instance_sha")
-  if ! reg_out=$(bash "$TRIMTAB_BIN" registry --check --instance "$INSTANCE" ${against[@]+"${against[@]}"} 2>&1); then
-    printf '%s\n' "$reg_out" >&2
-    die "the instance's doctrine fails the registry check; nothing was changed, the previous install stays live"
-  fi
-  ok "doctrine registry check passed"
-  values=$(bash "$TRIMTAB_BIN" instance --json --instance "$INSTANCE") \
-    || die "could not read the instance's values (instance.json is invalid, or the checker could not run; see above); nothing was changed"
+# The checker is run through bash, so a lost exec bit cannot fail it, and its
+# one third-party dependency is checked here: a missing PyYAML is a missing
+# dependency, and must not be reported as a fault in the instance's doctrine.
+TRIMTAB_BIN="$BASE/bin/trimtab"
+python3 -c 'import yaml' 2>/dev/null \
+  || die "PyYAML is required (the registry check imports it) and python3 cannot import it; nothing was changed"
+against=()
+# The baseline is the last installed SHA of this same instance, if one is recorded.
+[[ "$rec_root" == "$INSTANCE" && "$rec_instance_sha" =~ ^[0-9a-f]{40}$ ]] \
+  && against=(--against "$rec_instance_sha")
+if ! reg_out=$(bash "$TRIMTAB_BIN" registry --check --instance "$INSTANCE" ${against[@]+"${against[@]}"} 2>&1); then
+  printf '%s\n' "$reg_out" >&2
+  die "the instance's doctrine fails the registry check; nothing was changed, the previous install stays live"
 fi
+ok "doctrine registry check passed"
+values=$(bash "$TRIMTAB_BIN" instance --json --instance "$INSTANCE") \
+  || die "could not read the instance's values (instance.json is invalid, or the checker could not run; see above); nothing was changed"
 
 # ---- 1b. machine.json ---------------------------------------------------
 # Lives in the instance: it is this machine's values for that instance. Created
@@ -242,9 +235,10 @@ fi
 # Three layers, in order: the base, the instance, this machine. Dicts recurse,
 # lists concatenate without duplicates, scalars override. After every layer the
 # base's hook registrations must still be present: a layer that loses one would
-# switch a guard off silently, so the merge refuses and nothing is written.
+# switch a guard off silently, so the merge refuses and nothing is written. It
+# refuses, for the same reason, a layer whose env sets any HOOK_ALLOW_* key.
 mkdir -p "$CLAUDE_HOME"
-generated=$(python3 - "$BASE" "$INSTANCE" "${values:-}" <<'PY'
+generated=$(python3 - "$BASE" "$INSTANCE" "$values" <<'PY'
 import json, sys, os
 base_root, inst_root, values = sys.argv[1], sys.argv[2], sys.argv[3]
 def load(root, name):
@@ -270,17 +264,28 @@ def merge(a, b):
             out[k] = v
     return out
 
-layers = [("settings.base.json", load(base_root, "settings.base.json"))]
-if inst_root != base_root:
-    layers.append(("settings.instance.json", load(inst_root, "settings.instance.json")))
-layers.append(("machine.json", load(inst_root, "machine.json")))
+layers = [("settings.base.json", load(base_root, "settings.base.json")),
+          ("settings.instance.json", load(inst_root, "settings.instance.json")),
+          ("machine.json", load(inst_root, "machine.json"))]
 
 base_hooks = layers[0][1].get("hooks", {})
-def refuse(layer, why):
-    print(f"REFUSED: {layer} {why}; the guards would not run. No link was switched and settings.json was not written.", file=sys.stderr)
+def refuse(layer, why, effect="the guards would not run"):
+    print(f"REFUSED: {layer} {why}; {effect}. No link was switched and settings.json was not written.", file=sys.stderr)
     sys.exit(3)
 merged = {}
 for name, layer in layers:
+    # A guard override is the operator's, exported before launching claude. In a
+    # layer's env it would be written into the generated settings and lift that
+    # guard for every session, with every registration still intact. Any value
+    # counts, and only the key is named, never the value.
+    layer_env = layer.get("env", {})
+    if not isinstance(layer_env, dict):
+        refuse(name, "sets `env` to something that is not an object",
+               "its guard overrides could not be checked")
+    overrides = sorted(k for k in layer_env if k.startswith("HOOK_ALLOW_"))
+    if overrides:
+        refuse(name, f"sets {', '.join(overrides)} in env",
+               "the guards would allow everything in every session (export an override before launching claude instead)")
     merged = merge(merged, layer)
     hooks = merged.get("hooks", {})
     if not isinstance(hooks, dict):
@@ -296,11 +301,10 @@ for name, layer in layers:
 # machine, and the pack switch and private pattern file come from the
 # validated instance.json, never from a settings layer.
 env = merged.setdefault("env", {})
-owned = {"TRIMTAB_INSTANCE": inst_root}
-if values:
-    v = json.loads(values)
-    owned["TRIMTAB_SECRET_PACKS"] = v["env"]["TRIMTAB_SECRET_PACKS"]
-    owned["TRIMTAB_SECRET_PATTERNS"] = v["env"]["TRIMTAB_SECRET_PATTERNS"]
+v = json.loads(values)
+owned = {"TRIMTAB_INSTANCE": inst_root,
+         "TRIMTAB_SECRET_PACKS": v["env"]["TRIMTAB_SECRET_PACKS"],
+         "TRIMTAB_SECRET_PATTERNS": v["env"]["TRIMTAB_SECRET_PATTERNS"]}
 for key, value in owned.items():
     prior = env.get(key)
     if prior is not None and prior != value:
@@ -570,9 +574,9 @@ fi
 # A step that was not green (the observer probe, which notes instead of dying)
 # does not make this a failed install, so the record is still written; it is a
 # reason to delete nothing, and the run says so.
-if [[ $SINGLE_ROOT -eq 0 && $SANDBOXED -eq 1 && -z "${XDG_DATA_HOME:-}" ]]; then
+if [[ $SANDBOXED -eq 1 && -z "${XDG_DATA_HOME:-}" ]]; then
   skip "sandboxed run without its own XDG_DATA_HOME: install record and retention left alone (the store belongs to the live install)"
-elif [[ $SINGLE_ROOT -eq 0 ]]; then
+else
   base_sha=$(git -C "$BASE" rev-parse HEAD 2>/dev/null || true)
   store_phys=$(cd -P "$STORE" 2>/dev/null && pwd -P || true)
   base_parent=$(cd -P "$BASE/.." && pwd -P)
