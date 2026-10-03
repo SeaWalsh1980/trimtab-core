@@ -95,7 +95,9 @@ command -v python3 >/dev/null 2>&1 || die "python3 is required"
 BASE="$REPO"   # the mechanism: this checkout, or a snapshot under the store
 INSTANCE=""
 if [[ -n "$INSTANCE_ARG" ]]; then
-  INSTANCE=$(cd -P "$INSTANCE_ARG" 2>/dev/null && pwd -P) \
+  # CDPATH is cleared for the cd: with it set, a relative argument makes cd print
+  # the directory, and INSTANCE would be two lines.
+  INSTANCE=$(CDPATH= cd -P -- "$INSTANCE_ARG" 2>/dev/null && pwd -P) \
     || die "--instance $INSTANCE_ARG is not a directory"
   [[ -d "$INSTANCE/rules" ]] || die "--instance $INSTANCE has no rules/, so it is not an instance"
 fi
@@ -560,8 +562,15 @@ print(r.get("base_sha") or "-", r.get("prev_base_sha") or "-")' "$installed_json
   [[ "$rec_base" == - ]] && rec_base=""
   [[ "$rec_prev" == - ]] && rec_prev=""
   if [[ "$rec_base" == "$base_sha" ]]; then prev_base="$rec_prev"; else prev_base="$rec_base"; fi
+  # Only a snapshot in the store is something retention keeps or drops. An install
+  # from a plain checkout must not move the record's base: the next snapshot
+  # install would take the checkout for the predecessor and drop the real one.
+  is_snapshot=0
   if [[ -n "$store_phys" && "$base_parent" == "$store_phys" \
         && "$base_sha" =~ ^[0-9a-f]{40}$ && "${BASE##*/}" == "$base_sha" ]]; then
+    is_snapshot=1
+  fi
+  if [[ $is_snapshot -eq 1 ]]; then
     if [[ $red -eq 1 ]]; then
       skip "retention withheld: a step above was not green, so nothing is deleted"
     else
@@ -586,7 +595,12 @@ print(r.get("base_sha") or "-", r.get("prev_base_sha") or "-")' "$installed_json
         if [[ $CHECK_ONLY -eq 1 ]]; then
           skip "retention would delete snapshot $name"       # the dry run
         else
-          rm -rf -- "$d" && printf '  \033[33m-\033[0m deleted old snapshot %s\n' "$name"
+          # A failed rm in an && list does not trip errexit, so it is tested: a
+          # snapshot that cannot be deleted would otherwise be skipped in silence
+          # and the store would grow with no signal. The install itself is done.
+          rm -rf -- "$d" \
+            || die "retention could not delete snapshot $name (the install itself is complete and live); fix its permissions and re-run"
+          printf '  \033[33m-\033[0m deleted old snapshot %s\n' "$name"
         fi
       done
     fi
@@ -594,6 +608,7 @@ print(r.get("base_sha") or "-", r.get("prev_base_sha") or "-")' "$installed_json
   if [[ $CHECK_ONLY -eq 0 ]]; then
     inst_sha=$(git -C "$INSTANCE" rev-parse HEAD 2>/dev/null || true)
     mkdir -p "$STORE"
+    if [[ $is_snapshot -eq 0 ]]; then base_sha="$rec_base"; prev_base="$rec_prev"; fi
     python3 - "$installed_json" "$INSTANCE" "$inst_sha" "$base_sha" "$prev_base" <<'PY'
 import json, os, sys, tempfile
 path, root, inst, base, prev = sys.argv[1:]

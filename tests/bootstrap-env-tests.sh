@@ -370,6 +370,87 @@ check_unreadable_live_settings_are_reported() {
   fi
 }
 
+# A snapshot that cannot be deleted must stop the run loudly: a failed rm in an
+# && list does not trip errexit, and the store would grow with no signal.
+check_failed_retention_delete_is_loud() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  if [[ $(id -u) -eq 0 ]]; then
+    echo "SKIP  a failed retention delete is loud (running as root: permissions do not stop rm)"
+    return
+  fi
+  make_store "$h/share/trimtab/core"
+  chmod a-w "$snap_mid"          # its contents can no longer be unlinked
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  chmod u+w "$snap_mid"          # so the test's own cleanup can remove it
+  if [[ $rc -eq 1 && "$out" == *"${snap_mid##*/}"* && "$out" == *"could not delete"* ]]; then
+    pass "a failed retention delete stops the run and names the snapshot"
+  else
+    fail "a failed retention delete stops the run and names the snapshot" "rc=$rc"; echo "$out" | tail -4
+  fi
+}
+
+# The record holds HEAD at install time. If that commit is gone (a rebase, a
+# force-push, a gc), the registry check falls back to the committed file with a
+# note instead of failing, so a stale baseline cannot block every later install.
+# This pins that tolerance; it is not a fix, the behaviour already holds.
+check_unreachable_recorded_instance_sha_does_not_block() {
+  local h inst store
+  h=$(new_home); inst=$(inst_of "$h"); store="$h/share/trimtab/core"
+  mkdir -p "$store"
+  printf '{"instance_root": "%s", "instance_sha": "%s", "base_sha": null, "prev_base_sha": null}' \
+    "$inst" "$(printf 'a%.0s' $(seq 40))" > "$store/.installed.json"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"doctrine registry check passed"* ]]; then
+    pass "an unreachable recorded instance SHA does not block the install"
+  else
+    fail "an unreachable recorded instance SHA does not block the install" "rc=$rc"; echo "$out" | tail -4
+  fi
+}
+
+# With CDPATH set, cd searches it for a relative argument and prints what it
+# found, so INSTANCE would be two lines, or a different directory altogether. A
+# decoy of the same name sits where CDPATH points; the argument means "here".
+check_relative_instance_with_cdpath() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  mkdir -p "$work/cdpath-root/instance/rules"
+  set +e
+  out=$(cd "$h" && CDPATH="$work/cdpath-root" CLAUDE_CONFIG_DIR="$h/.claude" XDG_DATA_HOME="$h/share" \
+        "$live" --no-timer --allow-worktree --instance instance 2>&1)
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 && "$(settings_get "$h" env.TRIMTAB_INSTANCE)" == "$inst" ]]; then
+    pass "a relative --instance resolves to one path even with CDPATH set"
+  else
+    fail "a relative --instance resolves to one path even with CDPATH set" "rc=$rc"; echo "$out" | tail -4
+  fi
+}
+
+# Only a snapshot in the store is something retention may keep or drop. An install
+# from a plain checkout must not move the record's base, or the next snapshot
+# install would treat the checkout as the predecessor and drop the real one.
+check_checkout_install_leaves_the_record_base_alone() {
+  local h inst store base_a base_b
+  h=$(new_home); inst=$(inst_of "$h"); store="$h/share/trimtab/core"
+  base_a=$(printf 'a%.0s' $(seq 40)); base_b=$(printf 'b%.0s' $(seq 40))
+  mkdir -p "$store"
+  printf '{"instance_root": "%s", "instance_sha": null, "base_sha": "%s", "prev_base_sha": "%s"}' \
+    "$inst" "$base_a" "$base_b" > "$store/.installed.json"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 ]] && python3 - "$store/.installed.json" "$base_a" "$base_b" <<'PY'
+import json, sys
+rec = json.load(open(sys.argv[1]))
+assert rec["base_sha"] == sys.argv[2] and rec["prev_base_sha"] == sys.argv[3], rec
+assert isinstance(rec["instance_sha"], str) and len(rec["instance_sha"]) == 40, rec
+PY
+  then
+    pass "an install from a plain checkout leaves the record's base and predecessor alone"
+  else
+    fail "an install from a plain checkout leaves the record's base and predecessor alone" "rc=$rc"
+  fi
+}
+
 check_check_is_the_retention_dry_run() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
@@ -442,6 +523,10 @@ check_instance_without_claude_md_drops_a_dangling_link
 check_instance_without_claude_md_drops_a_link_into_the_store
 check_instance_without_claude_md_keeps_a_link_it_did_not_make
 check_unreadable_live_settings_are_reported
+check_failed_retention_delete_is_loud
+check_unreachable_recorded_instance_sha_does_not_block
+check_relative_instance_with_cdpath
+check_checkout_install_leaves_the_record_base_alone
 check_check_is_the_retention_dry_run
 check_red_run_deletes_nothing
 check_no_instance_keeps_single_root
