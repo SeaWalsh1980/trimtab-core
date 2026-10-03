@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from trimtab import config as project_config
+from trimtab import roots
 
 ID_SHAPE = re.compile(r"\b(?:trig|env|session)_[0-9A-Za-z]{16,}\b")
 SKIP_DIRS = {".git", "__pycache__"}
@@ -56,6 +56,9 @@ def _private_patterns(environ: Mapping[str, str]) -> tuple[re.Pattern, ...]:
     declared = environ.get(PATTERNS_ENV, "")
     if not declared:
         return ()
+    if not declared.startswith("/"):
+        # Relative to what? The scrub's working directory is not the instance (S3-6). Never echo the value.
+        raise ScrubError(f"{PATTERNS_ENV} is not an absolute path")
     try:
         lines = Path(declared).read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError) as err:
@@ -89,14 +92,11 @@ def _consumers(path: Path) -> list[str]:
 
 def private_terms(instance: Path, environ: Mapping[str, str]) -> Terms:
     instance = Path(instance)
-    repos: set[str] = set()
-    config, problems = project_config.load(instance)
-    if problems:
+    try:
         # Its own repository is the likeliest private name to leak; never build the list without it.
-        raise ScrubError(f"the instance's {project_config.PATH} cannot be read ("
-                         + ", ".join(p.code for p in problems) + ")")
-    if config and config.source:
-        repos.add(config.source)
+        repos = {roots.instance_repo(instance)}
+    except roots.InstanceInvalid as err:
+        raise ScrubError(str(err)) from err
     repos.update(_consumers(instance / "consumers.json"))
     ids: set[str] = set()
     for path in (instance / "routines").rglob("*"):

@@ -100,7 +100,7 @@ def apply(project: Path, todo: BumpPlan, confirm: str) -> None:
     path.write_text(SHA_VALUE.sub(lambda m: m.group(1) + todo.new + m.group(3), text, count=1), encoding="utf-8")
 
 
-def pr_body(todo: BumpPlan, source: str) -> str:
+def pr_body(todo: BumpPlan, repo: str) -> str:
     """The draft PR's body, harness block included. Values are IDs and SHAs only."""
     rows = "\n".join(f"| `{c.id}` | {c.what} | {c.detail} |" for c in todo.changes) or "| — | none | |"
     # Unticked on purpose: once the lock moves, `lint overrides` compares against
@@ -108,7 +108,7 @@ def pr_body(todo: BumpPlan, source: str) -> str:
     flags = "\n".join(f"- [ ] `{i}` (overrides.md entry {n}): **re-confirm or drop**" for i, n in todo.flagged)
     return (
         f"Moves the Trimtab lock from `{todo.old[:12]}` to `{todo.new[:12]}` "
-        f"([compare](https://github.com/{source}/compare/{todo.old}...{todo.new})).\n\n"
+        f"([compare](https://github.com/{repo}/compare/{todo.old}...{todo.new})).\n\n"
         f"## Changed items\n\n| ID | Change | Detail |\n|---|---|---|\n{rows}\n\n"
         f"## Overrides to re-confirm\n\n{flags or 'None: no override cites a changed item.'}\n\n"
         "## Harness items applied\n```yaml\n- id: NRM-3\n"

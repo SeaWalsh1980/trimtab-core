@@ -1,5 +1,6 @@
 """The package's two roots (stage S2 spec, section 3)."""
 
+import json
 import os
 import subprocess
 import tempfile
@@ -8,6 +9,7 @@ from pathlib import Path
 
 from instance_fixture import REPO_NAME, env_for, make_instance
 from trimtab import config as project_config
+from trimtab import instance as instance_file
 from trimtab import roots
 
 
@@ -105,7 +107,7 @@ class CommandLine(unittest.TestCase):
         self.assertEqual((done.returncode, done.stdout), (2, ""))
         self.assertIn("not an instance", done.stderr)
 
-    def test_instance_prints_the_root_and_the_repository_from_its_lock(self):
+    def test_instance_prints_the_root_and_the_repository_from_its_instance_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             inst = make_instance(Path(tmp))
             env = {k: v for k, v in os.environ.items() if k != roots.ENV}
@@ -171,17 +173,36 @@ class CommandLine(unittest.TestCase):
 
 
 class InstanceRepo(unittest.TestCase):
-    def test_a_malformed_lock_is_a_typed_error_not_no_repository(self):
+    """Integration at the file boundary: the repository comes from instance.json (stage S3 spec, S3-4)."""
+
+    def test_the_repository_comes_from_the_instance_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             inst = make_instance(Path(tmp))
-            (inst / LOCK).write_text("{not json")
+
+            self.assertEqual(roots.instance_repo(inst), REPO_NAME)
+
+    def test_a_malformed_instance_file_is_a_typed_error_not_no_repository(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = make_instance(Path(tmp))
+            (inst / instance_file.FILE).write_text("{not json")
 
             with self.assertRaises(roots.InstanceInvalid):
                 roots.instance_repo(inst)
 
-    def test_an_instance_without_a_lock_has_no_repository(self):
+    def test_an_instance_without_an_instance_file_is_a_typed_error(self):
         with tempfile.TemporaryDirectory() as tmp:
-            inst = make_instance(Path(tmp))
-            (inst / LOCK).unlink()
+            inst = make_instance(Path(tmp), instance_json=False)
 
-            self.assertIsNone(roots.instance_repo(inst))
+            with self.assertRaises(roots.InstanceInvalid) as ctx:
+                roots.instance_repo(inst)
+
+            self.assertIn(instance_file.FILE, str(ctx.exception))
+
+    def test_the_lock_no_longer_names_the_repository(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = make_instance(Path(tmp), instance_json=False)
+            (inst / LOCK).write_text(json.dumps({"source": REPO_NAME, "trimtab_sha": "0" * 40,
+                                                 "id_prefix": "INS", "schema_version": 1}))
+
+            with self.assertRaises(roots.InstanceInvalid):
+                roots.instance_repo(inst)

@@ -1,6 +1,7 @@
 """Routine specs render from templates with instance values (stage S2 spec, section 4)."""
 
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -41,6 +42,23 @@ class Render(unittest.TestCase):
 
         sources = spec["job_config"]["ccr"]["session_context"]["sources"]
         self.assertEqual(sources, [{"git_repository": {"url": f"https://github.com/{REPO_NAME}"}}])
+
+    def test_the_name_carries_the_instances_repository(self):
+        # Stage S3 spec, S3-2: the session step finds the routine by this name, not by a stored ID.
+        spec = routines.render("upstream-retro", routines.values(self.inst, {"environment_id": "placeholder"}))
+
+        self.assertIn(REPO_NAME, spec["name"])
+
+    def test_the_rendered_spec_holds_no_id_shape(self):
+        spec = routines.render("upstream-retro", routines.values(self.inst, {"environment_id": "placeholder"}))
+
+        self.assertIsNone(re.search(r"(trig|env|session)_[A-Za-z0-9]{16,}", json.dumps(spec)))
+
+    def test_an_instance_without_an_instance_file_is_an_error_not_a_blank_repository(self):
+        inst = make_instance(Path(self.tmp.name) / "bare", instance_json=False)
+
+        with self.assertRaises(roots.InstanceInvalid):
+            routines.values(inst, {"environment_id": "placeholder"})
 
     def test_a_missing_value_is_an_error_naming_it(self):
         with self.assertRaises(routines.RenderError) as caught:

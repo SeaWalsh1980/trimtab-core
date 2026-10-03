@@ -12,7 +12,7 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
-from trimtab import config as project_config
+from trimtab import instance as instance_file
 
 ENV = "TRIMTAB_INSTANCE"
 
@@ -47,13 +47,12 @@ def instance_root(explicit: str | os.PathLike | None = None,
     return root
 
 
-def instance_repo(instance: Path) -> str | None:
-    """The instance's own repository. Stage S2: its lock's `source`; stage S3: instance.json.
+def instance_repo(instance: Path) -> str:
+    """The instance's own repository, from its instance.json (stage S3 spec, S3-4).
 
-    None only when the instance has no lock; a lock that cannot be read is an error, not "no repository".
+    A missing or invalid file is an error, never "no repository".
     """
-    config, problems = project_config.load(instance)
-    if problems:
-        raise InstanceInvalid(f"the instance's {project_config.PATH} cannot be read ("
-                              + ", ".join(p.code for p in problems) + ")")
-    return config.source if config else None
+    try:
+        return instance_file.load(instance).repo
+    except instance_file.InstanceFileError as err:
+        raise InstanceInvalid(f"the instance's {instance_file.FILE}: {err}") from err

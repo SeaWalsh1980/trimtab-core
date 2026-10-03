@@ -10,8 +10,11 @@ from pathlib import Path
 from trimtab.items import Problem
 
 PATH = ".claude/trimtab.json"
-SCHEMA_VERSION = 1
-REQUIRED = ("source", "trimtab_sha", "id_prefix", "schema_version")
+SCHEMA_VERSION = 2
+REQUIRED = ("trimtab_sha", "id_prefix", "schema_version")
+# Schema 1 bindings. The instance's instance.json names its repository, and no
+# file holds a routine ID (stage S3 spec, S3-2 and S3-4).
+RETIRED = ("source", "routines")
 COMMIT_SHA = re.compile(r"^[0-9a-f]{7,40}$")
 
 
@@ -26,7 +29,6 @@ def is_commit_sha(value) -> bool:
 
 @dataclass(frozen=True)
 class ProjectConfig:
-    source: str
     trimtab_sha: str
     id_prefix: str
     schema_version: int = SCHEMA_VERSION
@@ -38,7 +40,7 @@ class ProjectConfig:
     cadence: str = "weekly"
     adopted_at: str | None = None
     baseline_pr: int = 0
-    routines: dict = field(default_factory=dict, compare=False)
+    warnings: tuple[str, ...] = field(default=(), compare=False)
 
 
 def parse(text: str, where: str = PATH) -> tuple[ProjectConfig | None, list[Problem]]:
@@ -51,12 +53,27 @@ def parse(text: str, where: str = PATH) -> tuple[ProjectConfig | None, list[Prob
     missing = [k for k in REQUIRED if k not in data]
     if missing:
         return None, [Problem("bad-config", where, f"missing {', '.join(missing)}")]
+    version = data.get("schema_version")
+    if not isinstance(version, int) or isinstance(version, bool):
+        return None, [Problem("bad-config", where, "schema_version must be an integer")]
+    if version > SCHEMA_VERSION:
+        return None, [Problem("bad-config", where, f"schema_version {version} is newer than this base "
+                                                   f"({SCHEMA_VERSION}); update the base")]
+    retired = [k for k in RETIRED if k in data]
+    warnings: tuple[str, ...] = ()
+    if retired and version >= 2:
+        return None, [Problem("bad-config", where, f"{', '.join(retired)} is not part of schema "
+                                                   f"{version}; remove it (the instance's instance.json "
+                                                   "names the repository)")]
+    if retired:
+        warnings = (f"schema_version {version}: {', '.join(retired)} ignored; "
+                    "the instance's instance.json names the repository",)
     known = {f for f in ProjectConfig.__dataclass_fields__}
-    values = {k: v for k, v in data.items() if k in known}
+    values = {k: v for k, v in data.items() if k in known and k != "warnings"}
     if "item_types" in values:
         values["item_types"] = tuple(values["item_types"])
     try:
-        config = ProjectConfig(**values)
+        config = ProjectConfig(**values, warnings=warnings)
     except TypeError:
         return None, [Problem("bad-config", where, "unexpected field types")]
     if not isinstance(config.baseline_pr, int) or not isinstance(config.schema_version, int):

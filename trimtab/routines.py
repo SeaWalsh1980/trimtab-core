@@ -28,13 +28,8 @@ def _templates() -> Path:
 
 
 def values(instance: Path, overrides: Mapping[str, str]) -> dict[str, str]:
-    """The instance's values (stage S2: its repository, from the lock), then `overrides` over them."""
-    found: dict[str, str] = {}
-    repo = roots.instance_repo(instance)
-    if repo:
-        found["instance_repo"] = repo
-    found.update(overrides)
-    return found
+    """The instance's values (its repository, from instance.json), then `overrides` over them."""
+    return {"instance_repo": roots.instance_repo(instance), **overrides}
 
 
 def _fill(path: Path, given: Mapping[str, str]) -> str:

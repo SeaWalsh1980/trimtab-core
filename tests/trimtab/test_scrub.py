@@ -7,14 +7,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from trimtab import config as project_config
+from trimtab import instance as instance_file
 from trimtab import scrub
 
 REPO_NAME = "owner/secret-instance"
 CONSUMER = "owner/consumer-one"
 ROUTINE_ID = "trig_" + "A1b2C3d4E5f6G7h8J9k0"  # built at run time: never a literal ID in a file
 DOCTRINE = "PrivateDoctrine.md"
-LOCK = project_config.PATH
 TRIMTAB = Path(__file__).resolve().parents[2] / "bin" / "trimtab"
 
 
@@ -22,9 +21,8 @@ def make_instance(root: Path) -> Path:
     inst = root / "instance"
     (inst / "rules").mkdir(parents=True)
     (inst / "rules" / DOCTRINE).write_text("---\nid_prefix: PRV\n---\n# 1. x\n", encoding="utf-8")
-    (inst / ".claude").mkdir()
-    (inst / ".claude" / "trimtab.json").write_text(json.dumps(
-        {"source": REPO_NAME, "trimtab_sha": "0" * 40, "id_prefix": "INS", "schema_version": 1}))
+    (inst / instance_file.FILE).write_text(json.dumps(
+        {"schema_version": 1, "repo": REPO_NAME, "base": {"repo": "owner/base", "sha": "0" * 40}}))
     (inst / "consumers.json").write_text(json.dumps({"schema_version": 1, "consumers": [{"repo": CONSUMER}]}))
     (inst / "routines").mkdir()
     (inst / "routines" / "spec.json").write_text(json.dumps({"id": ROUTINE_ID}))
@@ -126,6 +124,13 @@ class PrivateScrubInputs(unittest.TestCase):
         with self.assertRaises(scrub.ScrubError):
             scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: str(self.root / "missing")})
 
+    def test_a_relative_pattern_path_is_an_error_naming_the_variable_not_the_value(self):
+        with self.assertRaises(scrub.ScrubError) as ctx:
+            scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: "rel.patterns"})
+
+        self.assertIn(scrub.PATTERNS_ENV, str(ctx.exception))
+        self.assertNotIn("rel.patterns", str(ctx.exception))
+
     def test_a_pattern_line_without_a_tab_is_an_error(self):
         patterns = self.root / "private.patterns"
         patterns.write_text("no-tab-here\n", encoding="utf-8")
@@ -206,14 +211,34 @@ class CommandLine(unittest.TestCase):
 
         self.assertEqual(done.returncode, 2)
 
-    def test_a_malformed_lock_exits_2_rather_than_dropping_the_repository(self):
-        (self.instance / LOCK).write_text(json.dumps({"source": REPO_NAME}))
+    def test_a_malformed_instance_file_exits_2_rather_than_dropping_the_repository(self):
+        (self.instance / instance_file.FILE).write_text(json.dumps({"repo": REPO_NAME}))
         (self.tree / "README.md").write_text(f"clone {REPO_NAME}\n", encoding="utf-8")
 
         done = self.scrub("--instance", str(self.instance))
 
         self.assertEqual(done.returncode, 2)
         self.assertNotIn(REPO_NAME, done.stdout + done.stderr)
+
+    def test_an_instance_without_an_instance_file_exits_2(self):
+        (self.instance / instance_file.FILE).unlink()
+
+        done = self.scrub("--instance", str(self.instance))
+
+        self.assertEqual(done.returncode, 2)
+        self.assertIn(instance_file.FILE, done.stderr)
+
+    def test_a_relative_pattern_path_exits_2_naming_the_variable_but_not_the_value(self):
+        # Stage S3 spec, S3-6: relative to the scrub's working directory is not the instance.
+        (self.tree / "rel.patterns").write_text("acme-[0-9]{4}\tacme key\n", encoding="utf-8")
+        self.env[scrub.PATTERNS_ENV] = "rel.patterns"
+
+        done = subprocess.run([str(TRIMTAB), "scrub", "--tree", str(self.tree), "--instance", str(self.instance)],
+                              capture_output=True, text=True, env=self.env, cwd=self.tree)
+
+        self.assertEqual(done.returncode, 2)
+        self.assertIn(scrub.PATTERNS_ENV, done.stderr)
+        self.assertNotIn("rel.patterns", done.stdout + done.stderr)
 
     def test_a_malformed_consumers_list_exits_2_not_1(self):
         (self.instance / "consumers.json").write_text("[not json")

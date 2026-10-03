@@ -61,7 +61,7 @@ class Overrides(unittest.TestCase):
         (self.project / "docs" / "adr").mkdir(parents=True)
         (self.project / "docs" / "adr" / "0001-gwt.md").write_text("# ADR\n")
         (self.project / ".claude" / "trimtab.json").write_text(json.dumps(
-            {"source": "o/r", "trimtab_sha": self.sha, "id_prefix": "PRJ", "schema_version": 1}))
+            {"trimtab_sha": self.sha, "id_prefix": "PRJ", "schema_version": 2}))
 
     def tearDown(self):
         self._tmp.cleanup()

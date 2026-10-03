@@ -10,7 +10,7 @@ from trimtab.items import Item, Strength
 from trimtab.propose import render
 from trimtab.score import candidates, tally
 
-CONFIG = ProjectConfig(source="owner/repo", trimtab_sha="abc", id_prefix="TT",
+CONFIG = ProjectConfig(trimtab_sha="abc", id_prefix="TT",
                        adopted_at="2026-09-27T00:00:00Z", baseline_pr=10)
 REGISTRY = {"TST-2": Item(id="TST-2", prefix="TST", local_id="2", type="rule", source="rules/Example.md",
                           heading="Mocking Policy", strength=Strength.PROHIBIT)}
