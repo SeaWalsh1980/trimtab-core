@@ -235,7 +235,8 @@ fi
 # Three layers, in order: the base, the instance, this machine. Dicts recurse,
 # lists concatenate without duplicates, scalars override. After every layer the
 # base's hook registrations must still be present: a layer that loses one would
-# switch a guard off silently, so the merge refuses and nothing is written.
+# switch a guard off silently, so the merge refuses and nothing is written. It
+# refuses, for the same reason, a layer whose env sets any HOOK_ALLOW_* key.
 mkdir -p "$CLAUDE_HOME"
 generated=$(python3 - "$BASE" "$INSTANCE" "$values" <<'PY'
 import json, sys, os
@@ -268,11 +269,23 @@ layers = [("settings.base.json", load(base_root, "settings.base.json")),
           ("machine.json", load(inst_root, "machine.json"))]
 
 base_hooks = layers[0][1].get("hooks", {})
-def refuse(layer, why):
-    print(f"REFUSED: {layer} {why}; the guards would not run. No link was switched and settings.json was not written.", file=sys.stderr)
+def refuse(layer, why, effect="the guards would not run"):
+    print(f"REFUSED: {layer} {why}; {effect}. No link was switched and settings.json was not written.", file=sys.stderr)
     sys.exit(3)
 merged = {}
 for name, layer in layers:
+    # A guard override is the operator's, exported before launching claude. In a
+    # layer's env it would be written into the generated settings and lift that
+    # guard for every session, with every registration still intact. Any value
+    # counts, and only the key is named, never the value.
+    layer_env = layer.get("env", {})
+    if not isinstance(layer_env, dict):
+        refuse(name, "sets `env` to something that is not an object",
+               "its guard overrides could not be checked")
+    overrides = sorted(k for k in layer_env if k.startswith("HOOK_ALLOW_"))
+    if overrides:
+        refuse(name, f"sets {', '.join(overrides)} in env",
+               "the guards would allow everything in every session (export an override before launching claude instead)")
     merged = merge(merged, layer)
     hooks = merged.get("hooks", {})
     if not isinstance(hooks, dict):
