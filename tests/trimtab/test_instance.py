@@ -61,6 +61,19 @@ class Parse(unittest.TestCase):
     def test_another_schema_version_is_refused(self):
         self.refuses(with_(schema_version=2), "schema_version")
 
+    def test_a_dot_component_in_base_repo_is_refused(self):
+        for repo in ("../x", "owner/..", "./x", "owner/."):
+            with self.subTest(repo=repo):
+                self.refuses(with_(base={"repo": repo, "sha": SHA}), "base.repo")
+
+    def test_a_dot_component_in_repo_is_refused(self):
+        self.refuses(with_(repo="../x"), "repo")
+
+    def test_a_boolean_or_float_schema_version_is_refused(self):
+        for version in (True, 1.0):
+            with self.subTest(version=version):
+                self.refuses(with_(schema_version=version), "schema_version")
+
     def test_a_pack_list_is_kept_in_order(self):
         f = instance.parse(with_(guards={"secrets_packs": ["zoho", "google"]}))
         self.assertEqual(instance.packs_env(f), "zoho,google")
