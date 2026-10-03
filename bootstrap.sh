@@ -61,11 +61,33 @@ die()  { printf '  \033[31m✗\033[0m %s\n' "$1" >&2; exit 1; }
 # drift, or `--check` in a sandbox would report drift that does not exist, and
 # it must not print the arrow that the idempotency test greps for.
 skip() { printf '  \033[90m·\033[0m %s\n' "$1"; }
-# env_key <settings file> <KEY>: the value under "env", or empty when the key,
-# the file or its JSON is absent. Reading is never a reason to stop.
+# env_key <settings file> <KEY>: the value under "env"; empty when the file or
+# the key is absent. A file that exists but cannot be read as settings (not JSON,
+# not an object, "env" not an object) is exit 3, never an empty value: callers use
+# the result to decide which probes run, and an empty value would skip one, or
+# widen a pack switch of "none" to every pack, without a word. See unreadable().
 env_key() {
-  python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("env",{}).get(sys.argv[2],""))' \
-    "$1" "$2" 2>/dev/null || true
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+path, key = sys.argv[1:]
+try:
+    with open(path) as f:
+        settings = json.load(f)
+except FileNotFoundError:
+    print("")
+    sys.exit(0)
+except (OSError, ValueError):
+    sys.exit(3)
+env = settings.get("env", {}) if isinstance(settings, dict) else None
+if not isinstance(env, dict):
+    sys.exit(3)
+print(env.get(key, ""))
+PY
+}
+# unreadable <what>: the live settings.json cannot be read back. In an install it
+# was just written, so that is a fault; under --check it is drift, reported.
+unreadable() {
+  if [[ $CHECK_ONLY -eq 1 ]]; then note "$1 cannot be read as settings"; else die "$1 cannot be read as settings"; fi
 }
 
 command -v python3 >/dev/null 2>&1 || die "python3 is required"
@@ -233,7 +255,7 @@ layers.append(("machine.json", load(inst_root, "machine.json")))
 
 base_hooks = layers[0][1].get("hooks", {})
 def refuse(layer, why):
-    print(f"REFUSED: {layer} {why}; the guards would not run. Nothing was changed.", file=sys.stderr)
+    print(f"REFUSED: {layer} {why}; the guards would not run. No link was switched and settings.json was not written.", file=sys.stderr)
     sys.exit(3)
 merged = {}
 for name, layer in layers:
@@ -273,7 +295,7 @@ def prune(o):
     return o
 print(json.dumps(prune(merged), indent=2))
 PY
-) || die "settings merge refused (see above); nothing was changed"
+) || die "settings merge refused (see above); no link was switched and settings.json was not written"
 
 target="$CLAUDE_HOME/settings.json"
 if [[ -f "$target" ]] && [[ "$(cat "$target")" == "$generated" ]]; then
@@ -294,7 +316,7 @@ fi
 # it would block every call (they refuse a relative value), whatever the
 # comparison above found: name it.
 if [[ $CHECK_ONLY -eq 1 && -f "$target" ]]; then
-  live_pat=$(env_key "$target" TRIMTAB_SECRET_PATTERNS)
+  live_pat=$(env_key "$target" TRIMTAB_SECRET_PATTERNS) || { unreadable "settings.json"; live_pat=""; }
   if [[ -n "$live_pat" && "$live_pat" != /* ]]; then
     note "TRIMTAB_SECRET_PATTERNS in settings.json is not an absolute path"
   fi
@@ -343,13 +365,29 @@ if [[ -f "$INSTANCE/CLAUDE.md" ]]; then
     rm -f "$dst"; ln -s "$INSTANCE/CLAUDE.md" "$dst"; note "linked CLAUDE.md"
   fi
 elif [[ -L "$CLAUDE_HOME/CLAUDE.md" ]]; then
-  # This instance has no CLAUDE.md, but an earlier install linked one: left in
-  # place it keeps feeding the previous tree's instructions to every session (and
-  # dangles when that tree goes). Only a symlink is removed, never a regular file.
-  if [[ $CHECK_ONLY -eq 1 ]]; then
-    note "CLAUDE.md links to $(readlink "$CLAUDE_HOME/CLAUDE.md"), but this instance has none"
+  # This instance has no CLAUDE.md, but an earlier install may have linked one:
+  # left in place it keeps feeding the previous tree's instructions to every
+  # session (and dangles when that tree goes). It goes only if an install could
+  # have made it: the link dangles, or points into the snapshot store or the last
+  # installed instance. Any other link is the operator's own and stays; so does a
+  # regular file. Nothing is deleted on a guess about what the operator meant.
+  dst="$CLAUDE_HOME/CLAUDE.md"
+  link_target=$(readlink -f "$dst" 2>/dev/null || true)
+  store_phys_now=$(cd -P "$STORE" 2>/dev/null && pwd -P || true)
+  rec_instance=$(python3 -c '
+import json, sys
+print(json.load(open(sys.argv[1])).get("instance_root") or "")' "$installed_json" 2>/dev/null || true)
+  ours=0
+  if [[ ! -e "$dst" ]]; then ours=1
+  elif [[ -n "$store_phys_now" && "$link_target" == "$store_phys_now"/* ]]; then ours=1
+  elif [[ -n "$rec_instance" && "$link_target" == "$rec_instance"/* ]]; then ours=1
+  fi
+  if [[ $ours -eq 0 ]]; then
+    skip "CLAUDE.md links to $(readlink "$dst"), which no install of this tool made: left alone"
+  elif [[ $CHECK_ONLY -eq 1 ]]; then
+    note "CLAUDE.md links to $(readlink "$dst"), but this instance has none"
   else
-    rm -f "$CLAUDE_HOME/CLAUDE.md"; note "removed a stale CLAUDE.md link (this instance has none)"
+    rm -f "$dst"; note "removed a stale CLAUDE.md link (this instance has none)"
   fi
 fi
 
@@ -418,7 +456,7 @@ probe_guard guard-secrets.sh "a PEM private key in written content" \
 # Each enabled signature pack must block its own sample (stage S2, C8). The
 # switch comes from the generated settings, not this shell: unset or empty
 # means every shipped pack, "none" means no pack.
-packs=$(env_key "$CLAUDE_HOME/settings.json" TRIMTAB_SECRET_PACKS)
+packs=$(env_key "$CLAUDE_HOME/settings.json" TRIMTAB_SECRET_PACKS) || { unreadable "settings.json (pack switch)"; packs=""; }
 pack_list=()
 if [[ -z "$packs" ]]; then
   for f in "$BASE"/hooks/secrets.d/*.patterns; do
@@ -445,7 +483,7 @@ unset pem
 # The declared private pattern file must parse with guard-secrets' own parser:
 # a benign write has to pass with it. The guard refuses a relative path or an
 # unreadable file, so a bad declaration fails here and not on the first edit.
-pat=$(env_key "$CLAUDE_HOME/settings.json" TRIMTAB_SECRET_PATTERNS)
+pat=$(env_key "$CLAUDE_HOME/settings.json" TRIMTAB_SECRET_PATTERNS) || { unreadable "settings.json (pattern file)"; pat=""; }
 if [[ -n "$pat" && -x "$CLAUDE_HOME/hooks/guard-secrets.sh" ]]; then
   set +e
   printf '%s' '{"tool_name":"Write","tool_input":{"file_path":"/tmp/x/probe.py","content":"print(42)"}}' \

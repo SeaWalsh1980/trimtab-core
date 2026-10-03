@@ -103,10 +103,13 @@ check_refuses_hooks_replaced() {
   h=$(new_home); inst=$(inst_of "$h")
   echo '{"hooks": "off"}' > "$inst/settings.instance.json"
   boot "$h" "$live" --instance "$inst"
-  if [[ $rc -eq 1 && "$out" == *settings.instance.json* ]] && no_links "$h"; then
-    pass "refuses a layer that replaces hooks, naming the layer"
+  # machine.json is created before the merge (it is one of the layers), so the
+  # refusal must not claim that nothing was changed.
+  if [[ $rc -eq 1 && "$out" == *settings.instance.json* && "${out,,}" != *"nothing was changed"* ]] \
+     && no_links "$h"; then
+    pass "refuses a layer that replaces hooks, naming the layer, without claiming nothing changed"
   else
-    fail "refuses a layer that replaces hooks, naming the layer" "rc=$rc"; echo "$out" | tail -5
+    fail "refuses a layer that replaces hooks, naming the layer, without claiming nothing changed" "rc=$rc"; echo "$out" | tail -5
   fi
 }
 
@@ -275,15 +278,14 @@ check_retention_spares_a_snapshot_systemd_links_into() {
 # Without PyYAML the registry check cannot run; that is a missing dependency,
 # not a doctrine failure, and the message must say which.
 check_missing_pyyaml_is_named() {
-  local h inst
+  local h inst stub
   h=$(new_home); inst=$(inst_of "$h")
-  mkdir -p "$h/fakehome"
-  if HOME="$h/fakehome" python3 -c 'import yaml' 2>/dev/null; then
-    echo "SKIP  a missing PyYAML is named as such (PyYAML is installed system-wide here)"
-    return
-  fi
+  # A stub that fails to import shadows PyYAML wherever it is installed, so the
+  # check runs on every machine and not only on ones that lack the library.
+  stub="$h/no-yaml"; mkdir -p "$stub"
+  echo 'raise ImportError("PyYAML hidden for this test")' > "$stub/yaml.py"
   set +e
-  out=$(HOME="$h/fakehome" CLAUDE_CONFIG_DIR="$h/sandbox-config" XDG_DATA_HOME="$h/share" \
+  out=$(PYTHONPATH="$stub" CLAUDE_CONFIG_DIR="$h/sandbox-config" XDG_DATA_HOME="$h/share" \
         "$live" --no-timer --allow-worktree --instance "$inst" 2>&1)
   rc=$?
   set -e
@@ -295,22 +297,76 @@ check_missing_pyyaml_is_named() {
 }
 
 # An instance with no CLAUDE.md must not leave the previous tree's link in
-# place: it keeps feeding the old instructions to every session.
-check_instance_without_claude_md_drops_a_stale_link() {
+# place: it keeps feeding the old instructions to every session. But only a link
+# an install could have made goes: one that dangles, or that points into the
+# snapshot store or the last installed instance. Anything else is the operator's.
+check_instance_without_claude_md_drops_a_dangling_link() {
   local h inst check_rc check_out
   h=$(new_home); inst=$(inst_of "$h")
   rm -f "$inst/CLAUDE.md"
   mkdir -p "$h/.claude"
-  echo "old instructions" > "$h/old-claude.md"
-  ln -s "$h/old-claude.md" "$h/.claude/CLAUDE.md"
+  ln -s "$h/old-tree/CLAUDE.md" "$h/.claude/CLAUDE.md"
   boot "$h" "$live" --instance "$inst" --check
   check_rc=$rc; check_out=$out
   boot "$h" "$live" --instance "$inst"
   if [[ $check_rc -eq 1 && "$check_out" == *CLAUDE.md* && $rc -eq 0 \
      && ! -e "$h/.claude/CLAUDE.md" && ! -L "$h/.claude/CLAUDE.md" ]]; then
-    pass "an instance without a CLAUDE.md drops the stale link (and --check reports it)"
+    pass "an instance without a CLAUDE.md drops a dangling link (and --check reports it)"
   else
-    fail "an instance without a CLAUDE.md drops the stale link (and --check reports it)" "check rc=$check_rc, rc=$rc"
+    fail "an instance without a CLAUDE.md drops a dangling link (and --check reports it)" "check rc=$check_rc, rc=$rc"
+  fi
+}
+
+check_instance_without_claude_md_drops_a_link_into_the_store() {
+  local h inst snap
+  h=$(new_home); inst=$(inst_of "$h")
+  rm -f "$inst/CLAUDE.md"
+  snap="$h/share/trimtab/core/$(printf '%040d' 7)"
+  mkdir -p "$snap" "$h/.claude"
+  echo "old instructions" > "$snap/CLAUDE.md"
+  ln -s "$snap/CLAUDE.md" "$h/.claude/CLAUDE.md"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && ! -L "$h/.claude/CLAUDE.md" ]]; then
+    pass "an instance without a CLAUDE.md drops a link into the snapshot store"
+  else
+    fail "an instance without a CLAUDE.md drops a link into the snapshot store" "rc=$rc"
+  fi
+}
+
+check_instance_without_claude_md_keeps_a_link_it_did_not_make() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  rm -f "$inst/CLAUDE.md"
+  mkdir -p "$h/.claude"
+  echo "my own instructions" > "$h/mine.md"
+  ln -s "$h/mine.md" "$h/.claude/CLAUDE.md"
+  boot "$h" "$live" --instance "$inst" --check
+  local check_out=$out
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && "$(readlink "$h/.claude/CLAUDE.md")" == "$h/mine.md" \
+     && "$check_out" == *"left alone"* ]]; then
+    pass "an instance without a CLAUDE.md leaves an operator's own link alone, and says so"
+  else
+    fail "an instance without a CLAUDE.md leaves an operator's own link alone, and says so" "rc=$rc"
+  fi
+}
+
+# The checks that read the generated settings back (pack switch, private
+# pattern file, the relative-path note) must not turn an unreadable file into an
+# empty value: that would skip a probe, or widen "none" to every pack, silently.
+check_unreadable_live_settings_are_reported() {
+  local h inst first
+  h=$(new_home); inst=$(inst_of "$h")
+  boot "$h" "$live" --instance "$inst"
+  echo '{not json' > "$h/.claude/settings.json"
+  boot "$h" "$live" --instance "$inst" --check
+  first=$out
+  echo '{"env": 5}' > "$h/.claude/settings.json"
+  boot "$h" "$live" --instance "$inst" --check
+  if [[ "$first" == *"cannot be read as settings"* && "$out" == *"cannot be read as settings"* ]]; then
+    pass "an unreadable live settings.json is reported, not read as empty"
+  else
+    fail "an unreadable live settings.json is reported, not read as empty"
   fi
 }
 
@@ -382,7 +438,10 @@ check_sandbox_without_own_store_leaves_store_alone
 check_observer_failure_records_but_withholds_retention
 check_retention_spares_a_snapshot_systemd_links_into
 check_missing_pyyaml_is_named
-check_instance_without_claude_md_drops_a_stale_link
+check_instance_without_claude_md_drops_a_dangling_link
+check_instance_without_claude_md_drops_a_link_into_the_store
+check_instance_without_claude_md_keeps_a_link_it_did_not_make
+check_unreadable_live_settings_are_reported
 check_check_is_the_retention_dry_run
 check_red_run_deletes_nothing
 check_no_instance_keeps_single_root
