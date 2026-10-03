@@ -1,0 +1,42 @@
+# Keeps the SHA-pinned actions current, the claude-code-action pin above
+# all: its version decides the review model, which claude-code-review.yml
+# leaves at the action's default (ADR 0009).
+#
+# Dependabot keeps the commit-SHA pin and rewrites the trailing version
+# comment. It recognises that comment only when the version is the LAST
+# token on the line, so a pin's comment is the bare `# vX.Y.Z` and nothing
+# else. Text after the version leaves the comment stale while the SHA still
+# moves.
+#
+# Every action here is used by claude-code-review.yml, so claude-review
+# skips these PRs (claude-code-action does not review a PR that edits its
+# own workflow, and still reports success). The operator reviews and merges
+# each one.
+#
+# Grouping: minor and patch bumps arrive in one weekly PR; a major bump
+# (claude-code-action v1 -> v2, say) arrives on its own, so it can be
+# reviewed and reverted alone.
+#
+# Do not add an `ignore` entry without saying so at the entry: if security
+# updates are switched on for this repository, `ignore` suppresses those
+# too, silently.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+      include: scope
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
