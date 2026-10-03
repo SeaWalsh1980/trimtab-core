@@ -338,6 +338,42 @@ class Shim(unittest.TestCase):
             (dot_git / "info" / "attributes").write_text("* filter=x\n")
         self.refused_after_planting(plant)
 
+    def test_a_file_in_the_snapshot_git_directory_that_a_clone_never_writes_stops_the_shim(self):
+        # commondir redirects git to another directory's config, hooks and objects; the rest are other
+        # files git reads. None is on the allowlist.
+        for name in ("commondir", "gitdir", "config.worktree", "shallow", "info/grafts", "info/sparse-checkout",
+                     "description", "worktrees", "unexpected"):
+            with self.subTest(name=name):
+                self.reset_store()
+                def plant(dot_git, name=name):
+                    # commondir names a real repository (git would take its objects, config and hooks
+                    # from it); shallow and grafts name a real commit, so git accepts both.
+                    content = {"commondir": f"{self.base / '.git'}\n", "shallow": f"{self.sha}\n",
+                               "info/grafts": f"{self.sha}\n"}.get(name, "/attacker/dir\n")
+                    target = dot_git / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(content)
+                self.refused_after_planting(plant)
+
+    def test_a_symlinked_entry_in_the_snapshot_git_directory_stops_the_shim(self):
+        elsewhere = self.tmp / "elsewhere-objects"
+        shutil.copytree(self.base / ".git" / "objects", elsewhere)
+        def plant(dot_git):
+            shutil.rmtree(dot_git / "objects")
+            (dot_git / "objects").symlink_to(elsewhere)
+        self.refused_after_planting(plant)
+
+    def test_what_normal_use_leaves_in_the_snapshot_git_directory_does_not_stop_the_shim(self):
+        self.run_shim()
+        dot_git = self.store / self.sha / ".git"
+        (dot_git / "FETCH_HEAD").write_text("")
+        (dot_git / "ORIG_HEAD").write_text(self.sha + "\n")
+        (dot_git / "info").mkdir(exist_ok=True)
+        (dot_git / "info" / "exclude").write_text("# nothing\n")
+        (dot_git / "hooks").mkdir(exist_ok=True)
+        out = self.run_shim()
+        self.assertEqual(out.returncode, 0, out.stderr)
+
     def test_a_corrupted_tree_object_stops_the_shim(self):
         # A loose tree object rewritten to list a tampered blob, with the tampered file in place: the HEAD
         # still equals the pin and the working tree matches what ls-tree now says. Only the objects' own

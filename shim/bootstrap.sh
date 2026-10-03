@@ -200,12 +200,13 @@ PY
 # check_git_dir <dir>: the snapshot's own git directory holds nothing that could
 # make git, run later by the installer or the tooling in the snapshot, do
 # something other than read the pinned commit. The verifier below skips .git, so
-# this is where it is looked at: no hooks (and the check fails closed if it
-# cannot read the directory), no alternate object stores, no attributes file, a
-# config limited to the keys a clone writes (so no hooksPath, filter, include or
+# this is where it is looked at: only the entries a clone and normal use write
+# (no commondir, grafts, shallow and the like), no hooks (and the check fails
+# closed if it cannot read the directory), no alternate object stores, a config
+# limited to the keys a clone writes (so no hooksPath, filter, include or
 # fsmonitor), and every reachable object re-hashed by git fsck.
 check_git_dir() {
-  local gd="$1/.git" found key keys f out
+  local gd="$1/.git" found key keys f out entries entry kind
   if [[ -L "$gd/hooks" ]]; then
     echo "  .git/hooks is a symlink" >&2; return 1
   fi
@@ -214,7 +215,28 @@ check_git_dir() {
       || { echo "  .git/hooks could not be read" >&2; return 1; }
     [[ -z "$found" ]] || { echo "  .git/hooks is not empty" >&2; return 1; }
   fi
-  for f in objects/info/alternates objects/info/http-alternates info/attributes; do
+  # An allowlist, not a list of known-bad files: git reads many (commondir
+  # redirects it to another directory's config, hooks and objects; shallow,
+  # grafts, config.worktree and sparse-checkout change what it sees), and the
+  # next one is not on any list. Only what a clone and normal use write is
+  # accepted, as a real entry, never a symlink.
+  entries=$(find "$gd" -mindepth 1 -maxdepth 1 -printf '%y %f\n') \
+    || { echo "  .git could not be listed" >&2; return 1; }
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
+    kind=${entry%% *}; f=${entry#* }
+    if [[ "$kind" == l ]]; then echo "  .git/$f is a symlink" >&2; return 1; fi
+    case "$f" in
+      HEAD|config|objects|refs|packed-refs|index|logs|FETCH_HEAD|ORIG_HEAD|hooks) ;;
+      info)
+        # Only the exclude file, which the verifier does not consult.
+        found=$(find "$gd/info" -mindepth 1 -not \( -type f -name exclude \) -print -quit) \
+          || { echo "  .git/info could not be read" >&2; return 1; }
+        [[ -z "$found" ]] || { echo "  .git/info holds something other than exclude" >&2; return 1; } ;;
+      *) echo "  .git/$f is not something a clone writes" >&2; return 1 ;;
+    esac
+  done <<<"$entries"
+  for f in objects/info/alternates objects/info/http-alternates; do
     if [[ -e "$gd/$f" || -L "$gd/$f" ]]; then
       echo "  .git/$f exists, and a snapshot never has one" >&2; return 1
     fi
