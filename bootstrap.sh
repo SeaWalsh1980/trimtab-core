@@ -54,6 +54,9 @@ drift=0
 # deletes nothing after one; ordinary drift, such as a first install's changes,
 # is not red.
 red=0
+# Set once the live settings.json is found unreadable: the probes that depend on
+# it are then skipped, not run against a guess.
+settings_bad=0
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 note() { printf '  \033[33m→\033[0m %s\n' "$1"; drift=1; }
 die()  { printf '  \033[31m✗\033[0m %s\n' "$1" >&2; exit 1; }
@@ -84,9 +87,33 @@ if not isinstance(env, dict):
 print(env.get(key, ""))
 PY
 }
+# read_record: the install record's fields, read once, for every later decision.
+# Sets rec_root, rec_instance_sha, rec_base and rec_prev; each is empty when the
+# record is absent, unreadable or lacks the field (a missing record is a first
+# install, not an error).
+read_record() {
+  local fields
+  mapfile -t fields < <(python3 - "$installed_json" <<'PY' 2>/dev/null
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        rec = json.load(f)
+except (OSError, ValueError):
+    rec = {}
+if not isinstance(rec, dict):
+    rec = {}
+for key in ("instance_root", "instance_sha", "base_sha", "prev_base_sha"):
+    value = rec.get(key)
+    print(value if isinstance(value, str) else "")
+PY
+)
+  rec_root=${fields[0]-}; rec_instance_sha=${fields[1]-}
+  rec_base=${fields[2]-}; rec_prev=${fields[3]-}
+}
 # unreadable <what>: the live settings.json cannot be read back. In an install it
 # was just written, so that is a fault; under --check it is drift, reported.
 unreadable() {
+  settings_bad=1
   if [[ $CHECK_ONLY -eq 1 ]]; then note "$1 cannot be read as settings"; else die "$1 cannot be read as settings"; fi
 }
 
@@ -175,6 +202,7 @@ fi
 # previous install live, and nothing is created, switched or deleted. Only with
 # --instance; the single-root install has no separate doctrine to check.
 installed_json="$STORE/.installed.json"
+read_record
 values=""
 if [[ $SINGLE_ROOT -eq 0 ]]; then
   # The checker is run through bash, so a lost exec bit cannot fail it, and its
@@ -184,17 +212,9 @@ if [[ $SINGLE_ROOT -eq 0 ]]; then
   python3 -c 'import yaml' 2>/dev/null \
     || die "PyYAML is required (the registry check imports it) and python3 cannot import it; nothing was changed"
   against=()
-  prev_instance_sha=$(python3 - "$installed_json" "$INSTANCE" <<'PY' 2>/dev/null || true
-import json, sys
-try:
-    rec = json.load(open(sys.argv[1]))
-except (OSError, ValueError):
-    sys.exit(0)
-if rec.get("instance_root") == sys.argv[2] and isinstance(rec.get("instance_sha"), str):
-    print(rec["instance_sha"])
-PY
-)
-  [[ "$prev_instance_sha" =~ ^[0-9a-f]{40}$ ]] && against=(--against "$prev_instance_sha")
+  # The baseline is the last installed SHA of this same instance, if one is recorded.
+  [[ "$rec_root" == "$INSTANCE" && "$rec_instance_sha" =~ ^[0-9a-f]{40}$ ]] \
+    && against=(--against "$rec_instance_sha")
   if ! reg_out=$(bash "$TRIMTAB_BIN" registry --check --instance "$INSTANCE" ${against[@]+"${against[@]}"} 2>&1); then
     printf '%s\n' "$reg_out" >&2
     die "the instance's doctrine fails the registry check; nothing was changed, the previous install stays live"
@@ -284,7 +304,8 @@ if values:
 for key, value in owned.items():
     prior = env.get(key)
     if prior is not None and prior != value:
-        print(f"note: a settings layer set {key}; bootstrap owns it and wrote {value!r}", file=sys.stderr)
+        did = "removed it (the instance declares none)" if value is None else f"wrote {value!r}"
+        print(f"note: a settings layer set {key}; bootstrap owns it and {did}", file=sys.stderr)
     if value is None:
         env.pop(key, None)
     else:
@@ -317,11 +338,11 @@ fi
 # A relative private pattern path in the live file means the guards that read
 # it would block every call (they refuse a relative value), whatever the
 # comparison above found: name it.
-if [[ $CHECK_ONLY -eq 1 && -f "$target" ]]; then
-  live_pat=$(env_key "$target" TRIMTAB_SECRET_PATTERNS) || { unreadable "settings.json"; live_pat=""; }
-  if [[ -n "$live_pat" && "$live_pat" != /* ]]; then
-    note "TRIMTAB_SECRET_PATTERNS in settings.json is not an absolute path"
-  fi
+# Read once: the same value is the private pattern file the probe in section 5
+# runs against. An unreadable file is reported here, once.
+pat=$(env_key "$target" TRIMTAB_SECRET_PATTERNS) || { unreadable "settings.json"; pat=""; }
+if [[ $CHECK_ONLY -eq 1 && -n "$pat" && "$pat" != /* ]]; then
+  note "TRIMTAB_SECRET_PATTERNS in settings.json is not an absolute path"
 fi
 
 # ---- 3. symlink directories -------------------------------------------
@@ -376,13 +397,10 @@ elif [[ -L "$CLAUDE_HOME/CLAUDE.md" ]]; then
   dst="$CLAUDE_HOME/CLAUDE.md"
   link_target=$(readlink -f "$dst" 2>/dev/null || true)
   store_phys_now=$(cd -P "$STORE" 2>/dev/null && pwd -P || true)
-  rec_instance=$(python3 -c '
-import json, sys
-print(json.load(open(sys.argv[1])).get("instance_root") or "")' "$installed_json" 2>/dev/null || true)
   ours=0
   if [[ ! -e "$dst" ]]; then ours=1
   elif [[ -n "$store_phys_now" && "$link_target" == "$store_phys_now"/* ]]; then ours=1
-  elif [[ -n "$rec_instance" && "$link_target" == "$rec_instance"/* ]]; then ours=1
+  elif [[ -n "$rec_root" && "$link_target" == "$rec_root"/* ]]; then ours=1
   fi
   if [[ $ours -eq 0 ]]; then
     skip "CLAUDE.md links to $(readlink "$dst"), which no install of this tool made: left alone"
@@ -458,7 +476,14 @@ probe_guard guard-secrets.sh "a PEM private key in written content" \
 # Each enabled signature pack must block its own sample (stage S2, C8). The
 # switch comes from the generated settings, not this shell: unset or empty
 # means every shipped pack, "none" means no pack.
-packs=$(env_key "$CLAUDE_HOME/settings.json" TRIMTAB_SECRET_PACKS) || { unreadable "settings.json (pack switch)"; packs=""; }
+if [[ $settings_bad -eq 1 ]]; then
+  # Already reported. Running the probes against "every pack" would test packs a
+  # switch of "none" never asked for, so none run.
+  skip "pack and pattern-file probes skipped: settings.json cannot be read (reported above)"
+  packs=none
+else
+  packs=$(env_key "$CLAUDE_HOME/settings.json" TRIMTAB_SECRET_PACKS) || { unreadable "settings.json"; packs=none; }
+fi
 pack_list=()
 if [[ -z "$packs" ]]; then
   for f in "$BASE"/hooks/secrets.d/*.patterns; do
@@ -485,7 +510,6 @@ unset pem
 # The declared private pattern file must parse with guard-secrets' own parser:
 # a benign write has to pass with it. The guard refuses a relative path or an
 # unreadable file, so a bad declaration fails here and not on the first edit.
-pat=$(env_key "$CLAUDE_HOME/settings.json" TRIMTAB_SECRET_PATTERNS) || { unreadable "settings.json (pattern file)"; pat=""; }
 if [[ -n "$pat" && -x "$CLAUDE_HOME/hooks/guard-secrets.sh" ]]; then
   set +e
   printf '%s' '{"tool_name":"Write","tool_input":{"file_path":"/tmp/x/probe.py","content":"print(42)"}}' \
@@ -554,13 +578,7 @@ elif [[ $SINGLE_ROOT -eq 0 ]]; then
   base_parent=$(cd -P "$BASE/.." && pwd -P)
   # The predecessor is the previous *different* base. A re-run from the same base
   # keeps the one already recorded, or the rollback snapshot would be lost to any
-  # no-op re-run. Read before the record is rewritten below; "-" is an empty field.
-  read -r rec_base rec_prev < <(python3 -c '
-import json, sys
-r = json.load(open(sys.argv[1]))
-print(r.get("base_sha") or "-", r.get("prev_base_sha") or "-")' "$installed_json" 2>/dev/null || echo "- -")
-  [[ "$rec_base" == - ]] && rec_base=""
-  [[ "$rec_prev" == - ]] && rec_prev=""
+  # no-op re-run. rec_base and rec_prev were read before anything was written.
   if [[ "$rec_base" == "$base_sha" ]]; then prev_base="$rec_prev"; else prev_base="$rec_base"; fi
   # Only a snapshot in the store is something retention keeps or drops. An install
   # from a plain checkout must not move the record's base: the next snapshot

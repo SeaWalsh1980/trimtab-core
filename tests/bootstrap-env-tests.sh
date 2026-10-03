@@ -363,10 +363,28 @@ check_unreadable_live_settings_are_reported() {
   first=$out
   echo '{"env": 5}' > "$h/.claude/settings.json"
   boot "$h" "$live" --instance "$inst" --check
-  if [[ "$first" == *"cannot be read as settings"* && "$out" == *"cannot be read as settings"* ]]; then
-    pass "an unreadable live settings.json is reported, not read as empty"
+  # Reported once, and the probes that depend on the file are skipped rather
+  # than run against "every pack" (which a switch of "none" never asked for).
+  if [[ "$(grep -c 'cannot be read as settings' <<<"$first")" -eq 1 \
+     && "$(grep -c 'cannot be read as settings' <<<"$out")" -eq 1 \
+     && "$first" != *"sample through the symlink"* && "$out" != *"sample through the symlink"* ]]; then
+    pass "an unreadable live settings.json is reported once, and its dependent probes are skipped"
   else
-    fail "an unreadable live settings.json is reported, not read as empty"
+    fail "an unreadable live settings.json is reported once, and its dependent probes are skipped"
+  fi
+}
+
+# When bootstrap clears an owned key it must say so, not that it "wrote None".
+check_clearing_an_owned_key_is_reported_as_removal() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  echo '{"env": {"TRIMTAB_SECRET_PACKS": "zoho"}}' > "$inst/settings.instance.json"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"TRIMTAB_SECRET_PACKS"*"removed"* && "$out" != *"wrote None"* \
+     && "$(settings_get "$h" env.TRIMTAB_SECRET_PACKS)" == "<absent>" ]]; then
+    pass "clearing an owned key is reported as a removal"
+  else
+    fail "clearing an owned key is reported as a removal" "rc=$rc"; echo "$out" | grep TRIMTAB_SECRET_PACKS
   fi
 }
 
@@ -480,9 +498,10 @@ check_no_instance_keeps_single_root() {
   local h copy
   h=$(new_home); copy="$h/single-root"
   # A single-root install writes machine.json into the checkout it runs from, so
-  # it runs from a copy: the checkout under test is never touched.
-  git clone -q "$repo" "$copy"
-  cp "$repo/bootstrap.sh" "$copy/bootstrap.sh"
+  # it runs from a copy of the working tree (what is under test, committed or
+  # not), without .git and without a developer's own machine.json.
+  mkdir "$copy"
+  (cd "$repo" && tar --exclude=./.git --exclude=./machine.json -cf - .) | tar -xf - -C "$copy"
   boot "$h" "$copy/bootstrap.sh"
   if [[ $rc -eq 0 && "$out" == *"--instance will be required"* \
      && "$(settings_get "$h" env.TRIMTAB_INSTANCE)" == "$copy" ]]; then
@@ -523,6 +542,7 @@ check_instance_without_claude_md_drops_a_dangling_link
 check_instance_without_claude_md_drops_a_link_into_the_store
 check_instance_without_claude_md_keeps_a_link_it_did_not_make
 check_unreadable_live_settings_are_reported
+check_clearing_an_owned_key_is_reported_as_removal
 check_failed_retention_delete_is_loud
 check_unreachable_recorded_instance_sha_does_not_block
 check_relative_instance_with_cdpath
