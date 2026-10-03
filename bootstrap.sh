@@ -61,6 +61,12 @@ die()  { printf '  \033[31m✗\033[0m %s\n' "$1" >&2; exit 1; }
 # drift, or `--check` in a sandbox would report drift that does not exist, and
 # it must not print the arrow that the idempotency test greps for.
 skip() { printf '  \033[90m·\033[0m %s\n' "$1"; }
+# env_key <settings file> <KEY>: the value under "env", or empty when the key,
+# the file or its JSON is absent. Reading is never a reason to stop.
+env_key() {
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("env",{}).get(sys.argv[2],""))' \
+    "$1" "$2" 2>/dev/null || true
+}
 
 command -v python3 >/dev/null 2>&1 || die "python3 is required"
 
@@ -140,27 +146,19 @@ if [[ -n "${CLAUDE_CONFIG_DIR:-}" && "${CLAUDE_CONFIG_DIR%/}" != "${HOME%/}/.cla
   SANDBOXED=1
 fi
 
-# ---- 1. machine.json ---------------------------------------------------
-# Lives in the instance: it is this machine's values for that instance.
-if [[ ! -f "$INSTANCE/machine.json" ]]; then
-  if [[ $CHECK_ONLY -eq 1 ]]; then
-    note "machine.json missing"
-  else
-    sed "s|/home/CHANGEME/|$HOME/|g" "$BASE/machine.example.json" > "$INSTANCE/machine.json"
-    note "created machine.json from example — edit it for this host"
-  fi
-else
-  ok "machine.json present"
-fi
-
-# ---- 1b. the doctrine registry check (D10) ----------------------------
-# Before anything is written: a failure leaves the previous install live, and
-# nothing is switched or deleted. Only with --instance; the single-root install
-# has no separate doctrine to check.
+# ---- 1. the doctrine registry check (D10) -----------------------------
+# Before anything is written, machine.json included: a failure leaves the
+# previous install live, and nothing is created, switched or deleted. Only with
+# --instance; the single-root install has no separate doctrine to check.
 installed_json="$STORE/.installed.json"
 values=""
 if [[ $SINGLE_ROOT -eq 0 ]]; then
+  # The checker is run through bash, so a lost exec bit cannot fail it, and its
+  # one third-party dependency is checked here: a missing PyYAML is a missing
+  # dependency, and must not be reported as a fault in the instance's doctrine.
   TRIMTAB_BIN="$BASE/bin/trimtab"
+  python3 -c 'import yaml' 2>/dev/null \
+    || die "PyYAML is required (the registry check imports it) and python3 cannot import it; nothing was changed"
   against=()
   prev_instance_sha=$(python3 - "$installed_json" "$INSTANCE" <<'PY' 2>/dev/null || true
 import json, sys
@@ -173,13 +171,27 @@ if rec.get("instance_root") == sys.argv[2] and isinstance(rec.get("instance_sha"
 PY
 )
   [[ "$prev_instance_sha" =~ ^[0-9a-f]{40}$ ]] && against=(--against "$prev_instance_sha")
-  if ! reg_out=$("$TRIMTAB_BIN" registry --check --instance "$INSTANCE" ${against[@]+"${against[@]}"} 2>&1); then
+  if ! reg_out=$(bash "$TRIMTAB_BIN" registry --check --instance "$INSTANCE" ${against[@]+"${against[@]}"} 2>&1); then
     printf '%s\n' "$reg_out" >&2
     die "the instance's doctrine fails the registry check; nothing was changed, the previous install stays live"
   fi
   ok "doctrine registry check passed"
-  values=$("$TRIMTAB_BIN" instance --json --instance "$INSTANCE") \
-    || die "the instance's instance.json is invalid; nothing was changed"
+  values=$(bash "$TRIMTAB_BIN" instance --json --instance "$INSTANCE") \
+    || die "could not read the instance's values (instance.json is invalid, or the checker could not run; see above); nothing was changed"
+fi
+
+# ---- 1b. machine.json ---------------------------------------------------
+# Lives in the instance: it is this machine's values for that instance. Created
+# only once the registry check has passed.
+if [[ ! -f "$INSTANCE/machine.json" ]]; then
+  if [[ $CHECK_ONLY -eq 1 ]]; then
+    note "machine.json missing"
+  else
+    sed "s|/home/CHANGEME/|$HOME/|g" "$BASE/machine.example.json" > "$INSTANCE/machine.json"
+    note "created machine.json from example — edit it for this host"
+  fi
+else
+  ok "machine.json present"
 fi
 
 # ---- 2. generate settings.json ----------------------------------------
@@ -282,7 +294,7 @@ fi
 # it would block every call (they refuse a relative value), whatever the
 # comparison above found: name it.
 if [[ $CHECK_ONLY -eq 1 && -f "$target" ]]; then
-  live_pat=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("env",{}).get("TRIMTAB_SECRET_PATTERNS",""))' "$target" 2>/dev/null || true)
+  live_pat=$(env_key "$target" TRIMTAB_SECRET_PATTERNS)
   if [[ -n "$live_pat" && "$live_pat" != /* ]]; then
     note "TRIMTAB_SECRET_PATTERNS in settings.json is not an absolute path"
   fi
@@ -329,6 +341,15 @@ if [[ -f "$INSTANCE/CLAUDE.md" ]]; then
   else
     [[ -e "$dst" && ! -L "$dst" ]] && mv "$dst" "$dst.bak.$(date +%Y%m%d%H%M%S)"
     rm -f "$dst"; ln -s "$INSTANCE/CLAUDE.md" "$dst"; note "linked CLAUDE.md"
+  fi
+elif [[ -L "$CLAUDE_HOME/CLAUDE.md" ]]; then
+  # This instance has no CLAUDE.md, but an earlier install linked one: left in
+  # place it keeps feeding the previous tree's instructions to every session (and
+  # dangles when that tree goes). Only a symlink is removed, never a regular file.
+  if [[ $CHECK_ONLY -eq 1 ]]; then
+    note "CLAUDE.md links to $(readlink "$CLAUDE_HOME/CLAUDE.md"), but this instance has none"
+  else
+    rm -f "$CLAUDE_HOME/CLAUDE.md"; note "removed a stale CLAUDE.md link (this instance has none)"
   fi
 fi
 
@@ -397,8 +418,7 @@ probe_guard guard-secrets.sh "a PEM private key in written content" \
 # Each enabled signature pack must block its own sample (stage S2, C8). The
 # switch comes from the generated settings, not this shell: unset or empty
 # means every shipped pack, "none" means no pack.
-packs=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("env",{}).get("TRIMTAB_SECRET_PACKS",""))' \
-        "$CLAUDE_HOME/settings.json" 2>/dev/null || true)
+packs=$(env_key "$CLAUDE_HOME/settings.json" TRIMTAB_SECRET_PACKS)
 pack_list=()
 if [[ -z "$packs" ]]; then
   for f in "$BASE"/hooks/secrets.d/*.patterns; do
@@ -425,8 +445,7 @@ unset pem
 # The declared private pattern file must parse with guard-secrets' own parser:
 # a benign write has to pass with it. The guard refuses a relative path or an
 # unreadable file, so a bad declaration fails here and not on the first edit.
-pat=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("env",{}).get("TRIMTAB_SECRET_PATTERNS",""))' \
-      "$CLAUDE_HOME/settings.json" 2>/dev/null || true)
+pat=$(env_key "$CLAUDE_HOME/settings.json" TRIMTAB_SECRET_PATTERNS)
 if [[ -n "$pat" && -x "$CLAUDE_HOME/hooks/guard-secrets.sh" ]]; then
   set +e
   printf '%s' '{"tool_name":"Write","tool_input":{"file_path":"/tmp/x/probe.py","content":"print(42)"}}' \
@@ -483,9 +502,13 @@ fi
 # did not bring its own XDG_DATA_HOME would reach that store through $HOME, and
 # could overwrite the record or delete a snapshot the live install still uses.
 # It leaves both alone.
-if [[ $SINGLE_ROOT -eq 0 && $red -eq 0 && $SANDBOXED -eq 1 && -z "${XDG_DATA_HOME:-}" ]]; then
+#
+# A step that was not green (the observer probe, which notes instead of dying)
+# does not make this a failed install, so the record is still written; it is a
+# reason to delete nothing, and the run says so.
+if [[ $SINGLE_ROOT -eq 0 && $SANDBOXED -eq 1 && -z "${XDG_DATA_HOME:-}" ]]; then
   skip "sandboxed run without its own XDG_DATA_HOME: install record and retention left alone (the store belongs to the live install)"
-elif [[ $SINGLE_ROOT -eq 0 && $red -eq 0 ]]; then
+elif [[ $SINGLE_ROOT -eq 0 ]]; then
   base_sha=$(git -C "$BASE" rev-parse HEAD 2>/dev/null || true)
   store_phys=$(cd -P "$STORE" 2>/dev/null && pwd -P || true)
   base_parent=$(cd -P "$BASE/.." && pwd -P)
@@ -501,16 +524,34 @@ print(r.get("base_sha") or "-", r.get("prev_base_sha") or "-")' "$installed_json
   if [[ "$rec_base" == "$base_sha" ]]; then prev_base="$rec_prev"; else prev_base="$rec_base"; fi
   if [[ -n "$store_phys" && "$base_parent" == "$store_phys" \
         && "$base_sha" =~ ^[0-9a-f]{40}$ && "${BASE##*/}" == "$base_sha" ]]; then
-    for d in "$STORE"/*/; do
-      d=${d%/}; name=${d##*/}
-      [[ "$name" =~ ^[0-9a-f]{40}$ ]] || continue          # snapshots only, never anything else
-      [[ "$name" == "$base_sha" || "$name" == "$prev_base" ]] && continue
-      if [[ $CHECK_ONLY -eq 1 ]]; then
-        skip "retention would delete snapshot $name"       # the dry run
-      else
-        rm -rf -- "$d" && printf '  \033[33m-\033[0m deleted old snapshot %s\n' "$name"
-      fi
-    done
+    if [[ $red -eq 1 ]]; then
+      skip "retention withheld: a step above was not green, so nothing is deleted"
+    else
+      # A snapshot a systemd unit links into is spared: it would dangle, and the
+      # timer would silently never run. --no-timer installs and sandboxed runs do
+      # not relink the units, so the links are read, never assumed.
+      protected=()
+      for u in "${XDG_CONFIG_HOME:-$HOME/.config}"/systemd/user/*; do
+        [[ -L "$u" ]] || continue
+        t=$(readlink -f "$u" 2>/dev/null) || continue
+        [[ "$t" == "$store_phys"/* ]] || continue
+        t=${t#"$store_phys"/}; protected+=("${t%%/*}")
+      done
+      for d in "$STORE"/*/; do
+        d=${d%/}; name=${d##*/}
+        [[ "$name" =~ ^[0-9a-f]{40}$ ]] || continue          # snapshots only, never anything else
+        [[ "$name" == "$base_sha" || "$name" == "$prev_base" ]] && continue
+        if [[ " ${protected[*]-} " == *" $name "* ]]; then
+          skip "retention keeps snapshot $name: a systemd unit links into it"
+          continue
+        fi
+        if [[ $CHECK_ONLY -eq 1 ]]; then
+          skip "retention would delete snapshot $name"       # the dry run
+        else
+          rm -rf -- "$d" && printf '  \033[33m-\033[0m deleted old snapshot %s\n' "$name"
+        fi
+      done
+    fi
   fi
   if [[ $CHECK_ONLY -eq 0 ]]; then
     inst_sha=$(git -C "$INSTANCE" rev-parse HEAD 2>/dev/null || true)

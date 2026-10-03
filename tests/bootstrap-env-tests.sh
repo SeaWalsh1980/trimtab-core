@@ -121,10 +121,11 @@ from tests.trimtab.instance_fixture import add_rule
 add_rule(Path(sys.argv[2]), "Duplicate.md", "TST")
 PY
   boot "$h" "$live" --instance "$inst"
-  if [[ $rc -eq 1 && "$out" == *TST* ]] && no_links "$h" && [[ ! -e "$h/share/trimtab/core/.installed.json" ]]; then
-    pass "a registry failure installs nothing and records nothing"
+  if [[ $rc -eq 1 && "$out" == *TST* ]] && no_links "$h" \
+     && [[ ! -e "$h/share/trimtab/core/.installed.json" && ! -e "$inst/machine.json" ]]; then
+    pass "a registry failure installs nothing, records nothing and creates no machine.json"
   else
-    fail "a registry failure installs nothing and records nothing" "rc=$rc"; echo "$out" | tail -8
+    fail "a registry failure installs nothing, records nothing and creates no machine.json" "rc=$rc"; echo "$out" | tail -8
   fi
 }
 
@@ -237,6 +238,82 @@ check_sandbox_without_own_store_leaves_store_alone() {
   fi
 }
 
+# The observer probe notes a failure instead of dying, so a run can finish with
+# a step that was not green. That run is still an install: it records what it
+# installed. It is not a licence to delete anything, and it says so.
+check_observer_failure_records_but_withholds_retention() {
+  local h inst store
+  h=$(new_home); inst=$(inst_of "$h"); store="$h/share/trimtab/core"
+  make_store "$store"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$snap_new/hooks/rule-usage.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -eq 0 && -d "$snap_mid" && -d "$snap_old" && "$out" == *"retention withheld"* ]] \
+     && grep -q "\"base_sha\": \"${snap_new##*/}\"" "$store/.installed.json"; then
+    pass "a failed observer probe still records the install, withholds retention and says so"
+  else
+    fail "a failed observer probe still records the install, withholds retention and says so" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# A unit linked into a snapshot dangles when the snapshot goes, and the timer
+# silently never runs; --no-timer installs do not relink it.
+check_retention_spares_a_snapshot_systemd_links_into() {
+  local h inst unitdir
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  unitdir="$h/xdg-config/systemd/user"
+  mkdir -p "$unitdir"
+  ln -s "$snap_mid/systemd/rule-usage-report.timer" "$unitdir/rule-usage-report.timer"
+  XDG_CONFIG_HOME="$h/xdg-config" boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -eq 0 && -d "$snap_mid" && -d "$snap_old" && -d "$snap_new" ]]; then
+    pass "retention spares a snapshot a systemd unit links into"
+  else
+    fail "retention spares a snapshot a systemd unit links into" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# Without PyYAML the registry check cannot run; that is a missing dependency,
+# not a doctrine failure, and the message must say which.
+check_missing_pyyaml_is_named() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  mkdir -p "$h/fakehome"
+  if HOME="$h/fakehome" python3 -c 'import yaml' 2>/dev/null; then
+    echo "SKIP  a missing PyYAML is named as such (PyYAML is installed system-wide here)"
+    return
+  fi
+  set +e
+  out=$(HOME="$h/fakehome" CLAUDE_CONFIG_DIR="$h/sandbox-config" XDG_DATA_HOME="$h/share" \
+        "$live" --no-timer --allow-worktree --instance "$inst" 2>&1)
+  rc=$?
+  set -e
+  if [[ $rc -eq 1 && "$out" == *PyYAML* && "$out" != *"fails the registry check"* ]]; then
+    pass "a missing PyYAML is named as such, not reported as a doctrine failure"
+  else
+    fail "a missing PyYAML is named as such, not reported as a doctrine failure" "rc=$rc"; echo "$out" | tail -4
+  fi
+}
+
+# An instance with no CLAUDE.md must not leave the previous tree's link in
+# place: it keeps feeding the old instructions to every session.
+check_instance_without_claude_md_drops_a_stale_link() {
+  local h inst check_rc check_out
+  h=$(new_home); inst=$(inst_of "$h")
+  rm -f "$inst/CLAUDE.md"
+  mkdir -p "$h/.claude"
+  echo "old instructions" > "$h/old-claude.md"
+  ln -s "$h/old-claude.md" "$h/.claude/CLAUDE.md"
+  boot "$h" "$live" --instance "$inst" --check
+  check_rc=$rc; check_out=$out
+  boot "$h" "$live" --instance "$inst"
+  if [[ $check_rc -eq 1 && "$check_out" == *CLAUDE.md* && $rc -eq 0 \
+     && ! -e "$h/.claude/CLAUDE.md" && ! -L "$h/.claude/CLAUDE.md" ]]; then
+    pass "an instance without a CLAUDE.md drops the stale link (and --check reports it)"
+  else
+    fail "an instance without a CLAUDE.md drops the stale link (and --check reports it)" "check rc=$check_rc, rc=$rc"
+  fi
+}
+
 check_check_is_the_retention_dry_run() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
@@ -263,11 +340,15 @@ check_red_run_deletes_nothing() {
 }
 
 check_no_instance_keeps_single_root() {
-  local h
-  h=$(new_home)
-  boot "$h" "$live"
+  local h copy
+  h=$(new_home); copy="$h/single-root"
+  # A single-root install writes machine.json into the checkout it runs from, so
+  # it runs from a copy: the checkout under test is never touched.
+  git clone -q "$repo" "$copy"
+  cp "$repo/bootstrap.sh" "$copy/bootstrap.sh"
+  boot "$h" "$copy/bootstrap.sh"
   if [[ $rc -eq 0 && "$out" == *"--instance will be required"* \
-     && "$(settings_get "$h" env.TRIMTAB_INSTANCE)" == "$repo" ]]; then
+     && "$(settings_get "$h" env.TRIMTAB_INSTANCE)" == "$copy" ]]; then
     pass "without --instance: today's single-root install, with a notice"
   else
     fail "without --instance: today's single-root install, with a notice" "rc=$rc"; echo "$out" | tail -5
@@ -298,6 +379,10 @@ check_idempotent
 check_retention_keeps_live_and_predecessor
 check_rerun_from_same_base_keeps_predecessor
 check_sandbox_without_own_store_leaves_store_alone
+check_observer_failure_records_but_withholds_retention
+check_retention_spares_a_snapshot_systemd_links_into
+check_missing_pyyaml_is_named
+check_instance_without_claude_md_drops_a_stale_link
 check_check_is_the_retention_dry_run
 check_red_run_deletes_nothing
 check_no_instance_keeps_single_root
