@@ -37,10 +37,12 @@ The decisions behind this layout, and behind the guards, are recorded in
 ## Status
 
 Work in progress. This repository currently holds the extracted mechanism
-and its tests. **Installing needs an instance**: installing from the base
-alone is not supported yet, and a way to create a new instance is planned
-but not yet available. Until then, the base is published for reading and
-review rather than for use.
+and its tests. **The base installs an instance, never itself.** An instance
+carries a copy of `shim/bootstrap.sh`, which fetches and verifies the base
+snapshot the instance pins and runs its `bootstrap.sh`; that installer
+requires `--instance <dir>`, and a run without it stops with a usage error.
+A way to create a new instance is planned but not yet available. Until
+then, the base is published for reading and review rather than for use.
 
 ## Platforms
 

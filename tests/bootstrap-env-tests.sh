@@ -494,20 +494,20 @@ check_red_run_deletes_nothing() {
   fi
 }
 
-check_no_instance_keeps_single_root() {
-  local h copy
-  h=$(new_home); copy="$h/single-root"
-  # A single-root install writes machine.json into the checkout it runs from, so
-  # it runs from a copy of the working tree (what is under test, committed or
-  # not), without .git and without a developer's own machine.json.
-  mkdir "$copy"
-  (cd "$repo" && tar --exclude=./.git --exclude=./machine.json -cf - .) | tar -xf - -C "$copy"
-  boot "$h" "$copy/bootstrap.sh"
-  if [[ $rc -eq 0 && "$out" == *"--instance will be required"* \
-     && "$(settings_get "$h" env.TRIMTAB_INSTANCE)" == "$copy" ]]; then
-    pass "without --instance: today's single-root install, with a notice"
+# The base installs an instance, never itself: a run without --instance is a
+# usage error, and it stops before it creates anything.
+check_no_instance_is_refused() {
+  local h err
+  h=$(new_home)
+  set +e
+  err=$(CLAUDE_CONFIG_DIR="$h/.claude" XDG_DATA_HOME="$h/share" \
+        "$live" --no-timer --allow-worktree 2>&1 >/dev/null)
+  rc=$?
+  set -e
+  if [[ $rc -eq 64 && "$err" == *--instance* && ! -e "$h/.claude" && ! -L "$h/.claude" ]]; then
+    pass "without --instance: refused as a usage error, naming --instance, creating nothing"
   else
-    fail "without --instance: today's single-root install, with a notice" "rc=$rc"; echo "$out" | tail -5
+    fail "without --instance: refused as a usage error, naming --instance, creating nothing" "rc=$rc"; echo "$err" | tail -5
   fi
 }
 
@@ -549,7 +549,7 @@ check_relative_instance_with_cdpath
 check_checkout_install_leaves_the_record_base_alone
 check_check_is_the_retention_dry_run
 check_red_run_deletes_nothing
-check_no_instance_keeps_single_root
+check_no_instance_is_refused
 check_observer_probe
 
 if [[ $fails -ne 0 ]]; then
