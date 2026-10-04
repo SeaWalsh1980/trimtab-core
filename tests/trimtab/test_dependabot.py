@@ -313,7 +313,7 @@ class FakeGitHub:
     """An in-memory PullRequestHost: one PR, its runs, and the re-runs requested."""
 
     def __init__(self, pr, runs=(), rerun_fails=False, view_fails=False, keeps_on_write=None,
-                 view_fails_after_write=False):
+                 view_fails_after_write=False, set_body_fails=False):
         self.pr = pr
         self.ci = list(runs)
         self.reruns = []
@@ -323,6 +323,7 @@ class FakeGitHub:
         # What the host stores when a body is written, if not the body itself: a host that mangles it.
         self.keeps_on_write = keeps_on_write
         self.view_fails_after_write = view_fails_after_write
+        self.set_body_fails = set_body_fails
 
     def view(self, number):
         if self.view_fails or (self.view_fails_after_write and self.body_writes):
@@ -330,6 +331,8 @@ class FakeGitHub:
         return self.pr
 
     def set_body(self, number, body):
+        if self.set_body_fails:
+            raise HostError("write refused")
         self.pr = replace(self.pr, body=body if self.keeps_on_write is None else self.keeps_on_write)
         self.body_writes += 1
 
@@ -433,6 +436,15 @@ class Applying(unittest.TestCase):
         apply_to(host, dry_run_token(host))
 
         self.assertEqual((host.body_writes, host.reruns), (1, [FAILED_RUN]))
+
+
+class WritingFails(unittest.TestCase):
+    def test_a_failed_write_raises_and_requests_no_rerun(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()], set_body_fails=True)
+
+        with self.assertRaises(HostError):
+            apply_to(host, dry_run_token(host))
+        self.assertEqual(host.reruns, [])
 
 
 class ReadingBack(unittest.TestCase):
@@ -554,6 +566,13 @@ class TheApplyCommand(unittest.TestCase):
         code, _, err = run_command(host, "--apply", "--confirm", dry_run_token(host))
 
         self.assertEqual((code, "the body was written" in err), (2, True))
+
+    def test_a_failed_write_exits_2_and_says_running_again_is_safe(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()], set_body_fails=True)
+
+        code, _, err = run_command(host, "--apply", "--confirm", dry_run_token(host))
+
+        self.assertEqual((code, "running the dry run again is safe" in err, host.reruns), (2, True, []))
 
     def test_a_failed_read_back_exits_1_and_says_the_body_was_written(self):
         host = FakeGitHub(dependabot_pr(), [failed_run()], view_fails_after_write=True)
