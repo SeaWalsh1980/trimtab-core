@@ -481,6 +481,10 @@ def passed_run(run_id=FAILED_RUN):
     return CiRun(id=run_id, status="completed", conclusion="success")
 
 
+def running_run(run_id=FAILED_RUN):
+    return CiRun(id=run_id, status="in_progress", conclusion="")
+
+
 def cancelled_run(run_id=FAILED_RUN):
     return CiRun(id=run_id, status="completed", conclusion="cancelled")
 
@@ -557,6 +561,20 @@ class TheDryRun(unittest.TestCase):
 
         self.assertEqual((code, "still going" in out, "attention" in err), (0, True, False))
 
+    def test_a_run_still_going_when_the_block_is_to_be_written_is_noted_as_older_than_it(self):
+        host = FakeGitHub(dependabot_pr(), [running_run()])
+
+        _, out, _ = run_command(host)
+
+        self.assertIn("started before the block was added", out)
+
+    def test_a_run_still_going_when_the_block_is_already_there_carries_no_note(self):
+        host = FakeGitHub(dependabot_pr(body=VALID_BLOCK_BODY), [running_run()])
+
+        _, out, _ = run_command(host)
+
+        self.assertNotIn("started before the block was added", out)
+
     def test_a_newest_run_that_passed_is_named(self):
         host = FakeGitHub(dependabot_pr(body=VALID_BLOCK_BODY), [passed_run()])
 
@@ -601,6 +619,13 @@ class TheApplyCommand(unittest.TestCase):
         code, _, err = run_command(host, "--apply", "--confirm", dry_run_token(host))
 
         self.assertEqual((code, "attention" in err, host.body_writes), (EXIT_CI_ATTENTION, True, 1))
+
+    def test_apply_that_adds_the_block_while_a_run_is_going_notes_it_is_older(self):
+        host = FakeGitHub(dependabot_pr(), [running_run()])
+
+        code, out, _ = run_command(host, "--apply", "--confirm", dry_run_token(host))
+
+        self.assertEqual((code, "started before the block was added" in out), (0, True))
 
     def test_apply_with_a_stale_token_exits_3(self):
         host = FakeGitHub(dependabot_pr(), [failed_run()])

@@ -410,11 +410,15 @@ def _print_block_plan(todo: dependabot.BlockPlan) -> None:
         print(f"re-run: none; no {todo.workflow} run found at this head (check --workflow, or whether CI started)")
     elif todo.run_in_progress:
         print(f"re-run: none; the newest {todo.workflow} run at this head is still going")
+        if todo.run_predates_block:
+            print(PREDATES_NOTE)
     elif newest.conclusion == "success":
         print(f"re-run: none; the newest {todo.workflow} run at this head passed")
     else:
         print(f"re-run: none; the newest {todo.workflow} run at this head ended {todo.shown_conclusion}")
 
+
+PREDATES_NOTE = "note: this run started before the block was added; if it fails, run the command again"
 
 # dependabot-block's own exit code for "done, but CI at the head needs a look": 1 stays "refused".
 EXIT_CI_ATTENTION = 4
@@ -472,6 +476,8 @@ def cmd_dependabot_block(args, host_for=GhPullRequests, registry=None) -> int:
         return 2
     print(f"PR #{args.pr}: " + ("block added" if done.wrote_body else "block already there")
           + (f"; re-run of run {done.reran} requested" if done.reran is not None else "; no re-run"))
+    if done.run_predates_block:
+        print(PREDATES_NOTE)
     return _attention(done.ci_needs_attention, args.workflow, args.pr)
 
 

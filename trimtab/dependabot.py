@@ -131,6 +131,11 @@ class BlockPlan:
         return self.newest_run is not None and self.newest_run.status != "completed"
 
     @property
+    def run_predates_block(self) -> bool:
+        """The block is to be written while a run is going: that run read the old body, and is not re-run."""
+        return self.new_body is not None and self.run_in_progress
+
+    @property
     def ci_needs_attention(self) -> bool:
         """No run at the head, or a newest run that ended neither passed nor failed (cancelled, timed out).
 
@@ -203,6 +208,7 @@ class Applied:
     reran: int | None
     # From the plan apply acted on: CI that this command neither fixed nor re-ran.
     ci_needs_attention: bool = False
+    run_predates_block: bool = False
 
 
 def read_plan(host: PullRequestHost, registry: Mapping[str, Item], repo: str, workflow: str,
@@ -232,4 +238,4 @@ def apply(host: PullRequestHost, registry: Mapping[str, Item], repo: str, workfl
         except HostError as err:
             raise RerunFailed(f"run {todo.rerun_run_id} was not re-run", todo.new_body is not None) from err
     return Applied(wrote_body=todo.new_body is not None, reran=todo.rerun_run_id,
-                   ci_needs_attention=todo.ci_needs_attention)
+                   ci_needs_attention=todo.ci_needs_attention, run_predates_block=todo.run_predates_block)
