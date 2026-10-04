@@ -944,9 +944,15 @@ tp "$STUB" guard-secrets.sh 2 "full deps: PEM still blocked"     "$PEM_PAYLOAD"
 # PATH directly: the answer is checked with python3 after the guard has run.
 stub_bin cat
 tm ask  "no jq and no python3: a read asks"    "$MCP_READ"  "$STUB"
-stub_bin cat jq
-tm pass "jq only: a read still passes"        "$MCP_READ"  "$STUB"
-tm ask  "jq only: a write asks"               "$MCP_WRITE" "$STUB"
+# stub_bin links only what resolves, so with jq absent (CI's python3-fallback
+# run) this stub would hold no parser at all and test the case above again.
+if command -v jq >/dev/null 2>&1; then
+  stub_bin cat jq
+  tm pass "jq only: a read still passes"        "$MCP_READ"  "$STUB"
+  tm ask  "jq only: a write asks"               "$MCP_WRITE" "$STUB"
+else
+  echo "SKIP  guard-mcp.sh   jq only: jq is not installed in this run"
+fi
 stub_bin cat python3
 tm pass "python3 only: a read still passes"   "$MCP_READ"  "$STUB"
 tm ask  "python3 only: a write asks"          "$MCP_WRITE" "$STUB"
