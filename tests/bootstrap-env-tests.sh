@@ -238,7 +238,9 @@ check_retention_keeps_live_and_predecessor() {
   make_store "$store"
   boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
   if [[ $rc -eq 0 && -d "$snap_new" && -d "$snap_old" && ! -e "$snap_mid" \
-     && "$out" == *"${snap_mid##*/}"* && -f "$store/notes.txt" && -d "$store/keep-me" ]]; then
+     && "$out" == *"${snap_mid##*/}"* && -f "$store/notes.txt" && -d "$store/keep-me" \
+     && "$(printf '%s\n' "$out" | sed '/^$/d' | tail -1)" == "done. Run 'claude'"* \
+     && "$out" != *"NOT GREEN"* ]]; then
     pass "retention keeps the live snapshot and its predecessor, and ignores anything else"
   else
     fail "retention keeps the live snapshot and its predecessor, and ignores anything else" "rc=$rc"; echo "$out" | tail -6
@@ -295,11 +297,13 @@ check_observer_failure_records_but_withholds_retention() {
   make_store "$store"
   printf '#!/usr/bin/env bash\nexit 1\n' > "$snap_new/hooks/rule-usage.sh"
   boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
-  if [[ $rc -eq 0 && -d "$snap_mid" && -d "$snap_old" && "$out" == *"retention withheld"* ]] \
+  if [[ $rc -eq 0 && -d "$snap_mid" && -d "$snap_old" && "$out" == *"retention withheld"* \
+        && "$(printf '%s\n' "$out" | sed '/^$/d' | tail -1)" == "NOT GREEN: observer"* \
+        && "$out" != *"done. Run 'claude'"* ]] \
      && grep -q "\"base_sha\": \"${snap_new##*/}\"" "$store/.installed.json"; then
-    pass "a failed observer probe still records the install, withholds retention and says so"
+    pass "a failed observer probe still records the install, withholds retention and ends NOT GREEN"
   else
-    fail "a failed observer probe still records the install, withholds retention and says so" "rc=$rc"; echo "$out" | tail -6
+    fail "a failed observer probe still records the install, withholds retention and ends NOT GREEN" "rc=$rc"; echo "$out" | tail -6
   fi
 }
 

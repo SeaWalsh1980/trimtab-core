@@ -13,7 +13,9 @@
 #                     (refused by default — see section 0)
 #
 # Exit codes: 0 done or in sync; 1 drift (--check) or a refused install;
-# 64 a usage error, including a run without --instance.
+# 64 a usage error, including a run without --instance. An install whose
+# observer step was red still exits 0, but ends "NOT GREEN: observer" instead
+# of "done.": read that closing line as a failed install.
 #
 # Idempotent: safe to re-run after every git pull.
 #
@@ -58,8 +60,8 @@ fi
 
 drift=0
 # Set by a step that failed without dying (the observer probe). Retention
-# deletes nothing after one; ordinary drift, such as a first install's changes,
-# is not red.
+# deletes nothing after one, and the run ends NOT GREEN; ordinary drift, such
+# as a first install's changes, is not red.
 red=0
 # Set once the live settings.json is found unreadable: the probes that depend on
 # it are then skipped, not run against a guess.
@@ -706,4 +708,11 @@ echo
 if [[ $CHECK_ONLY -eq 1 ]]; then
   [[ $drift -eq 1 ]] && { echo "drift detected"; exit 1; } || { echo "in sync"; exit 0; }
 fi
-echo "done. Run 'claude' and check /hooks to confirm registration."
+# A red observer step is not a failed guard, so the exit stays 0: the observer is
+# telemetry, and a scripted install (the cloud setup script among them) must not
+# fail over a usage log. The closing line is what says the run was not green.
+if [[ $red -eq 1 ]]; then
+  echo "NOT GREEN: observer — retention withheld; see the note above"
+else
+  echo "done. Run 'claude' and check /hooks to confirm registration."
+fi
