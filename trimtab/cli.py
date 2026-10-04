@@ -613,10 +613,15 @@ def cmd_lint(args) -> int:
         print(f"overrides: {len(found)} problem(s)")
         failed |= _print_problems(found)
     if "references" in which:
-        enabled = references.enabled_plugins([project, base])  # settings are instance content
-        found = references.lint(project, roots.code_root(), enabled, plugin_cache=_plugin_cache())
-        print(f"references: {len(found)} unresolved")
-        failed |= _print_problems(found)
+        try:
+            enabled = references.enabled_plugins([project, base])  # settings are instance content
+        except references.SettingsUnreadable as err:
+            print(f"error: {err}", file=sys.stderr)
+            failed = 1
+        else:
+            found = references.lint(project, roots.code_root(), enabled, plugin_cache=_plugin_cache())
+            print(f"references: {len(found)} unresolved")
+            failed |= _print_problems(found)
     if "structure" in which:
         rules_dirs = [config.rules_dir if config else project_config.ProjectConfig.rules_dir]
         if project.resolve() == base.resolve():
