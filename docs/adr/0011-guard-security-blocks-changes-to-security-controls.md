@@ -95,8 +95,10 @@ Two measurements shaped the implementation, both on a 140 KB heredoc:
 
 ## Consequences
 
-- Reading any control works everywhere: `Read`, `Grep`, `cat`, `git diff` and
-  `gh api` GETs.
+- Ordinary reads of a control pass guard-security: `Read`, `Grep`, `cat`,
+  `git diff` and `gh api` GETs. The exception is inline interpreter code, below.
+  Shell reads of the live control plane are still blocked by guard-paths
+  (ADR 0002).
 - Accepted residual: verb inspection cannot see every route to a write. Known
   routes it does not inspect include `git apply` and other git subcommands, a
   script run by path, `gh api graphql`, and a path held in a variable from an
