@@ -98,6 +98,25 @@ class PrivateScrub(unittest.TestCase):
 
         self.assertEqual(self.hits(f"see {public}\n"), [])
 
+    def test_an_instance_used_as_the_code_root_is_refused(self):
+        # Subtracting the code root's series would then subtract the instance's own records.
+        self.add_doc("adr", "0004-private-decision.md")
+
+        with self.assertRaises(scrub.ScrubError):
+            scrub.private_terms(self.instance, environ={}, code_root=self.instance)
+
+    def test_a_longer_repository_name_that_starts_with_a_private_one_is_not_a_hit(self):
+        self.assertEqual(self.hits(f"see {REPO_NAME}-core and {REPO_NAME}_old\n"), [])
+
+    def test_a_repository_name_ending_a_sentence_is_found(self):
+        self.assertEqual([h.kind for h in self.hits(f"cloned from {REPO_NAME}.\n")], ["repo"])
+
+    def test_a_repository_name_in_a_url_is_found(self):
+        self.assertEqual([h.kind for h in self.hits(f"https://github.com/{REPO_NAME}/pull/1\n")], ["repo"])
+
+    def test_a_repository_name_in_a_clone_url_is_found(self):
+        self.assertEqual([h.kind for h in self.hits(f"git clone git@github.com:{REPO_NAME}.git\n")], ["repo"])
+
 
 class PublicScrub(unittest.TestCase):
     def setUp(self):

@@ -91,8 +91,13 @@ def _consumers(path: Path) -> list[str]:
     return [e["repo"] for e in entries if isinstance(e, dict) and isinstance(e.get("repo"), str)]
 
 
-def private_terms(instance: Path, environ: Mapping[str, str]) -> Terms:
+def private_terms(instance: Path, environ: Mapping[str, str], code_root: Path | None = None) -> Terms:
     instance = Path(instance)
+    code_root = Path(code_root) if code_root is not None else roots.code_root()
+    if code_root.resolve() == instance.resolve():
+        # The base's own ADR names are subtracted below; from the instance that would subtract
+        # every instance record and leave the check silently empty. An instance is not a base.
+        raise ScrubError("the scrub is running from the instance itself; run it from a base checkout")
     try:
         # Its own repository is the likeliest private name to leak; never build the list without it.
         repos = {roots.instance_repo(instance)}
@@ -112,7 +117,7 @@ def private_terms(instance: Path, environ: Mapping[str, str]) -> Terms:
     # name this base's own series also carries is public, so neither is a term.
     docs = {p.name for folder in ("adr", "plans") for p in (instance / "docs" / folder).glob("*.md")
             if NUMBERED_DOC.match(p.name)}
-    docs -= {p.name for p in (roots.code_root() / "docs" / "adr").glob("*.md")}
+    docs -= {p.name for p in (code_root / "docs" / "adr").glob("*.md")}
     home = environ.get("HOME", "")
     email = _git(instance, "config", "user.email")
     literals = {"repo": tuple(sorted(repos)), "id": tuple(sorted(ids)),
@@ -153,6 +158,10 @@ def scan(tree: Path, terms: Terms) -> list[Hit]:
         raise ScrubError(f"{tree} is not a directory")
     # Names are matched without regard to case: GitHub's are case-insensitive, and prose lowercases them.
     literals = {k: tuple(w.casefold() for w in words) for k, words in terms.literals.items()}
+    # A repository name counts only where it ends: `owner/name-core` is a different repository.
+    # A sentence's full stop, a URL path and a clone URL's `.git` still end it.
+    repo_res = tuple(re.compile(r"(?<![\w-])" + re.escape(w) + r"(?![\w-]|\.(?!git\b)[\w-])")
+                     for w in literals.pop("repo", ()))
     hits: list[Hit] = []
     for path in sorted(tree.rglob("*")):
         rel = path.relative_to(tree)
@@ -165,7 +174,8 @@ def scan(tree: Path, terms: Terms) -> list[Hit]:
             raise ScrubError(f"{rel.as_posix()} cannot be read ({type(err).__name__})") from err
         for n, text in enumerate(lines, 1):
             folded = text.casefold()
-            kinds = [k for k, words in literals.items() if any(w in folded for w in words)]
+            kinds = ["repo"] if any(r.search(folded) for r in repo_res) else []
+            kinds += [k for k, words in literals.items() if any(w in folded for w in words)]
             kinds += [k for k, pats in terms.patterns.items() if any(p.search(text) for p in pats)]
             for kind in kinds:
                 if kind in terms.exempt_tests and _in_tests(rel):
