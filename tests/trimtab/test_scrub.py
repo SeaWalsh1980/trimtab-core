@@ -15,6 +15,7 @@ CONSUMER = "owner/consumer-one"
 ROUTINE_ID = "trig_" + "A1b2C3d4E5f6G7h8J9k0"  # built at run time: never a literal ID in a file
 DOCTRINE = "PrivateDoctrine.md"
 TRIMTAB = Path(__file__).resolve().parents[2] / "bin" / "trimtab"
+PUBLIC_ADR = "0001-a-public-decision.md"
 
 
 def make_instance(root: Path) -> Path:
@@ -29,11 +30,20 @@ def make_instance(root: Path) -> Path:
     return inst
 
 
+def make_base(root: Path) -> Path:
+    """A stand-in for the base checkout, so no test reads this repository's own docs/adr."""
+    base = root / "base"
+    (base / "docs" / "adr").mkdir(parents=True)
+    (base / "docs" / "adr" / PUBLIC_ADR).write_text("# x\n", encoding="utf-8")
+    return base
+
+
 class PrivateScrub(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.instance = make_instance(self.root)
+        self.code_root = make_base(self.root)
         self.tree = self.root / "tree"
         self.tree.mkdir()
 
@@ -42,7 +52,8 @@ class PrivateScrub(unittest.TestCase):
 
     def hits(self, text: str, name: str = "file.md"):
         (self.tree / name).write_text(text, encoding="utf-8")
-        terms = scrub.private_terms(self.instance, environ={"HOME": "/home/someone"})
+        terms = scrub.private_terms(self.instance, environ={"HOME": "/home/someone"},
+                                    code_root=self.code_root)
         return scrub.scan(self.tree, terms)
 
     def test_a_clean_tree_has_no_hits(self):
@@ -93,10 +104,9 @@ class PrivateScrub(unittest.TestCase):
         self.assertEqual(self.hits("see README.md\n"), [])
 
     def test_a_name_the_base_series_also_carries_is_not_a_term(self):
-        public = sorted(p.name for p in (scrub.roots.code_root() / "docs" / "adr").glob("[0-9]*.md"))[0]
-        self.add_doc("adr", public)
+        self.add_doc("adr", PUBLIC_ADR)
 
-        self.assertEqual(self.hits(f"see {public}\n"), [])
+        self.assertEqual(self.hits(f"see {PUBLIC_ADR}\n"), [])
 
     def test_an_instance_used_as_the_code_root_is_refused(self):
         # Subtracting the code root's series would then subtract the instance's own records.
@@ -184,6 +194,7 @@ class PrivateScrubInputs(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.instance = make_instance(self.root)
+        self.code_root = make_base(self.root)
         self.tree = self.root / "tree"
         self.tree.mkdir()
 
@@ -192,11 +203,13 @@ class PrivateScrubInputs(unittest.TestCase):
 
     def test_a_declared_pattern_file_that_cannot_be_read_is_an_error(self):
         with self.assertRaises(scrub.ScrubError):
-            scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: str(self.root / "missing")})
+            scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: str(self.root / "missing")},
+                                code_root=self.code_root)
 
     def test_a_relative_pattern_path_is_an_error_naming_the_variable_not_the_value(self):
         with self.assertRaises(scrub.ScrubError) as ctx:
-            scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: "rel.patterns"})
+            scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: "rel.patterns"},
+                                code_root=self.code_root)
 
         self.assertIn(scrub.PATTERNS_ENV, str(ctx.exception))
         self.assertNotIn("rel.patterns", str(ctx.exception))
@@ -206,21 +219,23 @@ class PrivateScrubInputs(unittest.TestCase):
         patterns.write_text("no-tab-here\n", encoding="utf-8")
 
         with self.assertRaises(scrub.ScrubError):
-            scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: str(patterns)})
+            scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: str(patterns)},
+                                code_root=self.code_root)
 
     def test_a_declared_private_pattern_is_found(self):
         patterns = self.root / "private.patterns"
         patterns.write_text("# comment\n\nacme-[0-9]{4}\tacme key\n", encoding="utf-8")
         (self.tree / "f.txt").write_text("key acme-1234\n", encoding="utf-8")
 
-        terms = scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: str(patterns)})
+        terms = scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: str(patterns)},
+                                    code_root=self.code_root)
 
         self.assertEqual([h.kind for h in scrub.scan(self.tree, terms)], ["pattern"])
 
     def test_a_name_inside_a_binary_file_is_still_found(self):
         (self.tree / "blob.bin").write_bytes(b"\xff\xfe\x00" + REPO_NAME.encode() + b"\x00\xff")
 
-        found = scrub.scan(self.tree, scrub.private_terms(self.instance, environ={}))
+        found = scrub.scan(self.tree, scrub.private_terms(self.instance, environ={}, code_root=self.code_root))
 
         self.assertEqual([(h.path, h.kind) for h in found], [("blob.bin", "repo")])
 

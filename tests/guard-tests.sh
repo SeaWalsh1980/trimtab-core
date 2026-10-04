@@ -1083,15 +1083,22 @@ mkdir -p "$LV_REPO/hooks" "$LV_REPO/rules" "$LV_REPO/bin" "$LV_HOME/.claude"
 # guard fail "healthy install is silent" on the base's side, and the required
 # check cannot be merged over. Adding a guard is allowed; dropping one is not:
 # each guard the base already checks must still be named.
-LV_GUARDS=$(printf '%s' "$LIVENESS" | sed -n 's/.*for g in \([a-z -]*\); do.*/\1/p')
-for g in guard-paths guard-bash guard-secrets guard-security guard-mcp; do
-  if [[ " $LV_GUARDS " == *" $g "* ]]; then
-    printf 'PASS  %-14s %s\n' "liveness" "the check still names $g"
-  else
-    printf 'FAIL  %-14s %s\n' "liveness" "the check no longer names $g"
-    fails=$((fails+1))
-  fi
-done
+LV_GUARDS=$(printf '%s' "$LIVENESS" | sed -n 's/.*for g in \([A-Za-z0-9_ -]*\); do.*/\1/p')
+# Said once, by name: otherwise an unreadable list shows up only as every guard
+# "no longer named", which points at the wrong cause.
+if [[ -z "$LV_GUARDS" ]]; then
+  printf 'FAIL  %-14s %s\n' "liveness" "could not read the guard list from the shipped check"
+  fails=$((fails+1))
+else
+  for g in guard-paths guard-bash guard-secrets guard-security guard-mcp; do
+    if [[ " $LV_GUARDS " == *" $g "* ]]; then
+      printf 'PASS  %-14s %s\n' "liveness" "the check still names $g"
+    else
+      printf 'FAIL  %-14s %s\n' "liveness" "the check no longer names $g"
+      fails=$((fails+1))
+    fi
+  done
+fi
 for g in $LV_GUARDS; do
   printf '#!/bin/sh\n' > "$LV_REPO/hooks/$g.sh"; chmod +x "$LV_REPO/hooks/$g.sh"
 done
