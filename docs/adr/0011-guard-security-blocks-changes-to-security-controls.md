@@ -67,7 +67,7 @@ in any repository.
   before launching Claude Code. An inline prefix on a command never reaches
   the hook.
 
-Two measurements shaped the implementation, both on a 140 KB heredoc:
+Three measurements shaped the implementation, all on a 140 KB heredoc:
 
 | Approach | Time | Outcome |
 | --- | --- | --- |
