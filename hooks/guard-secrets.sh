@@ -24,7 +24,7 @@
 # python3 to parse, and grep to scan. Everything else is a bash builtin, by
 # design — head/tail/basename were dropped for expansions after a missing one
 # was found to empty the scan and allow the write.
-# See docs/adr/0003-guards-fail-closed-on-missing-dependencies.md.
+# See docs/adr/0001-guards-fail-closed-on-missing-dependencies.md.
 #
 # Session override:  export HOOK_ALLOW_SECRETS=1
 #   (must be exported before launching claude — an inline env prefix on the
@@ -209,13 +209,13 @@ hit '\bsk-[A-Za-z0-9]{20,}\b' \
 hit '\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b' \
   && block "what looks like a signed JWT"
 
-# Tier 1, continued: signature packs and private patterns (stage S2, C8).
+# Tier 1, continued: signature packs and private patterns (ADR 0008).
 # Packs live in secrets.d/ beside this script. TRIMTAB_SECRET_PACKS unset or
 # empty means every shipped pack applies (fail-safe: a machine whose settings
 # lack the switch loses nothing); a comma-separated list narrows it; "none"
 # leaves only the built-ins. TRIMTAB_SECRET_PATTERNS names an optional file
 # of private patterns, given as an absolute path. Each line is "<ERE><TAB><label>". Anything declared
-# but unusable, or a missing secrets.d/, fails closed (ADR 0003).
+# but unusable, or a missing secrets.d/, fails closed (ADR 0001).
 here=$(cd -P "${BASH_SOURCE[0]%/*}" 2>/dev/null && pwd -P) \
   || fail_closed "cannot locate its own directory to read signature packs"
 packs_dir="$here/secrets.d"

@@ -9,10 +9,11 @@
 # Reading is NOT blocked — Read is not in the matcher, and in Bash only write
 # verbs, redirects and mutating `gh` calls are inspected. That is a deliberate
 # departure from guard-paths' noun-only Bash matching; the reasons and the
-# accepted residuals are in docs/adr/0008-security-controls-guard.md.
+# accepted residuals are in
+# docs/adr/0011-guard-security-blocks-changes-to-security-controls.md.
 #
 # Fails CLOSED: an empty or unparseable payload blocks, and a missing jq falls
-# back to python3. See docs/adr/0003-guards-fail-closed-on-missing-dependencies.md.
+# back to python3. See docs/adr/0001-guards-fail-closed-on-missing-dependencies.md.
 #
 # Session override: export HOOK_ALLOW_SECURITY=1
 #   (must be exported before launching claude — an inline prefix on the Bash
@@ -25,7 +26,7 @@ set -uo pipefail   # deliberately not -e: an unexpected non-zero must not
 
 payload=$(cat)
 
-# jq reports empty stdin as a successful parse of nothing; see ADR 0003.
+# jq reports empty stdin as a successful parse of nothing; see ADR 0001.
 if [[ -z "$payload" ]]; then
   echo "guard-security: empty hook payload. Blocking (fail closed)." >&2
   exit 2

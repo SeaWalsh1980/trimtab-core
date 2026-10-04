@@ -8,7 +8,7 @@
 # Claude Code treats every exit code except 2 as non-blocking, so a guard
 # that errors out (missing jq, bad JSON, empty stdin) looks identical to a guard
 # that is allowing everything — unless it deliberately exits 2.
-# See docs/adr/0003-guards-fail-closed-on-missing-dependencies.md.
+# See docs/adr/0001-guards-fail-closed-on-missing-dependencies.md.
 #
 # Override for a single command by prefixing it with:  ALLOW_DESTRUCTIVE=1
 # Override for a whole session:  export HOOK_ALLOW_DESTRUCTIVE=1

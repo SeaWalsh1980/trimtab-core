@@ -1,3 +1,3 @@
 # Zoho OAuth access and refresh tokens: "1000." and two 32-hex parts.
-# Moved unchanged from guard-secrets' built-ins (stage S2, C8).
+# Moved unchanged from guard-secrets' built-ins (ADR 0008).
 \b1000\.[0-9a-f]{32}\.[0-9a-f]{32}\b	a Zoho OAuth token

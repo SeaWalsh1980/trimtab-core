@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# SessionStart hook, matcher: *. NOT REGISTERED: registering it is control
-# change C2 (plan 0009, section 3b), which needs the operator's authorization.
+# SessionStart hook, matcher: *. Registered in settings.base.json; changing
+# that registration is a security-control change (ADR 0004).
 #
 # Warns when the Trimtab checkout this hook runs from is not the SHA the
 # project's .claude/trimtab.json was reviewed against, or when the project's

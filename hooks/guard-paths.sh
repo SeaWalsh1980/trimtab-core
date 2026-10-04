@@ -10,8 +10,8 @@
 # blocks); jq or python3 parses the payload; and `readlink`, run only when
 # ~/.claude/CLAUDE.md is a link (bootstrap always makes it one), without which
 # every call blocks. `sed` was dropped for bash expansions after a missing one
-# was found to empty both the path and the command and allow everything. See docs/adr/0003-guards-fail-closed-on-missing-dependencies.md
-# and plan 0009's Decision log.
+# was found to empty both the path and the command and allow everything. See
+# docs/adr/0001-guards-fail-closed-on-missing-dependencies.md.
 #
 # Session override: export HOOK_ALLOW_PATHS=1
 #   (must be exported before launching claude, or set in settings env —
@@ -125,7 +125,8 @@ EOF
 #
 # Residual, stated rather than hidden: `git pull` and `bootstrap.sh` change
 # these same files without an Edit/Write call, so this does not cover a
-# repo-level compromise. See docs/adr/0005-anchor-guards-to-the-live-control-plane.md.
+# repo-level compromise. See
+# docs/adr/0002-anchor-the-guards-to-the-live-control-plane.md.
 if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
   cp_home="${CLAUDE_CONFIG_DIR%/}"
 elif [[ -n "${HOME:-}" ]]; then
@@ -140,8 +141,7 @@ fi
 # and are not guaranteed on a minimal image. The one exception is the
 # instruction-file link (~/.claude/CLAUDE.md), which links to a FILE that
 # `cd -P` cannot resolve: it costs one plain `readlink` exec per hop, and a
-# missing `readlink` blocks. That trade is recorded in plan 0009's Decision
-# log ("guard-paths follows the instruction-file link with readlink").
+# missing `readlink` blocks. That trade is recorded in ADR 0002.
 #
 # Three outcomes, none of them a silent allow: the node is absent (nothing is
 # installed on this host — only the config names below are protected, which is
@@ -154,7 +154,7 @@ fi
 # the whole tree blocked every one of those writes, which broke agent memory
 # and plan mode outright. What deserves protection is the config: the files
 # that change what a session EXECUTES. See
-# docs/adr/0004-control-plane-scope-excludes-agent-state.md.
+# docs/adr/0002-anchor-the-guards-to-the-live-control-plane.md.
 cp_roots=()
 cp_files=()
 # The config dir node ITSELF, matched by equality only — never as a prefix, and
@@ -172,7 +172,7 @@ done
 cp_files+=( "$cp_home/settings.json" "$cp_home/settings.local.json" \
             "$cp_home/CLAUDE.md" )
 
-# Every link's realpath, not only the hooks link's parent (stage S2, C7): the
+# Every link's realpath, not only the hooks link's parent (ADR 0002): the
 # mechanism links resolve into the base snapshot and the rules link into the
 # instance. Each resolved link's parent is a root whose exact files bootstrap
 # reads. A link that exists and does not resolve blocks. The list is every
@@ -214,7 +214,7 @@ done
 # cannot resolve a link to a FILE, so this is the one place the guard execs
 # `readlink` (plain, not `-f`, which older macOS lacks), and only when the
 # node is a link. A missing `readlink`, a loop, or a target that is not a file
-# means the protected set cannot be established: block (ADR 0003).
+# means the protected set cannot be established: block (ADR 0002).
 cp_node="$cp_home/CLAUDE.md"
 if [[ -L "$cp_node" ]]; then
   cp_link="$cp_node"
@@ -332,7 +332,7 @@ if [[ -n "${TRIMTAB_SECRET_PATTERNS:-}" ]]; then
   fi
 fi
 
-# The base snapshot store (stage S4 installs into it): always a protected
+# The base snapshot store (snapshot installs, ADR 0003): always a protected
 # prefix, whether or not it exists yet, so the rollback snapshot is covered.
 # Normalised for the same reason as the pattern file above. A relative
 # XDG_DATA_HOME is invalid under the XDG base directory spec and is ignored,
@@ -367,8 +367,8 @@ cp_data="${XDG_DATA_HOME:-}"
 # Keeping it over-blocks the unrelated tree, the safe direction. It covers
 # only that spelling: cp_norm collapses `..` as text in every Edit path, so
 # `<any symlink>/../<protected name>` still misses every root, here and for
-# the other roots. That gap is not closed here; see plan 0009's Deferred work
-# ("guard-paths collapses `..` in a target path as text").
+# the other roots. That gap is not closed here; ADR 0002 records it as a
+# known gap.
 if [[ -n "$cp_data" ]]; then
   cp_norm "$cp_data/trimtab/core"
   cp_store="$cp_n"
@@ -406,15 +406,15 @@ fi
 # The user systemd unit directory: a protected PREFIX, so unit files, the links
 # bootstrap makes, `<unit>.d/` drop-ins and `*.wants/` links are all covered. An
 # edit to ExecStart= runs any command from the weekly timer, outside every
-# session guard, with no pull request (ADR 0005's case). bootstrap writes to
+# session guard, with no pull request (ADR 0002's case). bootstrap writes to
 # ${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user; both spellings are protected,
 # whichever one is in force, so the set only widens. As for XDG_DATA_HOME
 # above, a value that is not absolute is invalid under the XDG spec and is
 # ignored, and so is a relative HOME. When the directory exists it is protected
 # physically too (a dotfiles link); one that exists and does not resolve
 # blocks, as a config link does. Routes that write here without naming the
-# directory (`systemctl --user edit`, `enable`) are outside a path guard; see
-# plan 0009's Deferred work.
+# directory (`systemctl --user edit`, `enable`) are outside a path guard, and
+# no other guard closes them yet.
 cp_units=()
 [[ "${HOME:-}" == /* ]] && cp_units+=( "${HOME%/}/.config/systemd/user" )
 [[ "${XDG_CONFIG_HOME:-}" == /* ]] && cp_units+=( "${XDG_CONFIG_HOME%/}/systemd/user" )

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# PreToolUse hook, matcher: Bash. NOT REGISTERED: registering it is control
-# change C2 (plan 0009, section 3b), which needs the operator's authorization.
+# PreToolUse hook, matcher: Bash. Registered in settings.base.json; changing
+# that registration is a security-control change (ADR 0004).
 #
 # Checks the body of `gh pr create` / `gh pr edit --body*` for the harness
-# block (plan section 3a) before the PR is opened. Exit 2 = blocked, with a
+# block (ADR 0005) before the PR is opened. Exit 2 = blocked, with a
 # message that names sections and fields and never quotes the body.
 #
 # Unlike the four guards, this is policy, not a security control, and it fails
@@ -11,8 +11,8 @@
 # running the command, it allows. CI is the gate.
 #
 # Fast path: a command that does not contain `gh pr` exits before python3
-# starts, so the cost on ordinary Bash calls is one bash startup (risk R4;
-# latencies in docs/adr/0009).
+# starts, so the cost on ordinary Bash calls is one bash startup (latencies
+# in docs/adr/0005-harness-items-by-id-and-the-evidence-loop.md).
 
 payload=$(cat) || exit 0
 [[ "$payload" =~ gh[[:space:]]+pr ]] || exit 0
