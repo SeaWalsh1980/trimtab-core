@@ -1,4 +1,4 @@
-"""Latency of hooks/pr-body-check.sh (risk R4; measured before optimising). Not a test: run by hand.
+"""Latency of hooks/pr-body-check.sh (measured before optimising; results in ADR 0005). Not a test: run by hand.
 
     python3 tests/trimtab/bench_pr_body_check.py [runs]
 

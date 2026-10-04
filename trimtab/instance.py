@@ -1,8 +1,8 @@
-"""instance.json: an instance's deployment values (stage S3 spec, section 2).
+"""instance.json: an instance's deployment values (ADR 0008).
 
 The only reader of the file (ARC-3). `parse` is pure; `load` and
 `patterns_path` touch the file system. The file holds no routine or
-environment ID, and has no field for one (S3-2).
+environment ID, and has no field for one (see trimtab/routines.py).
 """
 
 from __future__ import annotations
@@ -39,8 +39,8 @@ class InstanceFile:
 def _keys(obj: dict, allowed: set[str], where: str) -> None:
     for key in obj:
         if key in NO_ID_FIELDS:
-            raise InstanceFileError(f"{where}{key}: no file holds routine or environment IDs "
-                                    "(stage S3 spec, S3-2); remove the key")
+            raise InstanceFileError(f"{where}{key}: no file holds routine or environment IDs; "
+                                    "remove the key")
         if key not in allowed:
             raise InstanceFileError(f"{where}{key}: unknown key")
 
@@ -116,14 +116,14 @@ def load(root: Path) -> InstanceFile:
 
 
 def packs_env(f: InstanceFile) -> str | None:
-    """The TRIMTAB_SECRET_PACKS value bootstrap writes, or None to write none (every pack, S2-5)."""
+    """The TRIMTAB_SECRET_PACKS value bootstrap writes, or None to write none (every pack, ADR 0008)."""
     if f.secrets_packs is None:
         return None
     return ",".join(f.secrets_packs) or "none"
 
 
 def patterns_path(f: InstanceFile, root: Path) -> Path | None:
-    """The private pattern file as an absolute path, resolved inside the instance (S3-5)."""
+    """The private pattern file as an absolute path, resolved inside the instance."""
     if f.secrets_patterns is None:
         return None
     base = Path(root).resolve()

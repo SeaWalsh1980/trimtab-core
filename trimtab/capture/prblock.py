@@ -1,4 +1,4 @@
-"""The PR block: parse and validate the three sections of plan section 3a.
+"""The PR block: parse and validate its three sections (ADR 0005).
 
 One parser for every caller: the CLI (`trimtab check-pr`), the local hook
 (`hooks/pr-body-check.sh`) and CI all come through `check_body`.
@@ -32,7 +32,7 @@ SECTIONS = (APPLIED, FEEDBACK, COST)
 
 KINDS = ("missed", "conflict", "ambiguous", "obsolete", "gap")
 SCOPES = ("project", "upstream")
-# F5: every pass records what happened to it, including a pass that never returned.
+# Every pass records what happened to it, including a pass that never returned (ADR 0005).
 STATUSES = ("ran", "timed_out", "failed", "skipped", "pending")
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 BELOW_BINDING = ("MEDIUM", "LOW")
@@ -229,7 +229,7 @@ def _feedback(data, registry, problems) -> tuple[Feedback, ...]:
             if clause and clause_strength(item, clause) is None:
                 problems.append(Problem("unknown-clause", where, "no line of the item starts with the clause"))
             elif strength.binding:
-                # A REQUIRE or PROHIBIT breach is CRITICAL or HIGH, never lower (F9).
+                # A REQUIRE or PROHIBIT breach is CRITICAL or HIGH, never lower.
                 problems.append(Problem("severity-below-binding", where,
                                         f"a {strength.name} item cannot be graded {severity}"))
         if len(problems) == before:

@@ -1,14 +1,14 @@
-"""Citations against a diff: the reviewer's deterministic pass (F2, R2, R3).
+"""Citations against a diff: the reviewer's deterministic pass (ADR 0005).
 
 An earlier reviewer matched citations by the clause's text, so a formatting difference
-made 34 correct citations "invented" (F2). Here a citation is an ID, and the
+made 34 correct citations "invented" (ADR 0005). Here a citation is an ID, and the
 check is set arithmetic over the resolver's answer:
 
 - a **binding path-scoped** item (REQUIRE/PROHIBIT, from a rule file whose
   `paths:` reach a changed file) that the plan did not cite was never in the
   planner's context: the reviewer grades it;
 - a cited **path-scoped** item whose globs reach no changed file is out of
-  scope (R3: flagged, never scored);
+  scope (flagged, never scored);
 - always-loaded items (base rules, rule files without `paths:`) apply to every
   path, so scope cannot tell whether one binds this diff. They are counted and
   left to the reviewer's judgement, never reported as uncited.

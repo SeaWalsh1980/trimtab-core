@@ -1,4 +1,4 @@
-"""Routine specs render from templates with instance values (stage S2 spec, section 4)."""
+"""Routine specs render from templates with instance values (ADR 0008)."""
 
 import json
 import re
@@ -44,7 +44,7 @@ class Render(unittest.TestCase):
         self.assertEqual(sources, [{"git_repository": {"url": f"https://github.com/{REPO_NAME}"}}])
 
     def test_the_name_carries_the_instances_repository(self):
-        # Stage S3 spec, S3-2: the session step finds the routine by this name, not by a stored ID.
+        # The session step finds the routine by this name, not by a stored ID.
         spec = routines.render("upstream-retro", routines.values(self.inst, {"environment_id": "placeholder"}))
 
         self.assertIn(REPO_NAME, spec["name"])

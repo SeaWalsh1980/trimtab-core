@@ -1,4 +1,4 @@
-"""Scrub checks for anything pushed to the public base (stage S2 spec, sections 3 and 6).
+"""Scrub checks for anything pushed to the public base.
 
 The private check builds its list at run time from the instance's own files, so
 the list is never committed anywhere public. The public check looks only for
@@ -57,7 +57,7 @@ def _private_patterns(environ: Mapping[str, str]) -> tuple[re.Pattern, ...]:
     if not declared:
         return ()
     if not declared.startswith("/"):
-        # Relative to what? The scrub's working directory is not the instance (S3-6). Never echo the value.
+        # Relative to what? The scrub's working directory is not the instance. Never echo the value.
         raise ScrubError(f"{PATTERNS_ENV} is not an absolute path")
     try:
         lines = Path(declared).read_text(encoding="utf-8").splitlines()

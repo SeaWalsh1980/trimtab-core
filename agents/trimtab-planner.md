@@ -14,7 +14,7 @@ breaks it. Your job is to make that impossible for the plan you write: resolve
 which items govern the footprint, read them in full, and return a plan whose
 every step names the item it satisfies, **by ID**.
 
-Citations are IDs from `HARNESS.md`, not quoted clause text (F2).
+Citations are IDs from `HARNESS.md`, not quoted clause text (trimtab-core ADR 0005).
 
 **You are in Planning mode.** You **PROHIBIT** yourself from:
 modifying any repository file, generating patch-ready code, or running a

@@ -1,4 +1,4 @@
-"""real_instance(): when an instance check runs, skips, or fails (stage S2 pre-extraction prep).
+"""real_instance(): when an instance check runs, skips, or fails.
 
 No test reads the real doctrine: each builds any instance in a temporary
 directory. All but one pass their own environment mapping. The exception,

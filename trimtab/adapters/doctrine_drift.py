@@ -1,6 +1,6 @@
 """SessionStart adapter: warn when the instance's doctrine differs from the project's lock.
 
-Never blocks and always exits 0 (plan section 3). Silent when the project has
+Never blocks and always exits 0 (ADR 0005). Silent when the project has
 not adopted Trimtab, when the lock matches or only non-doctrine files changed
 since it (ADR 0008), and in the instance's own checkouts (where the lock
 is a baseline, not a pin). Otherwise prints one JSON object whose

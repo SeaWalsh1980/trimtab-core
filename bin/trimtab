@@ -3,7 +3,7 @@
 #
 # Resolves through the ~/.claude/bin symlink to the checkout that holds the
 # `trimtab` package, so it runs the same code from anywhere. Standard library
-# plus PyYAML only (plan section 4).
+# plus PyYAML only.
 set -euo pipefail
 here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # -P: never put the working directory on sys.path, so a trimtab/ directory

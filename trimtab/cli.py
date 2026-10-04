@@ -106,7 +106,7 @@ def _since(args) -> str | None:
 
 
 def _lock(project: Path):
-    """The project's lock, with any schema warning printed (stage S3 spec, S3-4)."""
+    """The project's lock, with any schema warning printed."""
     config, problems = project_config.load(project)
     for warning in (config.warnings if config else ()):
         print(f"warning: {project / project_config.PATH}: {warning}", file=sys.stderr)
@@ -447,7 +447,7 @@ def cmd_instance(args) -> int:
     if args.root:  # for the agents: the doctrine root, which a lock it cannot read must not block
         print(base)
         return 0
-    if args.json:  # for bootstrap: the validated values it writes (stage S3 spec, section 3)
+    if args.json:  # for bootstrap: the validated values it writes
         try:
             found = instance.load(base)
             patterns = instance.patterns_path(found, base)
@@ -579,7 +579,7 @@ def _ingest_options(p) -> None:
 
 
 def _instance(args) -> Path:
-    """The instance root for this run: --instance, then TRIMTAB_INSTANCE (S2-2)."""
+    """The instance root for this run: --instance, then TRIMTAB_INSTANCE (ADR 0008)."""
     return roots.instance_root(getattr(args, "instance", None))
 
 

@@ -1,4 +1,4 @@
-"""Ingest by watermark, tally per ID, and propose (plan sections 6a and 11)."""
+"""Ingest by watermark, tally per ID, and propose (ADR 0005)."""
 
 import unittest
 
