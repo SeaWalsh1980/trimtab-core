@@ -696,7 +696,8 @@ echo "== guard-security =="
 # claude-code-action skips any PR that edits its own workflow and still reports
 # success, so a workflow edit passes a required review check unreviewed. Reads
 # must stay allowed: the friction belongs on changing a control, not on looking
-# at one.
+# at one. See
+# docs/adr/0011-guard-security-blocks-changes-to-security-controls.md.
 SG=guard-security.sh
 
 # -- file tools, one case per control class ------------------------------
