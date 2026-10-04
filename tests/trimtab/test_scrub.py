@@ -73,6 +73,76 @@ class PrivateScrub(unittest.TestCase):
 
         self.assertNotIn(REPO_NAME, repr(found))
 
+    def add_doc(self, folder: str, name: str):
+        (self.instance / "docs" / folder).mkdir(parents=True, exist_ok=True)
+        (self.instance / "docs" / folder / name).write_text("# x\n", encoding="utf-8")
+
+    def test_a_numbered_instance_adr_file_name_is_found(self):
+        self.add_doc("adr", "0004-private-decision.md")
+
+        self.assertEqual([h.kind for h in self.hits("see 0004-private-decision.md\n")], ["private-doc"])
+
+    def test_a_numbered_instance_plan_file_name_is_found(self):
+        self.add_doc("plans", "0013-private-split.md")
+
+        self.assertEqual([h.kind for h in self.hits("see 0013-private-split.md, section 3\n")], ["private-doc"])
+
+    def test_an_unnumbered_instance_doc_name_is_not_a_term(self):
+        self.add_doc("adr", "README.md")
+
+        self.assertEqual(self.hits("see README.md\n"), [])
+
+    def test_a_name_the_base_series_also_carries_is_not_a_term(self):
+        public = sorted(p.name for p in (scrub.roots.code_root() / "docs" / "adr").glob("[0-9]*.md"))[0]
+        self.add_doc("adr", public)
+
+        self.assertEqual(self.hits(f"see {public}\n"), [])
+
+    def test_an_instance_used_as_the_code_root_is_refused(self):
+        # Subtracting the code root's series would then subtract the instance's own records.
+        self.add_doc("adr", "0004-private-decision.md")
+
+        with self.assertRaises(scrub.ScrubError):
+            scrub.private_terms(self.instance, environ={}, code_root=self.instance)
+
+    def use_base(self, base_repo: str):
+        data = json.loads((self.instance / instance_file.FILE).read_text())
+        data["base"]["repo"] = base_repo
+        (self.instance / instance_file.FILE).write_text(json.dumps(data))
+
+    def test_the_bases_own_name_is_not_a_hit_when_a_private_name_prefixes_it(self):
+        self.use_base(f"{REPO_NAME}-core")
+
+        self.assertEqual(self.hits(f"see {REPO_NAME}-core\n"), [])
+
+    def test_the_private_name_beside_the_bases_own_is_still_found(self):
+        self.use_base(f"{REPO_NAME}-core")
+
+        self.assertEqual([h.kind for h in self.hits(f"{REPO_NAME}-core forks {REPO_NAME}\n")], ["repo"])
+
+    def test_blanking_the_bases_name_never_hides_a_home_path(self):
+        # An owner named like the user, with the base cloned into the home directory.
+        self.use_base("someone/x-core")
+
+        self.assertEqual([h.kind for h in self.hits("at /home/someone/x-core/hooks/f.sh\n")], ["home"])
+
+    def test_a_private_name_that_starts_with_the_bases_own_is_still_found(self):
+        self.use_base("owner/consumer")
+
+        self.assertEqual([h.kind for h in self.hits(f"see {CONSUMER}\n")], ["repo"])
+
+    def test_a_longer_name_that_starts_with_a_private_one_is_found(self):
+        self.assertEqual([h.kind for h in self.hits(f"see {REPO_NAME}-api and {REPO_NAME}_old\n")], ["repo"])
+
+    def test_a_repository_name_ending_a_sentence_is_found(self):
+        self.assertEqual([h.kind for h in self.hits(f"cloned from {REPO_NAME}.\n")], ["repo"])
+
+    def test_a_repository_name_in_a_url_is_found(self):
+        self.assertEqual([h.kind for h in self.hits(f"https://github.com/{REPO_NAME}/pull/1\n")], ["repo"])
+
+    def test_a_repository_name_in_a_clone_url_is_found(self):
+        self.assertEqual([h.kind for h in self.hits(f"git clone git@github.com:{REPO_NAME}.git\n")], ["repo"])
+
 
 class PublicScrub(unittest.TestCase):
     def setUp(self):

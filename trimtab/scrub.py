@@ -15,9 +15,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from trimtab import instance as instance_file
 from trimtab import roots
 
 ID_SHAPE = re.compile(r"\b(?:trig|env|session)_[0-9A-Za-z]{16,}\b")
+NUMBERED_DOC = re.compile(r"^\d{4}-.+\.md$")
 SKIP_DIRS = {".git", "__pycache__"}
 TEST_PARTS = {"tests", "test", "fixtures"}
 PATTERNS_ENV = "TRIMTAB_SECRET_PATTERNS"
@@ -40,6 +42,9 @@ class Terms:
     literals: dict[str, tuple[str, ...]] = field(default_factory=dict)
     patterns: dict[str, tuple[re.Pattern, ...]] = field(default_factory=dict)
     exempt_tests: frozenset[str] = frozenset()
+    # Public names blanked out of each line before repository names are matched: the base's
+    # own repository can start with the instance's name (`owner/x-core` contains `owner/x`).
+    public_names: tuple[str, ...] = ()
 
 
 def _git(root: Path, *args: str) -> str:
@@ -90,12 +95,18 @@ def _consumers(path: Path) -> list[str]:
     return [e["repo"] for e in entries if isinstance(e, dict) and isinstance(e.get("repo"), str)]
 
 
-def private_terms(instance: Path, environ: Mapping[str, str]) -> Terms:
+def private_terms(instance: Path, environ: Mapping[str, str], code_root: Path | None = None) -> Terms:
     instance = Path(instance)
+    code_root = Path(code_root) if code_root is not None else roots.code_root()
+    if code_root.resolve() == instance.resolve():
+        # The base's own ADR names are subtracted below; from the instance that would subtract
+        # every instance record and leave the check silently empty. An instance is not a base.
+        raise ScrubError("the scrub is running from the instance itself; run it from a base checkout")
     try:
         # Its own repository is the likeliest private name to leak; never build the list without it.
         repos = {roots.instance_repo(instance)}
-    except roots.InstanceInvalid as err:
+        base_repo = instance_file.load(instance).base_repo
+    except (roots.InstanceInvalid, instance_file.InstanceFileError) as err:
         raise ScrubError(str(err)) from err
     repos.update(_consumers(instance / "consumers.json"))
     ids: set[str] = set()
@@ -106,14 +117,24 @@ def private_terms(instance: Path, environ: Mapping[str, str]) -> Terms:
             except OSError as err:
                 raise ScrubError(f"routines/{path.name} cannot be read ({type(err).__name__})") from err
     doctrine = {p.name for p in (instance / "rules").glob("*.md")}
+    # The instance's own decision records and plans, by full numbered name: these are what
+    # leaked into the base before. Unnumbered names (README.md) would match everywhere, and a
+    # name this base's own series also carries is public, so neither is a term.
+    docs = {p.name for folder in ("adr", "plans") for p in (instance / "docs" / folder).glob("*.md")
+            if NUMBERED_DOC.match(p.name)}
+    docs -= {p.name for p in (code_root / "docs" / "adr").glob("*.md")}
     home = environ.get("HOME", "")
     email = _git(instance, "config", "user.email")
     literals = {"repo": tuple(sorted(repos)), "id": tuple(sorted(ids)),
-                "doctrine-file": tuple(sorted(doctrine)),
+                "doctrine-file": tuple(sorted(doctrine)), "private-doc": tuple(sorted(docs)),
                 "home": (home,) if home else (), "email": (email,) if email else ()}
     private = _private_patterns(environ)
     patterns = {"pattern": private} if private else {}
-    return Terms(literals={k: v for k, v in literals.items() if v}, patterns=patterns)
+    # Blank the base's name only where that cannot hide a private one: if it is part of a private
+    # repository name (a consumer `owner/base-fork`), keep it, and accept the false positive.
+    public = () if any(base_repo.casefold() in r.casefold() for r in repos) else (base_repo,)
+    return Terms(literals={k: v for k, v in literals.items() if v}, patterns=patterns,
+                 public_names=public)
 
 
 def public_terms(self_repo: str | None) -> Terms:
@@ -146,6 +167,7 @@ def scan(tree: Path, terms: Terms) -> list[Hit]:
         raise ScrubError(f"{tree} is not a directory")
     # Names are matched without regard to case: GitHub's are case-insensitive, and prose lowercases them.
     literals = {k: tuple(w.casefold() for w in words) for k, words in terms.literals.items()}
+    public = tuple(p.casefold() for p in terms.public_names if p)
     hits: list[Hit] = []
     for path in sorted(tree.rglob("*")):
         rel = path.relative_to(tree)
@@ -158,7 +180,13 @@ def scan(tree: Path, terms: Terms) -> list[Hit]:
             raise ScrubError(f"{rel.as_posix()} cannot be read ({type(err).__name__})") from err
         for n, text in enumerate(lines, 1):
             folded = text.casefold()
-            kinds = [k for k, words in literals.items() if any(w in folded for w in words)]
+            # The base's name is blanked for repository names only: in any other class it could
+            # cut a home path whose user is the owner and whose checkout is the base, and hide it.
+            for_repos = folded
+            for p in public:
+                for_repos = for_repos.replace(p, " ")
+            kinds = [k for k, words in literals.items()
+                     if any(w in (for_repos if k == "repo" else folded) for w in words)]
             kinds += [k for k, pats in terms.patterns.items() if any(p.search(text) for p in pats)]
             for kind in kinds:
                 if kind in terms.exempt_tests and _in_tests(rel):
