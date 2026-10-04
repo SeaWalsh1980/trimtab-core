@@ -68,9 +68,11 @@ class SettingsUnreadable(Exception):
 def enabled_plugins(roots: list[Path]) -> set[str]:
     """Plugin names enabled in each root's settings layers: the base's
     settings.base.json, an instance's settings.instance.json, and a
-    project's .claude/settings.json."""
+    project's .claude/settings.json. Within a root a later layer overrides an
+    earlier one per plugin, as bootstrap merges them."""
     enabled: set[str] = set()
     for root in roots:
+        merged: dict[str, object] = {}
         for path in (root / "settings.base.json", root / "settings.instance.json",
                      root / ".claude" / "settings.json"):
             try:
@@ -83,8 +85,8 @@ def enabled_plugins(roots: list[Path]) -> set[str]:
                 data = json.loads(text)
             except ValueError as err:
                 raise SettingsUnreadable(f"{path} is not valid JSON") from err
-            plugins = data.get("enabledPlugins") or {}
-            enabled |= {key.split("@", 1)[0] for key, on in plugins.items() if on is True}
+            merged.update(data.get("enabledPlugins") or {})
+        enabled |= {key.split("@", 1)[0] for key, on in merged.items() if on is True}
     return enabled
 
 

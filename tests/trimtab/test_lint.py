@@ -206,6 +206,15 @@ class PluginsFromTheInstanceLayer(unittest.TestCase):
 
         self.assertEqual([p.code for p in problems], ["unresolved"])
 
+    def test_a_plugin_the_instance_layer_disables_over_the_base_layer_fails(self):
+        self.enable(True, layer="settings.base.json")
+        self.enable(False)
+
+        enabled = references.enabled_plugins([self.root])
+        problems = references.lint(self.root, base_root=None, enabled_plugins=enabled)
+
+        self.assertEqual([p.code for p in problems], ["unresolved"])
+
     def test_a_plugin_enabled_in_the_base_layer_still_resolves(self):
         self.enable(True, layer="settings.base.json")
 
