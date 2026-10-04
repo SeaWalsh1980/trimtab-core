@@ -547,7 +547,12 @@ def cmd_instance(args) -> int:
             path = base / upstream.CONSUMERS
             if not path.is_file():
                 raise upstream.ConsumersError(f"{upstream.CONSUMERS} is missing")
-            n = len(upstream.load_consumers(path.read_text(encoding="utf-8")))
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as err:
+                raise upstream.ConsumersError(
+                    f"{upstream.CONSUMERS} cannot be read ({type(err).__name__})") from err
+            n = len(upstream.load_consumers(text))
         except upstream.ConsumersError as err:  # its messages already name consumers.json
             print(f"error: {err}", file=sys.stderr)
             return 2

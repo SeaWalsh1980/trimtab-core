@@ -257,6 +257,15 @@ class CliInstanceCheck(unittest.TestCase):
         self.assertEqual((done.returncode, done.stdout), (2, ""))
         self.assertIn(upstream.CONSUMERS, done.stderr)
 
+    def test_a_consumers_json_that_is_not_utf8_exits_2_naming_it(self):
+        (self.inst / upstream.CONSUMERS).write_bytes(b'{"consumers": [{"repo": "o/r\xff"}]}')
+
+        done = self.run_check()
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""))
+        self.assertIn(upstream.CONSUMERS, done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+
     def test_a_malformed_instance_json_exits_2_naming_it(self):
         self.write_consumers({"consumers": [{"repo": "o/r"}]})
         data = json.loads((self.inst / instance.FILE).read_text())
