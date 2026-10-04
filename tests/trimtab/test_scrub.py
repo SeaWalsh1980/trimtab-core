@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from trimtab import instance as instance_file
 from trimtab import scrub
@@ -15,6 +16,9 @@ CONSUMER = "owner/consumer-one"
 ROUTINE_ID = "trig_" + "A1b2C3d4E5f6G7h8J9k0"  # built at run time: never a literal ID in a file
 DOCTRINE = "PrivateDoctrine.md"
 TRIMTAB = Path(__file__).resolve().parents[2] / "bin" / "trimtab"
+PUBLIC_ADR = "0001-a-public-decision.md"
+INSTANCE_EMAIL = "operator@example.invalid"
+HOOK_EMAIL = "hook@example.invalid"
 
 
 def make_instance(root: Path) -> Path:
@@ -29,11 +33,54 @@ def make_instance(root: Path) -> Path:
     return inst
 
 
+def make_base(root: Path) -> Path:
+    """A stand-in for the base checkout, so no test reads this repository's own docs/adr."""
+    base = root / "base"
+    (base / "docs" / "adr").mkdir(parents=True)
+    (base / "docs" / "adr" / PUBLIC_ADR).write_text("# x\n", encoding="utf-8")
+    return base
+
+
+# Set by git while it runs a hook: inherited, they would point every git call in a test at
+# the hook's own repository, for reads and for writes.
+GIT_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                     "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
+# Config handed down by a caller: `git -c key=value` exports GIT_CONFIG_PARAMETERS to what it
+# runs, hooks included, and GIT_CONFIG_COUNT with GIT_CONFIG_KEY_n/VALUE_n sets keys directly.
+GIT_CONFIG_VARS = ("GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT")
+GIT_CONFIG_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+
+
+def _inherited_git_setting(name: str) -> bool:
+    return name in GIT_LOCATION_VARS or name in GIT_CONFIG_VARS or name.startswith(GIT_CONFIG_PREFIXES)
+
+
+def isolated_git_env(environ, root: Path) -> dict:
+    """environ, with git kept inside root and away from the machine's own config.
+
+    private_terms reads the instance's commit email with `git config`. A fixture instance is
+    not a repository, so git would otherwise fall back to the global config of whoever runs
+    the tests, or find a repository above the temporary directory.
+    """
+    env = {k: v for k, v in environ.items() if not _inherited_git_setting(k)}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+               GIT_CEILING_DIRECTORIES=str(root.resolve()))
+    return env
+
+
+def isolate_git(case: unittest.TestCase, root: Path) -> None:
+    patcher = mock.patch.dict(os.environ, isolated_git_env(os.environ, root), clear=True)
+    patcher.start()
+    case.addCleanup(patcher.stop)
+
+
 class PrivateScrub(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        isolate_git(self, self.root)
         self.instance = make_instance(self.root)
+        self.code_root = make_base(self.root)
         self.tree = self.root / "tree"
         self.tree.mkdir()
 
@@ -42,7 +89,8 @@ class PrivateScrub(unittest.TestCase):
 
     def hits(self, text: str, name: str = "file.md"):
         (self.tree / name).write_text(text, encoding="utf-8")
-        terms = scrub.private_terms(self.instance, environ={"HOME": "/home/someone"})
+        terms = scrub.private_terms(self.instance, environ={"HOME": "/home/someone"},
+                                    code_root=self.code_root)
         return scrub.scan(self.tree, terms)
 
     def test_a_clean_tree_has_no_hits(self):
@@ -73,6 +121,48 @@ class PrivateScrub(unittest.TestCase):
 
         self.assertNotIn(REPO_NAME, repr(found))
 
+    def test_the_machines_own_git_identity_is_not_a_term(self):
+        terms = scrub.private_terms(self.instance, environ={}, code_root=self.code_root)
+
+        self.assertNotIn("email", terms.literals)
+
+    def test_the_instances_commit_email_is_found(self):
+        subprocess.run(["git", "init", "-q", str(self.instance)], check=True)
+        subprocess.run(["git", "-C", str(self.instance), "config", "user.email", INSTANCE_EMAIL], check=True)
+
+        self.assertEqual([h.kind for h in self.hits(f"by {INSTANCE_EMAIL}\n")], ["email"])
+
+    def test_a_git_dir_inherited_from_a_hook_is_neither_read_nor_written(self):
+        hook_repo = self.root / "hook-repo"
+        subprocess.run(["git", "init", "-q", str(hook_repo)], check=True)
+        subprocess.run(["git", "-C", str(hook_repo), "config", "user.email", HOOK_EMAIL], check=True)
+        # As git exports it to a hook, then isolated again as setUp would.
+        hook = mock.patch.dict(os.environ, {"GIT_DIR": str(hook_repo / ".git")})
+        hook.start()
+        self.addCleanup(hook.stop)
+        isolate_git(self, self.root)
+
+        subprocess.run(["git", "init", "-q", str(self.instance)], check=True)
+        subprocess.run(["git", "-C", str(self.instance), "config", "user.email", INSTANCE_EMAIL], check=True)
+
+        self.assertEqual([h.kind for h in self.hits(f"by {INSTANCE_EMAIL}\n")], ["email"])
+        written = subprocess.run(["git", "-C", str(hook_repo), "config", "user.email"],
+                                 capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(written, HOOK_EMAIL)
+
+    def test_config_handed_down_by_a_caller_is_not_read(self):
+        # As `git -c user.email=… commit` passes it to a hook, and as the counted form sets it.
+        caller = mock.patch.dict(os.environ, {
+            "GIT_CONFIG_PARAMETERS": f"'user.email'='{HOOK_EMAIL}'",
+            "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "user.email", "GIT_CONFIG_VALUE_0": HOOK_EMAIL})
+        caller.start()
+        self.addCleanup(caller.stop)
+        isolate_git(self, self.root)
+
+        terms = scrub.private_terms(self.instance, environ={}, code_root=self.code_root)
+
+        self.assertNotIn("email", terms.literals)
+
     def add_doc(self, folder: str, name: str):
         (self.instance / "docs" / folder).mkdir(parents=True, exist_ok=True)
         (self.instance / "docs" / folder / name).write_text("# x\n", encoding="utf-8")
@@ -93,10 +183,9 @@ class PrivateScrub(unittest.TestCase):
         self.assertEqual(self.hits("see README.md\n"), [])
 
     def test_a_name_the_base_series_also_carries_is_not_a_term(self):
-        public = sorted(p.name for p in (scrub.roots.code_root() / "docs" / "adr").glob("[0-9]*.md"))[0]
-        self.add_doc("adr", public)
+        self.add_doc("adr", PUBLIC_ADR)
 
-        self.assertEqual(self.hits(f"see {public}\n"), [])
+        self.assertEqual(self.hits(f"see {PUBLIC_ADR}\n"), [])
 
     def test_an_instance_used_as_the_code_root_is_refused(self):
         # Subtracting the code root's series would then subtract the instance's own records.
@@ -183,7 +272,9 @@ class PrivateScrubInputs(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        isolate_git(self, self.root)
         self.instance = make_instance(self.root)
+        self.code_root = make_base(self.root)
         self.tree = self.root / "tree"
         self.tree.mkdir()
 
@@ -192,11 +283,13 @@ class PrivateScrubInputs(unittest.TestCase):
 
     def test_a_declared_pattern_file_that_cannot_be_read_is_an_error(self):
         with self.assertRaises(scrub.ScrubError):
-            scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: str(self.root / "missing")})
+            scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: str(self.root / "missing")},
+                                code_root=self.code_root)
 
     def test_a_relative_pattern_path_is_an_error_naming_the_variable_not_the_value(self):
         with self.assertRaises(scrub.ScrubError) as ctx:
-            scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: "rel.patterns"})
+            scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: "rel.patterns"},
+                                code_root=self.code_root)
 
         self.assertIn(scrub.PATTERNS_ENV, str(ctx.exception))
         self.assertNotIn("rel.patterns", str(ctx.exception))
@@ -206,21 +299,23 @@ class PrivateScrubInputs(unittest.TestCase):
         patterns.write_text("no-tab-here\n", encoding="utf-8")
 
         with self.assertRaises(scrub.ScrubError):
-            scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: str(patterns)})
+            scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: str(patterns)},
+                                code_root=self.code_root)
 
     def test_a_declared_private_pattern_is_found(self):
         patterns = self.root / "private.patterns"
         patterns.write_text("# comment\n\nacme-[0-9]{4}\tacme key\n", encoding="utf-8")
         (self.tree / "f.txt").write_text("key acme-1234\n", encoding="utf-8")
 
-        terms = scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: str(patterns)})
+        terms = scrub.private_terms(self.instance, environ={scrub.PATTERNS_ENV: str(patterns)},
+                                    code_root=self.code_root)
 
         self.assertEqual([h.kind for h in scrub.scan(self.tree, terms)], ["pattern"])
 
     def test_a_name_inside_a_binary_file_is_still_found(self):
         (self.tree / "blob.bin").write_bytes(b"\xff\xfe\x00" + REPO_NAME.encode() + b"\x00\xff")
 
-        found = scrub.scan(self.tree, scrub.private_terms(self.instance, environ={}))
+        found = scrub.scan(self.tree, scrub.private_terms(self.instance, environ={}, code_root=self.code_root))
 
         self.assertEqual([(h.path, h.kind) for h in found], [("blob.bin", "repo")])
 
@@ -234,7 +329,8 @@ class CommandLine(unittest.TestCase):
         self.instance = make_instance(self.root)
         self.tree = self.root / "tree"
         self.tree.mkdir()
-        self.env = {k: v for k, v in os.environ.items() if k not in ("TRIMTAB_INSTANCE", scrub.PATTERNS_ENV)}
+        self.env = isolated_git_env({k: v for k, v in os.environ.items()
+                                     if k not in ("TRIMTAB_INSTANCE", scrub.PATTERNS_ENV)}, self.root)
 
     def tearDown(self):
         self.tmp.cleanup()
