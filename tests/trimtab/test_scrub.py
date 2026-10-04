@@ -105,8 +105,28 @@ class PrivateScrub(unittest.TestCase):
         with self.assertRaises(scrub.ScrubError):
             scrub.private_terms(self.instance, environ={}, code_root=self.instance)
 
-    def test_a_longer_repository_name_that_starts_with_a_private_one_is_not_a_hit(self):
-        self.assertEqual(self.hits(f"see {REPO_NAME}-core and {REPO_NAME}_old\n"), [])
+    def use_base(self, base_repo: str):
+        data = json.loads((self.instance / instance_file.FILE).read_text())
+        data["base"]["repo"] = base_repo
+        (self.instance / instance_file.FILE).write_text(json.dumps(data))
+
+    def test_the_bases_own_name_is_not_a_hit_when_a_private_name_prefixes_it(self):
+        self.use_base(f"{REPO_NAME}-core")
+
+        self.assertEqual(self.hits(f"see {REPO_NAME}-core\n"), [])
+
+    def test_the_private_name_beside_the_bases_own_is_still_found(self):
+        self.use_base(f"{REPO_NAME}-core")
+
+        self.assertEqual([h.kind for h in self.hits(f"{REPO_NAME}-core forks {REPO_NAME}\n")], ["repo"])
+
+    def test_a_private_name_that_starts_with_the_bases_own_is_still_found(self):
+        self.use_base("owner/consumer")
+
+        self.assertEqual([h.kind for h in self.hits(f"see {CONSUMER}\n")], ["repo"])
+
+    def test_a_longer_name_that_starts_with_a_private_one_is_found(self):
+        self.assertEqual([h.kind for h in self.hits(f"see {REPO_NAME}-api and {REPO_NAME}_old\n")], ["repo"])
 
     def test_a_repository_name_ending_a_sentence_is_found(self):
         self.assertEqual([h.kind for h in self.hits(f"cloned from {REPO_NAME}.\n")], ["repo"])

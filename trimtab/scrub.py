@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from trimtab import instance as instance_file
 from trimtab import roots
 
 ID_SHAPE = re.compile(r"\b(?:trig|env|session)_[0-9A-Za-z]{16,}\b")
@@ -41,6 +42,9 @@ class Terms:
     literals: dict[str, tuple[str, ...]] = field(default_factory=dict)
     patterns: dict[str, tuple[re.Pattern, ...]] = field(default_factory=dict)
     exempt_tests: frozenset[str] = frozenset()
+    # Public names blanked out of each line before the literals are matched: the base's own
+    # repository can start with the instance's name (`owner/x-core` contains `owner/x`).
+    public_names: tuple[str, ...] = ()
 
 
 def _git(root: Path, *args: str) -> str:
@@ -101,7 +105,8 @@ def private_terms(instance: Path, environ: Mapping[str, str], code_root: Path | 
     try:
         # Its own repository is the likeliest private name to leak; never build the list without it.
         repos = {roots.instance_repo(instance)}
-    except roots.InstanceInvalid as err:
+        base_repo = instance_file.load(instance).base_repo
+    except (roots.InstanceInvalid, instance_file.InstanceFileError) as err:
         raise ScrubError(str(err)) from err
     repos.update(_consumers(instance / "consumers.json"))
     ids: set[str] = set()
@@ -125,7 +130,11 @@ def private_terms(instance: Path, environ: Mapping[str, str], code_root: Path | 
                 "home": (home,) if home else (), "email": (email,) if email else ()}
     private = _private_patterns(environ)
     patterns = {"pattern": private} if private else {}
-    return Terms(literals={k: v for k, v in literals.items() if v}, patterns=patterns)
+    # Blank the base's name only where that cannot hide a private one: if it is part of a private
+    # repository name (a consumer `owner/base-fork`), keep it, and accept the false positive.
+    public = () if any(base_repo.casefold() in r.casefold() for r in repos) else (base_repo,)
+    return Terms(literals={k: v for k, v in literals.items() if v}, patterns=patterns,
+                 public_names=public)
 
 
 def public_terms(self_repo: str | None) -> Terms:
@@ -158,10 +167,7 @@ def scan(tree: Path, terms: Terms) -> list[Hit]:
         raise ScrubError(f"{tree} is not a directory")
     # Names are matched without regard to case: GitHub's are case-insensitive, and prose lowercases them.
     literals = {k: tuple(w.casefold() for w in words) for k, words in terms.literals.items()}
-    # A repository name counts only where it ends: `owner/name-core` is a different repository.
-    # A sentence's full stop, a URL path and a clone URL's `.git` still end it.
-    repo_res = tuple(re.compile(r"(?<![\w-])" + re.escape(w) + r"(?![\w-]|\.(?!git\b)[\w-])")
-                     for w in literals.pop("repo", ()))
+    public = tuple(p.casefold() for p in terms.public_names if p)
     hits: list[Hit] = []
     for path in sorted(tree.rglob("*")):
         rel = path.relative_to(tree)
@@ -174,8 +180,9 @@ def scan(tree: Path, terms: Terms) -> list[Hit]:
             raise ScrubError(f"{rel.as_posix()} cannot be read ({type(err).__name__})") from err
         for n, text in enumerate(lines, 1):
             folded = text.casefold()
-            kinds = ["repo"] if any(r.search(folded) for r in repo_res) else []
-            kinds += [k for k, words in literals.items() if any(w in folded for w in words)]
+            for p in public:
+                folded = folded.replace(p, " ")
+            kinds = [k for k, words in literals.items() if any(w in folded for w in words)]
             kinds += [k for k, pats in terms.patterns.items() if any(p.search(text) for p in pats)]
             for kind in kinds:
                 if kind in terms.exempt_tests and _in_tests(rel):
