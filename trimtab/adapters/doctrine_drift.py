@@ -2,7 +2,7 @@
 
 Never blocks and always exits 0 (plan section 3). Silent when the project has
 not adopted Trimtab, when the lock matches or only non-doctrine files changed
-since it (spec 0013, D1), and in the instance's own checkouts (where the lock
+since it (ADR 0008), and in the instance's own checkouts (where the lock
 is a baseline, not a pin). Otherwise prints one JSON object whose
 `systemMessage` the operator sees, including when TRIMTAB_INSTANCE is unset:
 this is a policy hook, so it fails open, but never silently.

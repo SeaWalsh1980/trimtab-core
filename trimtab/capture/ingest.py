@@ -135,7 +135,7 @@ class IngestPlan:
     records: tuple[Record, ...]
     baseline_skipped: tuple[int, ...]
     already_recorded: tuple[int, ...]
-    # Written in a block version this Trimtab does not read (ADR 0012): neither
+    # Written in a block version this Trimtab does not read (ADR 0007): neither
     # recorded nor labelled, so a newer Trimtab still finds and counts them.
     newer_version: tuple[int, ...] = ()
 
@@ -198,7 +198,7 @@ def rebuild(pulls: Iterable[PullRequest], registry: Mapping[str, Item], baseline
 
     A routine has no durable disk, so in the cloud the ledger is not stored at
     all: the label is the watermark and the merged PR body is the record, read
-    again each run within a bounded window (ADR 0011). Keyed by number, as a
+    again each run within a bounded window (ADR 0006). Keyed by number, as a
     stored ledger is, so the result is the same however often it is rebuilt.
     """
     ledger = Ledger()

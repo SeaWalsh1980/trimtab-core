@@ -78,7 +78,7 @@ class Agents(unittest.TestCase):
     def test_every_agent_is_named_after_its_file_and_has_no_file_editing_tool(self):
         # This removes the editing tools only. Bash is still granted unscoped, so
         # "never edits" rests on the agent's instructions and the guards, not on
-        # this test (plan 0009, Deferred work: scope the agents' Bash).
+        # this test. Scoping the agents' Bash is an open gap.
         agents = sorted((REPO / "agents").glob("*.md"))
         self.assertGreaterEqual(len(agents), 4)
         for path in agents:

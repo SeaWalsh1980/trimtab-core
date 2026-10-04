@@ -3,7 +3,7 @@ description: The project loop. Ingest merged PRs by watermark, tally harness fee
 argument-hint: "[--memories] [--usage]"
 ---
 
-Run the Trimtab project loop for this repository (plan 0009, section 6b).
+Run the Trimtab project loop for this repository (trimtab-core ADR 0005).
 Arguments: `$ARGUMENTS`.
 
 The loop proposes; it never merges and never edits a rule in place. Every
@@ -49,10 +49,10 @@ descriptions, so it can report a missing label as present.
 Creating a label is the operator's decision, not the loop's. Report what is
 missing and stop.
 
-## 1. Ingest (section 6a)
+## 1. Ingest
 
 The ledger is rebuilt from PRs already labelled, within the 8-week window, so
-the loop needs no disk (ADR 0011):
+the loop needs no disk (trimtab-core ADR 0006):
 
 ```bash
 "$TRIMTAB" ingest --dry-run --repo "$REPO" --ledger-from-labels
@@ -88,7 +88,7 @@ Read the conformance reports under `docs/reviews/` whose filename date falls in
 the window. An item ID raised as a finding in **2 or more** reports is a
 candidate for a project proposal in step 4, with those reports as evidence.
 
-## 4. Proposals, one per ID (section 6b)
+## 4. Proposals, one per ID
 
 ```bash
 "$TRIMTAB" propose --dry-run --check-open --repo "$REPO" --ledger-from-labels
@@ -127,7 +127,7 @@ test, not more rule text. When the evidence says a REQUIRE keeps being
 missed, propose that instead, and note that a hook or workflow is a security
 control: name it for the operator, never change it.
 
-## 5. Structure check (section 6d)
+## 5. Structure check
 
 Measure what loads in every session against the budget, the 200-line target,
 and growth since the last cadence:

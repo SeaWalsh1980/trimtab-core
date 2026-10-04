@@ -88,7 +88,7 @@ ln -s "$CP_REPO/bin"   "$CP_HOME/bin"
 # Claude Code's other config dirs, and — separately — the agent's own working
 # state. Both live under CLAUDE_HOME and the guard must tell them apart: the
 # first group is protected, the second must stay writable or memory and plan
-# mode break. See docs/adr/0004-control-plane-scope-excludes-agent-state.md.
+# mode break. See docs/adr/0002-anchor-the-guards-to-the-live-control-plane.md.
 mkdir -p "$CP_HOME/commands" "$CP_HOME/agents" "$CP_HOME/skills" \
          "$CP_HOME/output-styles" "$CP_HOME/plugins/somplugin" \
          "$CP_HOME/projects/-a-project/memory" "$CP_HOME/plans" \
@@ -203,7 +203,7 @@ echo "== guard-paths: live control plane =="
 # tree only — $CLAUDE_HOME, the realpath targets of its symlinks, and the exact
 # repo-root files bootstrap consumes. A worktree copy is deliberately NOT
 # protected, so the pull request that changes a guard stays authorable; see
-# docs/adr/0005-anchor-guards-to-the-live-control-plane.md.
+# docs/adr/0002-anchor-the-guards-to-the-live-control-plane.md.
 
 # -- writes against the live tree ---------------------------------------
 t guard-paths.sh 2 "edit live hook via the ~/.claude symlink" "$(j Edit "{\"file_path\":\"$CP_HOME/hooks/guard-paths.sh\"}")"
@@ -345,9 +345,9 @@ HOME="$S2/home" XDG_DATA_HOME="" CLAUDE_CONFIG_DIR="$S2_HOME" t guard-paths.sh 2
   "snapshot store under ~/.local/share when XDG_DATA_HOME is unset" \
   "$(j Edit "{\"file_path\":\"$S2_FALLBACK/hooks/guard-paths.sh\"}")"
 
-# The instruction-file link is a per-link root of its own (spec 0013 stage S2,
-# section 5): its target is protected even when no other link resolves into
-# the same tree. The link is relative here, which the resolution must handle.
+# The instruction-file link is a per-link root of its own (ADR 0002): its
+# target is protected even when no other link resolves into the same tree.
+# The link is relative here, which the resolution must handle.
 S3_HOME="$S2/home3/.claude"
 mkdir -p "$S3_HOME" "$S2/elsewhere"
 : > "$S2/elsewhere/AGENTS.md"; : > "$S2/elsewhere/notes.md"
@@ -367,7 +367,7 @@ ln -s ../../via/sym/../AGENTS.md "$S6_HOME/CLAUDE.md"
 CLAUDE_CONFIG_DIR="$S6_HOME" t guard-paths.sh 2 "instruction-file target reached through a symlinked dir and .." \
   "$(j Edit "{\"file_path\":\"$S2/phys/AGENTS.md\"}")"
 # A link that exists and does not resolve means the protected set cannot be
-# established, so every call blocks (ADR 0003), the instruction file included.
+# established, so every call blocks (ADR 0002), the instruction file included.
 S4_HOME="$S2/home4/.claude"
 mkdir -p "$S4_HOME"
 ln -s "$S2/nowhere/CLAUDE.md" "$S4_HOME/CLAUDE.md"
@@ -535,7 +535,7 @@ TRIMTAB_SECRET_PATTERNS="$S2/pl2/../p.patterns" t2 2 "edit the pattern file name
 TRIMTAB_SECRET_PATTERNS="$S2/no-such-dir/p.patterns" t2 2 "FAIL-CLOSED: a TRIMTAB_SECRET_PATTERNS whose directory does not resolve" \
   "$(j Edit '{"file_path":"/p/app/main.py"}')"
 
-echo "== guard-paths: the trimtab/ package (plan 0009, Deferred) =="
+echo "== guard-paths: the trimtab/ package (ADR 0002) =="
 # Live hooks execute the package: pr-body-check.sh and doctrine-drift.sh run
 # `python3 -m trimtab.adapters.*` from the checkout, and so does bin/trimtab.
 # An edit there changes what the next session runs, with no pull request. It
@@ -553,7 +553,7 @@ pushd "$CP_REPO" >/dev/null
 t guard-paths.sh 2 "relative token naming the trimtab package"  "$(j Bash '{"command":"sed -i s/a/b/ trimtab/adapters/pr_body_check.py"}')"
 popd >/dev/null
 
-echo "== guard-paths: systemd units (plan 0009, Deferred) =="
+echo "== guard-paths: systemd units (ADR 0002) =="
 # bootstrap links $REPO/systemd/* into ${XDG_CONFIG_HOME:-~/.config}/systemd/user
 # and enables the timer. An edit to ExecStart= runs any command from the timer,
 # outside every session guard. Protected: the checkout's systemd/, and the whole
@@ -694,9 +694,9 @@ done
 echo "== guard-security =="
 # An agent must not change a security control on its own initiative. Evidence:
 # claude-code-action skips any PR that edits its own workflow and still reports
-# success, so a workflow edit passes a required review check unreviewed. See
-# docs/adr/0008-security-controls-guard.md. Reads must stay allowed: the
-# friction belongs on changing a control, not on looking at one.
+# success, so a workflow edit passes a required review check unreviewed. Reads
+# must stay allowed: the friction belongs on changing a control, not on looking
+# at one.
 SG=guard-security.sh
 
 # -- file tools, one case per control class ------------------------------

@@ -1,4 +1,4 @@
-"""The package's two roots (docs/plans/0013-trimtab-split-stage2.md, section 3).
+"""The package's two roots (ADR 0008).
 
 The code root is this checkout: agents, commands, templates. The instance root
 holds the doctrine (rules/, HARNESS.md), the deployment files and the lock. It
