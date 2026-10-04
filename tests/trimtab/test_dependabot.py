@@ -6,9 +6,10 @@ import io
 import json
 import unittest
 from dataclasses import replace
+from unittest.mock import patch
 
 from trimtab.capture.prblock import check_body
-from trimtab.capture.sources import SourceError, _pr_view, _runs
+from trimtab.capture.sources import GhPullRequests, SourceError, _pr_view, _runs
 from trimtab.cli import build_parser, cmd_dependabot_block, main
 from trimtab.dependabot import (
     BLOCK, DEPENDABOT_LOGIN, MAX_BODY, BlockRefused, CiRun, HostError, NotDependabot, PullRequestView,
@@ -60,6 +61,12 @@ class WhoItAccepts(unittest.TestCase):
 
     def test_refuses_the_dependabot_login_on_an_account_that_is_not_a_bot(self):
         pr = dependabot_pr(is_bot=False)
+
+        with self.assertRaises(NotDependabot):
+            plan_for(pr)
+
+    def test_refuses_a_merged_pr(self):
+        pr = dependabot_pr(state="MERGED")
 
         with self.assertRaises(NotDependabot):
             plan_for(pr)
@@ -564,6 +571,73 @@ class TheCommand(unittest.TestCase):
             code = main(argv)
 
         self.assertEqual(code, 2)
+
+
+class GhRecorder:
+    """Stands in for the gh CLI, a true external system: records each command and its stdin, answers canned output."""
+
+    def __init__(self, answer=""):
+        self.calls = []
+        self.answer = answer
+
+    def gh(self, *args):
+        self.calls.append((args, None))
+        return self.answer
+
+    def gh_input(self, stdin, *args):
+        self.calls.append((args, stdin))
+        return self.answer
+
+    def __enter__(self):
+        self._patches = [patch("trimtab.capture.sources._gh", self.gh),
+                         patch("trimtab.capture.sources._gh_input", self.gh_input)]
+        for p in self._patches:
+            p.start()
+        return self
+
+    def __exit__(self, *exc):
+        for p in self._patches:
+            p.stop()
+
+
+class GhPullRequestCommands(unittest.TestCase):
+    def test_set_body_patches_the_pr_with_the_body_as_json_on_stdin(self):
+        with GhRecorder() as gh:
+            GhPullRequests(REPO).set_body(PR_NUMBER, CANARY)
+
+        (args, stdin), = gh.calls
+        self.assertEqual((args[:4], json.loads(stdin)), (("api", "-X", "PATCH", f"repos/{REPO}/pulls/{PR_NUMBER}"),
+                                                         {"body": CANARY}))
+
+    def test_set_body_never_puts_the_body_in_the_arguments(self):
+        with GhRecorder() as gh:
+            GhPullRequests(REPO).set_body(PR_NUMBER, CANARY)
+
+        (args, _), = gh.calls
+        self.assertFalse(any(CANARY in a for a in args))
+
+    def test_runs_filters_by_workflow_head_and_event_and_is_bounded(self):
+        with GhRecorder(answer="[]") as gh:
+            GhPullRequests(REPO).runs(HEAD_SHA, WORKFLOW, 10)
+
+        (args, _), = gh.calls
+        pairs = dict(zip(args, args[1:]))
+        self.assertEqual((pairs["--workflow"], pairs["--commit"], pairs["--event"], pairs["--limit"]),
+                         (WORKFLOW, HEAD_SHA, "pull_request", "10"))
+
+    def test_rerun_failed_reruns_only_the_failed_jobs(self):
+        with GhRecorder() as gh:
+            GhPullRequests(REPO).rerun_failed(FAILED_RUN)
+
+        (args, _), = gh.calls
+        self.assertEqual(args[:3] + ("--failed" in args,), ("run", "rerun", str(FAILED_RUN), True))
+
+    def test_view_asks_for_the_fields_the_plan_needs(self):
+        with GhRecorder(answer=gh_pr_json()) as gh:
+            GhPullRequests(REPO).view(PR_NUMBER)
+
+        (args, _), = gh.calls
+        self.assertEqual(dict(zip(args, args[1:]))["--json"], "number,author,body,headRefOid,state")
 
 
 if __name__ == "__main__":
