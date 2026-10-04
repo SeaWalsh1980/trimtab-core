@@ -6,7 +6,7 @@
 # block (ADR 0005) before the PR is opened. Exit 2 = blocked, with a
 # message that names sections and fields and never quotes the body.
 #
-# Unlike the four guards, this is policy, not a security control, and it fails
+# Unlike the four guards, this checks policy, not security, and it fails
 # OPEN: on its own errors, a missing python3, or a body it cannot read without
 # running the command, it allows. CI is the gate.
 #
