@@ -307,6 +307,22 @@ check_observer_failure_records_but_withholds_retention() {
   fi
 }
 
+# guard-mcp answers "ask" instead of blocking, so it has its own self-probe. A
+# guard-mcp that stays silent on an MCP write lets every write run unprompted:
+# the install must refuse it, not report done.
+check_silent_guard_mcp_fails_the_install() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n' > "$snap_new/hooks/guard-mcp.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"guard-mcp returned 0 without asking about an MCP write"* ]]; then
+    pass "a guard-mcp that does not ask fails the install"
+  else
+    fail "a guard-mcp that does not ask fails the install" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
 # A unit linked into a snapshot dangles when the snapshot goes, and the timer
 # silently never runs; --no-timer installs do not relink it.
 check_retention_spares_a_snapshot_systemd_links_into() {
@@ -588,6 +604,7 @@ check_retention_keeps_live_and_predecessor
 check_rerun_from_same_base_keeps_predecessor
 check_sandbox_without_own_store_leaves_store_alone
 check_observer_failure_records_but_withholds_retention
+check_silent_guard_mcp_fails_the_install
 check_retention_spares_a_snapshot_systemd_links_into
 check_missing_pyyaml_is_named
 check_instance_without_claude_md_drops_a_dangling_link

@@ -43,6 +43,16 @@
         ]
       },
       {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$HOME/.claude/hooks/guard-mcp.sh\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "Skill",
         "hooks": [
           {
@@ -81,7 +91,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "m=''; for g in guard-paths guard-bash guard-secrets guard-security; do [ -x \"$HOME/.claude/hooks/$g.sh\" ] || m=\"$m hooks/$g.sh\"; done; for n in rules bin CLAUDE.md; do [ -e \"$HOME/.claude/$n\" ] || m=\"$m $n\"; done; [ -z \"$m\" ] || printf '{\"systemMessage\":\"GUARDS OFF: missing or dangling in ~/.claude:%s. Re-run ./bootstrap.sh from the canonical checkout, then start a new session.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"WARNING: the PreToolUse guard hooks are not installed (missing:%s), so every tool call in this session is unguarded. Do not run state-changing commands. Tell the operator to re-run ./bootstrap.sh from the canonical checkout and start a new session.\"}}\\n' \"$m\" \"$m\"; exit 0",
+            "command": "m=''; for g in guard-paths guard-bash guard-secrets guard-security guard-mcp; do [ -x \"$HOME/.claude/hooks/$g.sh\" ] || m=\"$m hooks/$g.sh\"; done; for n in rules bin CLAUDE.md; do [ -e \"$HOME/.claude/$n\" ] || m=\"$m $n\"; done; [ -z \"$m\" ] || printf '{\"systemMessage\":\"GUARDS OFF: missing or dangling in ~/.claude:%s. Re-run ./bootstrap.sh from the canonical checkout, then start a new session.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"WARNING: the PreToolUse guard hooks are not installed (missing:%s), so every tool call in this session is unguarded. Do not run state-changing commands. Tell the operator to re-run ./bootstrap.sh from the canonical checkout and start a new session.\"}}\\n' \"$m\" \"$m\"; exit 0",
             "timeout": 5
           }
         ]

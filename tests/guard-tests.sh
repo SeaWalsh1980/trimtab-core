@@ -784,6 +784,89 @@ t $SG 2 "FAIL-CLOSED: garbage payload"              'NOT JSON AT ALL'
 t $SG 2 "FAIL-CLOSED: command too large to inspect" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo $(printf 'x%.0s' $(seq 100001))\"}}"
 t $SG 0 "a large but inspectable command"           "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo $(printf 'x%.0s' $(seq 90000))\"}}"
 
+echo "== guard-mcp =="
+# An MCP call that may write waits for the operator, call by call; a read by
+# name passes. The guard never exits 2: it answers "ask" as JSON on exit 0, so
+# `t` cannot see it and `tm` checks the answer itself. A model's own account
+# of whether a call ran is not evidence (ADR 0013); the guard's output is. See
+# docs/adr/0013-guard-mcp-asks-before-mcp-tools-that-may-write.md.
+tm() { # tm <want: pass|ask> <label> <payload> [PATH for the guard]
+  local want="$1" label="$2" payload="$3" p="${4:-$PATH}" out rc verdict
+  out=$(printf '%s' "$payload" | PATH="$p" "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null); rc=$?
+  verdict=$(printf '%s' "$out" | python3 -c '
+import json, sys
+want, rc, out = sys.argv[1], int(sys.argv[2]), sys.stdin.read()
+if rc != 0:
+    print("exit %d: guard-mcp answers on exit 0" % rc)
+elif want == "pass":
+    print("ok" if out == "" else "expected no output, got %r" % out[:80])
+else:
+    try:
+        d = json.loads(out)
+    except ValueError:
+        sys.exit(print("not valid JSON: %r" % out[:80]))
+    h = d.get("hookSpecificOutput", {}) if isinstance(d, dict) else {}
+    ok = (h.get("hookEventName") == "PreToolUse" and h.get("permissionDecision") == "ask"
+          and str(h.get("permissionDecisionReason", "")).startswith("guard-mcp: "))
+    print("ok" if ok else "not an ask: %r" % out[:120])
+' "$want" "$rc")
+  if [[ "$verdict" == ok ]]; then
+    printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh "$want" "$label"
+  else
+    printf 'FAIL  %-14s %-4s  %s  -- %s\n' guard-mcp.sh "$want" "$label" "$verdict"
+    fails=$((fails+1))
+  fi
+}
+
+MCP_WRITE="$(j mcp__srv__create_item '{"name":"x"}')"
+MCP_READ="$(j mcp__srv__get_item '{"id":"1"}')"
+GTM_READ="$(j mcp__srv__gtm_tag '{"action":"get","tagId":"1"}')"
+
+tm pass "a get_ tool"                         "$MCP_READ"
+tm pass "a list- tool"                        "$(j mcp__srv__list-items '{}')"
+tm pass "a search_ tool"                      "$(j mcp__srv__search_products '{"q":"x"}')"
+tm pass "a query_ tool"                       "$(j mcp__srv__query_metric '{}')"
+tm pass "a read_ tool"                        "$(j mcp__srv__read_file '{}')"
+tm pass "a generated-ID server, read tool"    "$(j mcp__0f3c2a1e-0000-4000-8000-000000000000__get_tag '{}')"
+tm pass "a plugin server name with _, read"   "$(j mcp__plugin_x_y__list_issues '{}')"
+
+tm ask  "a create_ tool"                      "$MCP_WRITE"
+tm ask  "a delete- tool"                      "$(j mcp__srv__delete-thing '{}')"
+tm ask  "an unknown verb"                     "$(j mcp__srv__frobnicate '{}')"
+tm ask  "a verb that only starts like a read" "$(j mcp__srv__getaway '{}')"
+tm ask  "a read verb in another case"         "$(j mcp__srv__Get_item '{}')"
+tm ask  "a gtm_ tool with a read action"      "$GTM_READ"
+tm ask  "a gtm_ tool with a write action"     "$(j mcp__srv__gtm_version '{"action":"publish"}')"
+tm ask  "a gtm_ tool named like a read"       "$(j mcp__srv__gtm_list_tags '{}')"
+
+tm ask  "FAIL-CLOSED: garbage payload"        'NOT JSON AT ALL'
+tm ask  "FAIL-CLOSED: empty payload"          ''
+tm ask  "FAIL-CLOSED: a JSON array"           '[1,2]'
+tm ask  "FAIL-CLOSED: two JSON documents"     "$MCP_READ$MCP_READ"
+tm ask  "FAIL-CLOSED: no tool_name"           '{"tool_input":{}}'
+tm ask  "FAIL-CLOSED: a non-string tool_name" '{"tool_name":["mcp__srv__get_item"]}'
+tm ask  "FAIL-CLOSED: a non-MCP tool"         "$(j Bash '{"command":"ls"}')"
+tm ask  "FAIL-CLOSED: no tool part"           "$(j mcp__srv '{}')"
+tm ask  "FAIL-CLOSED: an empty server"        "$(j mcp____get_item '{}')"
+tm ask  "FAIL-CLOSED: an ambiguous split"     "$(j mcp__srv__x__get_y '{}')"
+tm ask  "FAIL-CLOSED: a quote in the name"    "$(j 'mcp__srv__get_"x' '{}')"
+tm ask  "FAIL-CLOSED: a newline in the name"  "$(j $'mcp__srv__x\nmcp__srv__get_y' '{}')"
+
+# The reason is shown to the operator and the model; the call's arguments can
+# hold a secret, so they must never appear in it.
+MARK="argument-marker-$$"
+if printf '%s' "$(j mcp__srv__create_item "{\"token\":\"$MARK\"}")" | bash "$HOOKS/guard-mcp.sh" 2>&1 | grep -q "$MARK"; then
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh ask "an ask never repeats the call's arguments"; fails=$((fails+1))
+else
+  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh ask "an ask never repeats the call's arguments"
+fi
+
+export HOOK_ALLOW_MCP=1
+tm pass "exported override passes a write"    "$MCP_WRITE"
+export HOOK_ALLOW_MCP=yes
+tm ask  "an override other than 1 is ignored" "$MCP_WRITE"
+unset HOOK_ALLOW_MCP
+
 echo "== fail-closed on an unrunnable dependency =="
 # A guard that cannot run its own scanner must BLOCK. It could not: with `grep`
 # off PATH, guard-secrets printed "grep: command not found" and exited 0, which
@@ -857,6 +940,24 @@ tp "$STUB" guard-secrets.sh 0 "full deps: benign code allowed"   "$(j Write '{"f
 tp "$STUB" guard-paths.sh   0 "full deps: normal source allowed" "$(j Read '{"file_path":"/p/app/main.py"}')"
 tp "$STUB" guard-secrets.sh 2 "full deps: PEM still blocked"     "$PEM_PAYLOAD"
 
+# guard-mcp answers "ask" rather than blocking, so it gets `tm`, given the stub
+# PATH directly: the answer is checked with python3 after the guard has run.
+stub_bin cat
+tm ask  "no jq and no python3: a read asks"    "$MCP_READ"  "$STUB"
+# stub_bin links only what resolves, so with jq absent (CI's python3-fallback
+# run) this stub would hold no parser at all and test the case above again.
+if command -v jq >/dev/null 2>&1; then
+  stub_bin cat jq
+  tm pass "jq only: a read still passes"        "$MCP_READ"  "$STUB"
+  tm ask  "jq only: a write asks"               "$MCP_WRITE" "$STUB"
+else
+  echo "SKIP  guard-mcp.sh   jq only: jq is not installed in this run"
+fi
+stub_bin cat python3
+tm pass "python3 only: a read still passes"   "$MCP_READ"  "$STUB"
+tm ask  "python3 only: a write asks"          "$MCP_WRITE" "$STUB"
+tm ask  "python3 only: garbage payload asks"  'NOT JSON AT ALL' "$STUB"
+
 echo "== rules frontmatter =="
 # Regression guard: every rules/*.md must open with a YAML frontmatter block that
 # parses as a mapping. Catches the class of breakage where a key ends up glued to
@@ -926,6 +1027,30 @@ else
     echo "SKIP  frontmatter     no rules/*.md in this checkout (rules live in an instance)"
 fi
 
+echo "== guard-mcp registration (settings.base.json) =="
+# A guard that is not registered is not a guard. Checked as the file ships: one
+# PreToolUse group runs guard-mcp, on a matcher that catches MCP tools and
+# nothing else. Claude Code matches the whole tool name, as fullmatch does here.
+python3 - "$REPO/settings.base.json" <<'PY'
+import json, re, sys
+groups = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
+want = '"$HOME/.claude/hooks/guard-mcp.sh"'
+found = [(g.get("matcher"), h) for g in groups for h in g["hooks"] if h.get("command") == want]
+def case(ok, label):
+    print("%s  %-14s %s" % ("PASS" if ok else "FAIL", "registration", label))
+    return 0 if ok else 1
+fails = case(len(found) == 1, "guard-mcp is registered exactly once")
+if len(found) == 1:
+    matcher, hook = found[0]
+    fails += case(hook.get("timeout") == 10, "guard-mcp has the 10 s timeout")
+    m = re.compile(matcher or "")
+    fails += case(bool(m.fullmatch("mcp__srv__create_item")), "its matcher catches an MCP tool")
+    fails += case(not any(m.fullmatch(t) for t in ("Bash", "Edit", "Read", "Skill")),
+                  "its matcher leaves built-in tools alone")
+sys.exit(fails)
+PY
+fails=$((fails + $?))
+
 echo "== guard liveness check (SessionStart, settings.base.json) =="
 # The guards fail open when they cannot be found: move the checkout and every
 # link in ~/.claude dangles, and a session starts with no guards and no
@@ -959,7 +1084,7 @@ mkdir -p "$LV_REPO/hooks" "$LV_REPO/rules" "$LV_REPO/bin" "$LV_HOME/.claude"
 # check cannot be merged over. Adding a guard is allowed; dropping one is not:
 # each guard the base already checks must still be named.
 LV_GUARDS=$(printf '%s' "$LIVENESS" | sed -n 's/.*for g in \([a-z -]*\); do.*/\1/p')
-for g in guard-paths guard-bash guard-secrets guard-security; do
+for g in guard-paths guard-bash guard-secrets guard-security guard-mcp; do
   if [[ " $LV_GUARDS " == *" $g "* ]]; then
     printf 'PASS  %-14s %s\n' "liveness" "the check still names $g"
   else
@@ -1007,6 +1132,9 @@ lv "healthy install is silent"               "$LV_HOME"       silent
 chmod -x "$LV_REPO/hooks/guard-bash.sh"
 lv "a non-executable guard is named"         "$LV_HOME"       "hooks/guard-bash.sh"
 chmod +x "$LV_REPO/hooks/guard-bash.sh"
+rm "$LV_REPO/hooks/guard-mcp.sh"
+lv "a missing guard-mcp is named"           "$LV_HOME"       "hooks/guard-mcp.sh"
+printf '#!/bin/sh\n' > "$LV_REPO/hooks/guard-mcp.sh"; chmod +x "$LV_REPO/hooks/guard-mcp.sh"
 mv "$LV_REPO" "$LV/moved"
 lv "moved checkout: dangling guards named"   "$LV_HOME"       "hooks/guard-security.sh"
 lv "moved checkout: dangling rules named"    "$LV_HOME"       " rules"

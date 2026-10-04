@@ -513,6 +513,48 @@ done
 probe_guard guard-security.sh "an edit to a CI workflow" \
   '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/x/.github/workflows/ci.yml"}}'
 unset pem
+
+# guard-mcp never exits 2: it answers "ask" as JSON on exit 0, so the operator
+# approves an MCP write call by call (ADR 0013). probe_guard cannot see that
+# answer, so it gets its own probe, held to the same standard: an MCP write and
+# a garbage payload must each be asked about, and silence on either is a guard
+# that lets MCP writes run unprompted.
+#
+#   probe_ask <hook> <what it asks about> <payload that must ask>
+probe_ask() {
+  local hook="$1" what="$2" probe="$3" name="${1%.sh}" out rc out_garbage rc_garbage
+  if [[ -x "$CLAUDE_HOME/hooks/$hook" ]]; then
+    set +e
+    out=$(printf '%s' "$probe" | "$CLAUDE_HOME/hooks/$hook" 2>/dev/null)
+    rc=$?
+    out_garbage=$(printf '%s' 'not json' | "$CLAUDE_HOME/hooks/$hook" 2>/dev/null)
+    rc_garbage=$?
+    set -e
+    # die, not note, as in probe_guard: a guard that does not ask is absent.
+    [[ $rc -eq 0 ]] && is_ask "$out" && ok "$name asks about $what through the symlink" \
+      || die "$name returned $rc without asking about $what — MCP writes would run unprompted"
+    [[ $rc_garbage -eq 0 ]] && is_ask "$out_garbage" && ok "$name asks on an unparseable payload" \
+      || die "$name returned $rc_garbage without asking on garbage — fails open"
+  elif [[ $CHECK_ONLY -eq 1 ]]; then
+    note "$hook not linked into $CLAUDE_HOME — guard probe skipped"
+  else
+    die "$hook not linked into $CLAUDE_HOME after section 3 — refusing to report a successful install with unverified guards"
+  fi
+}
+is_ask() { # is_ask <hook stdout>: one PreToolUse "ask" answer, and nothing else
+  python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit(1)
+h = d.get("hookSpecificOutput") if isinstance(d, dict) else None
+sys.exit(0 if isinstance(h, dict) and h.get("hookEventName") == "PreToolUse"
+         and h.get("permissionDecision") == "ask" else 1)
+' "$1"
+}
+probe_ask guard-mcp.sh "an MCP write" \
+  '{"tool_name":"mcp__probe__create_item","tool_input":{}}'
 # The declared private pattern file must parse with guard-secrets' own parser:
 # a benign write has to pass with it. The guard refuses a relative path or an
 # unreadable file, so a bad declaration fails here and not on the first edit.
