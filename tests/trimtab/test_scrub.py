@@ -73,6 +73,31 @@ class PrivateScrub(unittest.TestCase):
 
         self.assertNotIn(REPO_NAME, repr(found))
 
+    def add_doc(self, folder: str, name: str):
+        (self.instance / "docs" / folder).mkdir(parents=True, exist_ok=True)
+        (self.instance / "docs" / folder / name).write_text("# x\n", encoding="utf-8")
+
+    def test_a_numbered_instance_adr_file_name_is_found(self):
+        self.add_doc("adr", "0004-private-decision.md")
+
+        self.assertEqual([h.kind for h in self.hits("see 0004-private-decision.md\n")], ["private-doc"])
+
+    def test_a_numbered_instance_plan_file_name_is_found(self):
+        self.add_doc("plans", "0013-private-split.md")
+
+        self.assertEqual([h.kind for h in self.hits("see 0013-private-split.md, section 3\n")], ["private-doc"])
+
+    def test_an_unnumbered_instance_doc_name_is_not_a_term(self):
+        self.add_doc("adr", "README.md")
+
+        self.assertEqual(self.hits("see README.md\n"), [])
+
+    def test_a_name_the_base_series_also_carries_is_not_a_term(self):
+        public = sorted(p.name for p in (scrub.roots.code_root() / "docs" / "adr").glob("[0-9]*.md"))[0]
+        self.add_doc("adr", public)
+
+        self.assertEqual(self.hits(f"see {public}\n"), [])
+
 
 class PublicScrub(unittest.TestCase):
     def setUp(self):

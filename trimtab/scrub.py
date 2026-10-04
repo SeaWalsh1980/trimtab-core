@@ -18,6 +18,7 @@ from pathlib import Path
 from trimtab import roots
 
 ID_SHAPE = re.compile(r"\b(?:trig|env|session)_[0-9A-Za-z]{16,}\b")
+NUMBERED_DOC = re.compile(r"^\d{4}-.+\.md$")
 SKIP_DIRS = {".git", "__pycache__"}
 TEST_PARTS = {"tests", "test", "fixtures"}
 PATTERNS_ENV = "TRIMTAB_SECRET_PATTERNS"
@@ -106,10 +107,16 @@ def private_terms(instance: Path, environ: Mapping[str, str]) -> Terms:
             except OSError as err:
                 raise ScrubError(f"routines/{path.name} cannot be read ({type(err).__name__})") from err
     doctrine = {p.name for p in (instance / "rules").glob("*.md")}
+    # The instance's own decision records and plans, by full numbered name: these are what
+    # leaked into the base before. Unnumbered names (README.md) would match everywhere, and a
+    # name this base's own series also carries is public, so neither is a term.
+    docs = {p.name for folder in ("adr", "plans") for p in (instance / "docs" / folder).glob("*.md")
+            if NUMBERED_DOC.match(p.name)}
+    docs -= {p.name for p in (roots.code_root() / "docs" / "adr").glob("*.md")}
     home = environ.get("HOME", "")
     email = _git(instance, "config", "user.email")
     literals = {"repo": tuple(sorted(repos)), "id": tuple(sorted(ids)),
-                "doctrine-file": tuple(sorted(doctrine)),
+                "doctrine-file": tuple(sorted(doctrine)), "private-doc": tuple(sorted(docs)),
                 "home": (home,) if home else (), "email": (email,) if email else ()}
     private = _private_patterns(environ)
     patterns = {"pattern": private} if private else {}
