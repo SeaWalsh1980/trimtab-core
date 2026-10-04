@@ -395,6 +395,7 @@ class Applying(unittest.TestCase):
 
         with self.assertRaises(StaleBlockPlan):
             apply_to(host, token)
+        self.assertEqual((host.body_writes, host.reruns), (0, []))
 
     def test_apply_aborts_with_nothing_written_when_a_new_failed_run_appeared_after_the_dry_run(self):
         host = FakeGitHub(dependabot_pr(), [failed_run()])
