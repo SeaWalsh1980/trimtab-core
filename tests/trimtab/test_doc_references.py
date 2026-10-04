@@ -23,8 +23,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 ADR_DIR = "docs/" + "adr/"
 ADR_PATH = re.compile(r"(adr:\s*)?" + re.escape(ADR_DIR) + r"(\d{4})(-[a-z0-9-]+\.md)?")
-ADR_NUMBER = re.compile(r"\b" + "AD" + r"R[ -](\d{4})\b")
-PRIVATE_RECORD = re.compile(r"\b(?:" + "pla" + "n|" + "spe" + r"c) \d{4}\b|" + re.escape("docs/" + "plans/"))
+ADR_NUMBER = re.compile(r"\b" + "AD" + r"R[ -](\d{4})\b", re.IGNORECASE)
+PRIVATE_RECORD = re.compile(r"\b(?:" + "pla" + "n|" + "spe" + r"c) \d{4}\b|" + re.escape("docs/" + "plans/"),
+                            re.IGNORECASE)
 RULE = ("cite only this repository's ADRs, by existing number or full file name, "
         "and never an instance's ADR, plan or spec")
 
@@ -79,8 +80,17 @@ class Problems(unittest.TestCase):
     def test_a_hyphenated_adr_number_the_series_lacks_fails(self):
         self.assertEqual(len(problems("see AD" + "R-0012", self.ADRS)), 1)
 
+    def test_a_lower_case_adr_number_the_series_lacks_fails(self):
+        self.assertEqual(len(problems("see ad" + "r 0011", self.ADRS)), 1)
+
     def test_a_numbered_plan_fails(self):
         self.assertEqual(len(problems("see pla" + "n 0009's decision log", self.ADRS)), 1)
+
+    def test_a_numbered_plan_starting_a_sentence_fails(self):
+        self.assertEqual(len(problems("Pla" + "n 0009 records the trade.", self.ADRS)), 1)
+
+    def test_a_numbered_spec_starting_a_sentence_fails(self):
+        self.assertEqual(len(problems("Spe" + "c 0013 says so.", self.ADRS)), 1)
 
     def test_a_plans_directory_path_fails(self):
         self.assertEqual(len(problems("docs/" + "plans/0013-split.md", self.ADRS)), 1)
@@ -96,6 +106,8 @@ class Repository(unittest.TestCase):
         found = []
         for rel in tracked_files():
             if rel.startswith(ADR_DIR):
+                continue
+            if not (REPO / rel).is_file():  # deleted but not yet staged: nothing to cite
                 continue
             data = (REPO / rel).read_bytes()
             if b"\0" in data:  # binary, as git judges it: no citations to read
