@@ -1,6 +1,7 @@
 """dependabot-block: the harness block for a Dependabot PR, planned without touching GitHub."""
 
 import contextlib
+import hashlib
 import io
 import json
 import unittest
@@ -79,7 +80,22 @@ class TheBody(unittest.TestCase):
     def test_keeps_dependabots_text_as_an_exact_prefix(self):
         todo = plan_for(dependabot_pr())
 
-        self.assertTrue(todo.new_body.startswith(DEPENDABOT_TEXT.rstrip()))
+        self.assertTrue(todo.new_body.startswith(DEPENDABOT_TEXT))
+
+    def test_keeps_trailing_whitespace_so_the_prefix_matches_the_previewed_digest(self):
+        body = DEPENDABOT_TEXT + "\n\n  "
+
+        todo = plan_for(dependabot_pr(body=body))
+
+        prefix = todo.new_body[:len(body)]
+        self.assertEqual((prefix, hashlib.sha256(prefix.encode()).hexdigest()), (body, todo.old_digest))
+
+    def test_the_block_starts_on_its_own_line_after_text_with_no_final_newline(self):
+        body = DEPENDABOT_TEXT.rstrip("\n")
+
+        todo = plan_for(dependabot_pr(body=body))
+
+        self.assertEqual(todo.new_body, body + "\n\n" + BLOCK)
 
     def test_plans_no_body_change_when_a_valid_block_is_already_there(self):
         todo = plan_for(dependabot_pr(body=VALID_BLOCK_BODY))

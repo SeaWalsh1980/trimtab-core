@@ -28,7 +28,6 @@ DEPENDABOT_LOGIN = "app/dependabot"
 MAX_BODY = 65536
 # Runs of one workflow at one head SHA: a handful at most, so this bound is never reached in practice.
 RUN_LIMIT = 10
-SEPARATOR = "\n\n"
 # A run conclusion is shown only when it looks like one of GitHub's (`cancelled`, `timed_out`).
 CONCLUSION = re.compile(r"[a-z_]{1,40}")
 BLOCK = f"""## {APPLIED}
@@ -166,7 +165,8 @@ def _new_body(body: str, registry: Mapping[str, Item]) -> str | None:
         return None
     if not _missing_only(current.problems):
         raise BlockRefused("the body already holds an invalid harness block; fix it by hand", current.problems)
-    new = body.rstrip() + SEPARATOR + BLOCK
+    # Dependabot's text is kept exactly; only what ends its last line and opens a blank one is added.
+    new = body + ("\n" if body.endswith("\n") else "\n\n") + BLOCK
     if len(new) > MAX_BODY:
         raise BlockRefused(f"the body with the block would exceed GitHub's {MAX_BODY}-character limit")
     after = check_body(new, registry)
