@@ -14,7 +14,7 @@ from instance_fixture import make_instance
 from trimtab import config as project_config
 from trimtab.capture.prblock import check_body
 from trimtab.capture.sources import GhPullRequests, SourceError, _pr_view, _runs
-from trimtab.cli import build_parser, cmd_dependabot_block, main
+from trimtab.cli import EXIT_CI_ATTENTION, build_parser, cmd_dependabot_block, main
 from trimtab.dependabot import (
     BLOCK, DEPENDABOT_LOGIN, MAX_BODY, BlockRefused, CiRun, HostError, NotDependabot, PullRequestView,
     ReadBackFailed, RerunFailed, StaleBlockPlan, apply, confirmation, plan, read_plan,
@@ -481,6 +481,10 @@ def passed_run(run_id=FAILED_RUN):
     return CiRun(id=run_id, status="completed", conclusion="success")
 
 
+def cancelled_run(run_id=FAILED_RUN):
+    return CiRun(id=run_id, status="completed", conclusion="cancelled")
+
+
 class TheDryRun(unittest.TestCase):
     def test_a_dry_run_with_work_to_do_prints_a_token_and_exits_0(self):
         host = FakeGitHub(dependabot_pr(), [failed_run()])
@@ -503,20 +507,27 @@ class TheDryRun(unittest.TestCase):
 
         self.assertEqual((code, "confirm:" in out), (0, False))
 
-    def test_a_dry_run_with_no_run_found_names_the_workflow_and_exits_1(self):
+    def test_a_dry_run_with_no_run_found_names_the_workflow_and_exits_4(self):
         host = FakeGitHub(dependabot_pr(), [])
 
         code, out, _ = run_command(host)
 
-        self.assertEqual((code, f"no {WORKFLOW} run found" in out), (1, True))
+        self.assertEqual((code, f"no {WORKFLOW} run found" in out), (EXIT_CI_ATTENTION, True))
 
-    def test_a_dry_run_whose_newest_run_was_cancelled_names_it_and_exits_1(self):
+    def test_a_dry_run_whose_newest_run_was_cancelled_names_it_and_exits_4(self):
         host = FakeGitHub(dependabot_pr(body=VALID_BLOCK_BODY),
                           [CiRun(id=FAILED_RUN, status="completed", conclusion="cancelled")])
 
         code, out, _ = run_command(host)
 
-        self.assertEqual((code, "ended cancelled" in out), (1, True))
+        self.assertEqual((code, "ended cancelled" in out), (EXIT_CI_ATTENTION, True))
+
+    def test_a_dry_run_with_a_body_to_write_and_a_cancelled_run_prints_a_token_and_exits_4(self):
+        host = FakeGitHub(dependabot_pr(), [cancelled_run()])
+
+        code, out, _ = run_command(host)
+
+        self.assertEqual((code, f"confirm: {dry_run_token(host)}" in out), (EXIT_CI_ATTENTION, True))
 
     def test_an_unexpected_conclusion_is_not_printed(self):
         host = FakeGitHub(dependabot_pr(), [CiRun(id=FAILED_RUN, status="completed", conclusion=CANARY)])
@@ -583,6 +594,13 @@ class TheApplyCommand(unittest.TestCase):
         code, out, _ = run_command(host, "--apply", "--confirm", dry_run_token(host))
 
         self.assertEqual((code, "block added" in out), (0, True))
+
+    def test_apply_that_adds_the_block_while_ci_needs_a_look_warns_and_exits_4(self):
+        host = FakeGitHub(dependabot_pr(), [cancelled_run()])
+
+        code, _, err = run_command(host, "--apply", "--confirm", dry_run_token(host))
+
+        self.assertEqual((code, "attention" in err, host.body_writes), (EXIT_CI_ATTENTION, True, 1))
 
     def test_apply_with_a_stale_token_exits_3(self):
         host = FakeGitHub(dependabot_pr(), [failed_run()])

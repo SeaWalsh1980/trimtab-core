@@ -47,6 +47,13 @@ The constraints:
 - **The preview shows Dependabot's text only by length and sha256 digest.**
   The block it appends is constant text and is shown in full.
 - **`--workflow` is required.** The base names no instance's workflow.
+- **"CI needs a look" has its own exit code, 4.** When the head has no run
+  of the workflow, or its newest run ended neither passed nor failed
+  (cancelled, timed out), the block alone does not turn CI green and
+  nothing is re-run. Both the dry run and `--apply` say so on stderr and
+  exit 4, so the outcome is not mistaken for success (0) or for a refusal
+  (1), after which a valid token would be thrown away. The other codes: 2
+  for a GitHub or usage error, 3 for a plan gone stale since the dry run.
 - **The body is written through the REST endpoint**, with the JSON payload
   on stdin, not through `gh pr edit`.
 

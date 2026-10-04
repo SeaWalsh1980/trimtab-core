@@ -416,13 +416,21 @@ def _print_block_plan(todo: dependabot.BlockPlan) -> None:
         print(f"re-run: none; the newest {todo.workflow} run at this head ended {todo.shown_conclusion}")
 
 
-def _attention(todo: dependabot.BlockPlan) -> int:
-    """1, with the reason, when CI at the head is neither green, going, nor about to be re-run."""
-    if not todo.ci_needs_attention:
+# dependabot-block's own exit code for "done, but CI at the head needs a look": 1 stays "refused".
+EXIT_CI_ATTENTION = 4
+DEPENDABOT_EXIT_CODES = ("exit codes: 0 done, or nothing to do; 1 refused, the registry could not be built, "
+                         "or the written body did not read back; 2 a GitHub or usage error; 3 the PR or its "
+                         f"runs changed since the dry run; {EXIT_CI_ATTENTION} done (or planned), but CI at the "
+                         "head has no run, or its newest run ended neither passed nor failed")
+
+
+def _attention(needs_attention: bool, workflow: str, number: int) -> int:
+    """EXIT_CI_ATTENTION, with the reason, when CI at the head is neither green, going, nor about to be re-run."""
+    if not needs_attention:
         return 0
-    print(f"attention: CI is not fixed by this command; look at {todo.workflow} for PR #{todo.number} by hand",
+    print(f"attention: CI is not fixed by this command; look at {workflow} for PR #{number} by hand",
           file=sys.stderr)
-    return 1
+    return EXIT_CI_ATTENTION
 
 
 def cmd_dependabot_block(args, host_for=GhPullRequests, registry=None) -> int:
@@ -442,7 +450,7 @@ def cmd_dependabot_block(args, host_for=GhPullRequests, registry=None) -> int:
                 print(f"confirm: {token}")
                 print(f"to apply: trimtab dependabot-block {args.pr} --repo {args.repo} --workflow {args.workflow} "
                       f"--apply --confirm {token}" + (f" --project {args.project}" if args.project != "." else ""))
-            return _attention(todo)
+            return _attention(todo.ci_needs_attention, args.workflow, args.pr)
         done = dependabot.apply(host, registry, args.repo, args.workflow, args.pr, args.confirm)
     except (dependabot.NotDependabot, dependabot.BlockRefused) as err:
         print(f"refused: {err}", file=sys.stderr)
@@ -464,7 +472,7 @@ def cmd_dependabot_block(args, host_for=GhPullRequests, registry=None) -> int:
         return 2
     print(f"PR #{args.pr}: " + ("block added" if done.wrote_body else "block already there")
           + (f"; re-run of run {done.reran} requested" if done.reran is not None else "; no re-run"))
-    return 0
+    return _attention(done.ci_needs_attention, args.workflow, args.pr)
 
 
 # ---- upstream ----------------------------------------------------------------
@@ -728,7 +736,8 @@ def build_parser() -> argparse.ArgumentParser:
     bmp.set_defaults(func=cmd_bump)
 
     dep = sub.add_parser("dependabot-block", parents=[common],
-                         help="add the harness block to a Dependabot PR and re-run its failed CI (dry run unless --apply)")
+                         help="add the harness block to a Dependabot PR and re-run its failed CI (dry run unless --apply)",
+                         epilog=DEPENDABOT_EXIT_CODES)
     dep.add_argument("pr", type=int, help="the PR number")
     dep.add_argument("--repo", required=True, help="owner/name")
     dep.add_argument("--workflow", required=True, help="the workflow whose failed run to re-run, e.g. ci.yml")
