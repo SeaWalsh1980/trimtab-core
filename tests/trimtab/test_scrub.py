@@ -120,6 +120,12 @@ class PrivateScrub(unittest.TestCase):
 
         self.assertEqual([h.kind for h in self.hits(f"{REPO_NAME}-core forks {REPO_NAME}\n")], ["repo"])
 
+    def test_blanking_the_bases_name_never_hides_a_home_path(self):
+        # An owner named like the user, with the base cloned into the home directory.
+        self.use_base("someone/x-core")
+
+        self.assertEqual([h.kind for h in self.hits("at /home/someone/x-core/hooks/f.sh\n")], ["home"])
+
     def test_a_private_name_that_starts_with_the_bases_own_is_still_found(self):
         self.use_base("owner/consumer")
 

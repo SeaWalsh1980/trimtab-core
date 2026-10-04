@@ -42,8 +42,8 @@ class Terms:
     literals: dict[str, tuple[str, ...]] = field(default_factory=dict)
     patterns: dict[str, tuple[re.Pattern, ...]] = field(default_factory=dict)
     exempt_tests: frozenset[str] = frozenset()
-    # Public names blanked out of each line before the literals are matched: the base's own
-    # repository can start with the instance's name (`owner/x-core` contains `owner/x`).
+    # Public names blanked out of each line before repository names are matched: the base's
+    # own repository can start with the instance's name (`owner/x-core` contains `owner/x`).
     public_names: tuple[str, ...] = ()
 
 
@@ -180,9 +180,13 @@ def scan(tree: Path, terms: Terms) -> list[Hit]:
             raise ScrubError(f"{rel.as_posix()} cannot be read ({type(err).__name__})") from err
         for n, text in enumerate(lines, 1):
             folded = text.casefold()
+            # The base's name is blanked for repository names only: in any other class it could
+            # cut a home path whose user is the owner and whose checkout is the base, and hide it.
+            for_repos = folded
             for p in public:
-                folded = folded.replace(p, " ")
-            kinds = [k for k, words in literals.items() if any(w in folded for w in words)]
+                for_repos = for_repos.replace(p, " ")
+            kinds = [k for k, words in literals.items()
+                     if any(w in (for_repos if k == "repo" else folded) for w in words)]
             kinds += [k for k, pats in terms.patterns.items() if any(p.search(text) for p in pats)]
             for kind in kinds:
                 if kind in terms.exempt_tests and _in_tests(rel):
