@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
 from trimtab.capture.ingest import PullRequest
+from trimtab.dependabot import CiRun, HostError, PullRequestView
 from trimtab.upstream import Issue
 
 GH_TIMEOUT_SECONDS = 60
 
 
-class SourceError(Exception):
+class SourceError(HostError):
     """gh failed, timed out, or returned something unexpected."""
 
 
@@ -147,6 +149,62 @@ def _gh_input(stdin: str, *args: str) -> str:
     if done.returncode != 0:
         raise SourceError(f"gh {args[0]} {args[1]} exited {done.returncode}: {done.stderr.strip()[:300]}")
     return done.stdout
+
+
+SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def _pr_view(out: str) -> PullRequestView:
+    try:
+        r = json.loads(out)
+        author = r["author"]
+        view = PullRequestView(number=r["number"], author_login=author["login"], author_is_bot=author["is_bot"],
+                               body=r.get("body") or "", head_sha=r["headRefOid"], state=r["state"])
+    except (ValueError, KeyError, TypeError) as err:
+        raise SourceError("gh pr view returned unexpected JSON") from err
+    if not (isinstance(view.number, int) and isinstance(view.author_login, str)
+            and isinstance(view.author_is_bot, bool) and isinstance(view.body, str)
+            and isinstance(view.state, str)):
+        raise SourceError("gh pr view returned unexpected JSON")
+    if not (isinstance(view.head_sha, str) and SHA.fullmatch(view.head_sha)):
+        raise SourceError("gh pr view returned a head SHA that is not 40 hex characters")
+    return view
+
+
+def _runs(out: str) -> list[CiRun]:
+    try:
+        rows = json.loads(out)
+        runs = [CiRun(id=r["databaseId"], status=r["status"], conclusion=r.get("conclusion") or "") for r in rows]
+    except (ValueError, KeyError, TypeError) as err:
+        raise SourceError("gh run list returned unexpected JSON") from err
+    if not all(isinstance(r.id, int) and isinstance(r.status, str) and isinstance(r.conclusion, str) for r in runs):
+        raise SourceError("gh run list returned unexpected JSON")
+    return runs
+
+
+class GhPullRequests:
+    """One repository's PRs and their CI runs, for dependabot-block. The body goes in on stdin."""
+
+    def __init__(self, repo: str):
+        self.repo = repo
+
+    def view(self, number: int) -> PullRequestView:
+        out = _gh("pr", "view", str(number), "--repo", self.repo, "--json", "number,author,body,headRefOid,state")
+        return _pr_view(out)
+
+    def set_body(self, number: int, body: str) -> None:
+        # REST, not `gh pr edit`: edit also queries classic project cards and
+        # fails on repositories where GitHub has sunset them.
+        _gh_input(json.dumps({"body": body}), "api", "-X", "PATCH", f"repos/{self.repo}/pulls/{number}",
+                  "--input", "-", "--silent")
+
+    def runs(self, head_sha: str, workflow: str, limit: int) -> list[CiRun]:
+        out = _gh("run", "list", "--repo", self.repo, "--workflow", workflow, "--commit", head_sha,
+                  "--event", "pull_request", "--json", "databaseId,status,conclusion", "--limit", str(limit))
+        return _runs(out)
+
+    def rerun_failed(self, run_id: int) -> None:
+        _gh("run", "rerun", str(run_id), "--failed", "--repo", self.repo)
 
 
 class FixtureIssues:
