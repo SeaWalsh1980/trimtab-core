@@ -13,7 +13,7 @@ from unittest.mock import patch
 from instance_fixture import make_instance
 from trimtab import config as project_config
 from trimtab.capture.prblock import check_body
-from trimtab.capture.sources import GhPullRequests, SourceError, _pr_view, _runs
+from trimtab.capture.sources import GhPullRequests, SourceError
 from trimtab.cli import EXIT_CI_ATTENTION, build_parser, cmd_dependabot_block, main
 from trimtab.dependabot import (
     BLOCK, DEPENDABOT_LOGIN, MAX_BODY, BlockRefused, CiRun, HostError, NotDependabot, PullRequestView,
@@ -258,14 +258,34 @@ def gh_pr_json(**overrides):
     return json.dumps(row)
 
 
-class GhPullRequestParsing(unittest.TestCase):
-    def test_a_parsed_view_keeps_the_login_and_the_bot_flag(self):
-        view = _pr_view(gh_pr_json())
+def view_of(out):
+    """GhPullRequests.view with gh answering `out`."""
+    with GhRecorder(answer=out):
+        return GhPullRequests(REPO).view(PR_NUMBER)
+
+
+def runs_of(out):
+    """GhPullRequests.runs with gh answering `out`."""
+    with GhRecorder(answer=out):
+        return GhPullRequests(REPO).runs(HEAD_SHA, WORKFLOW, 10)
+
+
+def gh_runs_json(*rows):
+    return json.dumps(list(rows))
+
+
+def gh_run(run_id=FAILED_RUN, status="completed", conclusion="failure"):
+    return {"databaseId": run_id, "status": status, "conclusion": conclusion}
+
+
+class GhPullRequestView(unittest.TestCase):
+    def test_a_view_keeps_the_login_and_the_bot_flag(self):
+        view = view_of(gh_pr_json())
 
         self.assertEqual((view.author_login, view.author_is_bot), (DEPENDABOT_LOGIN, True))
 
     def test_a_null_body_reads_as_empty(self):
-        view = _pr_view(gh_pr_json(body=None))
+        view = view_of(gh_pr_json(body=None))
 
         self.assertEqual(view.body, "")
 
@@ -274,43 +294,70 @@ class GhPullRequestParsing(unittest.TestCase):
         del row["author"]
 
         with self.assertRaises(SourceError):
-            _pr_view(json.dumps(row))
+            view_of(json.dumps(row))
 
     def test_a_bot_flag_that_is_not_a_boolean_is_refused(self):
         with self.assertRaises(SourceError):
-            _pr_view(gh_pr_json(author={"login": DEPENDABOT_LOGIN, "is_bot": "true"}))
+            view_of(gh_pr_json(author={"login": DEPENDABOT_LOGIN, "is_bot": "true"}))
+
+    def test_a_pr_number_that_is_not_an_integer_is_refused(self):
+        with self.assertRaises(SourceError):
+            view_of(gh_pr_json(number=str(PR_NUMBER)))
+
+    def test_a_login_that_is_not_a_string_is_refused(self):
+        with self.assertRaises(SourceError):
+            view_of(gh_pr_json(author={"login": 7, "is_bot": True}))
+
+    def test_a_state_that_is_not_a_string_is_refused(self):
+        with self.assertRaises(SourceError):
+            view_of(gh_pr_json(state=["OPEN"]))
+
+    def test_a_body_that_is_not_a_string_is_refused(self):
+        with self.assertRaises(SourceError):
+            view_of(gh_pr_json(body={"text": DEPENDABOT_TEXT}))
 
     def test_a_head_sha_that_is_not_40_hex_characters_is_refused(self):
         with self.assertRaises(SourceError):
-            _pr_view(gh_pr_json(headRefOid="not-a-sha"))
+            view_of(gh_pr_json(headRefOid="not-a-sha"))
 
     def test_output_that_is_not_json_is_refused(self):
         with self.assertRaises(SourceError):
-            _pr_view("<html>")
+            view_of("<html>")
 
 
-class GhRunParsing(unittest.TestCase):
+class GhPullRequestRuns(unittest.TestCase):
     def test_runs_parse_into_ci_runs(self):
-        out = json.dumps([{"databaseId": FAILED_RUN, "status": "completed", "conclusion": "failure"}])
+        runs = runs_of(gh_runs_json(gh_run()))
 
-        self.assertEqual(_runs(out), [failed_run()])
+        self.assertEqual(runs, [failed_run()])
 
     def test_a_pending_run_has_an_empty_conclusion(self):
-        out = json.dumps([{"databaseId": NEWER_RUN, "status": "in_progress", "conclusion": ""}])
+        runs = runs_of(gh_runs_json(gh_run(NEWER_RUN, status="in_progress", conclusion="")))
 
-        self.assertEqual(_runs(out)[0].conclusion, "")
+        self.assertEqual(runs[0].conclusion, "")
+
+    def test_a_run_with_no_conclusion_reads_as_empty(self):
+        row = gh_run()
+        del row["conclusion"]
+
+        runs = runs_of(gh_runs_json(row))
+
+        self.assertEqual(runs[0].conclusion, "")
 
     def test_a_run_id_that_is_not_an_integer_is_refused(self):
-        out = json.dumps([{"databaseId": "1001", "status": "completed", "conclusion": "failure"}])
-
         with self.assertRaises(SourceError):
-            _runs(out)
+            runs_of(gh_runs_json(gh_run(run_id=str(FAILED_RUN))))
 
     def test_a_run_without_a_status_is_refused(self):
-        out = json.dumps([{"databaseId": FAILED_RUN, "conclusion": "failure"}])
+        row = gh_run()
+        del row["status"]
 
         with self.assertRaises(SourceError):
-            _runs(out)
+            runs_of(gh_runs_json(row))
+
+    def test_output_that_is_not_a_list_is_refused(self):
+        with self.assertRaises(SourceError):
+            runs_of(json.dumps(gh_run()))
 
 
 class FakeGitHub:
