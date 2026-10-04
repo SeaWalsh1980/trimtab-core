@@ -7,11 +7,12 @@ Trimtab does two jobs. It **guards** a Claude Code session: PreToolUse hooks
 that block destructive commands, reads of credential files, secrets written
 into files, and edits to the controls that review change (CI workflows,
 CODEOWNERS, Claude Code settings and hooks), and that ask the operator to
-approve, call by call, every MCP tool call that may write (ADR 0013). And it
-runs a **loop** over a body of engineering rules: every rule is a *harness
-item* with a stable ID, pull requests cite the items they applied and report
-friction against them, and a retrospective tallies that evidence per ID and
-proposes changes to the items that keep causing trouble.
+approve, call by call, every MCP tool call not named as a read (ADR 0013;
+the name is the only evidence, so a write named like a read is not asked).
+And it runs a **loop** over a body of engineering rules: every rule is a
+*harness item* with a stable ID, pull requests cite the items they applied
+and report friction against them, and a retrospective tallies that evidence
+per ID and proposes changes to the items that keep causing trouble.
 
 ## The base and an instance
 
@@ -140,7 +141,7 @@ stand in for one.
   `guard-mcp` asks the operator; the two policy hooks (`doctrine-drift`,
   `pr-body-check`) fail open with a message.
 - A change to a guard comes with cases in `tests/guard-tests.sh`, including
-  the case that must still be blocked.
+  the case that must still be blocked, or for `guard-mcp`, asked.
 
 ## Licence
 
