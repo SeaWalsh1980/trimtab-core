@@ -231,6 +231,23 @@ class PluginsFromTheInstanceLayer(unittest.TestCase):
 
         self.assertIn("settings.instance.json", str(caught.exception))
 
+    def test_an_instance_layer_that_is_not_an_object_is_an_error_naming_it(self):
+        (self.root / "settings.instance.json").write_text("[]")
+
+        with self.assertRaises(references.SettingsUnreadable) as caught:
+            references.enabled_plugins([self.root])
+
+        self.assertIn("settings.instance.json", str(caught.exception))
+
+    def test_enabled_plugins_that_is_not_an_object_is_an_error_naming_it(self):
+        plugin_list = ["superpowers@claude-plugins-official"]
+        (self.root / "settings.instance.json").write_text(json.dumps({"enabledPlugins": plugin_list}))
+
+        with self.assertRaises(references.SettingsUnreadable) as caught:
+            references.enabled_plugins([self.root])
+
+        self.assertIn("settings.instance.json", str(caught.exception))
+
     def test_an_instance_layer_that_is_not_utf8_is_an_error_naming_it(self):
         latin1_byte = b"\xff"
         (self.root / "settings.instance.json").write_bytes(b"{" + latin1_byte + b"}")

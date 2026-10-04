@@ -85,7 +85,10 @@ def enabled_plugins(roots: list[Path]) -> set[str]:
                 data = json.loads(text)
             except ValueError as err:
                 raise SettingsUnreadable(f"{path} is not valid JSON") from err
-            merged.update(data.get("enabledPlugins") or {})
+            plugins = (data.get("enabledPlugins") or {}) if isinstance(data, dict) else None
+            if not isinstance(plugins, dict):
+                raise SettingsUnreadable(f"{path} is not a settings object")
+            merged.update(plugins)
         enabled |= {key.split("@", 1)[0] for key, on in merged.items() if on is True}
     return enabled
 
