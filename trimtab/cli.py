@@ -12,12 +12,13 @@ from pathlib import Path
 
 from trimtab import bump
 from trimtab import config as project_config
+from trimtab import dependabot
 from trimtab import instance, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_body, parse_applied
 from trimtab.capture.sources import (
-    FixtureContents, FixtureIssues, FixtureSource, GhContents, GhIssues, GhSource, SourceError, changed_files,
-    open_feedback_issues,
+    FixtureContents, FixtureIssues, FixtureSource, GhContents, GhIssues, GhPullRequests, GhSource, SourceError,
+    changed_files, open_feedback_issues,
 )
 from trimtab.lint import overrides, references, structure
 from trimtab.propose import render
@@ -391,6 +392,95 @@ def cmd_bump(args) -> int:
     return 0
 
 
+# ---- dependabot-block --------------------------------------------------------
+
+def _print_block_plan(todo: dependabot.BlockPlan) -> None:
+    # Dependabot's text carries third-party release notes: shown by size and digest, never verbatim.
+    print(f"PR #{todo.number} in {todo.repo}, opened by {dependabot.DEPENDABOT_LOGIN}, head {todo.head_sha[:12]}")
+    print(f"existing body: {todo.old_length} chars, sha256 {todo.old_digest[:12]}, kept unchanged as the prefix")
+    if todo.new_body is None:
+        print("body: a valid harness block is already there; nothing to write")
+    else:
+        print("body: append this block:")
+        print(dependabot.BLOCK, end="")
+    newest = todo.newest_run
+    if todo.rerun_run_id is not None:
+        print(f"re-run: the failed jobs of {todo.workflow} run {todo.rerun_run_id}")
+    elif newest is None:
+        print(f"re-run: none; no {todo.workflow} run found at this head (check --workflow, or whether CI started)")
+    elif todo.run_in_progress:
+        print(f"re-run: none; the newest {todo.workflow} run at this head is still going")
+        if todo.run_predates_block:
+            print(PREDATES_NOTE)
+    elif newest.conclusion == "success":
+        print(f"re-run: none; the newest {todo.workflow} run at this head passed")
+    else:
+        print(f"re-run: none; the newest {todo.workflow} run at this head ended {todo.shown_conclusion}")
+
+
+PREDATES_NOTE = "note: this run started before the block was added; if it fails, run the command again"
+
+# dependabot-block's own exit code for "done, but CI at the head needs a look": 1 stays "refused".
+EXIT_CI_ATTENTION = 4
+DEPENDABOT_EXIT_CODES = ("exit codes: 0 done, or nothing to do; 1 refused, the registry could not be built, "
+                         "or the written body did not read back; 2 a GitHub or usage error; 3 the PR or its "
+                         f"runs changed since the dry run; {EXIT_CI_ATTENTION} done (or planned), but CI at the "
+                         "head has no run, or its newest run ended neither passed nor failed")
+
+
+def _attention(needs_attention: bool, workflow: str, number: int) -> int:
+    """EXIT_CI_ATTENTION, with the reason, when CI at the head is neither green, going, nor about to be re-run."""
+    if not needs_attention:
+        return 0
+    print(f"attention: CI is not fixed by this command; look at {workflow} for PR #{number} by hand",
+          file=sys.stderr)
+    return EXIT_CI_ATTENTION
+
+
+def cmd_dependabot_block(args, host_for=GhPullRequests, registry=None) -> int:
+    if registry is None:
+        registry, problems = registry_for(_instance(args), Path(args.project))
+        if problems:
+            print("cannot build the registry:", file=sys.stderr)
+            return _print_problems(problems) or 1
+    host = host_for(args.repo)
+    try:
+        if not args.apply:
+            todo = dependabot.read_plan(host, registry, args.repo, args.workflow, args.pr)
+            print("dependabot-block --dry-run: nothing written")
+            _print_block_plan(todo)
+            if not todo.nothing_to_do:
+                token = dependabot.confirmation(todo)
+                print(f"confirm: {token}")
+                print(f"to apply: trimtab dependabot-block {args.pr} --repo {args.repo} --workflow {args.workflow} "
+                      f"--apply --confirm {token}" + (f" --project {args.project}" if args.project != "." else ""))
+            return _attention(todo.ci_needs_attention, args.workflow, args.pr)
+        done = dependabot.apply(host, registry, args.repo, args.workflow, args.pr, args.confirm)
+    except (dependabot.NotDependabot, dependabot.BlockRefused) as err:
+        print(f"refused: {err}", file=sys.stderr)
+        _print_problems(getattr(err, "problems", ()))
+        return 1
+    except dependabot.StaleBlockPlan as err:
+        print(f"aborted: {err}", file=sys.stderr)
+        return 3
+    except dependabot.ReadBackFailed as err:
+        cause = f": {err.__cause__}" if err.__cause__ else ""
+        print(f"error: {err}{cause}; running the dry run again is safe", file=sys.stderr)
+        return 1
+    except dependabot.RerunFailed as err:
+        written = "the body was written; " if err.wrote_body else ""
+        print(f"error: {err}: {err.__cause__}; {written}running the dry run again is safe", file=sys.stderr)
+        return 2
+    except dependabot.HostError as err:
+        print(f"error: {err}; running the dry run again is safe", file=sys.stderr)
+        return 2
+    print(f"PR #{args.pr}: " + ("block added" if done.wrote_body else "block already there")
+          + (f"; re-run of run {done.reran} requested" if done.reran is not None else "; no re-run"))
+    if done.run_predates_block:
+        print(PREDATES_NOTE)
+    return _attention(done.ci_needs_attention, args.workflow, args.pr)
+
+
 # ---- upstream ----------------------------------------------------------------
 
 def _behind(sha: str | None, base: Path) -> str:
@@ -650,6 +740,19 @@ def build_parser() -> argparse.ArgumentParser:
     bmp.add_argument("--confirm", help="the token a dry run printed")
     bmp.add_argument("--body-file", help="in a dry run, write the draft PR's body here")
     bmp.set_defaults(func=cmd_bump)
+
+    dep = sub.add_parser("dependabot-block", parents=[common],
+                         help="add the harness block to a Dependabot PR and re-run its failed CI (dry run unless --apply)",
+                         epilog=DEPENDABOT_EXIT_CODES)
+    dep.add_argument("pr", type=int, help="the PR number")
+    dep.add_argument("--repo", required=True, help="owner/name")
+    dep.add_argument("--workflow", required=True, help="the workflow whose failed run to re-run, e.g. ci.yml")
+    dep.add_argument("--project", default=".", help="project root, for its own IDs (default: .)")
+    dmode = dep.add_mutually_exclusive_group()
+    dmode.add_argument("--dry-run", action="store_true", help="report only (the default)")
+    dmode.add_argument("--apply", action="store_true", help="write the body and re-run; needs --confirm")
+    dep.add_argument("--confirm", help="the token a dry run printed")
+    dep.set_defaults(func=cmd_dependabot_block)
 
     up = sub.add_parser("upstream", parents=[common], help="the config loop's evidence: overrides and reports per base ID (read only)")
     up.add_argument("--consumers", help=f"consumers.json (default: the instance's {upstream.CONSUMERS})")
