@@ -61,16 +61,35 @@ def _defined(roots: list[Path]) -> dict[str, set[str]]:
     return names
 
 
+class SettingsUnreadable(Exception):
+    """A settings file exists but cannot be read or is not valid JSON."""
+
+
 def enabled_plugins(roots: list[Path]) -> set[str]:
-    """Plugin names enabled in Trimtab's settings.base.json and the project's settings."""
+    """Plugin names enabled in each root's settings layers: the base's
+    settings.base.json, an instance's settings.instance.json, and a
+    project's .claude/settings.json. Within a root a later layer overrides an
+    earlier one per plugin, as bootstrap merges them."""
     enabled: set[str] = set()
-    for path in [r / "settings.base.json" for r in roots] + [r / ".claude" / "settings.json" for r in roots]:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        plugins = data.get("enabledPlugins") or {}
-        enabled |= {key.split("@", 1)[0] for key, on in plugins.items() if on is True}
+    for root in roots:
+        merged: dict[str, object] = {}
+        for path in (root / "settings.base.json", root / "settings.instance.json",
+                     root / ".claude" / "settings.json"):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                continue  # a layer this root does not have; every layer is optional
+            except (OSError, UnicodeDecodeError) as err:
+                raise SettingsUnreadable(f"{path} could not be read") from err
+            try:
+                data = json.loads(text)
+            except ValueError as err:
+                raise SettingsUnreadable(f"{path} is not valid JSON") from err
+            plugins = (data.get("enabledPlugins") or {}) if isinstance(data, dict) else None
+            if not isinstance(plugins, dict):
+                raise SettingsUnreadable(f"{path} is not a settings object")
+            merged.update(plugins)
+        enabled |= {key.split("@", 1)[0] for key, on in merged.items() if on is True}
     return enabled
 
 

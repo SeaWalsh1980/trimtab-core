@@ -171,6 +171,93 @@ class References(unittest.TestCase):
         self.assertEqual(self.lint("x.md", "```\nsubagent_type: nope\n```\n"), [])
 
 
+class PluginsFromTheInstanceLayer(unittest.TestCase):
+    """Integration test at the file boundary: an instance that enables its
+    plugins only in settings.instance.json (no settings.base.json)."""
+
+    SKILL_TABLE = "| Skill | Why |\n|---|---|\n| `superpowers:brainstorming` | x |\n"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        (self.root / "rules").mkdir()
+        (self.root / "rules" / "Example.md").write_text(self.SKILL_TABLE)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def enable(self, on, layer="settings.instance.json"):
+        (self.root / layer).write_text(
+            json.dumps({"enabledPlugins": {"superpowers@claude-plugins-official": on}}))
+
+    def test_a_plugin_enabled_only_in_the_instance_layer_resolves(self):
+        self.enable(True)
+
+        enabled = references.enabled_plugins([self.root])
+        problems = references.lint(self.root, base_root=None, enabled_plugins=enabled)
+
+        self.assertEqual(problems, [])
+
+    def test_a_plugin_disabled_in_the_instance_layer_still_fails(self):
+        self.enable(False)
+
+        enabled = references.enabled_plugins([self.root])
+        problems = references.lint(self.root, base_root=None, enabled_plugins=enabled)
+
+        self.assertEqual([p.code for p in problems], ["unresolved"])
+
+    def test_a_plugin_the_instance_layer_disables_over_the_base_layer_fails(self):
+        self.enable(True, layer="settings.base.json")
+        self.enable(False)
+
+        enabled = references.enabled_plugins([self.root])
+        problems = references.lint(self.root, base_root=None, enabled_plugins=enabled)
+
+        self.assertEqual([p.code for p in problems], ["unresolved"])
+
+    def test_a_plugin_enabled_in_the_base_layer_still_resolves(self):
+        self.enable(True, layer="settings.base.json")
+
+        enabled = references.enabled_plugins([self.root])
+        problems = references.lint(self.root, base_root=None, enabled_plugins=enabled)
+
+        self.assertEqual(problems, [])
+
+    def test_an_unparseable_instance_layer_is_an_error_naming_it(self):
+        (self.root / "settings.instance.json").write_text("{not json")
+
+        with self.assertRaises(references.SettingsUnreadable) as caught:
+            references.enabled_plugins([self.root])
+
+        self.assertIn("settings.instance.json", str(caught.exception))
+
+    def test_an_instance_layer_that_is_not_an_object_is_an_error_naming_it(self):
+        (self.root / "settings.instance.json").write_text("[]")
+
+        with self.assertRaises(references.SettingsUnreadable) as caught:
+            references.enabled_plugins([self.root])
+
+        self.assertIn("settings.instance.json", str(caught.exception))
+
+    def test_enabled_plugins_that_is_not_an_object_is_an_error_naming_it(self):
+        plugin_list = ["superpowers@claude-plugins-official"]
+        (self.root / "settings.instance.json").write_text(json.dumps({"enabledPlugins": plugin_list}))
+
+        with self.assertRaises(references.SettingsUnreadable) as caught:
+            references.enabled_plugins([self.root])
+
+        self.assertIn("settings.instance.json", str(caught.exception))
+
+    def test_an_instance_layer_that_is_not_utf8_is_an_error_naming_it(self):
+        latin1_byte = b"\xff"
+        (self.root / "settings.instance.json").write_bytes(b"{" + latin1_byte + b"}")
+
+        with self.assertRaises(references.SettingsUnreadable) as caught:
+            references.enabled_plugins([self.root])
+
+        self.assertIn("settings.instance.json", str(caught.exception))
+
+
 class Structure(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
