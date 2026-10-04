@@ -1,4 +1,4 @@
-"""check-pr: the three-section PR block (plan section 3a)."""
+"""check-pr: the three-section PR block (ADR 0005)."""
 
 import unittest
 from pathlib import Path

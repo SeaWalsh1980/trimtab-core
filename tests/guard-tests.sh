@@ -304,8 +304,8 @@ t guard-paths.sh 0 "bash reading a plan file"                 "$(j Bash "{\"comm
 t guard-paths.sh 0 "Read of a live hook still allowed"        "$(j Read "{\"file_path\":\"$CP_HOME/hooks/guard-paths.sh\"}")"
 t guard-paths.sh 0 "Read of a live rule still allowed"        "$(j Read "{\"file_path\":\"$CP_REPO/rules/Example.md\"}")"
 
-echo "== guard-paths: two trees (stage S2, C7) =="
-# Stage S4's layout: the mechanism links (hooks, bin, commands, agents) resolve
+echo "== guard-paths: two trees (ADR 0002) =="
+# The split layout (ADR 0008): the mechanism links (hooks, bin, commands, agents) resolve
 # into a base snapshot under $XDG_DATA_HOME/trimtab/core/<sha>, while rules and
 # the instruction file resolve into the instance. The protected set must follow
 # every link, not only the hooks link's parent, and must cover a rollback
@@ -454,7 +454,7 @@ ln -s "$S2/y1/z" "$S2/l1"
 XDG_DATA_HOME="$S2/l1/../data1" t2x 2 "the store under XDG_DATA_HOME with .. after a symlinked dir" \
   "$(j Edit "{\"file_path\":\"$S2/y1/data1/trimtab/core/old/hooks/x\"}")"
 # A dangling link on the way to the store (an unmounted volume, a link made
-# ahead of stage S4) means the store's physical path cannot be established:
+# ahead of a snapshot install) means the store's physical path cannot be established:
 # block every call, as a dangling config link does. The control shows the same
 # layout with the link resolving allows an ordinary edit.
 mkdir -p "$S2/dl"

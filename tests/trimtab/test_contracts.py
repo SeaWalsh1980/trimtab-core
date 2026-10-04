@@ -1,8 +1,8 @@
-"""Contracts between the session files (agents, commands) and the parser (F2, F3).
+"""Contracts between the session files (agents, commands) and the parser.
 
 The planner's output is copied into PR bodies and parsed by `check-pr`, so the
 shape its definition tells it to emit must parse against the live registry. A
-second citation shape that nothing parsed is how an earlier project lost data (F3).
+second citation shape that nothing parsed is how an earlier project lost data.
 """
 
 import re
@@ -23,7 +23,7 @@ BASH_BLOCK = re.compile(r"```bash\n(.*?)```", re.S)
 DOCTRINE_READERS = ("trimtab-planner", "trimtab-reviewer", "trimtab-silent-failure-hunter",
                     "trimtab-test-analyzer")
 # The whole snippet: the installed CLI, never the tree under review's, and the doctrine root
-# from `trimtab instance --root` and nowhere else (S2-2).
+# from `trimtab instance --root` and nowhere else (ADR 0008).
 DOCTRINE_SNIPPET = (
     'TRIMTAB="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/trimtab"',
     'DOCTRINE=$("$TRIMTAB" instance --root) && echo "ok: doctrine at $DOCTRINE"',
@@ -97,7 +97,7 @@ class Agents(unittest.TestCase):
 
 
 class DoctrineRoot(unittest.TestCase):
-    """The agents take the doctrine root from `trimtab instance`, never the code checkout (S2-2)."""
+    """The agents take the doctrine root from `trimtab instance`, never the code checkout (ADR 0008)."""
 
     def test_the_doctrine_reading_agents_share_one_snippet_that_asks_trimtab_instance(self):
         snippets = {name: doctrine_snippet(REPO / "agents" / f"{name}.md") for name in DOCTRINE_READERS}
@@ -123,7 +123,7 @@ class DoctrineRoot(unittest.TestCase):
 
 
 class Routines(unittest.TestCase):
-    """Spike S4: a loop routine states its connectors, and is created disabled until a run is read."""
+    """A loop routine states its connectors, and is created disabled until a run is read."""
 
     def test_the_upstream_retro_spec_is_explicit(self):
         with tempfile.TemporaryDirectory() as tmp:

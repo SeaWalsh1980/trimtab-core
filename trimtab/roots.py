@@ -2,7 +2,7 @@
 
 The code root is this checkout: agents, commands, templates. The instance root
 holds the doctrine (rules/, HARNESS.md), the deployment files and the lock. It
-comes only from --instance or TRIMTAB_INSTANCE; there is no fallback (S2-2),
+comes only from --instance or TRIMTAB_INSTANCE; there is no fallback (ADR 0008),
 so a missing value is a loud error, never a read of the wrong tree.
 """
 
@@ -48,7 +48,7 @@ def instance_root(explicit: str | os.PathLike | None = None,
 
 
 def instance_repo(instance: Path) -> str:
-    """The instance's own repository, from its instance.json (stage S3 spec, S3-4).
+    """The instance's own repository, from its instance.json.
 
     A missing or invalid file is an error, never "no repository".
     """

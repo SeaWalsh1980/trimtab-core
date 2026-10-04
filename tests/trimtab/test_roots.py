@@ -1,4 +1,4 @@
-"""The package's two roots (stage S2 spec, section 3)."""
+"""The package's two roots (ADR 0008)."""
 
 import json
 import os
@@ -173,7 +173,7 @@ class CommandLine(unittest.TestCase):
 
 
 class InstanceRepo(unittest.TestCase):
-    """Integration at the file boundary: the repository comes from instance.json (stage S3 spec, S3-4)."""
+    """Integration at the file boundary: the repository comes from instance.json."""
 
     def test_the_repository_comes_from_the_instance_file(self):
         with tempfile.TemporaryDirectory() as tmp:

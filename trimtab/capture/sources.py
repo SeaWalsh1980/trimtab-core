@@ -39,7 +39,7 @@ class GhSource:
         self.repo = repo
 
     def unlabelled_merged(self, label: str, merged_since: str | None, limit: int) -> list[PullRequest]:
-        # Exact watermark query (plan section 6a), oldest first so a bounded run
+        # Exact watermark query (ADR 0005), oldest first so a bounded run
         # makes progress rather than re-reading the newest PRs.
         search = f"-label:{label} sort:created-asc"
         if merged_since:

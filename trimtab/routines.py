@@ -1,4 +1,4 @@
-"""Render routine specs from templates with the instance's values (stage S2 spec, section 4).
+"""Render routine specs from templates with the instance's values (ADR 0008).
 
 Rendering changes nothing: it prints a spec. Creating a routine stays a session
 step the operator approves: the routine then writes on the operator's authority

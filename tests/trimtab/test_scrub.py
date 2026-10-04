@@ -1,4 +1,4 @@
-"""The private and public scrub checks (stage S2 spec, sections 3 and 6)."""
+"""The private and public scrub checks."""
 
 import json
 import os
@@ -229,7 +229,7 @@ class CommandLine(unittest.TestCase):
         self.assertIn(instance_file.FILE, done.stderr)
 
     def test_a_relative_pattern_path_exits_2_naming_the_variable_but_not_the_value(self):
-        # Stage S3 spec, S3-6: relative to the scrub's working directory is not the instance.
+        # A relative path would resolve against the scrub's working directory, which is not the instance.
         (self.tree / "rel.patterns").write_text("acme-[0-9]{4}\tacme key\n", encoding="utf-8")
         self.env[scrub.PATTERNS_ENV] = "rel.patterns"
 

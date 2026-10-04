@@ -5,7 +5,7 @@ Always-loaded content is every instruction file (`CLAUDE.md` and/or
 key. It is measured in bytes: the observer's `context_tokens` arrives only on
 resumed sessions, so it measures a conversation, not this baseline.
 
-Findings are proposal triggers (plan section 6d), not errors: over the
+Findings are proposal triggers (ADR 0006), not errors: over the
 project's budget, an instruction file over 200 lines, or more than 10% growth
 since a previous report or since the tree at a git ref (`--against`).
 """
@@ -144,7 +144,7 @@ class Section:
     path: str
     heading: str
     bytes: int
-    binding: bool  # holds a REQUIRE or PROHIBIT: stays always-loaded whatever its size (section 6d)
+    binding: bool  # holds a REQUIRE or PROHIBIT: stays always-loaded whatever its size
 
 
 def sections(root: Path, report: Report, top: int = 10) -> list[Section]:

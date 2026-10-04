@@ -90,7 +90,7 @@ def parse_rule_file(source: str, text: str, prefix: str | None = None) -> tuple[
 def clause_strength(item: Item, clause: str) -> Strength | None:
     """The keyword of the line that starts with `clause`, or None if no line does.
 
-    ID-level citation (plan section 1): when one clause of a section is meant,
+    ID-level citation (ADR 0005): when one clause of a section is meant,
     cite the ID plus the clause's first words. Matching ignores emphasis and
     list markers so `PREFER in-memory fakes` finds `- **PREFER** in-memory fakes`.
     """

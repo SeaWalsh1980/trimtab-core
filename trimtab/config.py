@@ -1,4 +1,4 @@
-"""`.claude/trimtab.json`: a project's lock and settings (plan section 3)."""
+"""`.claude/trimtab.json`: a project's lock and settings (ADR 0005)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ PATH = ".claude/trimtab.json"
 SCHEMA_VERSION = 2
 REQUIRED = ("trimtab_sha", "id_prefix", "schema_version")
 # Schema 1 bindings. The instance's instance.json names its repository, and no
-# file holds a routine ID (stage S3 spec, S3-2 and S3-4).
+# file holds a routine ID.
 RETIRED = ("source", "routines")
 COMMIT_SHA = re.compile(r"^[0-9a-f]{7,40}$")
 

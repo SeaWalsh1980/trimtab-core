@@ -1,4 +1,4 @@
-"""The shim (stage S3 spec, section 3). Integration tests at the process boundary.
+"""The shim (ADR 0003). Integration tests at the process boundary.
 
 GitHub is a true external system, so a fake `git` first on PATH serves a local
 fixture repository for the one URL the shim may build. The shim itself takes no

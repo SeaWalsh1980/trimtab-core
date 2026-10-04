@@ -194,7 +194,7 @@ if [[ -n "${CLAUDE_CONFIG_DIR:-}" && "${CLAUDE_CONFIG_DIR%/}" != "${HOME%/}/.cla
   SANDBOXED=1
 fi
 
-# ---- 1. the doctrine registry check (D10) -----------------------------
+# ---- 1. the doctrine registry check (ADR 0008) ------------------------
 # Before anything is written, machine.json included: a failure leaves the
 # previous install live, and nothing is created, switched or deleted.
 installed_json="$STORE/.installed.json"
@@ -477,7 +477,7 @@ probe_guard guard-paths.sh "a read of a .env file" \
   '{"tool_name":"Read","tool_input":{"file_path":"/x/.env"}}'
 probe_guard guard-secrets.sh "a PEM private key in written content" \
   "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/x/probe.py\",\"content\":\"KEY = '$pem'\"}}"
-# Each enabled signature pack must block its own sample (stage S2, C8). The
+# Each enabled signature pack must block its own sample (ADR 0008). The
 # switch comes from the generated settings, not this shell: unset or empty
 # means every shipped pack, "none" means no pack.
 if [[ $settings_bad -eq 1 ]]; then
@@ -558,7 +558,7 @@ else
   note "rule-usage.sh not linked into $CLAUDE_HOME yet — observer probe skipped"
 fi
 
-# ---- 6b. the install record, and retention (D2) -----------------------
+# ---- 6b. the install record, and retention (ADR 0003) -----------------
 # Reaching this point means no step died: the registry check, the merge, the
 # links and every guard probe are green. Retention runs only then, and only
 # when this script is itself a snapshot under the store (a directory named by

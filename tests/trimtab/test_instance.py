@@ -1,4 +1,4 @@
-"""instance.json (stage S3 spec, section 2) and the lock at schema 2 (S3-4): parsers tested from values,
+"""instance.json (ADR 0008) and the lock at schema 2: parsers tested from values,
 then `trimtab instance --json` at the file boundary."""
 
 import json
@@ -130,7 +130,7 @@ class PatternsPath(unittest.TestCase):
             with self.assertRaises(instance.InstanceFileError):
                 instance.patterns_path(f, root)
 
-# The lock's schema table (S3-4) lives with the format it migrates to.
+# The lock's schema table lives with the format it migrates to.
 
 LOCK = {"trimtab_sha": "b" * 40, "id_prefix": "INS"}
 
@@ -140,7 +140,7 @@ def lock(**fields):
 
 
 class LockSchema(unittest.TestCase):
-    """Stage S3 spec, S3-4: each row of the table is one test."""
+    """Each row of the lock's schema table is one test."""
 
     def test_schema_2_without_bindings_is_accepted(self):
         config, problems = project_config.parse(lock(schema_version=2))
@@ -173,7 +173,7 @@ class LockSchema(unittest.TestCase):
 class CliInstanceJson(unittest.TestCase):
     """Integration at the file boundary: `trimtab instance --json` against a fixture instance.
 
-    Bootstrap consumes exactly this object (stage S3 spec, section 3), so its shape is a contract.
+    Bootstrap consumes exactly this object, so its shape is a contract.
     """
 
     def setUp(self):

@@ -66,10 +66,10 @@ is safe: the next run finds the unlabelled PRs again and counts each once.
 If the rebuild reports that it hit its limit, say so: older evidence in the
 window was not read.
 
-## 2. claude-review findings (a fourth reviewer, F6)
+## 2. claude-review findings (a fourth reviewer)
 
 For each PR recorded in step 1, read the review bot's comments. It posts as
-`claude[bot]`, as issue comments (checked on Trimtab #32), and may add review
+`claude[bot]`, as issue comments (observed on a live PR), and may add review
 or inline comments:
 
 ```bash
@@ -176,7 +176,7 @@ as in step 4, only when the operator agrees.
   (`"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/rule-usage-report.py" --days 7`):
   rules and skills that never loaded, and what pulled each rule in;
 - the context baseline and what this configuration costs over Claude Code's
-  own (spike S1):
+  own:
 
   ```bash
   claude -p "/context" --output-format json < /dev/null

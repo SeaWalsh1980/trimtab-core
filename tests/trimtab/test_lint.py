@@ -1,4 +1,4 @@
-"""trimtab lint: overrides (section 2a), references (F1), structure (section 6d)."""
+"""trimtab lint: overrides, references and structure."""
 
 import json
 import subprocess

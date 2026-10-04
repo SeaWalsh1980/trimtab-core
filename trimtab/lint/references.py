@@ -1,4 +1,4 @@
-"""`trimtab lint references`: every named agent, skill or command resolves (F1).
+"""`trimtab lint references`: every named agent, skill or command resolves.
 
 A project's review once named two agents from a plugin that was never enabled;
 both passes silently never ran. This finds such names before anything runs.
