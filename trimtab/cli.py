@@ -26,7 +26,7 @@ from trimtab.registry.lookup import registry_for
 from trimtab.score import THRESHOLD, WINDOW_WEEKS, candidates, tally
 
 DEFAULT_LIMIT = 50  # every run is bounded; the watermark carries the rest
-HISTORY_LIMIT = 500  # bounded: labelled PRs a ledger rebuild reads, newest first (ADR 0011)
+HISTORY_LIMIT = 500  # bounded: labelled PRs a ledger rebuild reads, newest first (ADR 0006)
 
 
 def _print_problems(problems) -> int:
@@ -129,7 +129,7 @@ def _setup(args):
 
 
 def _store(args, source, config, registry):
-    """The ledger: a file, or rebuilt from the PRs already labelled within the window (ADR 0011)."""
+    """The ledger: a file, or rebuilt from the PRs already labelled within the window (ADR 0006)."""
     if args.ledger:
         return ingest.FileLedgerStore(Path(args.ledger))
     store = ingest.InMemoryLedgerStore()
@@ -160,7 +160,7 @@ def _report(config, todo, records, since) -> None:
     if todo.newer_version:
         print(f"newer block version: {len(todo.newer_version)} PRs "
               f"({', '.join(f'#{n}' for n in todo.newer_version)}) use a block version this Trimtab does not "
-              "read; left unlabelled for a newer Trimtab (ADR 0012)")
+              "read; left unlabelled for a newer Trimtab (trimtab-core ADR 0007)")
     window = f" merged since {since}" if since else ""
     print(f"coverage: {valid}/{total} ingested PRs{window} carry a valid block{share}")
     ids = sorted({i for (i, _) in t.feedback})
@@ -568,7 +568,7 @@ def _ingest_options(p) -> None:
     led = p.add_mutually_exclusive_group()
     led.add_argument("--ledger", help="ledger JSON file")
     led.add_argument("--ledger-from-labels", action="store_true",
-                     help="rebuild the ledger from PRs already labelled, within the window (routines: ADR 0011)")
+                     help="rebuild the ledger from PRs already labelled, within the window (routines: trimtab-core ADR 0006)")
     p.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help=f"PRs per run (default {DEFAULT_LIMIT})")
     p.add_argument("--history-limit", type=int, default=HISTORY_LIMIT,
                    help=f"labelled PRs read by --ledger-from-labels (default {HISTORY_LIMIT})")

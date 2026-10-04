@@ -1,8 +1,10 @@
 """Render routine specs from templates with the instance's values (stage S2 spec, section 4).
 
 Rendering changes nothing: it prints a spec. Creating a routine stays a session
-step the operator approves (plan 0009, section 5). Values the instance does not
-hold yet are passed with --set, so no ID is ever written into git.
+step the operator approves: the routine then writes on the operator's authority
+on a schedule, and a side effect needs a preview and a confirmation (ADR 0005).
+Values the instance does not hold yet are passed with --set, so no ID is ever
+written into git.
 """
 
 from __future__ import annotations

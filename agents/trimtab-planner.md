@@ -96,7 +96,7 @@ Return markdown with these sections, in this order:
 - `## Footprint` — the files the change touches, existing and new.
 - `## Rules loaded` — the resolver's output verbatim, then anything else read.
 - `## Harness items applied` — **exactly one** ```` ```yaml ```` block, the
-  machine-read citation list (plan 0009 section 3a). One entry per item that
+  machine-read citation list (trimtab-core ADR 0005). One entry per item that
   binds or shapes the change: `id` (from the resolver's list or `HARNESS.md`),
   `why` (one line: what in this change it constrains, and the step that applies
   it), and `files` (footprint paths it governs). Cite every REQUIRE/PROHIBIT

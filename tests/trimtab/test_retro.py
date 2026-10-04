@@ -1,4 +1,4 @@
-"""The retro's state lives on GitHub, not on disk (ADR 0011).
+"""The retro's state lives on GitHub, not on disk (ADR 0006).
 
 A routine has no durable disk, so its ledger is rebuilt each run from the PRs
 already labelled `trimtab-ingested`, within the decay window; proposals are

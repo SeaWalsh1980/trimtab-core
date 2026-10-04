@@ -3,7 +3,7 @@ description: The config loop, run on Trimtab. Group every consumer's overrides a
 argument-hint: ""
 ---
 
-Run the Trimtab config loop (plan 0009, section 6c). It runs **once, on
+Run the Trimtab config loop (trimtab-core ADR 0005). It runs **once, on
 Trimtab**, because comparing consumers is its purpose; the project loop
 (`/trimtab-retro`) runs in each consumer.
 

@@ -186,7 +186,7 @@ class LegacyHeading(unittest.TestCase):
 
 
 class BlockVersion(unittest.TestCase):
-    """ADR 0012: no marker is version 1; a reader refuses a version it does not know."""
+    """ADR 0007: no marker is version 1; a reader refuses a version it does not know."""
 
     def marked(self, value):
         return f"<!-- trimtab-block: {value} -->\n" + VALID

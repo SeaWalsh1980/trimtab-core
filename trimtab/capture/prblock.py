@@ -8,7 +8,7 @@ only, and no problem message quotes a value from the body: messages name the
 section, entry and field, so a hook or CI log can print them safely.
 
 The block is versioned by an optional marker, `<!-- trimtab-block: N -->`
-(ADR 0012). No marker means version 1. A reader refuses a version it does not
+(ADR 0007). No marker means version 1. A reader refuses a version it does not
 know rather than reading it as one it does: a body is re-read long after it
 was written, by whatever Trimtab a project pins.
 """
@@ -37,7 +37,7 @@ STATUSES = ("ran", "timed_out", "failed", "skipped", "pending")
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 BELOW_BINDING = ("MEDIUM", "LOW")
 
-# The block format versions this parser reads (ADR 0012). No marker means 1.
+# The block format versions this parser reads (ADR 0007). No marker means 1.
 BLOCK_VERSIONS = (1,)
 VERSION_MARKER = re.compile(r"<!--\s*trimtab-block:\s*(.*?)\s*-->")
 

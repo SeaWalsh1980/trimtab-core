@@ -4,7 +4,7 @@ Run Trimtab's weekly config loop on $instance_repo and deliver its proposals as 
 
 # Before anything else: are the guards live?
 
-The environment's setup script runs `bootstrap.sh` before this session starts (plan 0009, spike S4). Confirm it did: the config directory's `hooks/` holds the four `guard-*.sh` scripts, its `bin/trimtab --help` runs, and its `settings.json` registers the guards. **If any check fails, stop.** Open nothing, write nothing, and say in your final message which check failed. An unguarded run is worse than no run.
+The environment's setup script runs `bootstrap.sh` before this session starts. Confirm it did: the config directory's `hooks/` holds the four `guard-*.sh` scripts, its `bin/trimtab --help` runs, and its `settings.json` registers the guards. **If any check fails, stop.** Open nothing, write nothing, and say in your final message which check failed. An unguarded run is worse than no run.
 
 # Authorisation
 

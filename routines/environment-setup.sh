@@ -4,13 +4,13 @@
 # Paste this into the environment's setup script (claude.ai, environment
 # settings). It runs before the routine's Claude Code session starts, which is
 # the only point at which a bootstrap guards that session: a bootstrap run from
-# the prompt guards later sessions only (spike S4, ADR 0009).
+# the prompt guards later sessions only.
 #
 # It installs the normal sandboxed bootstrap from the routine's instance
 # clone: every guard, the rules, and bin/trimtab, into ~/.claude. It fails
 # loudly rather than leave a session unguarded without saying so.
 #
-# Unverified until the first run (plan 0009, Deferred work): whether the setup
+# Unverified until the first run: whether the setup
 # script runs after the sources are cloned, and whether writing ~/.claude
 # replaces settings the environment itself relies on. The routine's prompt
 # checks the guards are live before doing anything.

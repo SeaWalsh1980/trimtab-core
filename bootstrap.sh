@@ -155,7 +155,7 @@ echo
 # all. `git` cannot answer there, and refusing would break a legitimate
 # tarball install, so that case proceeds. The target is the accidental
 # worktree run, not a determined operator.
-# See docs/adr/0006-bootstrap-installs-only-from-the-canonical-checkout.md.
+# See docs/adr/0003-install-only-from-a-verified-checkout-or-snapshot.md.
 #
 # Both sides of the comparison must be physical paths. `pwd` is logical by
 # default, so $REPO keeps any symlinked ancestor intact (a dotfiles-style
@@ -447,7 +447,7 @@ probe_guard() {
     # die, not note: a guard returning anything but 2 is not drift, it is absent.
     # note sets drift=1, which in install mode prints a yellow arrow and then
     # reports "done." — an install that says done while the guards are open is
-    # exactly the silent failure ADR 0001 refuses for the observer.
+    # a silent failure.
     [[ $rc -eq 2 ]] && ok "$name blocks $what through the symlink" \
                     || die "$name returned $rc, expected 2 — the guards are failing open"
     [[ $rc_garbage -eq 2 ]] && ok "$name fails closed on an unparseable payload" \
