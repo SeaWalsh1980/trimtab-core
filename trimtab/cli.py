@@ -795,7 +795,8 @@ def build_parser() -> argparse.ArgumentParser:
     lnt.add_argument("--strict", action="store_true", help="exit 1 on structure findings too")
     lnt.set_defaults(func=cmd_lint)
 
-    ins = sub.add_parser("instance", parents=[common], help="print the instance root and repository, from instance.json")
+    ins = sub.add_parser("instance", parents=[common],
+                         help="print the instance root and repository, from instance.json; --check checks its files load")
     only = ins.add_mutually_exclusive_group()
     only.add_argument("--repo", action="store_true", help="print only the instance's repository (owner/name)")
     only.add_argument("--root", action="store_true",

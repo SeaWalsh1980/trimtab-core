@@ -1,5 +1,5 @@
 """instance.json (ADR 0008) and the lock at schema 2: parsers tested from values,
-then `trimtab instance --json` at the file boundary."""
+then `trimtab instance --json` and `--check` at the file boundary."""
 
 import json
 import subprocess
