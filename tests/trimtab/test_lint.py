@@ -222,6 +222,15 @@ class PluginsFromTheInstanceLayer(unittest.TestCase):
 
         self.assertIn("settings.instance.json", str(caught.exception))
 
+    def test_an_instance_layer_that_is_not_utf8_is_an_error_naming_it(self):
+        latin1_byte = b"\xff"
+        (self.root / "settings.instance.json").write_bytes(b"{" + latin1_byte + b"}")
+
+        with self.assertRaises(references.SettingsUnreadable) as caught:
+            references.enabled_plugins([self.root])
+
+        self.assertIn("settings.instance.json", str(caught.exception))
+
 
 class Structure(unittest.TestCase):
     def setUp(self):

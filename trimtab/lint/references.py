@@ -77,7 +77,7 @@ def enabled_plugins(roots: list[Path]) -> set[str]:
                 text = path.read_text(encoding="utf-8")
             except FileNotFoundError:
                 continue  # a layer this root does not have; every layer is optional
-            except OSError as err:
+            except (OSError, UnicodeDecodeError) as err:
                 raise SettingsUnreadable(f"{path} could not be read") from err
             try:
                 data = json.loads(text)
