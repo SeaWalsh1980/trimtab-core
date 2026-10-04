@@ -7,6 +7,7 @@ itself, and requires the decoy never to run.
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -75,6 +76,47 @@ class Launchers(unittest.TestCase):
         out = subprocess.run([str(CHECKOUT / "hooks" / "pr-body-check.sh")], cwd=self.cwd, input=payload,
                              env=env, capture_output=True, text=True, timeout=60)
         self.assertEqual(out.returncode, 0, out.stderr)
+
+
+class NoBytecode(unittest.TestCase):
+    """Integration test at the process boundary: a launcher run leaves no
+    bytecode beside the package it ran (a snapshot is never written)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tree = Path(self.tmp.name) / "base"
+        for d in ("trimtab", "bin", "hooks"):
+            shutil.copytree(CHECKOUT / d, self.tree / d,
+                            ignore=shutil.ignore_patterns("__pycache__"))
+        # A caller's environment that already suppresses or redirects bytecode
+        # would let these pass without the launcher doing anything.
+        self.env = {k: v for k, v in os.environ.items()
+                    if k not in ("PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX")}
+
+    def run_launcher(self, argv, stdin=""):
+        subprocess.run(argv, cwd=self.tmp.name, input=stdin, env=self.env,
+                       capture_output=True, text=True, timeout=60)
+
+    def caches(self):
+        return sorted(str(p.relative_to(self.tree)) for p in self.tree.rglob("__pycache__"))
+
+    def test_the_cli_writes_no_bytecode(self):
+        self.run_launcher([str(self.tree / "bin" / "trimtab"), "--help"])
+
+        self.assertEqual(self.caches(), [])
+
+    def test_the_drift_hook_writes_no_bytecode(self):
+        self.run_launcher(["bash", str(self.tree / "hooks" / "doctrine-drift.sh")], "{}")
+
+        self.assertEqual(self.caches(), [])
+
+    def test_the_pr_body_hook_writes_no_bytecode(self):
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr create --body x"}})
+
+        self.run_launcher(["bash", str(self.tree / "hooks" / "pr-body-check.sh")], payload)
+
+        self.assertEqual(self.caches(), [])
 
 
 if __name__ == "__main__":

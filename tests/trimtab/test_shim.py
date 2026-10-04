@@ -233,15 +233,19 @@ class Shim(unittest.TestCase):
         self.run_shim()
         self.assertFalse(marker.exists())
 
-    def test_bytecode_written_by_running_hooks_is_removed_and_reported_not_trusted(self):
+    def test_bytecode_in_a_snapshot_stops_the_shim_and_is_left_in_place(self):
         self.run_shim()
         cache = self.store / self.sha / "__pycache__"
         cache.mkdir()
         (cache / "x.cpython-313.pyc").write_bytes(b"\0")
+        self.called.unlink()
+
         out = self.run_shim()
-        self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertFalse(cache.exists())
-        self.assertIn(str(cache), out.stdout)
+
+        self.assertEqual(out.returncode, 1)
+        self.assertTrue((cache / "x.cpython-313.pyc").exists())
+        self.assertIn("x.cpython-313.pyc", out.stdout + out.stderr)
+        self.assertFalse(self.called.exists())
 
     def test_a_symlinked_bytecode_directory_is_not_followed_and_stops_the_shim(self):
         self.run_shim()

@@ -22,7 +22,8 @@ python3 -P -c '' >/dev/null 2>&1 || exit 0   # an interpreter without -P: fail o
 here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # -P: never put the working directory on sys.path, so a trimtab/ directory
 # there cannot shadow this checkout's package (it would run instead, silently).
-PYTHONPATH="$here/.." python3 -P -m trimtab.adapters.pr_body_check <<<"$payload"
+# -B: write no bytecode beside the package; a snapshot is never written.
+PYTHONPATH="$here/.." python3 -P -B -m trimtab.adapters.pr_body_check <<<"$payload"
 rc=$?
 [[ $rc -eq 2 ]] && exit 2
 exit 0
