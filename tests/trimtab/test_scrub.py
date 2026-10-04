@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from trimtab import instance as instance_file
 from trimtab import scrub
@@ -16,6 +17,7 @@ ROUTINE_ID = "trig_" + "A1b2C3d4E5f6G7h8J9k0"  # built at run time: never a lite
 DOCTRINE = "PrivateDoctrine.md"
 TRIMTAB = Path(__file__).resolve().parents[2] / "bin" / "trimtab"
 PUBLIC_ADR = "0001-a-public-decision.md"
+INSTANCE_EMAIL = "operator@example.invalid"
 
 
 def make_instance(root: Path) -> Path:
@@ -38,8 +40,20 @@ def make_base(root: Path) -> Path:
     return base
 
 
+def isolate_git(case: unittest.TestCase) -> None:
+    """Hide the machine's git config for one test.
+
+    private_terms reads the instance's commit email with `git config`. A fixture instance is
+    not a repository, so git would fall back to the global config of whoever runs the tests.
+    """
+    patcher = mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+    patcher.start()
+    case.addCleanup(patcher.stop)
+
+
 class PrivateScrub(unittest.TestCase):
     def setUp(self):
+        isolate_git(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.instance = make_instance(self.root)
@@ -83,6 +97,17 @@ class PrivateScrub(unittest.TestCase):
         found = self.hits(f"see {REPO_NAME}\n")
 
         self.assertNotIn(REPO_NAME, repr(found))
+
+    def test_the_machines_own_git_identity_is_not_a_term(self):
+        terms = scrub.private_terms(self.instance, environ={}, code_root=self.code_root)
+
+        self.assertNotIn("email", terms.literals)
+
+    def test_the_instances_commit_email_is_found(self):
+        subprocess.run(["git", "init", "-q", str(self.instance)], check=True)
+        subprocess.run(["git", "-C", str(self.instance), "config", "user.email", INSTANCE_EMAIL], check=True)
+
+        self.assertEqual([h.kind for h in self.hits(f"by {INSTANCE_EMAIL}\n")], ["email"])
 
     def add_doc(self, folder: str, name: str):
         (self.instance / "docs" / folder).mkdir(parents=True, exist_ok=True)
@@ -191,6 +216,7 @@ class PrivateScrubInputs(unittest.TestCase):
     """The deny-list is built as declared, or the check refuses to vouch for the tree."""
 
     def setUp(self):
+        isolate_git(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.instance = make_instance(self.root)
