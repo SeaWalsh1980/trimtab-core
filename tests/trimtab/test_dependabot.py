@@ -8,10 +8,10 @@ from dataclasses import replace
 
 from trimtab.capture.prblock import check_body
 from trimtab.capture.sources import SourceError, _pr_view, _runs
-from trimtab.cli import main
+from trimtab.cli import build_parser, cmd_dependabot_block, main
 from trimtab.dependabot import (
     BLOCK, DEPENDABOT_LOGIN, MAX_BODY, BlockRefused, CiRun, HostError, NotDependabot, PullRequestView,
-    RerunFailed, StaleBlockPlan, apply, confirmation, plan, read_plan,
+    ReadBackFailed, RerunFailed, StaleBlockPlan, apply, confirmation, plan, read_plan,
 )
 
 REGISTRY = {}  # the block cites `id: none`, so no item has to resolve
@@ -145,6 +145,25 @@ class TheRerun(unittest.TestCase):
 
         self.assertEqual((todo.rerun_run_id, todo.run_in_progress), (None, True))
 
+    def test_picks_the_highest_run_id_when_runs_arrive_newest_first(self):
+        runs = [failed_run(NEWER_RUN), CiRun(id=FAILED_RUN, status="completed", conclusion="success")]
+
+        todo = plan_for(dependabot_pr(), runs)
+
+        self.assertEqual(todo.rerun_run_id, NEWER_RUN)
+
+    def test_plans_no_rerun_when_the_newest_run_was_cancelled(self):
+        runs = [CiRun(id=FAILED_RUN, status="completed", conclusion="cancelled")]
+
+        todo = plan_for(dependabot_pr(), runs)
+
+        self.assertEqual((todo.rerun_run_id, todo.ci_needs_attention), (None, True))
+
+    def test_plans_no_rerun_and_needs_attention_when_there_is_no_run(self):
+        todo = plan_for(dependabot_pr(), [])
+
+        self.assertEqual((todo.rerun_run_id, todo.ci_needs_attention), (None, True))
+
     def test_still_offers_the_rerun_when_the_block_is_already_there(self):
         todo = plan_for(dependabot_pr(body=VALID_BLOCK_BODY), [failed_run()])
 
@@ -270,18 +289,25 @@ class GhRunParsing(unittest.TestCase):
 class FakeGitHub:
     """An in-memory PullRequestHost: one PR, its runs, and the re-runs requested."""
 
-    def __init__(self, pr, runs=(), rerun_fails=False):
+    def __init__(self, pr, runs=(), rerun_fails=False, view_fails=False, keeps_on_write=None,
+                 view_fails_after_write=False):
         self.pr = pr
         self.ci = list(runs)
         self.reruns = []
         self.body_writes = 0
         self.rerun_fails = rerun_fails
+        self.view_fails = view_fails
+        # What the host stores when a body is written, if not the body itself: a host that mangles it.
+        self.keeps_on_write = keeps_on_write
+        self.view_fails_after_write = view_fails_after_write
 
     def view(self, number):
+        if self.view_fails or (self.view_fails_after_write and self.body_writes):
+            raise HostError("view refused")
         return self.pr
 
     def set_body(self, number, body):
-        self.pr = replace(self.pr, body=body)
+        self.pr = replace(self.pr, body=body if self.keeps_on_write is None else self.keeps_on_write)
         self.body_writes += 1
 
     def runs(self, head_sha, workflow, limit):
@@ -384,6 +410,134 @@ class Applying(unittest.TestCase):
         apply_to(host, dry_run_token(host))
 
         self.assertEqual((host.body_writes, host.reruns), (1, [FAILED_RUN]))
+
+
+class ReadingBack(unittest.TestCase):
+    def test_a_host_that_alters_the_body_on_write_fails_the_read_back(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()], keeps_on_write=DEPENDABOT_TEXT)
+
+        with self.assertRaises(ReadBackFailed):
+            apply_to(host, dry_run_token(host))
+
+    def test_a_read_back_that_cannot_reach_the_host_says_the_body_was_written(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()], view_fails_after_write=True)
+
+        with self.assertRaises(ReadBackFailed) as caught:
+            apply_to(host, dry_run_token(host))
+
+        self.assertIn("was written", str(caught.exception))
+
+
+def run_command(host, *extra):
+    """The dependabot-block command against an in-memory host. Returns (exit code, stdout, stderr)."""
+    args = build_parser().parse_args(["dependabot-block", str(PR_NUMBER), "--repo", REPO,
+                                      "--workflow", WORKFLOW, *extra])
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = cmd_dependabot_block(args, host_for=lambda repo: host, registry=REGISTRY)
+    return code, out.getvalue(), err.getvalue()
+
+
+def passed_run(run_id=FAILED_RUN):
+    return CiRun(id=run_id, status="completed", conclusion="success")
+
+
+class TheDryRun(unittest.TestCase):
+    def test_a_dry_run_with_work_to_do_prints_a_token_and_exits_0(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()])
+
+        code, out, _ = run_command(host)
+
+        self.assertEqual((code, f"confirm: {dry_run_token(host)}" in out), (0, True))
+
+    def test_a_dry_run_names_the_project_in_the_apply_command(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()])
+
+        _, out, _ = run_command(host, "--project", "elsewhere")
+
+        self.assertIn("--project elsewhere", out)
+
+    def test_a_dry_run_with_nothing_to_do_prints_no_token_and_exits_0(self):
+        host = FakeGitHub(dependabot_pr(body=VALID_BLOCK_BODY), [passed_run()])
+
+        code, out, _ = run_command(host)
+
+        self.assertEqual((code, "confirm:" in out), (0, False))
+
+    def test_a_dry_run_with_no_run_found_names_the_workflow_and_exits_1(self):
+        host = FakeGitHub(dependabot_pr(), [])
+
+        code, out, _ = run_command(host)
+
+        self.assertEqual((code, f"no {WORKFLOW} run found" in out), (1, True))
+
+    def test_a_dry_run_whose_newest_run_was_cancelled_names_it_and_exits_1(self):
+        host = FakeGitHub(dependabot_pr(body=VALID_BLOCK_BODY),
+                          [CiRun(id=FAILED_RUN, status="completed", conclusion="cancelled")])
+
+        code, out, _ = run_command(host)
+
+        self.assertEqual((code, "ended cancelled" in out), (1, True))
+
+    def test_an_unexpected_conclusion_is_not_printed(self):
+        host = FakeGitHub(dependabot_pr(), [CiRun(id=FAILED_RUN, status="completed", conclusion=CANARY)])
+
+        _, out, err = run_command(host)
+
+        self.assertNotIn(CANARY, out + err)
+
+    def test_a_dry_run_never_prints_dependabots_text(self):
+        host = FakeGitHub(dependabot_pr(body=DEPENDABOT_TEXT + CANARY + "\n"), [failed_run()])
+
+        _, out, err = run_command(host)
+
+        self.assertNotIn(CANARY, out + err)
+
+    def test_a_pr_not_opened_by_dependabot_exits_1(self):
+        host = FakeGitHub(dependabot_pr(login="someone", is_bot=False), [failed_run()])
+
+        code, _, _ = run_command(host)
+
+        self.assertEqual(code, 1)
+
+    def test_a_host_failure_exits_2_and_says_running_again_is_safe(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()], view_fails=True)
+
+        code, _, err = run_command(host)
+
+        self.assertEqual((code, "safe" in err), (2, True))
+
+
+class TheApplyCommand(unittest.TestCase):
+    def test_apply_with_the_dry_runs_token_exits_0(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()])
+
+        code, out, _ = run_command(host, "--apply", "--confirm", dry_run_token(host))
+
+        self.assertEqual((code, "block added" in out), (0, True))
+
+    def test_apply_with_a_stale_token_exits_3(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()])
+        token = dry_run_token(host)
+        host.ci.append(failed_run(NEWER_RUN))
+
+        code, _, _ = run_command(host, "--apply", "--confirm", token)
+
+        self.assertEqual(code, 3)
+
+    def test_a_failed_rerun_exits_2_and_says_the_body_was_written(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()], rerun_fails=True)
+
+        code, _, err = run_command(host, "--apply", "--confirm", dry_run_token(host))
+
+        self.assertEqual((code, "the body was written" in err), (2, True))
+
+    def test_a_failed_read_back_exits_1_and_says_the_body_was_written(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()], view_fails_after_write=True)
+
+        code, _, err = run_command(host, "--apply", "--confirm", dry_run_token(host))
+
+        self.assertEqual((code, "was written" in err), (1, True))
 
 
 class TheCommand(unittest.TestCase):

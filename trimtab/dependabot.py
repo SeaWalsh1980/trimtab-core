@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass
 from typing import Iterable, Mapping, Protocol
 
@@ -28,6 +29,8 @@ MAX_BODY = 65536
 # Runs of one workflow at one head SHA: a handful at most, so this bound is never reached in practice.
 RUN_LIMIT = 10
 SEPARATOR = "\n\n"
+# A run conclusion is shown only when it looks like one of GitHub's (`cancelled`, `timed_out`).
+CONCLUSION = re.compile(r"[a-z_]{1,40}")
 BLOCK = f"""## {APPLIED}
 ```yaml
 - id: none
@@ -117,12 +120,33 @@ class BlockPlan:
     old_digest: str
     new_body: str | None
     rerun_run_id: int | None
-    # Newest run still going: no rerun is planned, and the dry run says so.
-    run_in_progress: bool = False
+    # The newest run of the workflow at the head, or None when there is none.
+    newest_run: CiRun | None = None
 
     @property
     def nothing_to_do(self) -> bool:
         return self.new_body is None and self.rerun_run_id is None
+
+    @property
+    def run_in_progress(self) -> bool:
+        return self.newest_run is not None and self.newest_run.status != "completed"
+
+    @property
+    def ci_needs_attention(self) -> bool:
+        """No run at the head, or a newest run that ended neither passed nor failed (cancelled, timed out).
+
+        Neither is re-run, and neither is fixed by the block alone, so the operator has to look.
+        """
+        newest = self.newest_run
+        if newest is None:
+            return True
+        return newest.status == "completed" and newest.conclusion not in ("success", "failure")
+
+    @property
+    def shown_conclusion(self) -> str:
+        """The newest run's conclusion, safe to print: GitHub's word, or a neutral stand-in."""
+        value = self.newest_run.conclusion if self.newest_run else ""
+        return value if CONCLUSION.fullmatch(value) else "an unexpected conclusion"
 
 
 def _digest(text: str) -> str:
@@ -162,10 +186,9 @@ def plan(pr: PullRequestView, runs: Iterable[CiRun], registry: Mapping[str, Item
     new = _new_body(pr.body, registry)
     newest = max(runs, key=lambda r: r.id, default=None)
     rerun = newest.id if newest and newest.status == "completed" and newest.conclusion == "failure" else None
-    in_progress = newest is not None and newest.status != "completed"
     return BlockPlan(repo=repo, number=pr.number, head_sha=pr.head_sha, workflow=workflow,
                      old_length=len(pr.body), old_digest=_digest(pr.body), new_body=new,
-                     rerun_run_id=rerun, run_in_progress=in_progress)
+                     rerun_run_id=rerun, newest_run=newest)
 
 
 def confirmation(todo: BlockPlan) -> str:
@@ -195,7 +218,11 @@ def apply(host: PullRequestHost, registry: Mapping[str, Item], repo: str, workfl
         raise StaleBlockPlan("the PR or its runs changed since the dry run; run the dry run again")
     if todo.new_body is not None:
         host.set_body(number, todo.new_body)
-        if not check_body(host.view(number).body, registry).ok:
+        try:
+            written = host.view(number)
+        except HostError as err:
+            raise ReadBackFailed(f"PR #{number}'s body was written but could not be read back") from err
+        if not check_body(written.body, registry).ok:
             raise ReadBackFailed(f"PR #{number}'s body was written but does not read back with a valid block")
     if todo.rerun_run_id is not None:
         try:

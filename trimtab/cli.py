@@ -403,32 +403,46 @@ def _print_block_plan(todo: dependabot.BlockPlan) -> None:
     else:
         print("body: append this block:")
         print(dependabot.BLOCK, end="")
+    newest = todo.newest_run
     if todo.rerun_run_id is not None:
         print(f"re-run: the failed jobs of {todo.workflow} run {todo.rerun_run_id}")
+    elif newest is None:
+        print(f"re-run: none; no {todo.workflow} run found at this head (check --workflow, or whether CI started)")
     elif todo.run_in_progress:
         print(f"re-run: none; the newest {todo.workflow} run at this head is still going")
+    elif newest.conclusion == "success":
+        print(f"re-run: none; the newest {todo.workflow} run at this head passed")
     else:
-        print(f"re-run: none; no failed {todo.workflow} run is the newest at this head")
+        print(f"re-run: none; the newest {todo.workflow} run at this head ended {todo.shown_conclusion}")
 
 
-def cmd_dependabot_block(args) -> int:
-    registry, problems = registry_for(_instance(args), Path(args.project))
-    if problems:
-        print("cannot build the registry:", file=sys.stderr)
-        return _print_problems(problems) or 1
-    host = GhPullRequests(args.repo)
+def _attention(todo: dependabot.BlockPlan) -> int:
+    """1, with the reason, when CI at the head is neither green, going, nor about to be re-run."""
+    if not todo.ci_needs_attention:
+        return 0
+    print(f"attention: CI is not fixed by this command; look at {todo.workflow} for PR #{todo.number} by hand",
+          file=sys.stderr)
+    return 1
+
+
+def cmd_dependabot_block(args, host_for=GhPullRequests, registry=None) -> int:
+    if registry is None:
+        registry, problems = registry_for(_instance(args), Path(args.project))
+        if problems:
+            print("cannot build the registry:", file=sys.stderr)
+            return _print_problems(problems) or 1
+    host = host_for(args.repo)
     try:
         if not args.apply:
             todo = dependabot.read_plan(host, registry, args.repo, args.workflow, args.pr)
             print("dependabot-block --dry-run: nothing written")
             _print_block_plan(todo)
-            if todo.nothing_to_do:
-                return 0
-            token = dependabot.confirmation(todo)
-            print(f"confirm: {token}")
-            print(f"to apply: trimtab dependabot-block {args.pr} --repo {args.repo} --workflow {args.workflow} "
-                  f"--apply --confirm {token}" + (f" --project {args.project}" if args.project != "." else ""))
-            return 0
+            if not todo.nothing_to_do:
+                token = dependabot.confirmation(todo)
+                print(f"confirm: {token}")
+                print(f"to apply: trimtab dependabot-block {args.pr} --repo {args.repo} --workflow {args.workflow} "
+                      f"--apply --confirm {token}" + (f" --project {args.project}" if args.project != "." else ""))
+            return _attention(todo)
         done = dependabot.apply(host, registry, args.repo, args.workflow, args.pr, args.confirm)
     except (dependabot.NotDependabot, dependabot.BlockRefused) as err:
         print(f"refused: {err}", file=sys.stderr)
@@ -438,13 +452,14 @@ def cmd_dependabot_block(args) -> int:
         print(f"aborted: {err}", file=sys.stderr)
         return 3
     except dependabot.ReadBackFailed as err:
-        print(f"error: {err}", file=sys.stderr)
+        cause = f": {err.__cause__}" if err.__cause__ else ""
+        print(f"error: {err}{cause}; running the dry run again is safe", file=sys.stderr)
         return 1
     except dependabot.RerunFailed as err:
         written = "the body was written; " if err.wrote_body else ""
         print(f"error: {err}: {err.__cause__}; {written}running the dry run again is safe", file=sys.stderr)
         return 2
-    except SourceError as err:
+    except dependabot.HostError as err:
         print(f"error: {err}; running the dry run again is safe", file=sys.stderr)
         return 2
     print(f"PR #{args.pr}: " + ("block added" if done.wrote_body else "block already there")
