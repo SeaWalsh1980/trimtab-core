@@ -18,6 +18,7 @@ DOCTRINE = "PrivateDoctrine.md"
 TRIMTAB = Path(__file__).resolve().parents[2] / "bin" / "trimtab"
 PUBLIC_ADR = "0001-a-public-decision.md"
 INSTANCE_EMAIL = "operator@example.invalid"
+HOOK_EMAIL = "hook@example.invalid"
 
 
 def make_instance(root: Path) -> Path:
@@ -40,22 +41,36 @@ def make_base(root: Path) -> Path:
     return base
 
 
-def isolate_git(case: unittest.TestCase) -> None:
-    """Hide the machine's git config for one test.
+# Set by git while it runs a hook: inherited, they would point every git call in a test at
+# the hook's own repository, for reads and for writes.
+GIT_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                     "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
+
+
+def isolated_git_env(environ, root: Path) -> dict:
+    """environ, with git kept inside root and away from the machine's own config.
 
     private_terms reads the instance's commit email with `git config`. A fixture instance is
-    not a repository, so git would fall back to the global config of whoever runs the tests.
+    not a repository, so git would otherwise fall back to the global config of whoever runs
+    the tests, or find a repository above the temporary directory.
     """
-    patcher = mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+    env = {k: v for k, v in environ.items() if k not in GIT_LOCATION_VARS}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+               GIT_CEILING_DIRECTORIES=str(root.resolve()))
+    return env
+
+
+def isolate_git(case: unittest.TestCase, root: Path) -> None:
+    patcher = mock.patch.dict(os.environ, isolated_git_env(os.environ, root), clear=True)
     patcher.start()
     case.addCleanup(patcher.stop)
 
 
 class PrivateScrub(unittest.TestCase):
     def setUp(self):
-        isolate_git(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        isolate_git(self, self.root)
         self.instance = make_instance(self.root)
         self.code_root = make_base(self.root)
         self.tree = self.root / "tree"
@@ -108,6 +123,24 @@ class PrivateScrub(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.instance), "config", "user.email", INSTANCE_EMAIL], check=True)
 
         self.assertEqual([h.kind for h in self.hits(f"by {INSTANCE_EMAIL}\n")], ["email"])
+
+    def test_a_git_dir_inherited_from_a_hook_is_neither_read_nor_written(self):
+        hook_repo = self.root / "hook-repo"
+        subprocess.run(["git", "init", "-q", str(hook_repo)], check=True)
+        subprocess.run(["git", "-C", str(hook_repo), "config", "user.email", HOOK_EMAIL], check=True)
+        # As git exports it to a hook, then isolated again as setUp would.
+        hook = mock.patch.dict(os.environ, {"GIT_DIR": str(hook_repo / ".git")})
+        hook.start()
+        self.addCleanup(hook.stop)
+        isolate_git(self, self.root)
+
+        subprocess.run(["git", "init", "-q", str(self.instance)], check=True)
+        subprocess.run(["git", "-C", str(self.instance), "config", "user.email", INSTANCE_EMAIL], check=True)
+
+        self.assertEqual([h.kind for h in self.hits(f"by {INSTANCE_EMAIL}\n")], ["email"])
+        written = subprocess.run(["git", "-C", str(hook_repo), "config", "user.email"],
+                                 capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(written, HOOK_EMAIL)
 
     def add_doc(self, folder: str, name: str):
         (self.instance / "docs" / folder).mkdir(parents=True, exist_ok=True)
@@ -216,9 +249,9 @@ class PrivateScrubInputs(unittest.TestCase):
     """The deny-list is built as declared, or the check refuses to vouch for the tree."""
 
     def setUp(self):
-        isolate_git(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        isolate_git(self, self.root)
         self.instance = make_instance(self.root)
         self.code_root = make_base(self.root)
         self.tree = self.root / "tree"
@@ -275,7 +308,8 @@ class CommandLine(unittest.TestCase):
         self.instance = make_instance(self.root)
         self.tree = self.root / "tree"
         self.tree.mkdir()
-        self.env = {k: v for k, v in os.environ.items() if k not in ("TRIMTAB_INSTANCE", scrub.PATTERNS_ENV)}
+        self.env = isolated_git_env({k: v for k, v in os.environ.items()
+                                     if k not in ("TRIMTAB_INSTANCE", scrub.PATTERNS_ENV)}, self.root)
 
     def tearDown(self):
         self.tmp.cleanup()
