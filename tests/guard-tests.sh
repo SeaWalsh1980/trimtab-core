@@ -952,7 +952,22 @@ LV="$CPTMP/liveness"
 LV_REPO="$LV/checkout"
 LV_HOME="$LV/home"
 mkdir -p "$LV_REPO/hooks" "$LV_REPO/rules" "$LV_REPO/bin" "$LV_HOME/.claude"
+# The fixture stubs every guard the shipped check names, read from the command
+# itself. CI runs the base branch's copy of this file against a pull request's
+# settings.base.json, so a fixed list here would make every PR that adds a
+# guard fail "healthy install is silent" on the base's side, and the required
+# check cannot be merged over. Adding a guard is allowed; dropping one is not:
+# each guard the base already checks must still be named.
+LV_GUARDS=$(printf '%s' "$LIVENESS" | sed -n 's/.*for g in \([a-z -]*\); do.*/\1/p')
 for g in guard-paths guard-bash guard-secrets guard-security; do
+  if [[ " $LV_GUARDS " == *" $g "* ]]; then
+    printf 'PASS  %-14s %s\n' "liveness" "the check still names $g"
+  else
+    printf 'FAIL  %-14s %s\n' "liveness" "the check no longer names $g"
+    fails=$((fails+1))
+  fi
+done
+for g in $LV_GUARDS; do
   printf '#!/bin/sh\n' > "$LV_REPO/hooks/$g.sh"; chmod +x "$LV_REPO/hooks/$g.sh"
 done
 : > "$LV_REPO/CLAUDE.md"
