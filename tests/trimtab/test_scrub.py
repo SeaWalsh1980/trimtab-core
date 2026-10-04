@@ -45,6 +45,14 @@ def make_base(root: Path) -> Path:
 # the hook's own repository, for reads and for writes.
 GIT_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
                      "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
+# Config handed down by a caller: `git -c key=value` exports GIT_CONFIG_PARAMETERS to what it
+# runs, hooks included, and GIT_CONFIG_COUNT with GIT_CONFIG_KEY_n/VALUE_n sets keys directly.
+GIT_CONFIG_VARS = ("GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT")
+GIT_CONFIG_PREFIXES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+
+
+def _inherited_git_setting(name: str) -> bool:
+    return name in GIT_LOCATION_VARS or name in GIT_CONFIG_VARS or name.startswith(GIT_CONFIG_PREFIXES)
 
 
 def isolated_git_env(environ, root: Path) -> dict:
@@ -54,7 +62,7 @@ def isolated_git_env(environ, root: Path) -> dict:
     not a repository, so git would otherwise fall back to the global config of whoever runs
     the tests, or find a repository above the temporary directory.
     """
-    env = {k: v for k, v in environ.items() if k not in GIT_LOCATION_VARS}
+    env = {k: v for k, v in environ.items() if not _inherited_git_setting(k)}
     env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
                GIT_CEILING_DIRECTORIES=str(root.resolve()))
     return env
@@ -141,6 +149,19 @@ class PrivateScrub(unittest.TestCase):
         written = subprocess.run(["git", "-C", str(hook_repo), "config", "user.email"],
                                  capture_output=True, text=True, check=True).stdout.strip()
         self.assertEqual(written, HOOK_EMAIL)
+
+    def test_config_handed_down_by_a_caller_is_not_read(self):
+        # As `git -c user.email=… commit` passes it to a hook, and as the counted form sets it.
+        caller = mock.patch.dict(os.environ, {
+            "GIT_CONFIG_PARAMETERS": f"'user.email'='{HOOK_EMAIL}'",
+            "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "user.email", "GIT_CONFIG_VALUE_0": HOOK_EMAIL})
+        caller.start()
+        self.addCleanup(caller.stop)
+        isolate_git(self, self.root)
+
+        terms = scrub.private_terms(self.instance, environ={}, code_root=self.code_root)
+
+        self.assertNotIn("email", terms.literals)
 
     def add_doc(self, folder: str, name: str):
         (self.instance / "docs" / folder).mkdir(parents=True, exist_ok=True)
