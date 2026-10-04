@@ -104,6 +104,19 @@ class TheBody(unittest.TestCase):
         with self.assertRaises(BlockRefused):
             plan_for(dependabot_pr(body=body))
 
+    def test_accepts_a_body_that_reaches_githubs_limit_exactly(self):
+        body = "x" * (MAX_BODY - len("\n\n") - len(BLOCK))
+
+        todo = plan_for(dependabot_pr(body=body))
+
+        self.assertEqual(len(todo.new_body), MAX_BODY)
+
+    def test_refuses_a_body_one_character_over_githubs_limit(self):
+        body = "x" * (MAX_BODY - len("\n\n") - len(BLOCK) + 1)
+
+        with self.assertRaises(BlockRefused):
+            plan_for(dependabot_pr(body=body))
+
     def test_records_the_old_body_by_length_and_digest(self):
         todo = plan_for(dependabot_pr())
 
@@ -326,6 +339,24 @@ class Applying(unittest.TestCase):
 
         with self.assertRaises(StaleBlockPlan):
             apply_to(host, token)
+
+    def test_apply_aborts_with_nothing_written_when_a_new_failed_run_appeared_after_the_dry_run(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()])
+        token = dry_run_token(host)
+        host.ci.append(failed_run(NEWER_RUN))
+
+        with self.assertRaises(StaleBlockPlan):
+            apply_to(host, token)
+        self.assertEqual((host.body_writes, host.reruns), (0, []))
+
+    def test_apply_aborts_with_nothing_written_when_a_newer_run_passed_after_the_dry_run(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()])
+        token = dry_run_token(host)
+        host.ci.append(CiRun(id=NEWER_RUN, status="completed", conclusion="success"))
+
+        with self.assertRaises(StaleBlockPlan):
+            apply_to(host, token)
+        self.assertEqual((host.body_writes, host.reruns), (0, []))
 
     def test_a_second_apply_on_a_pr_that_has_the_block_writes_nothing(self):
         host = FakeGitHub(dependabot_pr(), [failed_run()])
