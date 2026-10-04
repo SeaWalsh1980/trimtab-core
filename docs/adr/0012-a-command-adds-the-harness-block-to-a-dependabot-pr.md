@@ -75,6 +75,11 @@ The constraints:
 
 - A Dependabot PR is fixed with one dry run and one apply instead of a
   hand edit and a re-run.
+- The re-run fixes the check only where the instance's CI reads the PR
+  body from the API when the job runs. A GitHub re-run reuses the original
+  event, so a check that reads the body from the event payload fails again
+  on the old body; such an instance has to push a commit, or close and
+  reopen the PR, instead.
 - Accepted: Dependabot rewrites the body when it updates a PR (a newer
   version, a rebase), which removes the block. The command is run again;
   it is safe to.
