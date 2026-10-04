@@ -11,8 +11,9 @@ docs/adr/, every tracked file must:
 
 It cannot catch an in-range number used with another repository's meaning, or
 an unnumbered plan reference; cite by full file name where the meaning matters.
-The `adr:` field of an overrides entry names the consumer's own ADR and is
-exempt. Forbidden spellings are assembled at run time so this file passes itself.
+A path written after `adr:` is exempt by that pattern, in any file: it is how
+an overrides entry names the consumer's own ADR. Forbidden spellings are
+assembled at run time so this file passes itself.
 """
 
 import re
@@ -112,7 +113,8 @@ class Repository(unittest.TestCase):
             data = (REPO / rel).read_bytes()
             if b"\0" in data:  # binary, as git judges it: no citations to read
                 continue
-            found += [f"{rel}: {p}" for p in problems(data.decode("utf-8"), adr_files)]
+            text = data.decode("utf-8", errors="replace")  # a non-UTF-8 file is still scanned
+            found += [f"{rel}: {p}" for p in problems(text, adr_files)]
         self.assertEqual(found, [], f"{RULE}:\n" + "\n".join(found))
 
 
