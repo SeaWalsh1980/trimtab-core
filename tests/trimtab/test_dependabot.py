@@ -186,6 +186,16 @@ class TheRerun(unittest.TestCase):
 
         self.assertEqual((todo.rerun_run_id, todo.ci_needs_attention), (None, True))
 
+    def test_a_newest_run_that_timed_out_needs_attention(self):
+        todo = plan_for(dependabot_pr(), [CiRun(id=FAILED_RUN, status="completed", conclusion="timed_out")])
+
+        self.assertTrue(todo.ci_needs_attention)
+
+    def test_a_completed_run_with_no_conclusion_needs_attention(self):
+        todo = plan_for(dependabot_pr(), [CiRun(id=FAILED_RUN, status="completed", conclusion="")])
+
+        self.assertTrue(todo.ci_needs_attention)
+
     def test_plans_no_rerun_and_needs_attention_when_there_is_no_run(self):
         todo = plan_for(dependabot_pr(), [])
 
@@ -514,6 +524,36 @@ class Applying(unittest.TestCase):
         self.assertEqual((host.body_writes, host.reruns), (1, [FAILED_RUN]))
 
 
+class WhatApplyReports(unittest.TestCase):
+    def test_apply_reports_that_ci_needs_a_look_when_there_is_no_run(self):
+        host = FakeGitHub(dependabot_pr(), [])
+
+        result = apply_to(host, dry_run_token(host))
+
+        self.assertTrue(result.ci_needs_attention)
+
+    def test_apply_reports_no_attention_when_it_reruns_a_failed_run(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()])
+
+        result = apply_to(host, dry_run_token(host))
+
+        self.assertFalse(result.ci_needs_attention)
+
+    def test_apply_reports_that_a_running_run_predates_the_block_it_wrote(self):
+        host = FakeGitHub(dependabot_pr(), [running_run()])
+
+        result = apply_to(host, dry_run_token(host))
+
+        self.assertTrue(result.run_predates_block)
+
+    def test_apply_reports_no_predating_run_when_the_block_was_already_there(self):
+        host = FakeGitHub(dependabot_pr(body=VALID_BLOCK_BODY), [running_run()])
+
+        result = apply_to(host, dry_run_token(host))
+
+        self.assertFalse(result.run_predates_block)
+
+
 class WritingFails(unittest.TestCase):
     def test_a_failed_write_raises_and_requests_no_rerun(self):
         host = FakeGitHub(dependabot_pr(), [failed_run()], set_body_fails=True)
@@ -586,24 +626,25 @@ class TheDryRun(unittest.TestCase):
     def test_a_dry_run_with_no_run_found_names_the_workflow_and_exits_4(self):
         host = FakeGitHub(dependabot_pr(), [])
 
-        code, out, _ = run_command(host)
+        code, out, err = run_command(host)
 
-        self.assertEqual((code, f"no {WORKFLOW} run found" in out), (EXIT_CI_ATTENTION, True))
+        self.assertEqual((code, f"no {WORKFLOW} run found" in out, "attention" in err), (EXIT_CI_ATTENTION, True, True))
 
     def test_a_dry_run_whose_newest_run_was_cancelled_names_it_and_exits_4(self):
         host = FakeGitHub(dependabot_pr(body=VALID_BLOCK_BODY),
                           [CiRun(id=FAILED_RUN, status="completed", conclusion="cancelled")])
 
-        code, out, _ = run_command(host)
+        code, out, err = run_command(host)
 
-        self.assertEqual((code, "ended cancelled" in out), (EXIT_CI_ATTENTION, True))
+        self.assertEqual((code, "ended cancelled" in out, "attention" in err), (EXIT_CI_ATTENTION, True, True))
 
     def test_a_dry_run_with_a_body_to_write_and_a_cancelled_run_prints_a_token_and_exits_4(self):
         host = FakeGitHub(dependabot_pr(), [cancelled_run()])
 
-        code, out, _ = run_command(host)
+        code, out, err = run_command(host)
 
-        self.assertEqual((code, f"confirm: {dry_run_token(host)}" in out), (EXIT_CI_ATTENTION, True))
+        self.assertEqual((code, f"confirm: {dry_run_token(host)}" in out, "attention" in err),
+                         (EXIT_CI_ATTENTION, True, True))
 
     def test_an_unexpected_conclusion_is_not_printed(self):
         host = FakeGitHub(dependabot_pr(), [CiRun(id=FAILED_RUN, status="completed", conclusion=CANARY)])
@@ -698,6 +739,20 @@ class TheApplyCommand(unittest.TestCase):
         code, out, _ = run_command(host, "--apply", "--confirm", dry_run_token(host))
 
         self.assertEqual((code, "started before the block was added" in out), (0, True))
+
+    def test_apply_with_no_run_at_the_head_adds_the_block_warns_and_exits_4(self):
+        host = FakeGitHub(dependabot_pr(), [])
+
+        code, _, err = run_command(host, "--apply", "--confirm", dry_run_token(host))
+
+        self.assertEqual((code, "attention" in err, host.body_writes), (EXIT_CI_ATTENTION, True, 1))
+
+    def test_apply_when_the_block_was_already_there_and_a_run_is_going_carries_no_note(self):
+        host = FakeGitHub(dependabot_pr(body=VALID_BLOCK_BODY), [running_run()])
+
+        _, out, _ = run_command(host, "--apply", "--confirm", dry_run_token(host))
+
+        self.assertNotIn("started before the block was added", out)
 
     def test_apply_with_a_stale_token_exits_3(self):
         host = FakeGitHub(dependabot_pr(), [failed_run()])
