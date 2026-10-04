@@ -10,10 +10,10 @@
 # environment, instance.json or a flag, and it runs git in an environment it
 # builds itself. A snapshot that exists but differs from its pinned commit in
 # any file, or whose git directory holds anything a clone does not write, is a
-# tampering signal: it stops, and repairs nothing. The one exception is
-# bytecode caches (__pycache__), which running the hooks writes and which it
-# deletes, printing each, before it verifies. The instance is always the directory this script sits in; a
-# caller-supplied --instance is refused.
+# tampering signal: it stops, and repairs nothing. Nothing writes into a
+# snapshot (the base's launchers run Python with -B), so a bytecode cache
+# (__pycache__) there is tampering too. The instance is always the directory
+# this script sits in; a caller-supplied --instance is refused.
 set -euo pipefail
 
 die() { printf '  \033[31m✗\033[0m %s\n' "$1" >&2; exit 1; }
@@ -143,9 +143,8 @@ owner=${base_repo%%/*}; name=${base_repo#*/}
 # own config names can run. Nothing is tolerated in the tree, bytecode included:
 # Python runs a compiled file whose header matches, or whose hash is unchecked,
 # without reading its source, so a cache directory is a place to hide code.
-# Running the hooks writes such caches, and they regenerate, so the one repair
-# the shim makes is to delete them first (drop_bytecode_caches), printing each,
-# before it verifies. The snapshot's .git must hold no hooks.
+# Nothing writes into a snapshot, so a cache there stops the shim and is left
+# in place for a person to look at. The snapshot's .git must hold no hooks.
 read -r -d '' VERIFY_PY <<'PY' || true
 import hashlib, os, stat, sys
 root = sys.argv[1]
@@ -259,15 +258,6 @@ verify_tree() {
   check_git_dir "$1" || return 1
   git_safe -C "$1" ls-tree -r -z HEAD | python3 -I -c "$VERIFY_PY" "$1"
 }
-# drop_bytecode_caches <dir>: delete every __pycache__ directory in the working
-# tree (never through a symlink, never inside .git), printing each.
-drop_bytecode_caches() {
-  local cache
-  while IFS= read -r -d '' cache; do
-    rm -rf -- "$cache" || die "could not delete the bytecode cache $cache"
-    printf '  \033[33m-\033[0m removed bytecode cache %s\n' "$cache"
-  done < <(find "$1" -path "$1/.git" -prune -o -type d -name __pycache__ -prune -print0)
-}
 
 store="${XDG_DATA_HOME:-$HOME/.local/share}/trimtab/core"
 snap="$store/$base_sha"
@@ -276,7 +266,6 @@ if [[ -e "$snap" || -L "$snap" ]]; then
     || die "the snapshot $snap is not a plain git checkout; stopping (nothing repairs this automatically)"
   head=$(git_safe -C "$snap" rev-parse HEAD 2>/dev/null || true)
   [[ "$head" == "$base_sha" ]] || die "the snapshot $snap is at ${head:-no commit}, not the pin; stopping (nothing repairs this automatically)"
-  drop_bytecode_caches "$snap"
   verify_tree "$snap" || die "the snapshot $snap differs from its pinned commit (see above); stopping (nothing repairs this automatically)"
 else
   mkdir -p "$store"

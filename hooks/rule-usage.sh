@@ -20,4 +20,5 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-exec python3 "$dir/rule_usage.py"
+# -B: write no bytecode beside the script; a snapshot is never written.
+exec python3 -B "$dir/rule_usage.py"
