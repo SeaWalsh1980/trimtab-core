@@ -4,10 +4,14 @@ import contextlib
 import hashlib
 import io
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from dataclasses import replace
 from unittest.mock import patch
 
+from instance_fixture import make_instance
+from trimtab import config as project_config
 from trimtab.capture.prblock import check_body
 from trimtab.capture.sources import GhPullRequests, SourceError, _pr_view, _runs
 from trimtab.cli import build_parser, cmd_dependabot_block, main
@@ -528,6 +532,35 @@ class TheDryRun(unittest.TestCase):
 
         self.assertNotIn(CANARY, out + err)
 
+    def test_a_planned_rerun_names_the_workflow_and_the_run(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()])
+
+        _, out, _ = run_command(host)
+
+        self.assertIn(f"the failed jobs of {WORKFLOW} run {FAILED_RUN}", out)
+
+    def test_a_run_still_going_is_named_and_exits_0_without_attention(self):
+        host = FakeGitHub(dependabot_pr(), [CiRun(id=FAILED_RUN, status="in_progress", conclusion="")])
+
+        code, out, err = run_command(host)
+
+        self.assertEqual((code, "still going" in out, "attention" in err), (0, True, False))
+
+    def test_a_newest_run_that_passed_is_named(self):
+        host = FakeGitHub(dependabot_pr(body=VALID_BLOCK_BODY), [passed_run()])
+
+        _, out, _ = run_command(host)
+
+        self.assertIn(f"the newest {WORKFLOW} run at this head passed", out)
+
+    def test_a_body_with_an_invalid_block_exits_1_and_lists_problems_without_quoting_it(self):
+        body = DEPENDABOT_TEXT + "\n## Harness items applied\n" + CANARY + "\n"
+        host = FakeGitHub(dependabot_pr(body=body), [failed_run()])
+
+        code, out, err = run_command(host)
+
+        self.assertEqual((code, "FAIL" in err, CANARY in out + err), (1, True, False))
+
     def test_a_pr_not_opened_by_dependabot_exits_1(self):
         host = FakeGitHub(dependabot_pr(login="someone", is_bot=False), [failed_run()])
 
@@ -573,6 +606,31 @@ class TheApplyCommand(unittest.TestCase):
         code, _, err = run_command(host, "--apply", "--confirm", dry_run_token(host))
 
         self.assertEqual((code, "running the dry run again is safe" in err, host.reruns), (2, True, []))
+
+    def test_a_failed_rerun_when_the_block_was_already_there_does_not_claim_a_write(self):
+        host = FakeGitHub(dependabot_pr(body=VALID_BLOCK_BODY), [failed_run()], rerun_fails=True)
+
+        code, _, err = run_command(host, "--apply", "--confirm", dry_run_token(host))
+
+        self.assertEqual((code, "the body was written" in err), (2, False))
+
+    def test_apply_after_the_head_moved_exits_3(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()])
+        token = dry_run_token(host)
+        host.pr = replace(host.pr, head_sha="b" * 40)
+
+        code, _, _ = run_command(host, "--apply", "--confirm", token)
+
+        self.assertEqual((code, host.body_writes), (3, 0))
+
+    def test_apply_after_the_body_changed_exits_3(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()])
+        token = dry_run_token(host)
+        host.pr = replace(host.pr, body=DEPENDABOT_TEXT + "edited\n")
+
+        code, _, _ = run_command(host, "--apply", "--confirm", token)
+
+        self.assertEqual((code, host.body_writes), (3, 0))
 
     def test_a_failed_read_back_exits_1_and_says_the_body_was_written(self):
         host = FakeGitHub(dependabot_pr(), [failed_run()], view_fails_after_write=True)
@@ -657,6 +715,29 @@ class GhPullRequestCommands(unittest.TestCase):
 
         (args, _), = gh.calls
         self.assertEqual(dict(zip(args, args[1:]))["--json"], "number,author,body,headRefOid,state")
+
+
+class TheRegistry(unittest.TestCase):
+    """Integration, not a unit test: builds an instance in a temporary directory, as test_bump does."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
+    def test_a_registry_that_cannot_be_built_exits_1_before_github_is_touched(self):
+        instance = make_instance(Path(self._tmp.name))
+        project = Path(self._tmp.name) / "project"
+        lock = project / project_config.PATH
+        lock.parent.mkdir(parents=True)
+        lock.write_text("{ not json", encoding="utf-8")
+        args = build_parser().parse_args(["dependabot-block", str(PR_NUMBER), "--repo", REPO, "--workflow", WORKFLOW,
+                                          "--instance", str(instance), "--project", str(project)])
+        touched = []
+
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            code = cmd_dependabot_block(args, host_for=lambda repo: touched.append(repo))
+
+        self.assertEqual((code, "cannot build the registry" in err.getvalue(), touched), (1, True, []))
 
 
 if __name__ == "__main__":
