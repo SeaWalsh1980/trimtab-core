@@ -120,6 +120,13 @@ stand in for one.
 - Nothing in this repository may name a deployment: no repository names
   other than this one, no home paths, no email addresses, no routine or
   environment IDs. Test fixtures use placeholders (`owner/repo`).
+- Cite decisions by this repository's ADRs in `docs/adr/`, never by an
+  instance's ADRs, plans or specs; where no ADR here records a decision,
+  state the reason in place. Text read inside another repository
+  (`agents/`, `commands/`, `templates/`, `routines/templates/`, CLI output)
+  writes `trimtab-core ADR NNNN`, because that repository numbers its own
+  ADRs; elsewhere, write `ADR NNNN` or the ADR's full file name.
+  `tests/trimtab/test_doc_references.py` checks the numbers and paths.
 - New code uses the Python standard library; PyYAML stays the only runtime
   dependency.
 - Unit tests are hermetic and deterministic: fixture instances in a
