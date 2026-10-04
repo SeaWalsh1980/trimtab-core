@@ -304,6 +304,14 @@ class GhPullRequestView(unittest.TestCase):
         with self.assertRaises(SourceError):
             view_of(gh_pr_json(number=str(PR_NUMBER)))
 
+    def test_a_pr_number_of_true_is_refused(self):
+        with self.assertRaises(SourceError):
+            view_of(gh_pr_json(number=True))
+
+    def test_a_head_sha_that_is_not_a_string_is_refused(self):
+        with self.assertRaises(SourceError):
+            view_of(gh_pr_json(headRefOid=["a" * 40]))
+
     def test_a_login_that_is_not_a_string_is_refused(self):
         with self.assertRaises(SourceError):
             view_of(gh_pr_json(author={"login": 7, "is_bot": True}))
@@ -347,6 +355,22 @@ class GhPullRequestRuns(unittest.TestCase):
     def test_a_run_id_that_is_not_an_integer_is_refused(self):
         with self.assertRaises(SourceError):
             runs_of(gh_runs_json(gh_run(run_id=str(FAILED_RUN))))
+
+    def test_a_run_id_of_true_is_refused(self):
+        with self.assertRaises(SourceError):
+            runs_of(gh_runs_json(gh_run(run_id=True)))
+
+    def test_a_run_status_that_is_not_a_string_is_refused(self):
+        with self.assertRaises(SourceError):
+            runs_of(gh_runs_json(gh_run(status=1)))
+
+    def test_a_run_conclusion_that_is_not_a_string_is_refused(self):
+        with self.assertRaises(SourceError):
+            runs_of(gh_runs_json(gh_run(conclusion=["failure"])))
+
+    def test_run_rows_that_are_not_objects_are_refused(self):
+        with self.assertRaises(SourceError):
+            runs_of(gh_runs_json("failure"))
 
     def test_a_run_without_a_status_is_refused(self):
         row = gh_run()

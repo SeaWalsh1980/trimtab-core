@@ -154,6 +154,11 @@ def _gh_input(stdin: str, *args: str) -> str:
 SHA = re.compile(r"[0-9a-f]{40}")
 
 
+def _is_int(value) -> bool:
+    """An integer that is not a bool: Python counts True and False as integers."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _pr_view(out: str) -> PullRequestView:
     try:
         r = json.loads(out)
@@ -162,7 +167,7 @@ def _pr_view(out: str) -> PullRequestView:
                                body=r.get("body") or "", head_sha=r["headRefOid"], state=r["state"])
     except (ValueError, KeyError, TypeError) as err:
         raise SourceError("gh pr view returned unexpected JSON") from err
-    if not (isinstance(view.number, int) and isinstance(view.author_login, str)
+    if not (_is_int(view.number) and isinstance(view.author_login, str)
             and isinstance(view.author_is_bot, bool) and isinstance(view.body, str)
             and isinstance(view.state, str)):
         raise SourceError("gh pr view returned unexpected JSON")
@@ -177,7 +182,7 @@ def _runs(out: str) -> list[CiRun]:
         runs = [CiRun(id=r["databaseId"], status=r["status"], conclusion=r.get("conclusion") or "") for r in rows]
     except (ValueError, KeyError, TypeError) as err:
         raise SourceError("gh run list returned unexpected JSON") from err
-    if not all(isinstance(r.id, int) and isinstance(r.status, str) and isinstance(r.conclusion, str) for r in runs):
+    if not all(_is_int(r.id) and isinstance(r.status, str) and isinstance(r.conclusion, str) for r in runs):
         raise SourceError("gh run list returned unexpected JSON")
     return runs
 
