@@ -1021,6 +1021,30 @@ else
     echo "SKIP  frontmatter     no rules/*.md in this checkout (rules live in an instance)"
 fi
 
+echo "== guard-mcp registration (settings.base.json) =="
+# A guard that is not registered is not a guard. Checked as the file ships: one
+# PreToolUse group runs guard-mcp, on a matcher that catches MCP tools and
+# nothing else. Claude Code matches the whole tool name, as fullmatch does here.
+python3 - "$REPO/settings.base.json" <<'PY'
+import json, re, sys
+groups = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
+want = '"$HOME/.claude/hooks/guard-mcp.sh"'
+found = [(g.get("matcher"), h) for g in groups for h in g["hooks"] if h.get("command") == want]
+def case(ok, label):
+    print("%s  %-14s %s" % ("PASS" if ok else "FAIL", "registration", label))
+    return 0 if ok else 1
+fails = case(len(found) == 1, "guard-mcp is registered exactly once")
+if len(found) == 1:
+    matcher, hook = found[0]
+    fails += case(hook.get("timeout") == 10, "guard-mcp has the 10 s timeout")
+    m = re.compile(matcher or "")
+    fails += case(bool(m.fullmatch("mcp__srv__create_item")), "its matcher catches an MCP tool")
+    fails += case(not any(m.fullmatch(t) for t in ("Bash", "Edit", "Read", "Skill")),
+                  "its matcher leaves built-in tools alone")
+sys.exit(fails)
+PY
+fails=$((fails + $?))
+
 echo "== guard liveness check (SessionStart, settings.base.json) =="
 # The guards fail open when they cannot be found: move the checkout and every
 # link in ~/.claude dangles, and a session starts with no guards and no
@@ -1047,7 +1071,7 @@ LV="$CPTMP/liveness"
 LV_REPO="$LV/checkout"
 LV_HOME="$LV/home"
 mkdir -p "$LV_REPO/hooks" "$LV_REPO/rules" "$LV_REPO/bin" "$LV_HOME/.claude"
-for g in guard-paths guard-bash guard-secrets guard-security; do
+for g in guard-paths guard-bash guard-secrets guard-security guard-mcp; do
   printf '#!/bin/sh\n' > "$LV_REPO/hooks/$g.sh"; chmod +x "$LV_REPO/hooks/$g.sh"
 done
 : > "$LV_REPO/CLAUDE.md"
@@ -1087,6 +1111,9 @@ lv "healthy install is silent"               "$LV_HOME"       silent
 chmod -x "$LV_REPO/hooks/guard-bash.sh"
 lv "a non-executable guard is named"         "$LV_HOME"       "hooks/guard-bash.sh"
 chmod +x "$LV_REPO/hooks/guard-bash.sh"
+rm "$LV_REPO/hooks/guard-mcp.sh"
+lv "a missing guard-mcp is named"           "$LV_HOME"       "hooks/guard-mcp.sh"
+printf '#!/bin/sh\n' > "$LV_REPO/hooks/guard-mcp.sh"; chmod +x "$LV_REPO/hooks/guard-mcp.sh"
 mv "$LV_REPO" "$LV/moved"
 lv "moved checkout: dangling guards named"   "$LV_HOME"       "hooks/guard-security.sh"
 lv "moved checkout: dangling rules named"    "$LV_HOME"       " rules"
