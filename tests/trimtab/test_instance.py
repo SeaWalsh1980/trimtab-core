@@ -9,7 +9,7 @@ from pathlib import Path
 
 from instance_fixture import REPO_NAME, env_for, make_instance
 from trimtab import config as project_config
-from trimtab import instance, roots
+from trimtab import instance, roots, upstream
 
 TRIMTAB = roots.code_root() / "bin" / "trimtab"
 
@@ -214,3 +214,55 @@ class CliInstanceJson(unittest.TestCase):
 
         self.assertEqual((done.returncode, done.stdout), (2, ""))
         self.assertIn("secrets_patterns", done.stderr)
+
+
+class CliInstanceCheck(unittest.TestCase):
+    """Integration at the file boundary: `trimtab instance --check` against a fixture instance.
+
+    The instance's CI runs it, so a malformed file must fail it naming the file.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.inst = make_instance(Path(self.tmp.name))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write_consumers(self, data):
+        (self.inst / upstream.CONSUMERS).write_text(json.dumps(data))
+
+    def run_check(self):
+        return subprocess.run([str(TRIMTAB), "instance", "--check", "--instance", str(self.inst)],
+                              capture_output=True, text=True, env=env_for(None))
+
+    def test_a_valid_instance_passes_counting_its_consumers(self):
+        self.write_consumers({"consumers": [{"repo": "o/r"}]})
+
+        done = self.run_check()
+
+        self.assertEqual((done.returncode, done.stdout), (0, "instance: ok (1 consumer(s))\n"), done.stderr)
+
+    def test_a_consumers_object_instead_of_a_list_exits_2_naming_consumers_json(self):
+        self.write_consumers({"consumers": {}})
+
+        done = self.run_check()
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""))
+        self.assertIn(upstream.CONSUMERS, done.stderr)
+
+    def test_a_missing_consumers_json_exits_2_naming_it(self):
+        done = self.run_check()
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""))
+        self.assertIn(upstream.CONSUMERS, done.stderr)
+
+    def test_a_malformed_instance_json_exits_2_naming_it(self):
+        self.write_consumers({"consumers": [{"repo": "o/r"}]})
+        data = json.loads((self.inst / instance.FILE).read_text())
+        (self.inst / instance.FILE).write_text(json.dumps({**data, "base": {**data["base"], "sha": "a" * 12}}))
+
+        done = self.run_check()
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""))
+        self.assertIn(instance.FILE, done.stderr)

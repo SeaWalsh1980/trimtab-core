@@ -537,6 +537,22 @@ def cmd_instance(args) -> int:
     if args.root:  # for the agents: the doctrine root, which a lock it cannot read must not block
         print(base)
         return 0
+    if args.check:  # for the instance's CI: its own files load
+        try:
+            instance.load(base)
+        except instance.InstanceFileError as err:  # its messages name the key, not the file
+            print(f"error: instance.json: {err}", file=sys.stderr)
+            return 2
+        try:
+            path = base / upstream.CONSUMERS
+            if not path.is_file():
+                raise upstream.ConsumersError(f"{upstream.CONSUMERS} is missing")
+            n = len(upstream.load_consumers(path.read_text(encoding="utf-8")))
+        except upstream.ConsumersError as err:  # its messages already name consumers.json
+            print(f"error: {err}", file=sys.stderr)
+            return 2
+        print(f"instance: ok ({n} consumer(s))")
+        return 0
     if args.json:  # for bootstrap: the validated values it writes
         try:
             found = instance.load(base)
@@ -781,6 +797,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="print only the instance root (the doctrine); never reads instance.json")
     only.add_argument("--json", action="store_true",
                       help="print instance.json's validated values and the env bootstrap writes, as JSON (schema 1)")
+    only.add_argument("--check", action="store_true",
+                      help="check that the instance's instance.json and consumers.json load (for its CI)")
     ins.set_defaults(func=cmd_instance)
 
     scr = sub.add_parser("scrub", parents=[common], help="check a tree before it is pushed to the public base")
