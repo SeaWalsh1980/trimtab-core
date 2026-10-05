@@ -189,7 +189,8 @@ mechanism, not instance data, on the same footing as `gtm_`.
   tool with a side effect behind a read-verb name passes this guard.
 - A new namespace from this or any other connector needs a change to the
   guard, its tests and this record. It does not get a data file.
-- The CI step that runs the base branch's guard matrix against the pull
-  request's hooks fails on the pull request that makes this change. The
-  base's matrix expects `Get_item` to ask. That step is meant to go red on a
-  legitimate change to the base's expectations, for a person to merge over.
+- Both CI steps that run the base branch's guard matrix against the pull
+  request's hooks, with jq and with the python3 fallback, fail on the pull
+  request that makes this change. The base's matrix expects `Get_item` to
+  ask. Those steps are meant to go red on a legitimate change to the base's
+  expectations, for a person to merge over.
