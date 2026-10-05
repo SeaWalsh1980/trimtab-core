@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted.
+Accepted. Amended 2026-10-05: read verbs match in any case, and one Zoho
+product namespace is stripped before the verb check. See
+[Amendment (2026-10-05)](#amendment-2026-10-05).
 
 ## Context
 
@@ -123,3 +125,71 @@ unattended mode measured an `ask` ends as a denial.
   fails on the pull request that adds this guard, because the base's liveness
   fixture stubs four guards. That step is meant to go red on a legitimate
   change to the base's expectations, for a person to merge over.
+
+## Amendment (2026-10-05)
+
+### Status
+
+Accepted. Amends the Decision's read-verb clause ("Matching is
+case-sensitive"); the rest of the Decision stands.
+
+### Context
+
+The Zoho connector names its tools with a product namespace and mixed case:
+`ZohoBooks_list_invoices`, `ZohoBooks_get_bill`, `ZohoInventory_list_items`,
+`ZohoWorkdrive_Get_File_Preview`, `ZohoWorkdrive_Search_Records`. The guard
+passed a tool only if its name started with a lower-case read verb, so every
+Zoho read asked. Confirmed against the guard as pinned on 2026-10-05. That is
+the outcome the Options above rejected for "ask on every MCP call": prompts on
+every read train the operator to approve without reading.
+
+### Decision
+
+- **The `gtm_*` check runs first, unchanged.** Every `gtm_*` tool still asks.
+- **One namespace is stripped, once.** If the tool name starts with exactly
+  `ZohoBooks_`, `ZohoInventory_` or `ZohoWorkdrive_` (case-sensitive), that
+  one segment is removed. Nothing else is stripped, and a second namespace is
+  not.
+- **Read verbs match in any case.** What remains passes if it starts with
+  `get`, `list`, `search`, `query` or `read` in any case, followed by `_` or
+  `-`. The case-insensitivity is written as bracket patterns
+  (`[Gg][Ee][Tt][_-]*`), the idiom `guard-bash.sh` already uses, not with
+  `shopt -s nocasematch` (which would apply to the rest of the script) or
+  `${x,,}` (which kills the hook on bash 3 with no output, and no output
+  fails open).
+- **Everything else asks, as before.** Every fail-closed path is unchanged.
+
+The three namespaces are the connector's public product names. They are
+mechanism, not instance data, on the same footing as `gtm_`.
+
+### Options considered
+
+- **Skip any CamelCase prefix before the verb.** Rejected. It lets
+  `Delete_List_Items` and `BulkDelete_list_x` through: the skipped segment can
+  itself be the write verb.
+- **An instance-side file of namespaces to strip.** Rejected for the reason
+  the verb data file was rejected above: a file that only ever adds passes
+  lets an instance widen the control with data and no change to the guard.
+- **Add `fetch` to the read verbs.** Rejected. `fetch_url`-style tools make
+  outbound requests on arguments the guard never reads, which makes them an
+  exfiltration channel, not a read.
+
+### Consequences
+
+- Zoho Books, Inventory and WorkDrive reads named with a read verb pass
+  without a prompt.
+- The case widening applies to every server, not only Zoho: `Get_item`,
+  `GET_item` or `Read-x` on any server now passes. `GETAWAY` and `getaway`
+  still ask, because no `_` or `-` follows the verb.
+- Accepted residual: `ZohoWorkdrive_Fetch_Files_Folders`,
+  `ZohoWorkdrive_My_Folder_Files`, `ZohoWorkdrive_My_Folder_Links` and
+  `ZohoWorkdrive_My_Trashed_Files` keep asking. They are reads, but their
+  names carry no read verb, or carry `fetch`.
+- The residual of the original Decision still holds, now over more names: a
+  tool with a side effect behind a read-verb name passes this guard.
+- A new namespace from this or any other connector needs a change to the
+  guard, its tests and this record. It does not get a data file.
+- The CI step that runs the base branch's guard matrix against the pull
+  request's hooks fails on the pull request that makes this change. The
+  base's matrix expects `Get_item` to ask. That step is meant to go red on a
+  legitimate change to the base's expectations, for a person to merge over.
