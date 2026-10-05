@@ -40,6 +40,10 @@ if [[ -z "$clone" ]]; then
   exit 1
 fi
 
+# --no-timer on both runs: an ephemeral cloud container has no use for the
+# weekly report timer and no user systemd session to enable it in. The install
+# tolerates the missing session, but --check would count the disabled timer as
+# drift and fail the setup.
 cd "$clone"
-./bootstrap.sh
-./bootstrap.sh --check
+./bootstrap.sh --no-timer
+./bootstrap.sh --check --no-timer

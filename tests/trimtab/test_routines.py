@@ -164,6 +164,7 @@ class SetupScript(unittest.TestCase):
     """
 
     SCRIPT = roots.code_root() / "routines" / "environment-setup.sh"
+    BOOTSTRAPPED = "bootstrap instance --no-timer\nbootstrap instance --check --no-timer\n"
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -182,7 +183,8 @@ class SetupScript(unittest.TestCase):
         if rules:
             (clone / "rules").mkdir()
         stub = clone / "bootstrap.sh"
-        stub.write_text(f'#!/usr/bin/env bash\necho "bootstrap {name} $*"\n')
+        stub.write_text(f'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "${{BASH_SOURCE%/*}}/calls"\n'
+                        f'echo "bootstrap {name} $*"\n')
         stub.chmod(0o755)
         return clone
 
@@ -197,7 +199,7 @@ class SetupScript(unittest.TestCase):
 
         done = self.run_setup()
 
-        self.assertEqual((done.returncode, done.stdout), (0, "bootstrap instance \nbootstrap instance --check\n"))
+        self.assertEqual((done.returncode, done.stdout), (0, self.BOOTSTRAPPED))
 
     def test_a_clone_beside_the_starting_directory_is_found_when_home_holds_none(self):
         self.source("instance", under=self.start)
@@ -205,14 +207,14 @@ class SetupScript(unittest.TestCase):
 
         done = self.run_setup()
 
-        self.assertEqual((done.returncode, done.stdout), (0, "bootstrap instance \nbootstrap instance --check\n"))
+        self.assertEqual((done.returncode, done.stdout), (0, self.BOOTSTRAPPED))
 
     def test_one_clone_reached_from_home_and_the_starting_directory_counts_once(self):
         self.source("instance", under=self.start)
 
         done = self.run_setup(home=self.start)
 
-        self.assertEqual((done.returncode, done.stdout), (0, "bootstrap instance \nbootstrap instance --check\n"))
+        self.assertEqual((done.returncode, done.stdout), (0, self.BOOTSTRAPPED))
 
     def test_one_clone_linked_into_home_counts_once(self):
         clone = self.source("instance", under=self.start)
@@ -220,7 +222,14 @@ class SetupScript(unittest.TestCase):
 
         done = self.run_setup()
 
-        self.assertEqual((done.returncode, done.stdout), (0, "bootstrap instance \nbootstrap instance --check\n"))
+        self.assertEqual((done.returncode, done.stdout), (0, self.BOOTSTRAPPED))
+
+    def test_both_bootstrap_runs_skip_the_weekly_report_timer(self):
+        clone = self.source("instance")
+
+        self.run_setup()
+
+        self.assertEqual((clone / "calls").read_text().splitlines(), ["--no-timer", "--check --no-timer"])
 
     def test_no_instance_clone_fails_loudly(self):
         self.source("project", rules=False)
