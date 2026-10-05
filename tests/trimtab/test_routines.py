@@ -157,19 +157,27 @@ class RenderCommand(unittest.TestCase):
 
 
 class SetupScript(unittest.TestCase):
-    """environment-setup.sh finds the one instance clone among the sources, or fails loudly."""
+    """environment-setup.sh finds the one instance clone among the sources, or fails loudly.
+
+    The sources are looked for under $HOME and beside the directory the script
+    starts in: the cloud starts it beside the clone, with $HOME elsewhere.
+    """
 
     SCRIPT = roots.code_root() / "routines" / "environment-setup.sh"
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.home = Path(self.tmp.name)
+        root = Path(self.tmp.name)
+        self.home = root / "home"
+        self.start = root / "start"
+        self.home.mkdir()
+        self.start.mkdir()
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def source(self, name: str, *, rules: bool = True) -> Path:
-        clone = self.home / name
+    def source(self, name: str, *, rules: bool = True, under: Path | None = None) -> Path:
+        clone = (under or self.home) / name
         clone.mkdir()
         if rules:
             (clone / "rules").mkdir()
@@ -178,9 +186,10 @@ class SetupScript(unittest.TestCase):
         stub.chmod(0o755)
         return clone
 
-    def run_setup(self) -> subprocess.CompletedProcess:
+    def run_setup(self, *, home: Path | None = None) -> subprocess.CompletedProcess:
         return subprocess.run(["bash", str(self.SCRIPT)], capture_output=True, text=True,
-                              env={"HOME": str(self.home), "PATH": "/usr/bin:/bin"})
+                              cwd=self.start,
+                              env={"HOME": str(home or self.home), "PATH": "/usr/bin:/bin"})
 
     def test_it_bootstraps_and_checks_the_one_instance_clone(self):
         self.source("instance")
@@ -190,8 +199,32 @@ class SetupScript(unittest.TestCase):
 
         self.assertEqual((done.returncode, done.stdout), (0, "bootstrap instance \nbootstrap instance --check\n"))
 
+    def test_a_clone_beside_the_starting_directory_is_found_when_home_holds_none(self):
+        self.source("instance", under=self.start)
+        self.source("project", rules=False)
+
+        done = self.run_setup()
+
+        self.assertEqual((done.returncode, done.stdout), (0, "bootstrap instance \nbootstrap instance --check\n"))
+
+    def test_one_clone_reached_from_home_and_the_starting_directory_counts_once(self):
+        self.source("instance", under=self.start)
+
+        done = self.run_setup(home=self.start)
+
+        self.assertEqual((done.returncode, done.stdout), (0, "bootstrap instance \nbootstrap instance --check\n"))
+
+    def test_one_clone_linked_into_home_counts_once(self):
+        clone = self.source("instance", under=self.start)
+        (self.home / "linked").symlink_to(clone)
+
+        done = self.run_setup()
+
+        self.assertEqual((done.returncode, done.stdout), (0, "bootstrap instance \nbootstrap instance --check\n"))
+
     def test_no_instance_clone_fails_loudly(self):
         self.source("project", rules=False)
+        self.source("other", rules=False, under=self.start)
 
         done = self.run_setup()
 
@@ -201,6 +234,15 @@ class SetupScript(unittest.TestCase):
     def test_two_instance_clones_fail_rather_than_guess(self):
         self.source("first")
         self.source("second")
+
+        done = self.run_setup()
+
+        self.assertEqual((done.returncode, done.stdout), (1, ""))
+        self.assertIn("more than one instance clone", done.stderr)
+
+    def test_a_clone_under_home_and_another_beside_the_starting_directory_fail_rather_than_guess(self):
+        self.source("first")
+        self.source("second", under=self.start)
 
         done = self.run_setup()
 
