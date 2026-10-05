@@ -14,10 +14,12 @@
 # denial (measured, ADR 0013).
 #
 # Classifies by tool name only, never by the call's arguments:
-#   mcp__<server>__<tool> whose <tool> starts with a read verb (get, list,
-#   search, query, read, then _ or -)               -> pass
 #   <tool> starting gtm_                            -> ask: its verb is in an
 #                                                      argument, not its name
+#   mcp__<server>__<tool> whose <tool>, after at most one namespace from
+#   ZohoBooks_, ZohoInventory_ or ZohoWorkdrive_ (exact case, stripped once),
+#   starts with a read verb (get, list, search, query, read, in any case,
+#   then _ or -)                                    -> pass
 #   anything else                                   -> ask
 #
 # Fails CLOSED by asking: an empty or unparseable payload, a missing parser
@@ -81,7 +83,19 @@ fi
 case "$tool" in
   gtm_*)
     ask "$name takes its verb in an argument, so every call to it asks (ADR 0013). Approve it only if you intended this call." ;;
-  get_*|get-*|list_*|list-*|search_*|search-*|query_*|query-*|read_*|read-*)
+esac
+
+# One product namespace, from this exact list, is stripped once.
+verb="$tool"
+case "$verb" in
+  ZohoBooks_*|ZohoInventory_*|ZohoWorkdrive_*) verb="${verb#*_}" ;;
+esac
+
+# Case-insensitive by bracket pattern, as guard-bash.sh does: nocasematch would
+# leak to the rest of the script, and ${x,,} kills bash 3 with no output, which
+# fails open.
+case "$verb" in
+  [Gg][Ee][Tt][_-]*|[Ll][Ii][Ss][Tt][_-]*|[Ss][Ee][Aa][Rr][Cc][Hh][_-]*|[Qq][Uu][Ee][Rr][Yy][_-]*|[Rr][Ee][Aa][Dd][_-]*)
     exit 0 ;;
 esac
 
