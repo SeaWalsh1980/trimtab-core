@@ -860,6 +860,17 @@ tm ask  "a gtm_ tool with a read action"      "$GTM_READ"
 tm ask  "a gtm_ tool with a write action"     "$(j mcp__srv__gtm_version '{"action":"publish"}')"
 tm ask  "a gtm_ tool named like a read"       "$(j mcp__srv__gtm_list_tags '{}')"
 
+# A read by name that carries a secret word in its tool part asks: the name
+# says it returns secret material. The server part is not checked.
+tm ask  "a Zoho read of an encryption key"    "$(j mcp__srv__ZohoBooks_get_bank_statement_import_encryption_key '{}')"
+tm ask  "a read of an API token"              "$(j mcp__srv__get_api_token '{}')"
+tm ask  "a read of a secret"                  "$(j mcp__srv__list_secrets '{}')"
+tm ask  "a read of a password"                "$(j mcp__srv__read_password '{}')"
+tm ask  "a read of a credential"              "$(j mcp__srv__search_credentials '{}')"
+tm ask  "a secret word in another case"       "$(j mcp__srv__Get_API_Token '{}')"
+tm ask  "a secret word inside a longer word"  "$(j mcp__srv__get_keyword_report '{}')"
+tm pass "a secret word in the server part"    "$(j mcp__keystore__get_item '{}')"
+
 tm ask  "FAIL-CLOSED: garbage payload"        'NOT JSON AT ALL'
 tm ask  "FAIL-CLOSED: empty payload"          ''
 tm ask  "FAIL-CLOSED: a JSON array"           '[1,2]'

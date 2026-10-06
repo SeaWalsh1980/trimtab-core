@@ -194,3 +194,41 @@ mechanism, not instance data, on the same footing as `gtm_`.
   request that makes this change. The base's matrix expects `Get_item` to
   ask. Those steps are meant to go red on a legitimate change to the base's
   expectations, for a person to merge over.
+
+### Addendum (2026-10-06)
+
+**Status.** Accepted. Narrows the read pass above; the rest of the amendment
+stands.
+
+**Context.** The amendment let Zoho reads pass, and with them
+`ZohoBooks_get_bank_statement_import_encryption_key`, which asked before it.
+A read by name that returns secret material now ran without a prompt.
+
+**Decision.** A tool that would pass as a read still asks when its tool part
+(everything after `mcp__<server>__`, before any namespace is stripped)
+contains `key`, `token`, `secret`, `password` or `credential`, in any case and
+anywhere. The match is written as bracket patterns, for the reasons the
+amendment gives. The server part is not checked: it is set per deployment, and
+a server named for a key store would make all its reads ask. Every other rule
+and every fail-closed path is unchanged.
+
+**Options considered.**
+
+- **Leave it.** Rejected. The guard's scope was writes, so a read returning a
+  secret was arguably outside it, but the amendment itself removed a prompt
+  that was guarding exactly that tool. Restoring it is cheaper than arguing
+  the scope.
+- **More words** (`passwd`, `pwd`, `auth`, `cookie`, `cert`, `private`,
+  `otp`). Rejected for now. Each catches ordinary reads (`get_authors`,
+  `read_private_note`), and prompts on ordinary reads are what the amendment
+  set out to remove.
+
+**Consequences.**
+
+- `ZohoBooks_get_bank_statement_import_encryption_key`, `get_api_token` and
+  the like ask again. `ZohoBooks_list_invoices` and `get_item` still pass.
+- Accepted residual: a read that returns secret material under a name carrying
+  none of the five words still passes, including names using the words listed
+  as rejected above.
+- Accepted false positive: a substring match asks on reads such as
+  `get_keyword_report` or `list_monkeys`.
