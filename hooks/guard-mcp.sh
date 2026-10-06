@@ -19,7 +19,9 @@
 #   mcp__<server>__<tool> whose <tool>, after at most one namespace from
 #   ZohoBooks_, ZohoInventory_ or ZohoWorkdrive_ (exact case, stripped once),
 #   starts with a read verb (get, list, search, query, read, in any case,
-#   then _ or -)                                    -> pass
+#   then _ or -)                                    -> pass, unless
+#   <tool> contains key, token, secret, password or credential, in any
+#   case                                            -> ask
 #   anything else                                   -> ask
 #
 # Fails CLOSED by asking: an empty or unparseable payload, a missing parser
@@ -96,6 +98,12 @@ esac
 # fails open.
 case "$verb" in
   [Gg][Ee][Tt][_-]*|[Ll][Ii][Ss][Tt][_-]*|[Ss][Ee][Aa][Rr][Cc][Hh][_-]*|[Qq][Uu][Ee][Rr][Yy][_-]*|[Rr][Ee][Aa][Dd][_-]*)
+    # A read whose tool part names secret material still asks. Matched
+    # anywhere in <tool>, in any case; the server part is not checked.
+    case "$tool" in
+      *[Kk][Ee][Yy]*|*[Tt][Oo][Kk][Ee][Nn]*|*[Ss][Ee][Cc][Rr][Ee][Tt]*|*[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]*|*[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]*)
+        ask "$name reads by name but may return secret material, so it asks (ADR 0013). Approve it only if you intended this call." ;;
+    esac
     exit 0 ;;
 esac
 
