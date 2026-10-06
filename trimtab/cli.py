@@ -453,7 +453,8 @@ def cmd_dependabot_block(args, host_for=GhPullRequests, registry=None) -> int:
                 token = dependabot.confirmation(todo)
                 print(f"confirm: {token}")
                 print(f"to apply: trimtab dependabot-block {args.pr} --repo {args.repo} --workflow {args.workflow} "
-                      f"--apply --confirm {token}" + (f" --project {args.project}" if args.project != "." else ""))
+                      f"--apply --confirm {token}" + (f" --project {args.project}" if args.project != "." else "")
+                      + (f" --instance {args.instance}" if args.instance else ""))
             return _attention(todo.ci_needs_attention, args.workflow, args.pr)
         done = dependabot.apply(host, registry, args.repo, args.workflow, args.pr, args.confirm)
     except (dependabot.NotDependabot, dependabot.BlockRefused) as err:

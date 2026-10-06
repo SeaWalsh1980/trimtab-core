@@ -616,6 +616,20 @@ class TheDryRun(unittest.TestCase):
 
         self.assertIn("--project elsewhere", out)
 
+    def test_a_dry_run_names_the_instance_in_the_apply_command(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()])
+
+        _, out, _ = run_command(host, "--instance", "the-instance")
+
+        self.assertIn("--instance the-instance", out)
+
+    def test_a_dry_run_without_an_instance_names_none_in_the_apply_command(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()])
+
+        _, out, _ = run_command(host)
+
+        self.assertNotIn("--instance", out)
+
     def test_a_dry_run_with_nothing_to_do_prints_no_token_and_exits_0(self):
         host = FakeGitHub(dependabot_pr(body=VALID_BLOCK_BODY), [passed_run()])
 
