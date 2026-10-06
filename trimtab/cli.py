@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 from datetime import date, timedelta
@@ -437,6 +438,17 @@ def _attention(needs_attention: bool, workflow: str, number: int) -> int:
     return EXIT_CI_ATTENTION
 
 
+def _dependabot_apply_command(args, token: str) -> str:
+    """The apply command for this dry run, each value shell-quoted so it pastes as one argument."""
+    argv = ["trimtab", "dependabot-block", str(args.pr), "--repo", args.repo, "--workflow", args.workflow,
+            "--apply", "--confirm", token]
+    if args.project != ".":
+        argv += ["--project", args.project]
+    if args.instance:
+        argv += ["--instance", args.instance]
+    return shlex.join(argv)
+
+
 def cmd_dependabot_block(args, host_for=GhPullRequests, registry=None) -> int:
     if registry is None:
         registry, problems = registry_for(_instance(args), Path(args.project))
@@ -452,8 +464,7 @@ def cmd_dependabot_block(args, host_for=GhPullRequests, registry=None) -> int:
             if not todo.nothing_to_do:
                 token = dependabot.confirmation(todo)
                 print(f"confirm: {token}")
-                print(f"to apply: trimtab dependabot-block {args.pr} --repo {args.repo} --workflow {args.workflow} "
-                      f"--apply --confirm {token}" + (f" --project {args.project}" if args.project != "." else ""))
+                print(f"to apply: {_dependabot_apply_command(args, token)}")
             return _attention(todo.ci_needs_attention, args.workflow, args.pr)
         done = dependabot.apply(host, registry, args.repo, args.workflow, args.pr, args.confirm)
     except (dependabot.NotDependabot, dependabot.BlockRefused) as err:
