@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import io
 import json
+import shlex
 import tempfile
 import unittest
 from pathlib import Path
@@ -629,6 +630,16 @@ class TheDryRun(unittest.TestCase):
         _, out, _ = run_command(host)
 
         self.assertNotIn("--instance", out)
+
+    def test_a_path_with_a_space_pastes_back_as_one_argument(self):
+        host = FakeGitHub(dependabot_pr(), [failed_run()])
+        spaced = "my instance"
+
+        _, out, _ = run_command(host, "--instance", spaced, "--project", spaced)
+
+        line = next(l for l in out.splitlines() if l.startswith("to apply: "))
+        argv = shlex.split(line[len("to apply: "):])
+        self.assertEqual((argv[argv.index("--instance") + 1], argv[argv.index("--project") + 1]), (spaced, spaced))
 
     def test_a_dry_run_with_nothing_to_do_prints_no_token_and_exits_0(self):
         host = FakeGitHub(dependabot_pr(body=VALID_BLOCK_BODY), [passed_run()])
