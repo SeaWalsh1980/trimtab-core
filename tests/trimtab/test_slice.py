@@ -126,5 +126,72 @@ class Slice(unittest.TestCase):
         self.assertNotIn("trimtab-ingested", self.pulls.read_text())
 
 
+SCHEMA_ONLY_RULE = "---\nid_prefix: SCR-LAYERING\n---\n\n## 1. Layers\n\n- **REQUIRE** ports own their types.\n"
+
+
+def schema_only_body(*ids):
+    applied = "".join(f"- id: {i}\n  why: applied\n" for i in ids)
+    return (f"## Harness items applied\n```yaml\n{applied}```\n\n"
+            "## Harness feedback\n```yaml\n```\n\n## Process cost\n```yaml\n```\n")
+
+
+class SchemaOnlyCli(unittest.TestCase):
+    """`check-pr --schema-only` as a consumer's CI runs it: no instance anywhere.
+
+    Builds a scratch project (a lock and one rule file) in a temporary directory.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.project = Path(self._tmp.name) / "scratch"
+        (self.project / ".claude" / "rules").mkdir(parents=True)
+        (self.project / ".claude" / "trimtab.json").write_text(json.dumps(CONFIG), encoding="utf-8")
+        (self.project / ".claude" / "rules" / "layering.md").write_text(SCHEMA_ONLY_RULE, encoding="utf-8")
+        self.body = Path(self._tmp.name) / "body.md"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def check_pr(self, body, *extra, env=None):
+        self.body.write_text(body, encoding="utf-8")
+        return subprocess.run([str(TRIMTAB), "check-pr", "--schema-only", "--project", str(self.project),
+                               "--body-file", str(self.body), *extra],
+                              capture_output=True, text=True, cwd=self.project, env=env or env_for(None))
+
+    def test_a_valid_block_passes_with_no_instance_set(self):
+        done = self.check_pr(schema_only_body("ENG-2", "SCR-LAYERING-1"))
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("PR block OK (schema only: base IDs checked for shape)", done.stdout)
+
+    def test_an_instance_in_the_environment_is_ignored(self):
+        missing = Path(self._tmp.name) / "no-such-instance"
+
+        done = self.check_pr(schema_only_body("ENG-2"), env=env_for(missing))
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_naming_an_instance_is_a_usage_error_naming_both_flags(self):
+        done = self.check_pr(schema_only_body("ENG-2"), "--instance", self._tmp.name)
+
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("--schema-only", done.stderr)
+        self.assertIn("--instance", done.stderr)
+
+    def test_a_bad_block_fails_naming_sections_and_fields_not_body_text(self):
+        done = self.check_pr(schema_only_body("SCR-LAYERING-zz9secret").replace("## Process cost", "## Cost"))
+
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("Process cost", done.stderr)
+        self.assertNotIn("zz9secret", done.stderr)
+
+    def test_an_unknown_project_id_fails(self):
+        done = self.check_pr(schema_only_body("SCR-LAYERING-zz9secret"))
+
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("unknown-id", done.stderr)
+        self.assertNotIn("zz9secret", done.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

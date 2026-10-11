@@ -157,11 +157,29 @@ def _int(value) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
-def _resolve(item_id, where: str, registry: Mapping[str, Item], problems: list[Problem]) -> Item | None:
+@dataclass(frozen=True)
+class _Ids:
+    """How a cited ID is checked: looked up in `registry`, or, under schema-only, by shape alone.
+
+    Schema-only is for a consumer's CI, which has no instance: an ID outside the
+    project's prefix (every ID, when the project has no lock) is checked against
+    `ITEM_ID` and never looked up, so it yields no item and no strength check.
+    """
+    registry: Mapping[str, Item]
+    schema_only: bool = False
+    project_prefix: str | None = None
+
+    def shape_only(self, item_id: str) -> bool:
+        return self.schema_only and not (self.project_prefix and item_id.startswith(f"{self.project_prefix}-"))
+
+
+def _resolve(item_id, where: str, ids: _Ids, problems: list[Problem]) -> Item | None:
     if not isinstance(item_id, str) or not ITEM_ID.match(item_id):
         problems.append(Problem("unknown-id", where, "id is not a harness item ID"))
         return None
-    item = registry.get(item_id)
+    if ids.shape_only(item_id):
+        return None
+    item = ids.registry.get(item_id)
     if item is None:
         problems.append(Problem("unknown-id", where, "id is not in the registry"))
     elif item.withdrawn:
@@ -169,7 +187,7 @@ def _resolve(item_id, where: str, registry: Mapping[str, Item], problems: list[P
     return item
 
 
-def _applied(data, registry, problems) -> tuple[Applied, ...]:
+def _applied(data, ids: _Ids, problems) -> tuple[Applied, ...]:
     if data in (None, []):
         problems.append(Problem("empty-section", APPLIED, "list at least one item, or `id: none` with a why"))
         return ()
@@ -187,7 +205,7 @@ def _applied(data, registry, problems) -> tuple[Applied, ...]:
             if why is None:
                 problems.append(Problem("missing-field", where, "`id: none` needs a why"))
         else:
-            _resolve(item_id, where, registry, problems)
+            _resolve(item_id, where, ids, problems)
         files = entry.get("files", [])
         if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
             problems.append(Problem("bad-shape", where, "files must be a list of paths"))
@@ -196,7 +214,7 @@ def _applied(data, registry, problems) -> tuple[Applied, ...]:
     return tuple(out)
 
 
-def _feedback(data, registry, problems) -> tuple[Feedback, ...]:
+def _feedback(data, ids: _Ids, problems) -> tuple[Feedback, ...]:
     if data in (None, []):
         return ()
     if not isinstance(data, list):
@@ -220,7 +238,7 @@ def _feedback(data, registry, problems) -> tuple[Feedback, ...]:
         item_id = entry.get("id")
         item = None
         if not (item_id == "none" and kind == "gap"):
-            item = _resolve(item_id, where, registry, problems)
+            item = _resolve(item_id, where, ids, problems)
         severity, clause = entry.get("severity"), _str(entry, "clause")
         if severity is not None and severity not in SEVERITIES:
             problems.append(Problem("bad-value", where, f"severity must be one of {' | '.join(SEVERITIES)}"))
@@ -279,7 +297,7 @@ def parse_applied(text: str, registry: Mapping[str, Item]) -> tuple[tuple[Applie
     if APPLIED not in sections:
         return (), (Problem("missing-section", APPLIED, f"`## {APPLIED}` is required"),)
     _, data = _yaml_of(APPLIED, sections[APPLIED], problems)
-    applied = _applied(data, registry, problems) if not problems else ()
+    applied = _applied(data, _Ids(registry), problems) if not problems else ()
     return applied, tuple(problems)
 
 
@@ -316,7 +334,11 @@ def block_version(body: str) -> tuple[int | None, Problem | None]:
     return version, None
 
 
-def check_body(body: str, registry: Mapping[str, Item], backfill: bool = False) -> CheckResult:
+def check_body(body: str, registry: Mapping[str, Item], backfill: bool = False, *,
+               schema_only: bool = False, project_prefix: str | None = None) -> CheckResult:
+    """Validate the block. With `schema_only`, only IDs under `project_prefix` are looked up in
+    `registry`; every other ID is checked for shape (see `_Ids`). Every other rule is the same."""
+    ids = _Ids(registry, schema_only, project_prefix)
     problems: list[Problem] = []
     version, refused = block_version(body)
     if refused is not None:
@@ -337,10 +359,10 @@ def check_body(body: str, registry: Mapping[str, Item], backfill: bool = False) 
         return CheckResult(None, tuple(problems))
 
     present, data = _yaml_of(APPLIED, sections[APPLIED], problems)
-    applied = _applied(data, registry, problems) if not problems else ()
+    applied = _applied(data, ids, problems) if not problems else ()
     n = len(problems)
     _, data = _yaml_of(FEEDBACK, sections[FEEDBACK], problems)
-    feedback = _feedback(data, registry, problems) if len(problems) == n else ()
+    feedback = _feedback(data, ids, problems) if len(problems) == n else ()
     n = len(problems)
     _, data = _yaml_of(COST, sections[COST], problems)
     passes, plan_tokens = _cost(data, problems) if len(problems) == n else ((), None)
