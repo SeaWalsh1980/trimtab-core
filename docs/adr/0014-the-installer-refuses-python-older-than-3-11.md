@@ -43,7 +43,7 @@ The constraints:
 Both CI steps sit directly after checkout and before the base-expectation
 steps. They run pinned code that reads nothing the pull request wrote (an
 explicit version, no version file, no cache key from the tree; one exact wheel,
-`--only-binary`, so no build script runs). They change only which `python3`
+`--only-binary`, so no build script runs; run with `-I`, so the checkout is not on `sys.path`). They change only which `python3`
 the later steps find, so the base guard matrix is still materialised, and the
 python3-fallback run still starts, before anything in the pull request can act
 on them. Those runs now use the floor as well.

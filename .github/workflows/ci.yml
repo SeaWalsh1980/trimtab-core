@@ -40,7 +40,8 @@ jobs:
       # order protects. Both steps run pinned third-party code that reads nothing
       # the PR wrote: the version is explicit (no version file, no cache key from
       # the tree), and pip installs one exact wheel (`--only-binary`, so no
-      # sdist build script runs). They change only which python3 later steps
+      # sdist build script runs; `-I`, because `-m` would otherwise put the checkout
+      # first on sys.path and run a pip the PR shipped). They change only which python3 later steps
       # find first on PATH, so the base branch's guard matrix is still
       # materialised, and the python3-fallback run still starts, before anything
       # in the PR can act on them, and now both run on the floor.
@@ -55,7 +56,7 @@ jobs:
 
       - name: "python: PyYAML for the 3.11 floor"
         run: |
-          python3 -m pip install --only-binary=:all: 'pyyaml==6.0.3'
+          python3 -I -m pip install --only-binary=:all: 'pyyaml==6.0.3'
           python3 --version
 
       # --- guard matrix (base expectations), pull_request only.
