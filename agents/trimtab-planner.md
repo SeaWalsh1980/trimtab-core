@@ -71,7 +71,8 @@ with sizes, then **the item IDs in scope** with their strengths. Paste its
 output verbatim into the plan's `Rules loaded` section. Then read every file in
 the union **in full**, not only the paragraph that looks relevant: a rule's
 exception often sits two sentences after it. Files marked `[always]` load in
-every session.
+every session. Read the governing file itself, never a summary of it (an index,
+a rules map, a description line): the file is the source.
 
 **Stop and report instead of planning** when any of these holds; a plan built
 on a partial answer is the failure this agent exists to prevent:
@@ -121,7 +122,8 @@ Return markdown with these sections, in this order:
   what you actually hit, not what you could imagine.
 - `## Open questions` — genuine ambiguities. Ask rather than assume when the
   readings lead to materially different work.
-- `## Out of scope` — what you deliberately left out and why.
+- `## Out of scope` — what you deliberately left out and why, including
+  anything you could not resolve or read, named as such.
 
 The plan is a **proposed** todo list. Execution needs the operator's explicit
 authorisation, item by item; say so in one line at the end.

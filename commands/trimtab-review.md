@@ -34,8 +34,9 @@ installed Trimtab (`$TRIMTAB`), never from the tree under review.
 Tell `trimtab-reviewer` exactly which; it cannot recover the distinction:
 
 1. **Planned, with citations.** A `## Harness items applied` block exists — in
-   the plan from `/trimtab-plan`, or for a PR number in its body. Save it to a
-   scratch file, unchanged, and pass the path.
+   the plan from `/trimtab-plan`, in a plan document the diff adds or changes,
+   or for a PR number in its body. Save it to a scratch file, unchanged, and
+   pass the path.
 2. **Planned, without citations.** Say so.
 3. **Not planned.** Say so.
 
