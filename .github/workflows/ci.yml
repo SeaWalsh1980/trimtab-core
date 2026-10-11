@@ -48,15 +48,31 @@ jobs:
       #
       # PyYAML is installed because the toolcache interpreter carries none and
       # the installer and the registry modules import it. The exact version is
-      # pinned here, not floated: Dependabot's github-actions ecosystem does
-      # not track it, so it moves by hand.
+      # pinned here, not floated, and by hash: `--require-hashes` makes pip
+      # refuse any file whose sha256 is not listed, so PyPI serving a different
+      # file under the same version fails the step. Dependabot's
+      # github-actions ecosystem does not track it, so it moves by hand.
+      #
+      # The requirements are written from this workflow into the runner's temp
+      # directory, not read from a file in the tree. A requirements file in the
+      # tree is something the PR wrote, and an installed package can run code at
+      # every interpreter start (a .pth file), so it would let the PR act before
+      # the base expectations. The hashes are the wheels for 3.11 on
+      # manylinux x86_64 and aarch64; add a hash here to run on another platform.
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
 
       - name: "python: PyYAML for the 3.11 floor"
         run: |
-          python3 -I -m pip install --only-binary=:all: 'pyyaml==6.0.3'
+          set -euo pipefail
+          req="$RUNNER_TEMP/ci-requirements.txt"
+          cat > "$req" <<'EOF'
+          pyyaml==6.0.3 \
+              --hash=sha256:b8bb0864c5a28024fac8a632c443c87c5aa6f215c0b126c449ae1a150412f31d \
+              --hash=sha256:10892704fc220243f5305762e276552a0395f7beb4dbf9b14ec8fd43b57f126c
+          EOF
+          python3 -I -m pip install --require-hashes --only-binary=:all: -r "$req"
           python3 --version
 
       # --- guard matrix (base expectations), pull_request only.
