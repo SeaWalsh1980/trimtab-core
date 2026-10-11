@@ -6,12 +6,18 @@ anything it cannot evaluate without running the command (a body built by
 has read the body and `check_body` rejects it.
 
 The message names sections, entries and fields; it never quotes the body.
+
+The project whose IDs the body may cite is the git toplevel of the session's
+`cwd`, so a session in a subdirectory still resolves the project's lock; when
+git fails or is slow, `cwd` itself (fail open: the worst case is the old
+behaviour). A `--body-file` path stays relative to `cwd`, as `gh` reads it.
 """
 
 from __future__ import annotations
 
 import json
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -24,8 +30,20 @@ BODY = {"--body", "-b"}
 BODY_FILE = {"--body-file", "-F"}
 FILL = {"--fill", "--fill-first", "--fill-verbose", "-f"}
 UNEVALUATED = ("$(", "`", "${")
+GIT_TIMEOUT_SECONDS = 2
 
 ALLOW, BLOCK = 0, 2
+
+
+def project_of(cwd: Path) -> Path:
+    """The git toplevel of `cwd`, or `cwd` itself when git fails or times out."""
+    try:
+        done = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--show-toplevel"], capture_output=True,
+                              text=True, timeout=GIT_TIMEOUT_SECONDS)
+    except (OSError, subprocess.TimeoutExpired):
+        return cwd  # no git, or a hung one: fall back, never block on it
+    top = done.stdout.strip()
+    return Path(top) if done.returncode == 0 and top else cwd
 
 
 def _segments(command: str) -> list[list[str]]:
@@ -103,7 +121,7 @@ def decide(payload: dict) -> tuple[int, str]:
             instance = roots.instance_root()
         except roots.InstanceError:
             return ALLOW, "pr-body-check: TRIMTAB_INSTANCE is not set; allowing, CI checks the body"
-        registry, problems = registry_for(instance, cwd)
+        registry, problems = registry_for(instance, project_of(cwd))
         if problems:
             return ALLOW, "pr-body-check: registry unavailable; allowing, CI checks the body"
         result = check_body(detail, registry)
