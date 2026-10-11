@@ -47,8 +47,31 @@ prompt, `transcript_path`, which points at the whole conversation, and, from
 the two events above, `command_args`, `prompt` and `tool_input` as a whole.
 A slash command's arguments and a skill's arguments are both things a person
 typed; only the NAME of the skill or command is recorded. This log holds
-paths, names, byte counts and timestamps, so it needs no redaction pass and
-can be read by anyone who can read the repository it describes.
+names, byte counts, timestamps and the paths of harness files, so it needs no
+redaction pass.
+
+No path of a file the work touched is recorded (ADR 0010). Three payload
+fields name one, so each is reduced before it is written:
+
+    cwd                  -> project_marker: the harness file at the project's
+                            git root (.claude/trimtab.json, else CLAUDE.md,
+                            else the .claude directory), or absent when the
+                            root has none. The raw cwd is never recorded.
+    trigger_file_path    -> trigger_glob: the file's extension as a glob
+                            (*.py), or * when it has none or an odd one. The
+                            matching rule glob is already in `globs`.
+    parent_file_path     -> kept only when it is the project's root CLAUDE.md
+                            or CLAUDE.local.md, a file under the project's
+                            .claude directory, or a file under the Claude
+                            config directory (see is_harness_path), else
+                            absent. A nested CLAUDE.md is dropped.
+
+project_marker and a kept parent path are absolute, so they still contain the
+directories above the harness file. That is what "the path of a harness file"
+means in ADR 0010, and the report needs the root to find projects.
+
+All three are still named keys, so a payload that carries them is not schema
+drift; they are just not copied.
 
 ⚠️ Two of the five events can block. `PreToolUse` treats exit 2 as "refuse
 this tool call" and `UserPromptExpansion` as "refuse this expansion", so an
@@ -75,6 +98,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 
@@ -90,6 +114,17 @@ MAX_LOG_BYTES = 8 * 1024 * 1024
 # only while it stays small. Long glob lists are the one field that can grow,
 # so they are capped rather than trusted.
 MAX_GLOBS = 20
+
+# Harness files that stand in for a project, in the order they are tried. The
+# bare `.claude` directory is the last resort and is handled in
+# project_marker, because it is a directory rather than a file.
+PROJECT_MARKERS = ((".claude", "trimtab.json"), ("CLAUDE.md",))
+
+# Instruction files that count as harness wherever they sit.
+INSTRUCTION_FILES = frozenset({"CLAUDE.md", "CLAUDE.local.md"})
+
+# A suffix short and plain enough to keep as a glob.
+EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,8}")
 
 # Every key Claude Code puts on a hook payload, whatever the event. This is
 # the CLI's own list, copied — it carries the same array internally — rather
@@ -124,12 +159,12 @@ BASE_KEYS = frozenset(
 # Base fields worth keeping. `transcript_path` is knowingly dropped, and so are
 # `scratchpad_dir` (a per-session temp path), `effort` and the two call-routing
 # keys: being *known* is what stops them reading as drift, and nothing in the
-# report asks about them. `agent_type` is recorded because it is what makes a
-# load attributable to the subagent that caused it — the question a planning
-# command exists to answer.
+# report asks about them. `cwd` is known but not recorded either: it is
+# replaced by `project_marker` (see project_marker). `agent_type` is recorded
+# because it is what makes a load attributable to the subagent that caused
+# it — the question a planning command exists to answer.
 BASE_RECORDED = (
     "session_id",
-    "cwd",
     "prompt_id",
     "agent_id",
     "agent_type",
@@ -141,14 +176,9 @@ EVENTS = {
     "InstructionsLoaded": (
         ("file_path", "memory_type", "load_reason"),
         ("globs", "trigger_file_path", "parent_file_path"),
-        (
-            "file_path",
-            "memory_type",
-            "load_reason",
-            "globs",
-            "trigger_file_path",
-            "parent_file_path",
-        ),
+        # trigger_file_path and parent_file_path are named above and reduced
+        # in build_record; they are never copied as they arrive.
+        ("file_path", "memory_type", "load_reason", "globs"),
     ),
     "SessionStart": (
         ("source",),
@@ -193,6 +223,96 @@ def log_path() -> str:
     return os.path.join(home, "logs", "rule-usage.jsonl")
 
 
+def git_root(start: str) -> str | None:
+    """Nearest ancestor holding a `.git` (a directory, or a file in a worktree)."""
+    path = os.path.abspath(start)
+    while True:
+        if os.path.exists(os.path.join(path, ".git")):
+            return path
+        parent = os.path.dirname(path)
+        if parent == path:
+            return None
+        path = parent
+
+
+def project_marker(cwd: object) -> str | None:
+    """The harness file that marks the project a session ran in, or None.
+
+    Stands in for the raw working directory, which can name anything. The
+    answer is the path of a harness file at the git root, chosen by a fixed
+    order: the lock, then the root instruction file, then the .claude
+    directory. A root with none of them has no marker and the session
+    contributes no project to the report; that is the price of recording no
+    path that is not a harness file. Never raises: this runs inside an
+    observer that must not block.
+    """
+    if not isinstance(cwd, str) or not os.path.isabs(cwd):
+        return None
+    try:
+        root = git_root(cwd)
+        if root is None:
+            return None
+        for rel in PROJECT_MARKERS:
+            candidate = os.path.join(root, *rel)
+            if os.path.isfile(candidate):
+                return candidate
+        candidate = os.path.join(root, ".claude")
+        if os.path.isdir(candidate):
+            return candidate
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def trigger_glob(path: object) -> str | None:
+    """A trigger file reduced to its extension as a glob, never its name.
+
+    `*.py`, or `*` when the file has no extension or one that is not a short
+    plain suffix (a suffix is free text and could carry a name). That is
+    enough to see a rule loading on files it was not written for; the rule's
+    own glob is recorded beside it.
+    """
+    if not isinstance(path, str) or not path:
+        return None
+    ext = os.path.splitext(os.path.basename(path))[1]
+    return "*" + ext if EXTENSION.fullmatch(ext) else "*"
+
+
+def project_root(cwd: object) -> str | None:
+    """The git root of a session's working directory, or None. Never raises."""
+    if not isinstance(cwd, str) or not os.path.isabs(cwd):
+        return None
+    try:
+        return git_root(cwd)
+    except (OSError, ValueError):
+        return None
+
+
+def is_harness_path(path: object, root: str | None) -> bool:
+    """Whether a path is a harness file of this session's own project or config.
+
+    By shape alone, never by reading the path's text. True for the root
+    `CLAUDE.md` or `CLAUDE.local.md` at the project's git root, for anything
+    under that root's `.claude` directory, and for anything under the Claude
+    config directory. A nested `CLAUDE.md`, or any other path, is false: it
+    would name a directory of the work. `root` is the git root, or None.
+    """
+    if not isinstance(path, str) or not path:
+        return False
+    target = os.path.abspath(path)
+    home = os.path.abspath(
+        os.environ.get("CLAUDE_CONFIG_DIR")
+        or os.path.join(os.path.expanduser("~"), ".claude")
+    )
+    if target == home or target.startswith(home + os.sep):
+        return True
+    if root is None:
+        return False
+    if os.path.dirname(target) == root and os.path.basename(target) in INSTRUCTION_FILES:
+        return True
+    return target.startswith(os.path.join(root, ".claude") + os.sep)
+
+
 def file_size(path: object) -> int | None:
     """Size of a loaded instruction file, or None when it cannot be measured.
 
@@ -227,6 +347,10 @@ def build_record(payload: dict) -> dict:
         if value is not None:
             record[key] = value
 
+    marker = project_marker(payload.get("cwd"))
+    if marker:
+        record["project_marker"] = marker
+
     for key in recorded:
         value = payload.get(key)
         if value is None:
@@ -240,6 +364,13 @@ def build_record(payload: dict) -> dict:
         # measured is a different fact from one that loaded at zero bytes, and
         # the report has to be able to tell them apart.
         record["bytes"] = file_size(payload.get("file_path"))
+
+        glob_form = trigger_glob(payload.get("trigger_file_path"))
+        if glob_form:
+            record["trigger_glob"] = glob_form
+        parent = payload.get("parent_file_path")
+        if is_harness_path(parent, project_root(payload.get("cwd"))):
+            record["parent_file_path"] = parent
 
     if event == "PreToolUse":
         # Registered with a matcher of `Skill`, so this should only ever fire

@@ -14,17 +14,20 @@ Answers, for a window of days:
   * whether every load is accounted for — anything the sections cannot place
     is named under Context cost rather than left as a gap between the totals
     and the tables;
-  * what pulled each path-scoped rule in, so an over-broad glob shows up as a
-    rule loading on files it does not govern;
+  * what pulled each path-scoped rule in, as the extension glob of the trigger
+    file (`*.py`), so an over-broad glob shows up as a rule loading on files
+    it does not govern;
   * how often the planning and review subagents ran;
   * which skills and slash commands were used, and — the same question the
     rules get — which of the installed ones were never reached at all;
   * what the plan-citation check found, tallied from the project's own review
     documents.
 
-Projects are discovered from the `cwd` of the observed records, so the report
-covers exactly the repositories that were worked in. `--project` adds one
-explicitly.
+Projects are discovered from the `project_marker` of the observed records (the
+harness file at a project's git root), so the report covers the repositories
+that were worked in and have one. A project with no harness file leaves no
+marker; `--project` adds it explicitly. Records from before the observer
+stopped recording raw paths carry `cwd` instead and are still read for this.
 
 Exit codes are the point of the failure policy:
 
@@ -286,6 +289,60 @@ def installed_skills(projects: list[str]) -> dict[str, set[str]]:
     return found
 
 
+def marker_root(marker: object) -> str | None:
+    """The project root a harness-file marker stands for.
+
+    The observer records the path of a harness file at the project's git
+    root, so the root is that file's directory — or its parent, for the lock
+    inside `.claude/` and for the `.claude` directory itself. Decided by the
+    name alone.
+    """
+    if not isinstance(marker, str) or not marker:
+        return None
+    parent, name = os.path.split(marker.rstrip(os.sep))
+    if name == "trimtab.json" and os.path.basename(parent) == ".claude":
+        return os.path.dirname(parent)
+    if name == ".claude":
+        return parent
+    if name == "CLAUDE.md":
+        return parent
+    return None
+
+
+def is_legacy(record: dict) -> bool:
+    """A record written when the observer still kept raw work paths."""
+    return "cwd" in record or "trigger_file_path" in record
+
+
+def unplaced_sessions(records: list[dict]) -> set:
+    """Sessions with neither a project marker nor a legacy working directory.
+
+    Their project has no harness file at its git root, so they add nothing to
+    the corpus tables. Counted so the report can say so.
+    """
+    placed = {
+        r.get("session_id")
+        for r in records
+        if r.get("project_marker") or isinstance(r.get("cwd"), str)
+    }
+    return {
+        r.get("session_id")
+        for r in records
+        if r.get("session_id") and r.get("session_id") not in placed
+    }
+
+
+def project_root_of(record: dict) -> str | None:
+    """The project a record belongs to: its marker, else (legacy) its cwd."""
+    root = marker_root(record.get("project_marker"))
+    if root:
+        return root
+    cwd = record.get("cwd")
+    if isinstance(cwd, str):
+        return repo_root(cwd)
+    return None
+
+
 def summarise(records: list[dict]) -> dict:
     loads = [r for r in records if r.get("event") == "InstructionsLoaded"]
     starts = [r for r in records if r.get("event") == "SessionStart"]
@@ -310,8 +367,11 @@ def summarise(records: list[dict]) -> dict:
         session = record.get("session_id") or "unknown"
         entry["sessions"].add(session)
         entry["reasons"][record.get("load_reason") or "unknown"] += 1
-        trigger = record.get("trigger_file_path")
-        if trigger:
+        # Only the reduced form is tallied. A record written before the
+        # observer stopped recording work paths carries trigger_file_path
+        # instead; it is counted as legacy and its path is never shown.
+        trigger = record.get("trigger_glob")
+        if isinstance(trigger, str) and trigger:
             entry["triggers"][trigger] += 1
         size = record.get("bytes")
         if isinstance(size, int):
@@ -335,6 +395,8 @@ def summarise(records: list[dict]) -> dict:
         "files_per_session": files_per_session,
         "resident_bytes": resident_bytes,
         "sessions": {r.get("session_id") for r in records if r.get("session_id")},
+        "legacy": [r for r in records if is_legacy(r)],
+        "unplaced_sessions": unplaced_sessions(records),
         "missing_required": [r for r in loads if r.get("missing_keys")],
         "unknown_keys": Counter(
             key for r in records for key in (r.get("unknown_keys") or [])
@@ -508,6 +570,18 @@ def render(args, data, stats, projects, warnings, transcripts) -> str:
         )
     )
     out.append("Session transcripts touched in the window: %d" % transcripts)
+    if data["legacy"]:
+        out.append(
+            "Legacy records: %d, written before the observer stopped recording work "
+            "paths. They are read for project discovery; their trigger paths are not "
+            "shown." % len(data["legacy"])
+        )
+    if data["unplaced_sessions"]:
+        out.append(
+            "Sessions with no project marker: %d. Their project has no harness file "
+            "at its git root, so they add no project to the corpus tables below. "
+            "Name a project with --project." % len(data["unplaced_sessions"])
+        )
     out.append("")
 
     if warnings:
@@ -558,12 +632,12 @@ def render(args, data, stats, projects, warnings, transcripts) -> str:
         if triggers:
             out.append("What pulled each path-scoped rule in:")
             out.append("")
-            out.append("| rule | top trigger paths |")
+            out.append("| rule | top trigger globs |")
             out.append("|---|---|")
             for name, counter in triggers:
                 top = ", ".join(
-                    "`%s` ×%d" % (os.path.relpath(path, root), count)
-                    for path, count in counter.most_common(3)
+                    "`%s` ×%d" % (glob_form, count)
+                    for glob_form, count in counter.most_common(3)
                 )
                 out.append("| `%s` | %s |" % (name, top))
             out.append("")
@@ -811,17 +885,15 @@ def main(argv: list[str] | None = None) -> int:
 
     projects = list(dict.fromkeys(os.path.abspath(p) for p in args.project))
     for record in records:
-        cwd = record.get("cwd")
-        if not isinstance(cwd, str):
-            continue
-        root = repo_root(cwd)
+        root = project_root_of(record)
         if root and root not in projects:
             projects.append(root)
 
     if not projects:
         warnings.append(
-            "No project could be resolved from the observed working directories, so "
-            "no corpus table could be built and nothing can be called never-loaded."
+            "No project could be resolved from the observed project markers, so "
+            "no corpus table could be built and nothing can be called never-loaded. "
+            "Name one with --project."
         )
 
     report = render(args, data, stats, projects, warnings, transcripts)

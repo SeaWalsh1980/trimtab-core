@@ -33,6 +33,15 @@ mkdir -p "$PROJECT/.claude/rules" "$PROJECT/docs/reviews"
 printf 'project root instructions\n' > "$PROJECT/CLAUDE.md"
 printf -- '---\npaths: ["src/**"]\n---\nloaded rule\n' > "$PROJECT/.claude/rules/loaded.md"
 printf -- '---\npaths: ["terraform/**"]\n---\nnever loaded rule\n' > "$PROJECT/.claude/rules/dormant.md"
+# A project is marked by a harness file at its git root, so this one is a
+# repository and carries a lock. BARE is a repository with no harness file.
+mkdir -p "$PROJECT/.git"
+printf '{}\n' > "$PROJECT/.claude/trimtab.json"
+BARE="$TMP/bare"
+mkdir -p "$BARE/.git" "$BARE/src"
+CLAUDE_ONLY="$TMP/claude-only"
+mkdir -p "$CLAUDE_ONLY/.git"
+printf 'root instructions\n' > "$CLAUDE_ONLY/CLAUDE.md"
 
 HOME_DIR="$TMP/claude-home"
 mkdir -p "$HOME_DIR/projects"
@@ -62,10 +71,77 @@ fire "{\"hook_event_name\":\"InstructionsLoaded\",\"session_id\":\"s1\",\"transc
 [[ $rc -eq 0 ]] && pass "observer" "a load exits 0" || bad "observer" "a load exits 0" "exit $rc"
 has '"event":"InstructionsLoaded"' && pass "observer" "records the event" || bad "observer" "records the event" "$(lastline)"
 has '"load_reason":"path_glob_match"' && pass "observer" "records why it loaded" || bad "observer" "records why it loaded" "$(lastline)"
-has '"trigger_file_path"' && pass "observer" "records what pulled it in" || bad "observer" "records what pulled it in" "$(lastline)"
+has '"trigger_glob":"\*.py"' && pass "observer" "records what pulled it in, as an extension glob" || bad "observer" "records what pulled it in, as an extension glob" "$(lastline)"
+has '"globs":\["src/\*\*"\]' && pass "observer" "records the rule's own glob beside it" || bad "observer" "records the rule's own glob beside it" "$(lastline)"
+has 'trigger_file_path\|src/a.py' && bad "observer" "records no raw trigger path" "$(lastline)" || pass "observer" "records no raw trigger path"
+has '"cwd"' && bad "observer" "records no raw cwd" "$(lastline)" || pass "observer" "records no raw cwd"
+has "\"project_marker\":\"$PROJECT/.claude/trimtab.json\"" && pass "observer" "marks the project by its lock" || bad "observer" "marks the project by its lock" "$(lastline)"
+has "$TMP/project\"" && bad "observer" "never records the project directory itself" "$(lastline)" || pass "observer" "never records the project directory itself"
+has '"unknown_keys"' && bad "observer" "a load's trigger, parent and cwd are known keys" "$(lastline)" || pass "observer" "a load's trigger, parent and cwd are known keys"
 size=$(wc -c < "$PROJECT/.claude/rules/loaded.md")
 has "\"bytes\":$size" && pass "observer" "measures the file at load time" || bad "observer" "measures the file at load time" "want $size, got $(lastline)"
 has '"transcript_path"' && bad "observer" "drops transcript_path" "it was recorded" || pass "observer" "drops transcript_path"
+
+# --- work paths are reduced, never recorded (ADR 0010) -------------------
+# A trigger with no extension, or an odd one, reduces to the bare glob: a
+# suffix is free text and must not carry a name through.
+: > "$LOG"
+fire "{\"hook_event_name\":\"InstructionsLoaded\",\"session_id\":\"s1\",\"cwd\":\"$PROJECT\",\"file_path\":\"$PROJECT/CLAUDE.md\",\"memory_type\":\"Project\",\"load_reason\":\"path_glob_match\",\"trigger_file_path\":\"$PROJECT/src/Makefile\"}"
+has '"trigger_glob":"\*"' && pass "observer" "a trigger with no extension reduces to *" || bad "observer" "a trigger with no extension reduces to *" "$(lastline)"
+: > "$LOG"
+fire "{\"hook_event_name\":\"InstructionsLoaded\",\"session_id\":\"s1\",\"cwd\":\"$PROJECT\",\"file_path\":\"$PROJECT/CLAUDE.md\",\"memory_type\":\"Project\",\"load_reason\":\"path_glob_match\",\"trigger_file_path\":\"$PROJECT/src/report.CLIENT-ACME-2026\"}"
+has '"trigger_glob":"\*"' && pass "observer" "an odd suffix reduces to *, carrying no name" || bad "observer" "an odd suffix reduces to *, carrying no name" "$(lastline)"
+has 'ACME' && bad "observer" "no part of the trigger's name survives" "$(lastline)" || pass "observer" "no part of the trigger's name survives"
+
+# parent_file_path: kept only for an instruction or harness file, by shape.
+: > "$LOG"
+fire "{\"hook_event_name\":\"InstructionsLoaded\",\"session_id\":\"s1\",\"cwd\":\"$PROJECT\",\"file_path\":\"$PROJECT/docs/inc.md\",\"memory_type\":\"Project\",\"load_reason\":\"include\",\"parent_file_path\":\"$PROJECT/CLAUDE.md\"}"
+has "\"parent_file_path\":\"$PROJECT/CLAUDE.md\"" && pass "observer" "an include from CLAUDE.md keeps its parent" || bad "observer" "an include from CLAUDE.md keeps its parent" "$(lastline)"
+: > "$LOG"
+fire "{\"hook_event_name\":\"InstructionsLoaded\",\"session_id\":\"s1\",\"cwd\":\"$PROJECT\",\"file_path\":\"$PROJECT/docs/inc.md\",\"memory_type\":\"Project\",\"load_reason\":\"include\",\"parent_file_path\":\"$PROJECT/.claude/rules/loaded.md\"}"
+has '"parent_file_path"' && pass "observer" "an include from a file under .claude keeps its parent" || bad "observer" "an include from a file under .claude keeps its parent" "$(lastline)"
+: > "$LOG"
+fire "{\"hook_event_name\":\"InstructionsLoaded\",\"session_id\":\"s1\",\"cwd\":\"$PROJECT\",\"file_path\":\"$PROJECT/docs/inc.md\",\"memory_type\":\"Project\",\"load_reason\":\"include\",\"parent_file_path\":\"$PROJECT/src/notes.md\"}"
+[[ $rc -eq 0 ]] && pass "observer" "an include from a work file exits 0" || bad "observer" "an include from a work file exits 0" "exit $rc"
+has 'parent_file_path\|notes.md' && bad "observer" "an include from a work file drops its parent" "$(lastline)" || pass "observer" "an include from a work file drops its parent"
+: > "$LOG"
+fire "{\"hook_event_name\":\"InstructionsLoaded\",\"session_id\":\"s1\",\"cwd\":\"$PROJECT\",\"file_path\":\"$PROJECT/docs/inc.md\",\"memory_type\":\"Project\",\"load_reason\":\"include\",\"parent_file_path\":\"$PROJECT/CLAUDE.local.md\"}"
+has '"parent_file_path"' && pass "observer" "the root CLAUDE.local.md counts as an instruction file" || bad "observer" "the root CLAUDE.local.md counts as an instruction file" "$(lastline)"
+# A nested CLAUDE.md, or a .claude directory outside this project, would name
+# a directory of the work, so both drop their parent.
+: > "$LOG"
+fire "{\"hook_event_name\":\"InstructionsLoaded\",\"session_id\":\"s1\",\"cwd\":\"$PROJECT\",\"file_path\":\"$PROJECT/docs/inc.md\",\"memory_type\":\"Project\",\"load_reason\":\"include\",\"parent_file_path\":\"$PROJECT/src/payments/CLAUDE.md\"}"
+has 'parent_file_path\|payments' && bad "observer" "a nested CLAUDE.md drops its parent, naming no directory" "$(lastline)" || pass "observer" "a nested CLAUDE.md drops its parent, naming no directory"
+: > "$LOG"
+fire "{\"hook_event_name\":\"InstructionsLoaded\",\"session_id\":\"s1\",\"cwd\":\"$PROJECT\",\"file_path\":\"$PROJECT/docs/inc.md\",\"memory_type\":\"Project\",\"load_reason\":\"include\",\"parent_file_path\":\"$TMP/other/.claude/x.md\"}"
+has 'parent_file_path\|other' && bad "observer" "a .claude directory outside the project drops its parent" "$(lastline)" || pass "observer" "a .claude directory outside the project drops its parent"
+# The config directory counts, wherever the session's project is.
+: > "$LOG"
+printf '%s' "{\"hook_event_name\":\"InstructionsLoaded\",\"session_id\":\"s1\",\"cwd\":\"/x\",\"file_path\":\"$HOME_DIR/rules/y.md\",\"memory_type\":\"User\",\"load_reason\":\"include\",\"parent_file_path\":\"$HOME_DIR/CLAUDE.md\"}" \
+  | CLAUDE_CONFIG_DIR="$HOME_DIR" CLAUDE_RULE_USAGE_LOG="$LOG" bash "$HOOK" >/dev/null 2>&1
+has "\"parent_file_path\":\"$HOME_DIR/CLAUDE.md\"" && pass "observer" "a parent under the config directory is kept" || bad "observer" "a parent under the config directory is kept" "$(lastline)"
+
+# project_marker: the lock, else CLAUDE.md, else the .claude directory, else
+# nothing — and it is the same wherever in the project the session started.
+: > "$LOG"
+fire "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"s1\",\"cwd\":\"$PROJECT/src/deep\",\"source\":\"startup\"}"
+has "\"project_marker\":\"$PROJECT/.claude/trimtab.json\"" && pass "observer" "a session in a subdirectory resolves to the project's lock" || bad "observer" "a session in a subdirectory resolves to the project's lock" "$(lastline)"
+: > "$LOG"
+fire "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"s1\",\"cwd\":\"$CLAUDE_ONLY\",\"source\":\"startup\"}"
+has "\"project_marker\":\"$CLAUDE_ONLY/CLAUDE.md\"" && pass "observer" "without a lock, CLAUDE.md marks the project" || bad "observer" "without a lock, CLAUDE.md marks the project" "$(lastline)"
+mkdir -p "$BARE/.claude"
+: > "$LOG"
+fire "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"s1\",\"cwd\":\"$BARE\",\"source\":\"startup\"}"
+has "\"project_marker\":\"$BARE/.claude\"" && pass "observer" "with neither, the .claude directory marks the project" || bad "observer" "with neither, the .claude directory marks the project" "$(lastline)"
+rmdir "$BARE/.claude"
+: > "$LOG"
+fire "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"s1\",\"cwd\":\"$BARE/src\",\"source\":\"startup\"}"
+[[ $rc -eq 0 ]] && pass "observer" "a project with no harness file exits 0" || bad "observer" "a project with no harness file exits 0" "exit $rc"
+has 'project_marker' && bad "observer" "a project with no harness file records no marker" "$(lastline)" || pass "observer" "a project with no harness file records no marker"
+has '"cwd"\|bare' && bad "observer" "and still no raw cwd" "$(lastline)" || pass "observer" "and still no raw cwd"
+: > "$LOG"
+fire '{"hook_event_name":"SessionStart","session_id":"s1","cwd":"relative/dir","source":"startup"}'
+[[ $rc -eq 0 ]] && has 'project_marker' && bad "observer" "a relative cwd records no marker" "$(lastline)" || pass "observer" "a relative cwd records no marker"
 
 : > "$LOG"
 fire '{"hook_event_name":"InstructionsLoaded","session_id":"s1","cwd":"/x","memory_type":"User","load_reason":"session_start"}'
@@ -179,7 +255,22 @@ grep -q 'not firing' "$TMP/err" && pass "report" "names the hook as the fault" |
 
 # A window with real activity in it.
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+MARKER="$PROJECT/.claude/trimtab.json"
 FULL="$TMP/full.jsonl"
+{
+  printf '{"v":1,"ts":"%s","event":"SessionStart","session_id":"s1","project_marker":"%s","source":"startup","model":"m"}\n' "$NOW" "$MARKER"
+  printf '{"v":1,"ts":"%s","event":"InstructionsLoaded","session_id":"s1","project_marker":"%s","file_path":"%s","memory_type":"Project","load_reason":"session_start","bytes":26}\n' "$NOW" "$MARKER" "$PROJECT/CLAUDE.md"
+  printf '{"v":1,"ts":"%s","event":"InstructionsLoaded","session_id":"s1","project_marker":"%s","file_path":"%s","memory_type":"Project","load_reason":"path_glob_match","trigger_glob":"%s","bytes":40}\n' "$NOW" "$MARKER" "$PROJECT/.claude/rules/loaded.md" "*.py"
+  printf '{"v":1,"ts":"%s","event":"SubagentStart","session_id":"s1","project_marker":"%s","agent_type":"xx-planner"}\n' "$NOW" "$MARKER"
+  printf '{"v":1,"ts":"%s","event":"PreToolUse","session_id":"s1","project_marker":"%s","tool_name":"Skill","skill":"used-skill"}\n' "$NOW" "$MARKER"
+  printf '{"v":1,"ts":"%s","event":"UserPromptExpansion","session_id":"s1","project_marker":"%s","expansion_type":"slash_command","command_name":"xx-review","command_source":"project"}\n' "$NOW" "$MARKER"
+  printf '{"v":1,"ts":"%s","event":"InstructionsLoaded","session_id":"s1","project_marker":"%s","file_path":"%s","memory_type":"User","load_reason":"session_start","bytes":30}\n' "$NOW" "$MARKER" "$HOME_DIR/rules/loaded-doctrine.md"
+  printf '{"v":1,"ts":"%s","event":"InstructionsLoaded","session_id":"s1","project_marker":"%s","file_path":"%s","memory_type":"User","load_reason":"session_start","bytes":30}\n' "$NOW" "$MARKER" "$TMP/elsewhere/linked-doctrine.md"
+} > "$FULL"
+
+# The same window as the observer wrote it before it stopped recording work
+# paths: raw cwd and trigger_file_path.
+LEGACY="$TMP/legacy.jsonl"
 {
   printf '{"v":1,"ts":"%s","event":"SessionStart","session_id":"s1","cwd":"%s","source":"startup","model":"m"}\n' "$NOW" "$PROJECT"
   printf '{"v":1,"ts":"%s","event":"InstructionsLoaded","session_id":"s1","cwd":"%s","file_path":"%s","memory_type":"Project","load_reason":"session_start","bytes":26}\n' "$NOW" "$PROJECT" "$PROJECT/CLAUDE.md"
@@ -189,7 +280,7 @@ FULL="$TMP/full.jsonl"
   printf '{"v":1,"ts":"%s","event":"UserPromptExpansion","session_id":"s1","cwd":"%s","expansion_type":"slash_command","command_name":"xx-review","command_source":"project"}\n' "$NOW" "$PROJECT"
   printf '{"v":1,"ts":"%s","event":"InstructionsLoaded","session_id":"s1","cwd":"%s","file_path":"%s","memory_type":"User","load_reason":"session_start","bytes":30}\n' "$NOW" "$PROJECT" "$HOME_DIR/rules/loaded-doctrine.md"
   printf '{"v":1,"ts":"%s","event":"InstructionsLoaded","session_id":"s1","cwd":"%s","file_path":"%s","memory_type":"User","load_reason":"session_start","bytes":30}\n' "$NOW" "$PROJECT" "$TMP/elsewhere/linked-doctrine.md"
-} > "$FULL"
+} > "$LEGACY"
 
 # The doctrine corpus: loaded in every project, owned by none of them. One
 # file is reached through a symlink, because that is how the real one is laid
@@ -227,7 +318,36 @@ sed -n '/Did not load at all/,/^$/p' "$TMP/report" | grep -q 'linked-doctrine' \
   || pass "report" "matches a rule loaded through its real path"
 grep -q 'accounted for above' "$TMP/report" && pass "report" "reconciles every load against a section" || bad "report" "reconciles every load against a section" "absent"
 grep -q 'Plugin skills are not in those counts' "$TMP/report" && pass "report" "says which skills it did not count" || bad "report" "says which skills it did not count" "absent"
-grep -q "$PROJECT" "$TMP/report" && pass "report" "found the project from the working directory" || bad "report" "found the project from the working directory" "absent"
+grep -q "$PROJECT" "$TMP/report" && pass "report" "found the project from its marker" || bad "report" "found the project from its marker" "absent"
+grep -q 'top trigger globs' "$TMP/report" && grep -q '`\*.py` ×1' "$TMP/report" && pass "report" "tables what pulled a rule in, as a glob" || bad "report" "tables what pulled a rule in, as a glob" "absent"
+grep -q 'Legacy records' "$TMP/report" && bad "report" "a new-format log is not called legacy" "named" || pass "report" "a new-format log is not called legacy"
+grep -q 'src/a.py' "$TMP/report" && bad "report" "shows no trigger path" "shown" || pass "report" "shows no trigger path"
+
+# A log written before the change: raw cwd and trigger_file_path. It must read
+# without a crash, build the same corpus table, name itself legacy, and never
+# print the raw trigger path.
+cp "$TMP/report" "$TMP/report-new"
+report --log "$LEGACY"
+[[ $rc -eq 0 ]] && pass "report" "a legacy log is still exit 0" || bad "report" "a legacy log is still exit 0" "exit $rc: $(cat "$TMP/err")"
+grep -q 'Legacy records' "$TMP/report" && pass "report" "says the records are legacy" || bad "report" "says the records are legacy" "absent"
+grep -q 'src/a.py' "$TMP/report" && bad "report" "a legacy trigger path is not shown" "shown" || pass "report" "a legacy trigger path is not shown"
+grep -q "$PROJECT" "$TMP/report" && pass "report" "a legacy cwd still finds the project" || bad "report" "a legacy cwd still finds the project" "absent"
+for f in report-new report; do
+  sed -n '/^## '"${PROJECT//\//\\/}"'/,/^## Context cost/p' "$TMP/$f" | grep '^| ' | grep -v 'trigger\|×' > "$TMP/table-$f"
+done
+[[ -s "$TMP/table-report" ]] && diff -q "$TMP/table-report-new" "$TMP/table-report" >/dev/null \
+  && pass "report" "a marker and a cwd build the same corpus table" \
+  || bad "report" "a marker and a cwd build the same corpus table" "$(diff "$TMP/table-report-new" "$TMP/table-report" | head -3)"
+
+# A session whose project has no harness file leaves no marker: it adds no
+# project, the report says so, and --project still names one.
+NOMARK="$TMP/nomark.jsonl"
+printf '{"v":1,"ts":"%s","event":"SessionStart","session_id":"s9","source":"startup"}\n' "$NOW" > "$NOMARK"
+report --log "$NOMARK"
+grep -q 'Sessions with no project marker: 1' "$TMP/report" && pass "report" "says a session had no project marker" || bad "report" "says a session had no project marker" "absent"
+grep -q 'could be resolved from the observed project markers' "$TMP/report" && pass "report" "says no corpus table could be built" || bad "report" "says no corpus table could be built" "absent"
+report --log "$NOMARK" --project "$PROJECT"
+grep -q "^## $PROJECT" "$TMP/report" && pass "report" "--project still names a project" || bad "report" "--project still names a project" "absent"
 
 printf 'not json\n' >> "$FULL"
 report --log "$FULL"
@@ -243,7 +363,7 @@ report --log "$FULL"
 grep -q 'present 1' "$TMP/report" && pass "report" "tallies a PLAN-CITATIONS line" || bad "report" "tallies a PLAN-CITATIONS line" "absent"
 grep -q 'uncited 6' "$TMP/report" && pass "report" "sums the uncited clauses" || bad "report" "sums the uncited clauses" "absent"
 
-printf '{"v":1,"ts":"%s","event":"InstructionsLoaded","session_id":"s1","cwd":"%s","file_path":"/nowhere/ORPHAN.md","memory_type":"Managed","load_reason":"session_start","bytes":4096}\n' "$NOW" "$PROJECT" >> "$FULL"
+printf '{"v":1,"ts":"%s","event":"InstructionsLoaded","session_id":"s1","project_marker":"%s","file_path":"/nowhere/ORPHAN.md","memory_type":"Managed","load_reason":"session_start","bytes":4096}\n' "$NOW" "$MARKER" >> "$FULL"
 report --log "$FULL"
 grep -q 'no section above accounts for' "$TMP/report" && pass "report" "names a load it cannot place" || bad "report" "names a load it cannot place" "absent"
 grep -q 'ORPHAN.md' "$TMP/report" && pass "report" "names which file that was" || bad "report" "names which file that was" "absent"

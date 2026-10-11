@@ -202,3 +202,49 @@ to the block follows the versioning rule in ADR 0007.
   fields, so it meets this record only once the observer is changed. The
   log stays on the machine, mode 0600, so the exposure is no wider than
   before this record.
+
+### Note, 2026-10-11: the exception is closed
+
+The observer no longer records `cwd`, `trigger_file_path` or
+`parent_file_path` as raw paths. The records written from this change on
+carry only the reduced forms below. Records written before it are left as
+they are; the report reads them as legacy, and the log's rotation and the
+eight-week window age them out.
+
+- `cwd` becomes `project_marker`: the path of a harness file at the
+  project's git root, the lock `.claude/trimtab.json` first, then
+  `CLAUDE.md`, then the `.claude` directory. A root with none of them gets
+  no marker, and the report says so; `--project` still names one.
+- `trigger_file_path` becomes `trigger_glob`: the trigger's extension as a
+  glob (`*.py`), or `*` when it has none or a suffix that is not short and
+  plain. The rule's own glob was already in `globs`.
+- `parent_file_path` is kept only when it is the `CLAUDE.md` or
+  `CLAUDE.local.md` at the project's git root, a file under that root's
+  `.claude` directory, or a file under the Claude config directory. It is
+  decided by the shape of the path, never by reading it. A nested
+  `CLAUDE.md`, a `.claude` directory elsewhere, and any other path are
+  dropped, because they would name a directory of the work.
+
+`project_marker` and a kept `parent_file_path` are absolute paths, so they
+still contain the directories above the harness file, including the home
+directory and the project's name. That is what "paths, but only of harness
+files" allows, and the report needs the root to find projects. The log is
+not free of names for that reason; it holds no path below a project's root
+except harness files.
+
+Options considered:
+
+- **Keep the raw paths.** Rejected. They name the project directory and the
+  files the work touched, which this record forbids.
+- **Hash the paths.** Rejected. A hash of a path can be reversed by guessing
+  likely paths, and a hash tells the report nothing it can group by.
+- **Drop the fields outright.** Rejected. The report could no longer find
+  which projects to table, and could no longer show a rule loading on files
+  it does not govern.
+- **Record the trigger's first directory plus its extension
+  (`src/**/*.py`).** Rejected for now. It names a directory of the work, and
+  the extension alone is enough to show an over-broad glob. Reconsider if
+  the extension proves too coarse.
+
+Accepted: a project with no harness file at its git root contributes no
+project to the corpus tables. A trigger shows its type but not where it sat.
