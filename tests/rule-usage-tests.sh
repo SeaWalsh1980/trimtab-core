@@ -105,8 +105,21 @@ fire "{\"hook_event_name\":\"InstructionsLoaded\",\"session_id\":\"s1\",\"cwd\":
 [[ $rc -eq 0 ]] && pass "observer" "an include from a work file exits 0" || bad "observer" "an include from a work file exits 0" "exit $rc"
 has 'parent_file_path\|notes.md' && bad "observer" "an include from a work file drops its parent" "$(lastline)" || pass "observer" "an include from a work file drops its parent"
 : > "$LOG"
-fire "{\"hook_event_name\":\"InstructionsLoaded\",\"session_id\":\"s1\",\"cwd\":\"$PROJECT\",\"file_path\":\"$PROJECT/docs/inc.md\",\"memory_type\":\"Project\",\"load_reason\":\"include\",\"parent_file_path\":\"$PROJECT/src/CLAUDE.local.md\"}"
-has '"parent_file_path"' && pass "observer" "CLAUDE.local.md counts as an instruction file" || bad "observer" "CLAUDE.local.md counts as an instruction file" "$(lastline)"
+fire "{\"hook_event_name\":\"InstructionsLoaded\",\"session_id\":\"s1\",\"cwd\":\"$PROJECT\",\"file_path\":\"$PROJECT/docs/inc.md\",\"memory_type\":\"Project\",\"load_reason\":\"include\",\"parent_file_path\":\"$PROJECT/CLAUDE.local.md\"}"
+has '"parent_file_path"' && pass "observer" "the root CLAUDE.local.md counts as an instruction file" || bad "observer" "the root CLAUDE.local.md counts as an instruction file" "$(lastline)"
+# A nested CLAUDE.md, or a .claude directory outside this project, would name
+# a directory of the work, so both drop their parent.
+: > "$LOG"
+fire "{\"hook_event_name\":\"InstructionsLoaded\",\"session_id\":\"s1\",\"cwd\":\"$PROJECT\",\"file_path\":\"$PROJECT/docs/inc.md\",\"memory_type\":\"Project\",\"load_reason\":\"include\",\"parent_file_path\":\"$PROJECT/src/payments/CLAUDE.md\"}"
+has 'parent_file_path\|payments' && bad "observer" "a nested CLAUDE.md drops its parent, naming no directory" "$(lastline)" || pass "observer" "a nested CLAUDE.md drops its parent, naming no directory"
+: > "$LOG"
+fire "{\"hook_event_name\":\"InstructionsLoaded\",\"session_id\":\"s1\",\"cwd\":\"$PROJECT\",\"file_path\":\"$PROJECT/docs/inc.md\",\"memory_type\":\"Project\",\"load_reason\":\"include\",\"parent_file_path\":\"$TMP/other/.claude/x.md\"}"
+has 'parent_file_path\|other' && bad "observer" "a .claude directory outside the project drops its parent" "$(lastline)" || pass "observer" "a .claude directory outside the project drops its parent"
+# The config directory counts, wherever the session's project is.
+: > "$LOG"
+printf '%s' "{\"hook_event_name\":\"InstructionsLoaded\",\"session_id\":\"s1\",\"cwd\":\"/x\",\"file_path\":\"$HOME_DIR/rules/y.md\",\"memory_type\":\"User\",\"load_reason\":\"include\",\"parent_file_path\":\"$HOME_DIR/CLAUDE.md\"}" \
+  | CLAUDE_CONFIG_DIR="$HOME_DIR" CLAUDE_RULE_USAGE_LOG="$LOG" bash "$HOOK" >/dev/null 2>&1
+has "\"parent_file_path\":\"$HOME_DIR/CLAUDE.md\"" && pass "observer" "a parent under the config directory is kept" || bad "observer" "a parent under the config directory is kept" "$(lastline)"
 
 # project_marker: the lock, else CLAUDE.md, else the .claude directory, else
 # nothing — and it is the same wherever in the project the session started.

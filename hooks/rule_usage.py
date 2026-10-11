@@ -60,8 +60,15 @@ fields name one, so each is reduced before it is written:
     trigger_file_path    -> trigger_glob: the file's extension as a glob
                             (*.py), or * when it has none or an odd one. The
                             matching rule glob is already in `globs`.
-    parent_file_path     -> kept only when it is itself an instruction or
-                            harness file (see is_harness_path), else absent.
+    parent_file_path     -> kept only when it is the project's root CLAUDE.md
+                            or CLAUDE.local.md, a file under the project's
+                            .claude directory, or a file under the Claude
+                            config directory (see is_harness_path), else
+                            absent. A nested CLAUDE.md is dropped.
+
+project_marker and a kept parent path are absolute, so they still contain the
+directories above the harness file. That is what "the path of a harness file"
+means in ADR 0010, and the report needs the root to find projects.
 
 All three are still named keys, so a payload that carries them is not schema
 drift; they are just not copied.
@@ -271,25 +278,39 @@ def trigger_glob(path: object) -> str | None:
     return "*" + ext if EXTENSION.fullmatch(ext) else "*"
 
 
-def is_harness_path(path: object) -> bool:
-    """Whether a path is an instruction or harness file, by its shape alone.
+def project_root(cwd: object) -> str | None:
+    """The git root of a session's working directory, or None. Never raises."""
+    if not isinstance(cwd, str) or not os.path.isabs(cwd):
+        return None
+    try:
+        return git_root(cwd)
+    except (OSError, ValueError):
+        return None
 
-    True for CLAUDE.md and CLAUDE.local.md wherever they sit, and for anything
-    under a `.claude` directory or under the Claude config directory. The
-    text of the path is never read for meaning.
+
+def is_harness_path(path: object, root: str | None) -> bool:
+    """Whether a path is a harness file of this session's own project or config.
+
+    By shape alone, never by reading the path's text. True for the root
+    `CLAUDE.md` or `CLAUDE.local.md` at the project's git root, for anything
+    under that root's `.claude` directory, and for anything under the Claude
+    config directory. A nested `CLAUDE.md`, or any other path, is false: it
+    would name a directory of the work. `root` is the git root, or None.
     """
     if not isinstance(path, str) or not path:
         return False
-    if os.path.basename(path) in INSTRUCTION_FILES:
-        return True
-    if ".claude" in path.split(os.sep):
-        return True
+    target = os.path.abspath(path)
     home = os.path.abspath(
         os.environ.get("CLAUDE_CONFIG_DIR")
         or os.path.join(os.path.expanduser("~"), ".claude")
     )
-    target = os.path.abspath(path)
-    return target == home or target.startswith(home + os.sep)
+    if target == home or target.startswith(home + os.sep):
+        return True
+    if root is None:
+        return False
+    if os.path.dirname(target) == root and os.path.basename(target) in INSTRUCTION_FILES:
+        return True
+    return target.startswith(os.path.join(root, ".claude") + os.sep)
 
 
 def file_size(path: object) -> int | None:
@@ -348,7 +369,7 @@ def build_record(payload: dict) -> dict:
         if glob_form:
             record["trigger_glob"] = glob_form
         parent = payload.get("parent_file_path")
-        if is_harness_path(parent):
+        if is_harness_path(parent, project_root(payload.get("cwd"))):
             record["parent_file_path"] = parent
 
     if event == "PreToolUse":

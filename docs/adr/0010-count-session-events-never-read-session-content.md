@@ -218,10 +218,19 @@ eight-week window age them out.
 - `trigger_file_path` becomes `trigger_glob`: the trigger's extension as a
   glob (`*.py`), or `*` when it has none or a suffix that is not short and
   plain. The rule's own glob was already in `globs`.
-- `parent_file_path` is kept only when it is `CLAUDE.md`, `CLAUDE.local.md`,
-  a file under a `.claude` directory or a file under the Claude config
-  directory. It is decided by the shape of the path, never by reading it.
-  Otherwise it is dropped.
+- `parent_file_path` is kept only when it is the `CLAUDE.md` or
+  `CLAUDE.local.md` at the project's git root, a file under that root's
+  `.claude` directory, or a file under the Claude config directory. It is
+  decided by the shape of the path, never by reading it. A nested
+  `CLAUDE.md`, a `.claude` directory elsewhere, and any other path are
+  dropped, because they would name a directory of the work.
+
+`project_marker` and a kept `parent_file_path` are absolute paths, so they
+still contain the directories above the harness file, including the home
+directory and the project's name. That is what "paths, but only of harness
+files" allows, and the report needs the root to find projects. The log is
+not free of names for that reason; it holds no path below a project's root
+except harness files.
 
 Options considered:
 
