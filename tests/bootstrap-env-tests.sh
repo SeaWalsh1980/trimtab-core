@@ -590,6 +590,84 @@ check_observer_probe() {
   fi
 }
 
+# A python3 on PATH that reports <version> to the installer's floor probe and
+# hands every other call to the real interpreter, so only the version is faked.
+# Prints the directory to put first on PATH.
+fake_python3() {
+  local version="$1" dir real
+  dir=$(mktemp -d -p "$work" fakepy.XXXXXX)
+  real=$(command -v python3)
+  cat > "$dir/python3" <<EOF
+#!/usr/bin/env bash
+if [[ "\${2-}" == *"version_info >= (3, 11)"* ]]; then
+  echo "$version"
+  [[ "$version" == 3.1[1-9]* ]]
+  exit \$?
+fi
+exec "$real" "\$@"
+EOF
+  chmod +x "$dir/python3"
+  echo "$dir"
+}
+
+# What an install or a --check would leave behind: nothing under the config
+# dir, no install record, and no machine.json in the instance.
+nothing_written() {
+  local h="$1" inst="$2"
+  [[ ! -e "$h/.claude" && ! -L "$h/.claude" && ! -e "$h/share" && ! -e "$inst/machine.json" ]]
+}
+
+check_refuses_python_older_than_3_11() {
+  local h inst fake
+  h=$(new_home); inst=$(inst_of "$h"); fake=$(fake_python3 3.10.4)
+  PATH="$fake:$PATH" boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 1 && "$out" == *"python3 3.10.4 is older than 3.11"* ]] && nothing_written "$h" "$inst"; then
+    pass "refuses python3 older than 3.11, naming the version, before anything is written"
+  else
+    fail "refuses python3 older than 3.11, naming the version, before anything is written" "rc=$rc"; echo "$out" | tail -5
+  fi
+}
+
+check_refuses_python_older_than_3_11_under_check() {
+  local h inst fake
+  h=$(new_home); inst=$(inst_of "$h"); fake=$(fake_python3 3.9.18)
+  PATH="$fake:$PATH" boot "$h" "$live" --instance "$inst" --check
+  if [[ $rc -eq 1 && "$out" == *"python3 3.9.18 is older than 3.11"* && "$out" != *"drift detected"* ]] \
+     && nothing_written "$h" "$inst"; then
+    pass "--check refuses python3 older than 3.11 too, and writes nothing"
+  else
+    fail "--check refuses python3 older than 3.11 too, and writes nothing" "rc=$rc"; echo "$out" | tail -5
+  fi
+}
+
+check_accepts_python_3_11() {
+  local h inst fake
+  h=$(new_home); inst=$(inst_of "$h"); fake=$(fake_python3 3.11.0)
+  PATH="$fake:$PATH" boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" != *"older than 3.11"* && -L "$h/.claude/hooks" ]]; then
+    pass "python3 3.11 passes the floor probe and installs"
+  else
+    fail "python3 3.11 passes the floor probe and installs" "rc=$rc"; echo "$out" | tail -5
+  fi
+}
+
+check_refuses_python_that_reports_no_version() {
+  local h inst dir
+  h=$(new_home); inst=$(inst_of "$h")
+  dir=$(mktemp -d -p "$work" brokenpy.XXXXXX)
+  printf '#!/usr/bin/env bash\nexit 7\n' > "$dir/python3"; chmod +x "$dir/python3"
+  PATH="$dir:$PATH" boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 1 && "$out" == *"did not report a version"* ]] && nothing_written "$h" "$inst"; then
+    pass "refuses a python3 that cannot report its version, before anything is written"
+  else
+    fail "refuses a python3 that cannot report its version, before anything is written" "rc=$rc"; echo "$out" | tail -5
+  fi
+}
+
+check_refuses_python_older_than_3_11
+check_refuses_python_older_than_3_11_under_check
+check_accepts_python_3_11
+check_refuses_python_that_reports_no_version
 check_writes_instance_values
 check_base_hooks_survive
 check_refuses_disable_all_hooks

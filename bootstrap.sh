@@ -126,7 +126,21 @@ unreadable() {
   if [[ $CHECK_ONLY -eq 1 ]]; then note "$1 cannot be read as settings"; else die "$1 cannot be read as settings"; fi
 }
 
-command -v python3 >/dev/null 2>&1 || die "python3 is required"
+# The python3 floor. The launchers (bin/trimtab, the drift hook, pr-body-check.sh)
+# run `python3 -P`, which needs 3.11: on anything older bin/trimtab fails, the
+# drift hook goes quiet and pr-body-check.sh fails open through its probe. So the
+# installer refuses first, before it writes, links or switches anything, --check
+# included. The version test is `sys.version_info`, not `-P`, so it also runs on
+# the interpreters it is there to refuse.
+# See docs/adr/0014-the-installer-refuses-python-older-than-3-11.md.
+command -v python3 >/dev/null 2>&1 || die "python3 is required (3.11 or newer: the launchers need python3 -P)"
+py_rc=0
+py_found=$(python3 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3]); sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null) \
+  || py_rc=$?
+[[ -n "$py_found" ]] \
+  || die "python3 did not report a version; the launchers need 3.11 or newer (python3 -P)"
+[[ $py_rc -eq 0 ]] \
+  || die "python3 $py_found is older than 3.11, which the launchers need (python3 -P)"
 
 BASE="$REPO"   # the mechanism: this checkout, or a snapshot under the store
 # CDPATH is cleared for the cd: with it set, a relative argument makes cd print
