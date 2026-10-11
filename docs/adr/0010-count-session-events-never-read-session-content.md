@@ -120,8 +120,13 @@ content. It may hold:
 
 An event never holds anything a person typed, a command line, file
 contents, tool input or output, or the path of a file the work touched.
-The rule-usage records are events. So is a guard denial, recorded by guard
-and reason code.
+A guard denial, recorded by guard and reason code, is an event. The
+rule-usage records are events except for three fields that predate this
+record: `cwd`, and the `trigger_file_path` and `parent_file_path` of an
+instruction load. They can name the project directory or a file the work
+touched. Until the observer drops them or reduces them to a harness path
+or a glob, in a change of its own, they are a known exception, and no
+draft carries them.
 
 **Events stay on the machine that recorded them.** Each kind of event is
 stored the way the rule-usage log is:
@@ -136,6 +141,9 @@ A hook never sends an event over the network.
 **Events never gate anything.** They reach GitHub the way local evidence
 already does. The local retrospective (`/trimtab-retro --usage`) turns them
 into draft feedback entries, and the operator files or discards each one.
+A draft carries names, IDs, reason codes and counts. It never carries a
+session ID: that field joins events within one machine's log and has no
+use outside it.
 
 Event counts may also be shown to the agent while it writes a pull request
 block, to remind it of friction lost to compaction. What it reports is
@@ -190,3 +198,7 @@ to the block follows the versioning rule in ADR 0007.
 - Accepted: the loop never sees the content that would explain an event,
   so some friction will stay unexplained. That is the price of keeping
   session content out.
+- Accepted, for now: the rule-usage log still holds work paths in three
+  fields, so it meets this record only once the observer is changed. The
+  log stays on the machine, mode 0600, so the exposure is no wider than
+  before this record.
