@@ -106,8 +106,8 @@ fire 'NOT JSON AT ALL'
 has '"reason":"unparseable-payload"' && pass "observer" "records its own parse failure" || bad "observer" "records its own parse failure" "$(lastline)"
 
 : > "$LOG"
-fire '{"hook_event_name":"SubagentStart","session_id":"s1","cwd":"/x","agent_id":"a1","agent_type":"ct-planner"}'
-has '"agent_type":"ct-planner"' && pass "observer" "records the agent type" || bad "observer" "records the agent type" "$(lastline)"
+fire '{"hook_event_name":"SubagentStart","session_id":"s1","cwd":"/x","agent_id":"a1","agent_type":"xx-planner"}'
+has '"agent_type":"xx-planner"' && pass "observer" "records the agent type" || bad "observer" "records the agent type" "$(lastline)"
 
 : > "$LOG"
 fire '{"hook_event_name":"SessionStart","session_id":"s1","cwd":"/x","source":"startup"}'
@@ -127,8 +127,8 @@ has '"skill":"superpowers:brainstorming"' && pass "observer" "records the skill 
 has 'SECRET-ARGS-XYZ' && bad "observer" "never records a skill's arguments" "they were recorded" || pass "observer" "never records a skill's arguments"
 
 : > "$LOG"
-fire '{"hook_event_name":"UserPromptExpansion","session_id":"s1","cwd":"/x","expansion_type":"slash_command","command_name":"ct-review","command_args":"SECRET-ARGS-XYZ","command_source":"project","prompt":"SECRET-PROMPT-XYZ"}'
-has '"command_name":"ct-review"' && pass "observer" "records the slash command" || bad "observer" "records the slash command" "$(lastline)"
+fire '{"hook_event_name":"UserPromptExpansion","session_id":"s1","cwd":"/x","expansion_type":"slash_command","command_name":"xx-review","command_args":"SECRET-ARGS-XYZ","command_source":"project","prompt":"SECRET-PROMPT-XYZ"}'
+has '"command_name":"xx-review"' && pass "observer" "records the slash command" || bad "observer" "records the slash command" "$(lastline)"
 has '"command_source":"project"' && pass "observer" "records where the command came from" || bad "observer" "records where the command came from" "$(lastline)"
 has 'SECRET' && bad "observer" "never records a command's args or prompt" "they were recorded" || pass "observer" "never records a command's args or prompt"
 
@@ -184,9 +184,9 @@ FULL="$TMP/full.jsonl"
   printf '{"v":1,"ts":"%s","event":"SessionStart","session_id":"s1","cwd":"%s","source":"startup","model":"m"}\n' "$NOW" "$PROJECT"
   printf '{"v":1,"ts":"%s","event":"InstructionsLoaded","session_id":"s1","cwd":"%s","file_path":"%s","memory_type":"Project","load_reason":"session_start","bytes":26}\n' "$NOW" "$PROJECT" "$PROJECT/CLAUDE.md"
   printf '{"v":1,"ts":"%s","event":"InstructionsLoaded","session_id":"s1","cwd":"%s","file_path":"%s","memory_type":"Project","load_reason":"path_glob_match","trigger_file_path":"%s","bytes":40}\n' "$NOW" "$PROJECT" "$PROJECT/.claude/rules/loaded.md" "$PROJECT/src/a.py"
-  printf '{"v":1,"ts":"%s","event":"SubagentStart","session_id":"s1","cwd":"%s","agent_type":"ct-planner"}\n' "$NOW" "$PROJECT"
+  printf '{"v":1,"ts":"%s","event":"SubagentStart","session_id":"s1","cwd":"%s","agent_type":"xx-planner"}\n' "$NOW" "$PROJECT"
   printf '{"v":1,"ts":"%s","event":"PreToolUse","session_id":"s1","cwd":"%s","tool_name":"Skill","skill":"used-skill"}\n' "$NOW" "$PROJECT"
-  printf '{"v":1,"ts":"%s","event":"UserPromptExpansion","session_id":"s1","cwd":"%s","expansion_type":"slash_command","command_name":"ct-review","command_source":"project"}\n' "$NOW" "$PROJECT"
+  printf '{"v":1,"ts":"%s","event":"UserPromptExpansion","session_id":"s1","cwd":"%s","expansion_type":"slash_command","command_name":"xx-review","command_source":"project"}\n' "$NOW" "$PROJECT"
   printf '{"v":1,"ts":"%s","event":"InstructionsLoaded","session_id":"s1","cwd":"%s","file_path":"%s","memory_type":"User","load_reason":"session_start","bytes":30}\n' "$NOW" "$PROJECT" "$HOME_DIR/rules/loaded-doctrine.md"
   printf '{"v":1,"ts":"%s","event":"InstructionsLoaded","session_id":"s1","cwd":"%s","file_path":"%s","memory_type":"User","load_reason":"session_start","bytes":30}\n' "$NOW" "$PROJECT" "$TMP/elsewhere/linked-doctrine.md"
 } > "$FULL"
@@ -206,16 +206,16 @@ mkdir -p "$HOME_DIR/skills/used-skill" "$HOME_DIR/skills/dormant-skill"
 printf -- '---\nname: used-skill\n---\n' > "$HOME_DIR/skills/used-skill/SKILL.md"
 printf -- '---\nname: dormant-skill\n---\n' > "$HOME_DIR/skills/dormant-skill/SKILL.md"
 mkdir -p "$PROJECT/.claude/commands"
-printf 'a command\n' > "$PROJECT/.claude/commands/ct-review.md"
+printf 'a command\n' > "$PROJECT/.claude/commands/xx-review.md"
 printf 'another\n' > "$PROJECT/.claude/commands/never-typed.md"
 
 report --log "$FULL"
 [[ $rc -eq 0 ]] && pass "report" "a clean window is exit 0" || bad "report" "a clean window is exit 0" "exit $rc: $(cat "$TMP/err")"
 grep -q 'dormant.md' "$TMP/report" && pass "report" "names the rule that never loaded" || bad "report" "names the rule that never loaded" "absent"
 grep -q 'loaded.md' "$TMP/report" && pass "report" "names the rule that did load" || bad "report" "names the rule that did load" "absent"
-grep -q 'ct-planner' "$TMP/report" && pass "report" "counts the subagent" || bad "report" "counts the subagent" "absent"
+grep -q 'xx-planner' "$TMP/report" && pass "report" "counts the subagent" || bad "report" "counts the subagent" "absent"
 grep -q 'used-skill' "$TMP/report" && pass "report" "counts the skill that was invoked" || bad "report" "counts the skill that was invoked" "absent"
-grep -q 'ct-review' "$TMP/report" && pass "report" "counts the slash command" || bad "report" "counts the slash command" "absent"
+grep -q 'xx-review' "$TMP/report" && pass "report" "counts the slash command" || bad "report" "counts the slash command" "absent"
 grep -q 'dormant-skill' "$TMP/report" && pass "report" "names the installed skill nobody used" || bad "report" "names the installed skill nobody used" "absent"
 grep -q 'never-typed' "$TMP/report" && pass "report" "names the command nobody typed" || bad "report" "names the command nobody typed" "absent"
 grep -q 'Doctrine — loaded in every project' "$TMP/report" && pass "report" "gives the doctrine its own section" || bad "report" "gives the doctrine its own section" "absent"

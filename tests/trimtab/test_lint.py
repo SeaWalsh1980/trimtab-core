@@ -112,11 +112,11 @@ class Overrides(unittest.TestCase):
         self.assertIn("unverifiable", self.lint(GOOD))
 
 
-CT_REVIEW = """# ct-review
+REVIEW_FIXTURE = """# xx-review
 
 | Agent | Pass |
 |---|---|
-| `ct-reviewer` | The project's own rule corpus |
+| `xx-reviewer` | The project's own rule corpus |
 | `pr-review-toolkit:pr-test-analyzer` | Test coverage |
 | `pr-review-toolkit:silent-failure-hunter` | Swallowed exceptions |
 """
@@ -128,7 +128,7 @@ class References(unittest.TestCase):
         self.root = Path(self._tmp.name)
         (self.root / ".claude" / "commands").mkdir(parents=True)
         (self.root / ".claude" / "agents").mkdir(parents=True)
-        (self.root / ".claude" / "agents" / "ct-reviewer.md").write_text("---\nname: ct-reviewer\n---\n")
+        (self.root / ".claude" / "agents" / "xx-reviewer.md").write_text("---\nname: xx-reviewer\n---\n")
         self.enabled = {"superpowers"}
 
     def tearDown(self):
@@ -139,13 +139,13 @@ class References(unittest.TestCase):
         return references.lint(self.root, base_root=None, enabled_plugins=self.enabled)
 
     def test_the_two_review_passes_that_never_ran_fail(self):
-        problems = self.lint("ct-review.md", CT_REVIEW)
+        problems = self.lint("xx-review.md", REVIEW_FIXTURE)
 
         self.assertEqual(sorted(p.where.split(" ")[-1] for p in problems),
                          ["pr-review-toolkit:pr-test-analyzer", "pr-review-toolkit:silent-failure-hunter"])
 
     def test_an_agent_that_exists_resolves(self):
-        problems = self.lint("ok.md", "| Agent | Pass |\n|---|---|\n| `ct-reviewer` | x |\n")
+        problems = self.lint("ok.md", "| Agent | Pass |\n|---|---|\n| `xx-reviewer` | x |\n")
 
         self.assertEqual(problems, [])
 
