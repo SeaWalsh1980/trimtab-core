@@ -174,6 +174,21 @@ class Bump(unittest.TestCase):
 
         self.assertEqual(result.problems, ())
 
+    def test_the_pr_body_passes_check_pr_against_a_registry_with_no_items(self):
+        result = check_body(bump.pr_body(bump.plan(self.project, self.base, self.v2), "o/r"), {})
+
+        self.assertEqual(result.problems, ())
+
+    def test_the_pr_body_cites_no_item_and_says_why(self):
+        result = check_body(bump.pr_body(bump.plan(self.project, self.base, self.v2), "o/r"), {})
+
+        self.assertEqual([(a.id, bool(a.why)) for a in result.block.applied], [("none", True)])
+
+    def test_the_pr_body_names_the_lock_as_the_file_applied_to(self):
+        result = check_body(bump.pr_body(bump.plan(self.project, self.base, self.v2), "o/r"), {})
+
+        self.assertEqual(result.block.applied[0].files, (".claude/trimtab.json",))
+
 
 if __name__ == "__main__":
     unittest.main()

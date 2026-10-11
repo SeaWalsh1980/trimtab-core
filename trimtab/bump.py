@@ -101,7 +101,12 @@ def apply(project: Path, todo: BumpPlan, confirm: str) -> None:
 
 
 def pr_body(todo: BumpPlan, repo: str) -> str:
-    """The draft PR's body, harness block included. Values are IDs and SHAs only."""
+    """The draft PR's body, harness block included. Values are IDs and SHAs only.
+
+    The applied block cites `id: none`: the base defines no item IDs of its
+    own, so any ID written here would belong to one instance and be unknown to
+    every other. The why is quoted so a later edit adding `: ` still parses.
+    """
     rows = "\n".join(f"| `{c.id}` | {c.what} | {c.detail} |" for c in todo.changes) or "| — | none | |"
     # Unticked on purpose: once the lock moves, `lint overrides` compares against
     # the new SHA and passes, so this checklist is the only record of re-confirmation.
@@ -111,8 +116,8 @@ def pr_body(todo: BumpPlan, repo: str) -> str:
         f"([compare](https://github.com/{repo}/compare/{todo.old}...{todo.new})).\n\n"
         f"## Changed items\n\n| ID | Change | Detail |\n|---|---|---|\n{rows}\n\n"
         f"## Overrides to re-confirm\n\n{flags or 'None: no override cites a changed item.'}\n\n"
-        "## Harness items applied\n```yaml\n- id: NRM-3\n"
-        "  why: moving the lock; every override citing a changed item is re-confirmed or dropped\n"
+        "## Harness items applied\n```yaml\n- id: none\n"
+        '  why: "moving the lock; every override citing a changed item is re-confirmed or dropped"\n'
         "  files: [.claude/trimtab.json]\n```\n\n"
         "## Harness feedback\n```yaml\n```\n\n"
         "## Process cost\n```yaml\n```\n"
