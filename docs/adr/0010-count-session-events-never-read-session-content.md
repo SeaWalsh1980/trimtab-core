@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed.
+Accepted.
 
 This record adds to ADR 0005 and leaves it unchanged. ADR 0005 rejected
 mining session transcripts and gave one reason. This record gives the
@@ -162,9 +162,9 @@ to the block follows the versioning rule in ADR 0007.
   the hook, and it writes to GitHub without the dry run and confirmation
   that ADR 0005 requires.
 - **Commit events to the instance repository.** Rejected. Every session
-  would write into the checkout that the live harness loads from
-  (ADR 0002). Every commit pushed from it would be a write to GitHub that
-  needs a gate (ADR 0005).
+  would write into the instance checkout, which the live harness loads
+  from (ADRs 0002 and 0008). Every commit pushed from it would be a
+  write to GitHub that needs a gate (ADR 0005).
 - **Publish weekly counts to GitHub automatically, so cloud routines can
   see them.** Rejected for now. An unattended timer cannot answer the
   confirmation gate, and nothing yet shows that the counts are worth
@@ -179,7 +179,7 @@ to the block follows the versioning rule in ADR 0007.
   as counts only. The gate stays where it is.
 - A new kind of event means a new hook, or a change to an existing one.
   When that change touches a guard, it changes a security control and goes
-  in a pull request of its own.
+  in a pull request of its own (ADR 0011).
 - Accepted: events are per machine. A retrospective sees only the events
   of the machine it runs on. Cloud routines see none, as with the
   rule-usage log today.
