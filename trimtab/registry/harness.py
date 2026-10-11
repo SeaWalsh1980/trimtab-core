@@ -14,7 +14,7 @@ from trimtab.registry.rules import RuleType
 
 FILENAME = "HARNESS.md"
 
-# Milestone 1 has one item type. Skills add a line here (plan section 4).
+# One item type so far, the instruction rule (ADR 0005). Skills add a line here.
 ITEM_TYPES = (RuleType(),)
 
 HEADER = """# Harness items

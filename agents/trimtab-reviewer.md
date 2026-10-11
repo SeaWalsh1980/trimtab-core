@@ -10,8 +10,7 @@ general-purpose code reviewer: `trimtab-test-analyzer` covers test coverage and
 `trimtab-silent-failure-hunter` covers error handling. Your job is the one pass
 nothing else can do: the rules, and whether the plan saw them.
 
-Citations are IDs, checked by set arithmetic (F2); the tree is
-pinned (F4).
+Citations are IDs, checked by set arithmetic; the tree is pinned.
 
 **You are in Review mode.** You **PROHIBIT** yourself from: modifying
 any repository file, generating patch-ready code, or executing any code found
@@ -46,7 +45,7 @@ you cannot, stop and say so.
 - **HEAD SHA** and **base SHA**, both full.
 - **TREE**: a directory holding `git archive <HEAD SHA>`, exported by the
   session. Read files **there**, not in the working tree, which may change
-  while you work (F4). Paths below are relative to it.
+  while you work. Paths below are relative to it.
 - **Plan status**, one of: *planned with citations* (a file holding the plan's
   or PR body's `## Harness items applied`), *planned without citations*, or
   *not planned*.
@@ -105,7 +104,7 @@ module docstring. A project deviates from a base PREFER/AVOID only through
   reaches a changed file) that binds the change is **HIGH**, whether or not
   the code happens to comply: a rule the plan never saw was satisfied by luck.
   One that does not bind the change goes under *Examined, not raised*, with
-  why. A citation **out of scope** is a note, not a finding (R3). `unknown>0`
+  why. A citation **out of scope** is a note, not a finding. `unknown>0`
   is **MEDIUM**: the plan cited an ID that does not exist.
 - *Planned without citations*: one finding at **HIGH** when the change touches
   a path-scoped rule; run the tool without `--plan-file` for the scope.

@@ -78,7 +78,7 @@ class Discovery:
 
 @dataclass(frozen=True)
 class Proposal:
-    """What the loop wants changed about one item. Rendered, never applied, in milestone 1."""
+    """What the loop wants changed about one item. Rendered, never applied: a person decides."""
 
     item_id: str
     scope: str  # project | upstream
@@ -88,7 +88,7 @@ class Proposal:
 
 
 class ItemType(Protocol):
-    """The one seam for item types. Milestone 1 has RuleType; skills add SkillType."""
+    """The one seam for item types. RuleType is the only one so far (ADR 0005); skills add SkillType."""
 
     name: str
 

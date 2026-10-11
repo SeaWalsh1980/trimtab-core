@@ -1,6 +1,6 @@
 """Moving a project's lock: which items changed, and which overrides must be re-confirmed.
 
-`/trimtab-bump` opens a draft PR moving `trimtab_sha` forward (plan section 3).
+`/trimtab-bump` opens a draft PR moving `trimtab_sha` forward (ADR 0005).
 The PR lists every base item that changed between the locked SHA and the new
 one, and flags each override citing a changed ID: "re-confirm or drop". The
 lock is written only behind a confirmation gate: `plan` reads, `apply` needs the

@@ -3,7 +3,7 @@
 `.claude/rules/overrides.md` holds one ```yaml list. Each entry names a base
 ID (and optionally the clause's first words), the replacement `text`, the
 `reason` and an `adr` path in the project. Every check is structural, so the
-result is deterministic (plan section 2a):
+result is deterministic (ADR 0005):
 
 - the ID exists in the base and is not withdrawn;
 - the item or clause is PREFER or AVOID (REQUIRE/PROHIBIT go upstream);

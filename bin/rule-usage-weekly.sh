@@ -24,7 +24,8 @@ days=7
 [[ "${1:-}" == "--days" ]] && days="${2:?--days needs a number}"
 
 out="$logdir/rule-usage-$(date -u +%G-W%V).md"
-python3 "$here/rule-usage-report.py" --days "$days" --out "$out"
+# -B: write no bytecode beside the script; a snapshot is never written.
+python3 -B "$here/rule-usage-report.py" --days "$days" --out "$out"
 rc=$?
 
 case $rc in

@@ -3,10 +3,9 @@
 Always-loaded content is every instruction file (`CLAUDE.md` and/or
 `AGENTS.md`), the files they import with `@path`, and rules without a `paths:`
 key. It is measured in bytes: the observer's `context_tokens` arrives only on
-resumed sessions, so it measures a conversation, not this baseline (spike S3,
-ADR 0009).
+resumed sessions, so it measures a conversation, not this baseline.
 
-Findings are proposal triggers (plan section 6d), not errors: over the
+Findings are proposal triggers (ADR 0006), not errors: over the
 project's budget, an instruction file over 200 lines, or more than 10% growth
 since a previous report or since the tree at a git ref (`--against`).
 """
@@ -124,7 +123,7 @@ def measure_at(root: Path, ref: str, rules_dirs: list[str], budget_kb: int) -> R
     """The same measurement over the tree as it stood at `ref`: the growth baseline.
 
     A routine has no disk to keep last run's report on, so the baseline is the
-    committed tree at a ref instead (ADR 0011). Exported with `git archive`
+    committed tree at a ref instead (ADR 0006). Exported with `git archive`
     into a temporary directory, removed on every path.
     """
     try:
@@ -145,7 +144,7 @@ class Section:
     path: str
     heading: str
     bytes: int
-    binding: bool  # holds a REQUIRE or PROHIBIT: stays always-loaded whatever its size (section 6d)
+    binding: bool  # holds a REQUIRE or PROHIBIT: stays always-loaded whatever its size
 
 
 def sections(root: Path, report: Report, top: int = 10) -> list[Section]:

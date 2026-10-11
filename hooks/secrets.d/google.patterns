@@ -3,7 +3,7 @@
 # \b would let it through (the matrix pins this).
 #
 # Google API key: "AIza" then 35 of [0-9A-Za-z_-]. No Google page states the
-# format; two widely used scanner rules agree (stage S2, spec S2-4):
+# format; two widely used scanner rules agree:
 #   gitleaks cmd/generate/config/rules/gcp.go, rule gcp-api-key:
 #     utils.GenerateUniqueTokenRegex(`AIza[\w-]{35}`, false)
 #     https://raw.githubusercontent.com/gitleaks/gitleaks/master/cmd/generate/config/rules/gcp.go

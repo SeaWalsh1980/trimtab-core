@@ -13,7 +13,9 @@
 #                     (refused by default — see section 0)
 #
 # Exit codes: 0 done or in sync; 1 drift (--check) or a refused install;
-# 64 a usage error, including a run without --instance.
+# 64 a usage error, including a run without --instance. An install whose
+# observer step was red still exits 0, but ends "NOT GREEN: observer" instead
+# of "done.": read that closing line as a failed install.
 #
 # Idempotent: safe to re-run after every git pull.
 #
@@ -58,8 +60,8 @@ fi
 
 drift=0
 # Set by a step that failed without dying (the observer probe). Retention
-# deletes nothing after one; ordinary drift, such as a first install's changes,
-# is not red.
+# deletes nothing after one, and the run ends NOT GREEN; ordinary drift, such
+# as a first install's changes, is not red.
 red=0
 # Set once the live settings.json is found unreadable: the probes that depend on
 # it are then skipped, not run against a guess.
@@ -155,7 +157,7 @@ echo
 # all. `git` cannot answer there, and refusing would break a legitimate
 # tarball install, so that case proceeds. The target is the accidental
 # worktree run, not a determined operator.
-# See docs/adr/0006-bootstrap-installs-only-from-the-canonical-checkout.md.
+# See docs/adr/0003-install-only-from-a-verified-checkout-or-snapshot.md.
 #
 # Both sides of the comparison must be physical paths. `pwd` is logical by
 # default, so $REPO keeps any symlinked ancestor intact (a dotfiles-style
@@ -194,7 +196,7 @@ if [[ -n "${CLAUDE_CONFIG_DIR:-}" && "${CLAUDE_CONFIG_DIR%/}" != "${HOME%/}/.cla
   SANDBOXED=1
 fi
 
-# ---- 1. the doctrine registry check (D10) -----------------------------
+# ---- 1. the doctrine registry check (ADR 0008) ------------------------
 # Before anything is written, machine.json included: a failure leaves the
 # previous install live, and nothing is created, switched or deleted.
 installed_json="$STORE/.installed.json"
@@ -447,7 +449,7 @@ probe_guard() {
     # die, not note: a guard returning anything but 2 is not drift, it is absent.
     # note sets drift=1, which in install mode prints a yellow arrow and then
     # reports "done." — an install that says done while the guards are open is
-    # exactly the silent failure ADR 0001 refuses for the observer.
+    # a silent failure.
     [[ $rc -eq 2 ]] && ok "$name blocks $what through the symlink" \
                     || die "$name returned $rc, expected 2 — the guards are failing open"
     [[ $rc_garbage -eq 2 ]] && ok "$name fails closed on an unparseable payload" \
@@ -477,7 +479,7 @@ probe_guard guard-paths.sh "a read of a .env file" \
   '{"tool_name":"Read","tool_input":{"file_path":"/x/.env"}}'
 probe_guard guard-secrets.sh "a PEM private key in written content" \
   "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/x/probe.py\",\"content\":\"KEY = '$pem'\"}}"
-# Each enabled signature pack must block its own sample (stage S2, C8). The
+# Each enabled signature pack must block its own sample (ADR 0008). The
 # switch comes from the generated settings, not this shell: unset or empty
 # means every shipped pack, "none" means no pack.
 if [[ $settings_bad -eq 1 ]]; then
@@ -511,6 +513,48 @@ done
 probe_guard guard-security.sh "an edit to a CI workflow" \
   '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/x/.github/workflows/ci.yml"}}'
 unset pem
+
+# guard-mcp never exits 2: it answers "ask" as JSON on exit 0, so the operator
+# approves an MCP write call by call (ADR 0013). probe_guard cannot see that
+# answer, so it gets its own probe, held to the same standard: an MCP write and
+# a garbage payload must each be asked about, and silence on either is a guard
+# that lets MCP writes run unprompted.
+#
+#   probe_ask <hook> <what it asks about> <payload that must ask>
+probe_ask() {
+  local hook="$1" what="$2" probe="$3" name="${1%.sh}" out rc out_garbage rc_garbage
+  if [[ -x "$CLAUDE_HOME/hooks/$hook" ]]; then
+    set +e
+    out=$(printf '%s' "$probe" | "$CLAUDE_HOME/hooks/$hook" 2>/dev/null)
+    rc=$?
+    out_garbage=$(printf '%s' 'not json' | "$CLAUDE_HOME/hooks/$hook" 2>/dev/null)
+    rc_garbage=$?
+    set -e
+    # die, not note, as in probe_guard: a guard that does not ask is absent.
+    [[ $rc -eq 0 ]] && is_ask "$out" && ok "$name asks about $what through the symlink" \
+      || die "$name returned $rc without asking about $what — MCP writes would run unprompted"
+    [[ $rc_garbage -eq 0 ]] && is_ask "$out_garbage" && ok "$name asks on an unparseable payload" \
+      || die "$name returned $rc_garbage without asking on garbage — fails open"
+  elif [[ $CHECK_ONLY -eq 1 ]]; then
+    note "$hook not linked into $CLAUDE_HOME — guard probe skipped"
+  else
+    die "$hook not linked into $CLAUDE_HOME after section 3 — refusing to report a successful install with unverified guards"
+  fi
+}
+is_ask() { # is_ask <hook stdout>: one PreToolUse "ask" answer, and nothing else
+  python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit(1)
+h = d.get("hookSpecificOutput") if isinstance(d, dict) else None
+sys.exit(0 if isinstance(h, dict) and h.get("hookEventName") == "PreToolUse"
+         and h.get("permissionDecision") == "ask" else 1)
+' "$1"
+}
+probe_ask guard-mcp.sh "an MCP write" \
+  '{"tool_name":"mcp__probe__create_item","tool_input":{}}'
 # The declared private pattern file must parse with guard-secrets' own parser:
 # a benign write has to pass with it. The guard refuses a relative path or an
 # unreadable file, so a bad declaration fails here and not on the first edit.
@@ -558,7 +602,7 @@ else
   note "rule-usage.sh not linked into $CLAUDE_HOME yet — observer probe skipped"
 fi
 
-# ---- 6b. the install record, and retention (D2) -----------------------
+# ---- 6b. the install record, and retention (ADR 0003) -----------------
 # Reaching this point means no step died: the registry check, the merge, the
 # links and every guard probe are green. Retention runs only then, and only
 # when this script is itself a snapshot under the store (a directory named by
@@ -706,4 +750,11 @@ echo
 if [[ $CHECK_ONLY -eq 1 ]]; then
   [[ $drift -eq 1 ]] && { echo "drift detected"; exit 1; } || { echo "in sync"; exit 0; }
 fi
-echo "done. Run 'claude' and check /hooks to confirm registration."
+# A red observer step is not a failed guard, so the exit stays 0: the observer is
+# telemetry, and a scripted install (the cloud setup script among them) must not
+# fail over a usage log. The closing line is what says the run was not green.
+if [[ $red -eq 1 ]]; then
+  echo "NOT GREEN: observer — retention withheld; see the note above"
+else
+  echo "done. Run 'claude' and check /hooks to confirm registration."
+fi

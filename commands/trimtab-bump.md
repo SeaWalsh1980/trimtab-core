@@ -6,10 +6,11 @@ argument-hint: "[Trimtab ref to move to; default: the installed checkout's HEAD]
 Move this project's Trimtab lock to `$ARGUMENTS` (or, if empty, to the
 Trimtab this machine runs).
 
-The lock records which Trimtab the project was last reviewed against (plan 0009,
-section 3). On a machine it acknowledges rather than pins; in a routine it is a
-real pin. Moving it is a review step, not a formality: the PR is where a person
-sees what changed upstream and decides about each override it touches.
+The lock records which Trimtab the project was last reviewed against
+(trimtab-core ADR 0005). On a machine it acknowledges rather than pins; in a
+routine it is a real pin. Moving it is a review step, not a formality: the PR
+is where a person sees what changed upstream and decides about each override
+it touches.
 
 A harness update (this command) and a scaffold update (`trimtab adopt --update`,
 iteration 4) are separate PRs. Do not mix them.

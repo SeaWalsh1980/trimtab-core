@@ -1,7 +1,7 @@
 """A hermetic instance for tests that run `bin/trimtab` or a hook, hermetically.
 
 The package reads its doctrine from an instance root, never from its own
-checkout (stage S2 spec, section 3). Tests build one here, in a temporary
+checkout (ADR 0008). Tests build one here, in a temporary
 directory, so no unit test reads the real `rules/`. The doctrine files have
 neutral names so a copy of these tests carries no deployment's filenames; the
 prefixes are the ones the fixtures cite (`TST-2`, `NRM-3`).

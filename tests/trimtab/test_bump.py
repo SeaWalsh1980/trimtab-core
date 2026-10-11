@@ -141,7 +141,7 @@ class Bump(unittest.TestCase):
         self.assertIn("## Harness items applied", body)
 
     def cli_dry_run(self):
-        """`trimtab bump` against this instance, with instance.json naming its repository (stage S3 spec, S3-4)."""
+        """`trimtab bump` against this instance, with instance.json naming its repository."""
         (self.base / instance_file.FILE).write_text(json.dumps(
             {"schema_version": 1, "repo": "owner/inst", "base": {"repo": "owner/base", "sha": "0" * 40}}))
         body = Path(self._tmp.name) / "body.md"

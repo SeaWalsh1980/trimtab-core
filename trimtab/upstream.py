@@ -1,7 +1,7 @@
-"""The config loop's evidence: what every consumer overrides and reports, per base ID (section 6c).
+"""The config loop's evidence: what every consumer overrides and reports, per base ID (ADR 0005).
 
 Trimtab reconsiders a base default only when **2 or more consumers** override
-the same ID, or report it upstream (plan section 2). This module reads each
+the same ID, or report it upstream (ADR 0005). This module reads each
 consumer's lock and `overrides.md`, and the open `harness-feedback` issues on
 Trimtab, and groups both by ID. It reads only; `/trimtab-upstream-retro`
 drafts the PR and ADR for each candidate.

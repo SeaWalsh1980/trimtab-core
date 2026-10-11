@@ -1,8 +1,8 @@
 """Score: tally evidence per ID, coverage, and the proposal threshold.
 
-Citation *count* is never scored (risk R3): applied citations are reported for
+Citation *count* is never scored (ADR 0005): applied citations are reported for
 context only. A proposal needs feedback on the same ID and scope from at least
-`threshold` distinct PRs (plan section 8a: act only on repeats).
+`threshold` distinct PRs (ADR 0005: act only on repeats).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from trimtab.items import Proposal
 
 THRESHOLD = 2
 # Evidence older than this no longer counts: items unseen for 8 weeks expire
-# (plan section 8a). It is also the bound on the ledger rebuilt from labels.
+# (ADR 0006). It is also the bound on the ledger rebuilt from labels.
 WINDOW_WEEKS = 8
 
 
@@ -35,7 +35,7 @@ class Tally:
 
 
 def tally(records: Iterable, since: str | None = None) -> Tally:
-    """Records merged on or after `since` (YYYY-MM-DD); older evidence has decayed (plan section 8a)."""
+    """Records merged on or after `since` (YYYY-MM-DD); older evidence has decayed (ADR 0006)."""
     t = Tally()
     for r in records:
         if since is not None and r.merged_at[:10] < since:

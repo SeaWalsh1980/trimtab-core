@@ -6,11 +6,13 @@ it.
 Trimtab does two jobs. It **guards** a Claude Code session: PreToolUse hooks
 that block destructive commands, reads of credential files, secrets written
 into files, and edits to the controls that review change (CI workflows,
-CODEOWNERS, Claude Code settings and hooks). And it runs a **loop** over a
-body of engineering rules: every rule is a *harness item* with a stable ID,
-pull requests cite the items they applied and report friction against them,
-and a retrospective tallies that evidence per ID and proposes changes to the
-items that keep causing trouble.
+CODEOWNERS, Claude Code settings and hooks), and that ask the operator to
+approve, call by call, every MCP tool call not named as a read (ADR 0013;
+the name is the only evidence, so a write named like a read is not asked).
+And it runs a **loop** over a body of engineering rules: every rule is a
+*harness item* with a stable ID, pull requests cite the items they applied
+and report friction against them, and a retrospective tallies that evidence
+per ID and proposes changes to the items that keep causing trouble.
 
 ## The base and an instance
 
@@ -30,6 +32,10 @@ The package never guesses which instance it serves. It takes the instance
 root from `--instance`, then from `TRIMTAB_INSTANCE`, and otherwise stops
 with an error naming both. It reads doctrine only from the instance and code
 (agents, commands) only from its own checkout.
+
+`trimtab instance --check` checks that an instance's `instance.json` and
+`consumers.json` load, and exits 2 naming the file that does not; an
+instance's CI runs it.
 
 The decisions behind this layout, and behind the guards, are recorded in
 [docs/adr/](docs/adr/).
@@ -120,14 +126,22 @@ stand in for one.
 - Nothing in this repository may name a deployment: no repository names
   other than this one, no home paths, no email addresses, no routine or
   environment IDs. Test fixtures use placeholders (`owner/repo`).
+- Cite decisions by this repository's ADRs in `docs/adr/`, never by an
+  instance's ADRs, plans or specs; where no ADR here records a decision,
+  state the reason in place. Text read inside another repository
+  (`agents/`, `commands/`, `templates/`, `routines/templates/`, CLI output)
+  writes `trimtab-core ADR NNNN`, because that repository numbers its own
+  ADRs; elsewhere, write `ADR NNNN` or the ADR's full file name.
+  `tests/trimtab/test_doc_references.py` checks the numbers and paths.
 - New code uses the Python standard library; PyYAML stays the only runtime
   dependency.
 - Unit tests are hermetic and deterministic: fixture instances in a
   temporary directory, no network.
-- Errors are typed. Guards fail closed; the two policy hooks
-  (`doctrine-drift`, `pr-body-check`) fail open with a message.
+- Errors are typed. Guards fail closed: the blocking guards block, and
+  `guard-mcp` asks the operator; the two policy hooks (`doctrine-drift`,
+  `pr-body-check`) fail open with a message.
 - A change to a guard comes with cases in `tests/guard-tests.sh`, including
-  the case that must still be blocked.
+  the case that must still be blocked, or for `guard-mcp`, asked.
 
 ## Licence
 

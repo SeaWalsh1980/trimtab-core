@@ -1,5 +1,5 @@
-"""instance.json (stage S3 spec, section 2) and the lock at schema 2 (S3-4): parsers tested from values,
-then `trimtab instance --json` at the file boundary."""
+"""instance.json (ADR 0008) and the lock at schema 2: parsers tested from values,
+then `trimtab instance --json` and `--check` at the file boundary."""
 
 import json
 import subprocess
@@ -9,7 +9,7 @@ from pathlib import Path
 
 from instance_fixture import REPO_NAME, env_for, make_instance
 from trimtab import config as project_config
-from trimtab import instance, roots
+from trimtab import instance, roots, upstream
 
 TRIMTAB = roots.code_root() / "bin" / "trimtab"
 
@@ -130,7 +130,7 @@ class PatternsPath(unittest.TestCase):
             with self.assertRaises(instance.InstanceFileError):
                 instance.patterns_path(f, root)
 
-# The lock's schema table (S3-4) lives with the format it migrates to.
+# The lock's schema table lives with the format it migrates to.
 
 LOCK = {"trimtab_sha": "b" * 40, "id_prefix": "INS"}
 
@@ -140,7 +140,7 @@ def lock(**fields):
 
 
 class LockSchema(unittest.TestCase):
-    """Stage S3 spec, S3-4: each row of the table is one test."""
+    """Each row of the lock's schema table is one test."""
 
     def test_schema_2_without_bindings_is_accepted(self):
         config, problems = project_config.parse(lock(schema_version=2))
@@ -173,7 +173,7 @@ class LockSchema(unittest.TestCase):
 class CliInstanceJson(unittest.TestCase):
     """Integration at the file boundary: `trimtab instance --json` against a fixture instance.
 
-    Bootstrap consumes exactly this object (stage S3 spec, section 3), so its shape is a contract.
+    Bootstrap consumes exactly this object, so its shape is a contract.
     """
 
     def setUp(self):
@@ -214,3 +214,64 @@ class CliInstanceJson(unittest.TestCase):
 
         self.assertEqual((done.returncode, done.stdout), (2, ""))
         self.assertIn("secrets_patterns", done.stderr)
+
+
+class CliInstanceCheck(unittest.TestCase):
+    """Integration at the file boundary: `trimtab instance --check` against a fixture instance.
+
+    The instance's CI runs it, so a malformed file must fail it naming the file.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.inst = make_instance(Path(self.tmp.name))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write_consumers(self, data):
+        (self.inst / upstream.CONSUMERS).write_text(json.dumps(data))
+
+    def run_check(self):
+        return subprocess.run([str(TRIMTAB), "instance", "--check", "--instance", str(self.inst)],
+                              capture_output=True, text=True, env=env_for(None))
+
+    def test_a_valid_instance_passes_counting_its_consumers(self):
+        self.write_consumers({"consumers": [{"repo": "o/r"}]})
+
+        done = self.run_check()
+
+        self.assertEqual((done.returncode, done.stdout), (0, "instance: ok (1 consumer(s))\n"), done.stderr)
+
+    def test_a_consumers_object_instead_of_a_list_exits_2_naming_consumers_json(self):
+        self.write_consumers({"consumers": {}})
+
+        done = self.run_check()
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""))
+        self.assertIn(upstream.CONSUMERS, done.stderr)
+
+    def test_a_missing_consumers_json_exits_2_naming_it(self):
+        done = self.run_check()
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""))
+        self.assertIn(upstream.CONSUMERS, done.stderr)
+
+    def test_a_consumers_json_that_is_not_utf8_exits_2_naming_it(self):
+        (self.inst / upstream.CONSUMERS).write_bytes(b'{"consumers": [{"repo": "o/r\xff"}]}')
+
+        done = self.run_check()
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""))
+        self.assertIn(upstream.CONSUMERS, done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+
+    def test_a_malformed_instance_json_exits_2_naming_it(self):
+        self.write_consumers({"consumers": [{"repo": "o/r"}]})
+        data = json.loads((self.inst / instance.FILE).read_text())
+        (self.inst / instance.FILE).write_text(json.dumps({**data, "base": {**data["base"], "sha": "a" * 12}}))
+
+        done = self.run_check()
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""))
+        self.assertIn(instance.FILE, done.stderr)

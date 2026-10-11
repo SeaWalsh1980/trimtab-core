@@ -1,4 +1,4 @@
-"""The PR block: parse and validate the three sections of plan section 3a.
+"""The PR block: parse and validate its three sections (ADR 0005).
 
 One parser for every caller: the CLI (`trimtab check-pr`), the local hook
 (`hooks/pr-body-check.sh`) and CI all come through `check_body`.
@@ -8,7 +8,7 @@ only, and no problem message quotes a value from the body: messages name the
 section, entry and field, so a hook or CI log can print them safely.
 
 The block is versioned by an optional marker, `<!-- trimtab-block: N -->`
-(ADR 0012). No marker means version 1. A reader refuses a version it does not
+(ADR 0007). No marker means version 1. A reader refuses a version it does not
 know rather than reading it as one it does: a body is re-read long after it
 was written, by whatever Trimtab a project pins.
 """
@@ -32,12 +32,12 @@ SECTIONS = (APPLIED, FEEDBACK, COST)
 
 KINDS = ("missed", "conflict", "ambiguous", "obsolete", "gap")
 SCOPES = ("project", "upstream")
-# F5: every pass records what happened to it, including a pass that never returned.
+# Every pass records what happened to it, including a pass that never returned (ADR 0005).
 STATUSES = ("ran", "timed_out", "failed", "skipped", "pending")
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 BELOW_BINDING = ("MEDIUM", "LOW")
 
-# The block format versions this parser reads (ADR 0012). No marker means 1.
+# The block format versions this parser reads (ADR 0007). No marker means 1.
 BLOCK_VERSIONS = (1,)
 VERSION_MARKER = re.compile(r"<!--\s*trimtab-block:\s*(.*?)\s*-->")
 
@@ -229,7 +229,7 @@ def _feedback(data, registry, problems) -> tuple[Feedback, ...]:
             if clause and clause_strength(item, clause) is None:
                 problems.append(Problem("unknown-clause", where, "no line of the item starts with the clause"))
             elif strength.binding:
-                # A REQUIRE or PROHIBIT breach is CRITICAL or HIGH, never lower (F9).
+                # A REQUIRE or PROHIBIT breach is CRITICAL or HIGH, never lower.
                 problems.append(Problem("severity-below-binding", where,
                                         f"a {strength.name} item cannot be graded {severity}"))
         if len(problems) == before:

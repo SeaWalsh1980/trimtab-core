@@ -1,6 +1,6 @@
 """PreToolUse adapter: check the PR body a `gh pr create|edit` command would send.
 
-Policy, not a guard (plan section 3a). It fails OPEN on its own errors and on
+Policy, not a guard (ADR 0005). It fails OPEN on its own errors and on
 anything it cannot evaluate without running the command (a body built by
 `$(...)`, a body on stdin): CI is the real gate. It blocks (exit 2) only when it
 has read the body and `check_body` rejects it.
@@ -119,7 +119,7 @@ def main() -> int:
     try:
         payload = json.loads(sys.stdin.read())
         code, message = decide(payload if isinstance(payload, dict) else {})
-    except Exception as err:  # fail open: this is policy, CI is the gate (plan section 3a)
+    except Exception as err:  # fail open: this is policy, CI is the gate (ADR 0005)
         print(f"pr-body-check: internal error ({type(err).__name__}); allowing, CI checks the body",
               file=sys.stderr)
         return ALLOW

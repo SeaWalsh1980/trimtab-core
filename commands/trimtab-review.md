@@ -6,10 +6,10 @@ argument-hint: "[PR number, or nothing for the current branch]"
 Review this change before it is opened as a PR, or review PR `$ARGUMENTS`.
 
 Ported from a consuming project's own review command, with three changes
-from what its first full run showed: every pass is a Trimtab agent that exists (F1), the tree is pinned (F4),
-and every pass records a status, cost and yield (F5, F6, F7).
+from what its first full run showed: every pass is a Trimtab agent that
+exists, the tree is pinned, and every pass records a status, cost and yield.
 
-## 1. Pin the scope (F4)
+## 1. Pin the scope
 
 A long review of a live working tree reviews a moving target. Pin it:
 
@@ -39,7 +39,7 @@ Tell `trimtab-reviewer` exactly which; it cannot recover the distinction:
 2. **Planned, without citations.** Say so.
 3. **Not planned.** Say so.
 
-## 3. Choose the passes (F7)
+## 3. Choose the passes
 
 | Agent | Pass | Runs when |
 |---|---|---|
@@ -56,7 +56,7 @@ Spawn the passes **in parallel, in one message**, each with `HEAD_SHA`,
 Tell the silent-failure hunter what the project's own rules say about silent
 failure, if the resolver lists any.
 
-## 4. Record every pass (F5, F6)
+## 4. Record every pass
 
 A pass that never returns must still leave a trace. For each pass record:
 
@@ -77,8 +77,8 @@ A slow pass does not block the report; an unrecorded status does.
 failure, **there is no review.** Report the stop and its stderr, and the cause
 to fix. List any other pass's findings only under a heading saying they are not
 a harness review. In section 6, leave `## Harness feedback` empty but still
-write `## Process cost` with every pass's status: the failed run is evidence
-(F5, F6), but no review may be claimed.
+write `## Process cost` with every pass's status: the failed run is evidence,
+but no review may be claimed.
 
 Otherwise, follow the shape `trimtab-reviewer` returns. Fold the other passes'
 findings in as `### [SEVERITY]` entries attributed to the pass that raised
@@ -88,7 +88,7 @@ them. Then:
   statement; keep the highest severity.
 - **Re-rank by the norm keyword.** A breach of a REQUIRE or PROHIBIT item is always
   CRITICAL or HIGH, whatever the raising pass called it. `check-pr` fails a
-  feedback entry that grades one lower (F9).
+  feedback entry that grades one lower.
 - **Do not pad.** An empty band is stated as empty by rule.
 - Keep `## Examined, not raised` and the `CITATIONS:` line exactly as the
   reviewer wrote it.

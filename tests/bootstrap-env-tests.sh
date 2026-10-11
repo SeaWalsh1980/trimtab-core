@@ -238,7 +238,9 @@ check_retention_keeps_live_and_predecessor() {
   make_store "$store"
   boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
   if [[ $rc -eq 0 && -d "$snap_new" && -d "$snap_old" && ! -e "$snap_mid" \
-     && "$out" == *"${snap_mid##*/}"* && -f "$store/notes.txt" && -d "$store/keep-me" ]]; then
+     && "$out" == *"${snap_mid##*/}"* && -f "$store/notes.txt" && -d "$store/keep-me" \
+     && "$(printf '%s\n' "$out" | sed '/^$/d' | tail -1)" == "done. Run 'claude'"* \
+     && "$out" != *"NOT GREEN"* ]]; then
     pass "retention keeps the live snapshot and its predecessor, and ignores anything else"
   else
     fail "retention keeps the live snapshot and its predecessor, and ignores anything else" "rc=$rc"; echo "$out" | tail -6
@@ -295,11 +297,29 @@ check_observer_failure_records_but_withholds_retention() {
   make_store "$store"
   printf '#!/usr/bin/env bash\nexit 1\n' > "$snap_new/hooks/rule-usage.sh"
   boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
-  if [[ $rc -eq 0 && -d "$snap_mid" && -d "$snap_old" && "$out" == *"retention withheld"* ]] \
+  if [[ $rc -eq 0 && -d "$snap_mid" && -d "$snap_old" && "$out" == *"retention withheld"* \
+        && "$(printf '%s\n' "$out" | sed '/^$/d' | tail -1)" == "NOT GREEN: observer"* \
+        && "$out" != *"done. Run 'claude'"* ]] \
      && grep -q "\"base_sha\": \"${snap_new##*/}\"" "$store/.installed.json"; then
-    pass "a failed observer probe still records the install, withholds retention and says so"
+    pass "a failed observer probe still records the install, withholds retention and ends NOT GREEN"
   else
-    fail "a failed observer probe still records the install, withholds retention and says so" "rc=$rc"; echo "$out" | tail -6
+    fail "a failed observer probe still records the install, withholds retention and ends NOT GREEN" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# guard-mcp answers "ask" instead of blocking, so it has its own self-probe. A
+# guard-mcp that stays silent on an MCP write lets every write run unprompted:
+# the install must refuse it, not report done.
+check_silent_guard_mcp_fails_the_install() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n' > "$snap_new/hooks/guard-mcp.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"guard-mcp returned 0 without asking about an MCP write"* ]]; then
+    pass "a guard-mcp that does not ask fails the install"
+  else
+    fail "a guard-mcp that does not ask fails the install" "rc=$rc"; echo "$out" | tail -6
   fi
 }
 
@@ -584,6 +604,7 @@ check_retention_keeps_live_and_predecessor
 check_rerun_from_same_base_keeps_predecessor
 check_sandbox_without_own_store_leaves_store_alone
 check_observer_failure_records_but_withholds_retention
+check_silent_guard_mcp_fails_the_install
 check_retention_spares_a_snapshot_systemd_links_into
 check_missing_pyyaml_is_named
 check_instance_without_claude_md_drops_a_dangling_link

@@ -35,7 +35,7 @@ the reviewer and by CI, and the main session never loads the corpus.
    explicitly that it inherits neither the instruction file nor the doctrine and
    must load them, and that the resolver is `"$TRIMTAB" rules-for`. Wait for
    it. **Note the tokens and duration the Agent result reports**: they are the
-   plan's cost in `## Process cost` (best-effort, spike S3).
+   plan's cost in `## Process cost` (best-effort).
 4. **Check the plan before presenting it.**
    - Its `Rules loaded` section contains the resolver's output.
    - Its `## Harness items applied` holds one yaml block that parses. Save that

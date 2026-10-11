@@ -1,4 +1,4 @@
-"""Citations against a diff: IDs and set arithmetic, never text fingerprints (F2, R2, R3)."""
+"""Citations against a diff: IDs and set arithmetic, never text fingerprints (ADR 0005)."""
 
 import subprocess
 import tempfile

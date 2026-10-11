@@ -1,4 +1,4 @@
-"""The config loop's evidence: 2+ consumers overriding or reporting one ID (plan sections 2, 6c)."""
+"""The config loop's evidence: 2+ consumers overriding or reporting one ID (ADR 0005)."""
 
 import json
 import subprocess

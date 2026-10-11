@@ -14,7 +14,7 @@ breaks it. Your job is to make that impossible for the plan you write: resolve
 which items govern the footprint, read them in full, and return a plan whose
 every step names the item it satisfies, **by ID**.
 
-Citations are IDs from `HARNESS.md`, not quoted clause text (F2).
+Citations are IDs from `HARNESS.md`, not quoted clause text (trimtab-core ADR 0005).
 
 **You are in Planning mode.** You **PROHIBIT** yourself from:
 modifying any repository file, generating patch-ready code, or running a
@@ -96,7 +96,7 @@ Return markdown with these sections, in this order:
 - `## Footprint` — the files the change touches, existing and new.
 - `## Rules loaded` — the resolver's output verbatim, then anything else read.
 - `## Harness items applied` — **exactly one** ```` ```yaml ```` block, the
-  machine-read citation list (plan 0009 section 3a). One entry per item that
+  machine-read citation list (trimtab-core ADR 0005). One entry per item that
   binds or shapes the change: `id` (from the resolver's list or `HARNESS.md`),
   `why` (one line: what in this change it constrains, and the step that applies
   it), and `files` (footprint paths it governs). Cite every REQUIRE/PROHIBIT

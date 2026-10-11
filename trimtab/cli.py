@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 from datetime import date, timedelta
@@ -12,12 +13,13 @@ from pathlib import Path
 
 from trimtab import bump
 from trimtab import config as project_config
+from trimtab import dependabot
 from trimtab import instance, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_body, parse_applied
 from trimtab.capture.sources import (
-    FixtureContents, FixtureIssues, FixtureSource, GhContents, GhIssues, GhSource, SourceError, changed_files,
-    open_feedback_issues,
+    FixtureContents, FixtureIssues, FixtureSource, GhContents, GhIssues, GhPullRequests, GhSource, SourceError,
+    changed_files, open_feedback_issues,
 )
 from trimtab.lint import overrides, references, structure
 from trimtab.propose import render
@@ -26,7 +28,7 @@ from trimtab.registry.lookup import registry_for
 from trimtab.score import THRESHOLD, WINDOW_WEEKS, candidates, tally
 
 DEFAULT_LIMIT = 50  # every run is bounded; the watermark carries the rest
-HISTORY_LIMIT = 500  # bounded: labelled PRs a ledger rebuild reads, newest first (ADR 0011)
+HISTORY_LIMIT = 500  # bounded: labelled PRs a ledger rebuild reads, newest first (ADR 0006)
 
 
 def _print_problems(problems) -> int:
@@ -106,7 +108,7 @@ def _since(args) -> str | None:
 
 
 def _lock(project: Path):
-    """The project's lock, with any schema warning printed (stage S3 spec, S3-4)."""
+    """The project's lock, with any schema warning printed."""
     config, problems = project_config.load(project)
     for warning in (config.warnings if config else ()):
         print(f"warning: {project / project_config.PATH}: {warning}", file=sys.stderr)
@@ -129,7 +131,7 @@ def _setup(args):
 
 
 def _store(args, source, config, registry):
-    """The ledger: a file, or rebuilt from the PRs already labelled within the window (ADR 0011)."""
+    """The ledger: a file, or rebuilt from the PRs already labelled within the window (ADR 0006)."""
     if args.ledger:
         return ingest.FileLedgerStore(Path(args.ledger))
     store = ingest.InMemoryLedgerStore()
@@ -160,7 +162,7 @@ def _report(config, todo, records, since) -> None:
     if todo.newer_version:
         print(f"newer block version: {len(todo.newer_version)} PRs "
               f"({', '.join(f'#{n}' for n in todo.newer_version)}) use a block version this Trimtab does not "
-              "read; left unlabelled for a newer Trimtab (ADR 0012)")
+              "read; left unlabelled for a newer Trimtab (trimtab-core ADR 0007)")
     window = f" merged since {since}" if since else ""
     print(f"coverage: {valid}/{total} ingested PRs{window} carry a valid block{share}")
     ids = sorted({i for (i, _) in t.feedback})
@@ -391,6 +393,105 @@ def cmd_bump(args) -> int:
     return 0
 
 
+# ---- dependabot-block --------------------------------------------------------
+
+def _print_block_plan(todo: dependabot.BlockPlan) -> None:
+    # Dependabot's text carries third-party release notes: shown by size and digest, never verbatim.
+    print(f"PR #{todo.number} in {todo.repo}, opened by {dependabot.DEPENDABOT_LOGIN}, head {todo.head_sha[:12]}")
+    print(f"existing body: {todo.old_length} chars, sha256 {todo.old_digest[:12]}, kept unchanged as the prefix")
+    if todo.new_body is None:
+        print("body: a valid harness block is already there; nothing to write")
+    else:
+        print("body: append this block:")
+        print(dependabot.BLOCK, end="")
+    newest = todo.newest_run
+    if todo.rerun_run_id is not None:
+        print(f"re-run: the failed jobs of {todo.workflow} run {todo.rerun_run_id}")
+    elif newest is None:
+        print(f"re-run: none; no {todo.workflow} run found at this head (check --workflow, or whether CI started)")
+    elif todo.run_in_progress:
+        print(f"re-run: none; the newest {todo.workflow} run at this head is still going")
+        if todo.run_predates_block:
+            print(PREDATES_NOTE)
+    elif newest.conclusion == "success":
+        print(f"re-run: none; the newest {todo.workflow} run at this head passed")
+    else:
+        print(f"re-run: none; the newest {todo.workflow} run at this head ended {todo.shown_conclusion}")
+
+
+PREDATES_NOTE = "note: this run started before the block was added; if it fails, run the command again"
+
+# dependabot-block's own exit code for "done, but CI at the head needs a look": 1 stays "refused".
+EXIT_CI_ATTENTION = 4
+DEPENDABOT_EXIT_CODES = ("exit codes: 0 done, or nothing to do; 1 refused, the registry could not be built, "
+                         "or the written body did not read back; 2 a GitHub or usage error; 3 the PR or its "
+                         f"runs changed since the dry run; {EXIT_CI_ATTENTION} done (or planned), but CI at the "
+                         "head has no run, or its newest run ended neither passed nor failed")
+
+
+def _attention(needs_attention: bool, workflow: str, number: int) -> int:
+    """EXIT_CI_ATTENTION, with the reason, when CI at the head is neither green, going, nor about to be re-run."""
+    if not needs_attention:
+        return 0
+    print(f"attention: CI is not fixed by this command; look at {workflow} for PR #{number} by hand",
+          file=sys.stderr)
+    return EXIT_CI_ATTENTION
+
+
+def _dependabot_apply_command(args, token: str) -> str:
+    """The apply command for this dry run, each value shell-quoted so it pastes as one argument."""
+    argv = ["trimtab", "dependabot-block", str(args.pr), "--repo", args.repo, "--workflow", args.workflow,
+            "--apply", "--confirm", token]
+    if args.project != ".":
+        argv += ["--project", args.project]
+    if args.instance:
+        argv += ["--instance", args.instance]
+    return shlex.join(argv)
+
+
+def cmd_dependabot_block(args, host_for=GhPullRequests, registry=None) -> int:
+    if registry is None:
+        registry, problems = registry_for(_instance(args), Path(args.project))
+        if problems:
+            print("cannot build the registry:", file=sys.stderr)
+            return _print_problems(problems) or 1
+    host = host_for(args.repo)
+    try:
+        if not args.apply:
+            todo = dependabot.read_plan(host, registry, args.repo, args.workflow, args.pr)
+            print("dependabot-block --dry-run: nothing written")
+            _print_block_plan(todo)
+            if not todo.nothing_to_do:
+                token = dependabot.confirmation(todo)
+                print(f"confirm: {token}")
+                print(f"to apply: {_dependabot_apply_command(args, token)}")
+            return _attention(todo.ci_needs_attention, args.workflow, args.pr)
+        done = dependabot.apply(host, registry, args.repo, args.workflow, args.pr, args.confirm)
+    except (dependabot.NotDependabot, dependabot.BlockRefused) as err:
+        print(f"refused: {err}", file=sys.stderr)
+        _print_problems(getattr(err, "problems", ()))
+        return 1
+    except dependabot.StaleBlockPlan as err:
+        print(f"aborted: {err}", file=sys.stderr)
+        return 3
+    except dependabot.ReadBackFailed as err:
+        cause = f": {err.__cause__}" if err.__cause__ else ""
+        print(f"error: {err}{cause}; running the dry run again is safe", file=sys.stderr)
+        return 1
+    except dependabot.RerunFailed as err:
+        written = "the body was written; " if err.wrote_body else ""
+        print(f"error: {err}: {err.__cause__}; {written}running the dry run again is safe", file=sys.stderr)
+        return 2
+    except dependabot.HostError as err:
+        print(f"error: {err}; running the dry run again is safe", file=sys.stderr)
+        return 2
+    print(f"PR #{args.pr}: " + ("block added" if done.wrote_body else "block already there")
+          + (f"; re-run of run {done.reran} requested" if done.reran is not None else "; no re-run"))
+    if done.run_predates_block:
+        print(PREDATES_NOTE)
+    return _attention(done.ci_needs_attention, args.workflow, args.pr)
+
+
 # ---- upstream ----------------------------------------------------------------
 
 def _behind(sha: str | None, base: Path) -> str:
@@ -447,7 +548,28 @@ def cmd_instance(args) -> int:
     if args.root:  # for the agents: the doctrine root, which a lock it cannot read must not block
         print(base)
         return 0
-    if args.json:  # for bootstrap: the validated values it writes (stage S3 spec, section 3)
+    if args.check:  # for the instance's CI: its own files load
+        try:
+            instance.load(base)
+        except instance.InstanceFileError as err:  # its messages name the key, not the file
+            print(f"error: instance.json: {err}", file=sys.stderr)
+            return 2
+        try:
+            path = base / upstream.CONSUMERS
+            if not path.is_file():
+                raise upstream.ConsumersError(f"{upstream.CONSUMERS} is missing")
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as err:
+                raise upstream.ConsumersError(
+                    f"{upstream.CONSUMERS} cannot be read ({type(err).__name__})") from err
+            n = len(upstream.load_consumers(text))
+        except upstream.ConsumersError as err:  # its messages already name consumers.json
+            print(f"error: {err}", file=sys.stderr)
+            return 2
+        print(f"instance: ok ({n} consumer(s))")
+        return 0
+    if args.json:  # for bootstrap: the validated values it writes
         try:
             found = instance.load(base)
             patterns = instance.patterns_path(found, base)
@@ -523,10 +645,15 @@ def cmd_lint(args) -> int:
         print(f"overrides: {len(found)} problem(s)")
         failed |= _print_problems(found)
     if "references" in which:
-        enabled = references.enabled_plugins([project, base])  # settings are instance content
-        found = references.lint(project, roots.code_root(), enabled, plugin_cache=_plugin_cache())
-        print(f"references: {len(found)} unresolved")
-        failed |= _print_problems(found)
+        try:
+            enabled = references.enabled_plugins([project, base])  # settings are instance content
+        except references.SettingsUnreadable as err:
+            print(f"error: {err}", file=sys.stderr)
+            failed = 1
+        else:
+            found = references.lint(project, roots.code_root(), enabled, plugin_cache=_plugin_cache())
+            print(f"references: {len(found)} unresolved")
+            failed |= _print_problems(found)
     if "structure" in which:
         rules_dirs = [config.rules_dir if config else project_config.ProjectConfig.rules_dir]
         if project.resolve() == base.resolve():
@@ -568,7 +695,7 @@ def _ingest_options(p) -> None:
     led = p.add_mutually_exclusive_group()
     led.add_argument("--ledger", help="ledger JSON file")
     led.add_argument("--ledger-from-labels", action="store_true",
-                     help="rebuild the ledger from PRs already labelled, within the window (routines: ADR 0011)")
+                     help="rebuild the ledger from PRs already labelled, within the window (routines: trimtab-core ADR 0006)")
     p.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help=f"PRs per run (default {DEFAULT_LIMIT})")
     p.add_argument("--history-limit", type=int, default=HISTORY_LIMIT,
                    help=f"labelled PRs read by --ledger-from-labels (default {HISTORY_LIMIT})")
@@ -579,7 +706,7 @@ def _ingest_options(p) -> None:
 
 
 def _instance(args) -> Path:
-    """The instance root for this run: --instance, then TRIMTAB_INSTANCE (S2-2)."""
+    """The instance root for this run: --instance, then TRIMTAB_INSTANCE (ADR 0008)."""
     return roots.instance_root(getattr(args, "instance", None))
 
 
@@ -651,6 +778,19 @@ def build_parser() -> argparse.ArgumentParser:
     bmp.add_argument("--body-file", help="in a dry run, write the draft PR's body here")
     bmp.set_defaults(func=cmd_bump)
 
+    dep = sub.add_parser("dependabot-block", parents=[common],
+                         help="add the harness block to a Dependabot PR and re-run its failed CI (dry run unless --apply)",
+                         epilog=DEPENDABOT_EXIT_CODES)
+    dep.add_argument("pr", type=int, help="the PR number")
+    dep.add_argument("--repo", required=True, help="owner/name")
+    dep.add_argument("--workflow", required=True, help="the workflow whose failed run to re-run, e.g. ci.yml")
+    dep.add_argument("--project", default=".", help="project root, for its own IDs (default: .)")
+    dmode = dep.add_mutually_exclusive_group()
+    dmode.add_argument("--dry-run", action="store_true", help="report only (the default)")
+    dmode.add_argument("--apply", action="store_true", help="write the body and re-run; needs --confirm")
+    dep.add_argument("--confirm", help="the token a dry run printed")
+    dep.set_defaults(func=cmd_dependabot_block)
+
     up = sub.add_parser("upstream", parents=[common], help="the config loop's evidence: overrides and reports per base ID (read only)")
     up.add_argument("--consumers", help=f"consumers.json (default: the instance's {upstream.CONSUMERS})")
     up.add_argument("--repo", help="where harness-feedback issues live (default: the instance's repository)")
@@ -671,13 +811,16 @@ def build_parser() -> argparse.ArgumentParser:
     lnt.add_argument("--strict", action="store_true", help="exit 1 on structure findings too")
     lnt.set_defaults(func=cmd_lint)
 
-    ins = sub.add_parser("instance", parents=[common], help="print the instance root and repository, from instance.json")
+    ins = sub.add_parser("instance", parents=[common],
+                         help="print the instance root and repository, from instance.json; --check checks its files load")
     only = ins.add_mutually_exclusive_group()
     only.add_argument("--repo", action="store_true", help="print only the instance's repository (owner/name)")
     only.add_argument("--root", action="store_true",
                       help="print only the instance root (the doctrine); never reads instance.json")
     only.add_argument("--json", action="store_true",
                       help="print instance.json's validated values and the env bootstrap writes, as JSON (schema 1)")
+    only.add_argument("--check", action="store_true",
+                      help="check that the instance's instance.json and consumers.json load (for its CI)")
     ins.set_defaults(func=cmd_instance)
 
     scr = sub.add_parser("scrub", parents=[common], help="check a tree before it is pushed to the public base")

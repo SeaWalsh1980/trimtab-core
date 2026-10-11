@@ -1,4 +1,4 @@
-"""Ingest by watermark, tally per ID, and propose (plan sections 6a and 11)."""
+"""Ingest by watermark, tally per ID, and propose (ADR 0005)."""
 
 import unittest
 
@@ -149,7 +149,7 @@ class Watermark(unittest.TestCase):
 
 
 class BlockVersion(unittest.TestCase):
-    """ADR 0012: a body in a newer block version waits, unlabelled, for a Trimtab that reads it."""
+    """ADR 0007: a body in a newer block version waits, unlabelled, for a Trimtab that reads it."""
 
     def setUp(self):
         self.github = FakeGitHub([PullRequest(11, "<!-- trimtab-block: 1 -->\n" + body(), "2026-09-28T00:00:00Z"),
