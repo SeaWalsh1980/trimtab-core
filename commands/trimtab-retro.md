@@ -84,9 +84,12 @@ This is counted, not acted on.
 
 ## 3. Conformance findings
 
-Read the conformance reports under `docs/reviews/` whose filename date falls in
-the window. An item ID raised as a finding in **2 or more** reports is a
-candidate for a project proposal in step 4, with those reports as evidence.
+Read the conformance reports `/trimtab-conformance` writes, at
+`docs/reviews/YYYY-MM-DD-conformance.md` on the default branch or on an open
+`reviews/conformance-YYYY-MM-DD` draft, whose filename date falls in the
+window. Each finding names its item on a `**Rule:**` line. An item ID raised
+as a finding in **2 or more** reports is a candidate for a project proposal in
+step 4, with those reports as evidence.
 
 ## 4. Proposals, one per ID
 
