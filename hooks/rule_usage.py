@@ -125,8 +125,8 @@ BASE_KEYS = frozenset(
 # `scratchpad_dir` (a per-session temp path), `effort` and the two call-routing
 # keys: being *known* is what stops them reading as drift, and nothing in the
 # report asks about them. `agent_type` is recorded because it is what makes a
-# load attributable to the subagent that caused it — the question `/ct-plan`
-# exists to answer.
+# load attributable to the subagent that caused it — the question a planning
+# command exists to answer.
 BASE_RECORDED = (
     "session_id",
     "cwd",
