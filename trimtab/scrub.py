@@ -24,6 +24,7 @@ SKIP_DIRS = {".git", "__pycache__"}
 TEST_PARTS = {"tests", "test", "fixtures"}
 PATTERNS_ENV = "TRIMTAB_SECRET_PATTERNS"
 GIT_TIMEOUT_SECONDS = 5
+PACKAGE_NAME = "trimtab"  # the base's package: never a private name, though an instance may share it
 
 
 class ScrubError(Exception):
@@ -95,6 +96,19 @@ def _consumers(path: Path) -> list[str]:
     return [e["repo"] for e in entries if isinstance(e, dict) and isinstance(e.get("repo"), str)]
 
 
+def _bare_name_patterns(consumers: list[str], base_repo: str) -> tuple[re.Pattern, ...]:
+    """Each consumer's name without its owner, as a whole word: prose names a repository bare.
+
+    A name equal to the base's own repository or package name is left out, or the base's
+    own name would be a hit on every line that runs it. A letter, digit, `_` or `-` on either
+    side makes a longer word, not the name.
+    """
+    public = {base_repo.rpartition("/")[2].casefold(), PACKAGE_NAME}
+    names = {r.rpartition("/")[2] for r in consumers} - {""}
+    return tuple(re.compile(rf"(?<![A-Za-z0-9_-]){re.escape(n)}(?![A-Za-z0-9_-])", re.IGNORECASE)
+                 for n in sorted(names) if n.casefold() not in public)
+
+
 def private_terms(instance: Path, environ: Mapping[str, str], code_root: Path | None = None) -> Terms:
     instance = Path(instance)
     code_root = Path(code_root) if code_root is not None else roots.code_root()
@@ -108,7 +122,8 @@ def private_terms(instance: Path, environ: Mapping[str, str], code_root: Path | 
         base_repo = instance_file.load(instance).base_repo
     except (roots.InstanceInvalid, instance_file.InstanceFileError) as err:
         raise ScrubError(str(err)) from err
-    repos.update(_consumers(instance / "consumers.json"))
+    consumers = _consumers(instance / "consumers.json")
+    repos.update(consumers)
     ids: set[str] = set()
     for path in (instance / "routines").rglob("*"):
         if path.is_file():
@@ -129,7 +144,8 @@ def private_terms(instance: Path, environ: Mapping[str, str], code_root: Path | 
                 "doctrine-file": tuple(sorted(doctrine)), "private-doc": tuple(sorted(docs)),
                 "home": (home,) if home else (), "email": (email,) if email else ()}
     private = _private_patterns(environ)
-    patterns = {"pattern": private} if private else {}
+    bare = _bare_name_patterns(consumers, base_repo)
+    patterns = {k: v for k, v in (("repo-name", bare), ("pattern", private)) if v}
     # Blank the base's name only where that cannot hide a private one: if it is part of a private
     # repository name (a consumer `owner/base-fork`), keep it, and accept the false positive.
     public = () if any(base_repo.casefold() in r.casefold() for r in repos) else (base_repo,)
