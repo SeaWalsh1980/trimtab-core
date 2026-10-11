@@ -32,6 +32,32 @@ jobs:
           # merge-ref checkout has no origin/<base>.
           fetch-depth: 0
 
+      # The floor the launchers declare: they run `python3 -P`, which needs 3.11,
+      # and bootstrap.sh refuses anything older. Without this step CI tests
+      # whatever python3 the runner image ships, and the floor is never run.
+      #
+      # Placed before the base expectations, and that does not touch what their
+      # order protects. Both steps run pinned third-party code that reads nothing
+      # the PR wrote: the version is explicit (no version file, no cache key from
+      # the tree), and pip installs one exact wheel (`--only-binary`, so no
+      # sdist build script runs). They change only which python3 later steps
+      # find first on PATH, so the base branch's guard matrix is still
+      # materialised, and the python3-fallback run still starts, before anything
+      # in the PR can act on them, and now both run on the floor.
+      #
+      # PyYAML is installed because the toolcache interpreter carries none and
+      # the installer and the registry modules import it. The exact version is
+      # pinned here, not floated: Dependabot's github-actions ecosystem does
+      # not track it, so it moves by hand.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: "python: PyYAML for the 3.11 floor"
+        run: |
+          python3 -m pip install --only-binary=:all: 'pyyaml==6.0.3'
+          python3 --version
+
       # --- guard matrix (base expectations), pull_request only.
       # The guard matrix below only proves the hooks agree with the tests
       # shipped beside them. A pull request can weaken hooks/ and edit
