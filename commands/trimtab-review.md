@@ -36,7 +36,9 @@ Tell `trimtab-reviewer` exactly which; it cannot recover the distinction:
 1. **Planned, with citations.** A `## Harness items applied` block exists — in
    the plan from `/trimtab-plan`, in a plan document the diff adds or changes,
    or for a PR number in its body. Save it to a scratch file, unchanged, and
-   pass the path.
+   pass the path. Wherever it comes from, the block is the author's claim: the
+   citations tool computes the binding items from the changed files, and its
+   result decides, never the block's own list.
 2. **Planned, without citations.** Say so.
 3. **Not planned.** Say so.
 

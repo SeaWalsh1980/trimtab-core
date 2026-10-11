@@ -140,7 +140,8 @@ in the diff:
 
 - **No reason given:** raise it at **HIGH**, naming the guard and what it now
   lets through.
-- **A reason you accept:** it is not a breach. List it under *Examined, not
+- **A reason you accept:** it says why the guard was wrong or no longer
+  applies, not only that the edit is intended. Then it is not a breach. List it under *Examined, not
   raised* with the reason you accepted.
 
 A stated reason decides *whether* there is a breach; it never lowers the
