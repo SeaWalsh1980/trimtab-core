@@ -87,7 +87,8 @@ This is counted, not acted on.
 Read the conformance reports `/trimtab-conformance` writes, at
 `docs/reviews/YYYY-MM-DD-conformance.md` on the default branch or on an open
 `reviews/conformance-YYYY-MM-DD` draft, whose filename date falls in the
-window. Each finding names its item on a `**Rule:**` line. An item ID raised
+window. A report found both on the default branch and on its branch is one
+report: count each date once. Each finding names its item on a `**Rule:**` line. An item ID raised
 as a finding in **2 or more** reports is a candidate for a project proposal in
 step 4, with those reports as evidence.
 

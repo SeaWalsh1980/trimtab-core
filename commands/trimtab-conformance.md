@@ -58,30 +58,49 @@ everywhere below; deriving them separately is how two steps come to describe
 different weeks:
 
 ```bash
-LAST=$(git ls-tree --name-only "origin/$DEFAULT" docs/reviews/ \
-  | sed -nE 's#^docs/reviews/([0-9]{4}-[0-9]{2}-[0-9]{2})-conformance\.md$#\1#p' | sort | tail -n 1)
+LAST=$( { git ls-tree --name-only "origin/$DEFAULT" docs/reviews/ \
+          | sed -nE 's#^docs/reviews/([0-9]{4}-[0-9]{2}-[0-9]{2})-conformance\.md$#\1#p'
+        git ls-remote --heads origin 'reviews/conformance-*' \
+          | sed -nE 's#^.*refs/heads/reviews/conformance-([0-9]{4}-[0-9]{2}-[0-9]{2})$#\1#p'
+      } | sort -u | tail -n 1)
 TODAY="$(date -u +%F)"
 WINDOW_START_DATE="${ARGUMENTS:-${LAST:-$(date -u -d '7 days ago' +%F)}}"
-WINDOW_START_SHA="$(git rev-list -1 --before="$WINDOW_START_DATE 00:00" "origin/$DEFAULT")"
+WINDOW_START_SHA="$(git rev-list -1 --before="$WINDOW_START_DATE 00:00 +0000" "origin/$DEFAULT")"
 HEAD_SHA="$(git rev-parse "origin/$DEFAULT")"
 ```
 
 `$ARGUMENTS` is the text after the command; substitute it, or leave it empty.
-If `LAST` is `TODAY`, a report for today exists already: stop and say so
-rather than write a second one.
+`LAST` is the newest report's date, merged **or** still on a pushed
+`reviews/conformance-*` branch: a report waiting as a draft has covered its
+window, so the next run starts where it ended, and windows neither overlap nor
+leave a gap. If `LAST` is `TODAY`, a report or a branch for today exists
+already: stop and say so rather than write a second one or fail at the push.
 
-`WINDOW_START_SHA` is the last commit **before** the window opens. **If it is
-empty, stop**: no commit precedes the window, and a diff against an empty
-revision compares against the empty tree, which reports every file as changed
-and resolves every rule as if it bound the window.
+`WINDOW_START_SHA` is the last commit **before** the window opens, in UTC like
+the dates. **If it is empty, stop**: no commit precedes the window, and a diff
+against an empty revision compares against the empty tree, which reports every
+file as changed and resolves every rule as if it bound the window.
+`rev-list --before` goes by commit date, which a skewed clock can put out of
+order; if the base SHA's date is not before `WINDOW_START_DATE`, or a commit in
+the range is dated before it, say so in `## Coverage`.
 
 Pin the tree, so the review reads one commit while the branch moves:
 
 ```bash
 TREE=$(mktemp -d)
 git archive "$HEAD_SHA" | tar -x -C "$TREE"
+find "$TREE" -type l -print -delete
 git diff --name-only --no-renames "$WINDOW_START_SHA".."$HEAD_SHA" | sort -u
 ```
+
+**The tree's symlinks are removed before anything reads it.** A link is the
+reviewed tree's content, and following one (a rule file pointing into the
+home directory, say) would read a file outside the tree into a report that is
+pushed. List every link `find` printed in `## Coverage`; a removed rule file or
+instruction file is a finding, MEDIUM unless a rule makes it more. Never read a
+file under `TREE` through a link, and never read the working tree in its place.
+
+From here on, **every stop removes `TREE` first** (`rm -rf "$TREE"`).
 
 `--no-renames` is deliberate: a rename shown as `old => new` is one token no
 rule's globs can match, where the two paths it stands for both can be.
@@ -235,7 +254,9 @@ appears only in that section, never as a severity.
 - If the PR cannot be opened, the branch is still pushed: print the compare URL
   and the **whole report** in the final message. A failed push or PR must never
   cost the run.
-- `rm -r "$TREE"`.
+- Clean up on every path, success or failure: `rm -rf "$TREE"`, then, once the
+  branch is pushed, remove the worktree (`git worktree remove <path>`). A
+  push that failed keeps the worktree, and the final message names it.
 
 End with the verdict, the summary table and the PR URL (or the compare URL and
 the report) in the final message, whatever happened.
