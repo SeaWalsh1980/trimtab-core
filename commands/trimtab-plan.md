@@ -47,7 +47,11 @@ the reviewer and by CI, and the main session never loads the corpus.
 
      `unknown` must be 0. Every `uncited binding` ID must either be cited or
      explained in the plan as not binding.
-   - If either check fails, or the planner reports that it stopped (a resolver
+   - **The footprint.** Every footprint path that some rule file's `paths:`
+     globs reach must show at least one item in `Rules loaded`. A path shown
+     as `(no path-scoped rule)` under a directory a rule covers was never in
+     the planner's context: send the plan back to the planner.
+   - If any of these checks fails, or the planner reports that it stopped (a resolver
      error, an unreadable rule file, a path it could not place), **do not
      present it as a plan**: report the stop, fix the cause, and run it again.
 5. **Present the plan unchanged**: footprint, rules loaded, items applied,
@@ -74,3 +78,7 @@ Keep the plan's `## Harness items applied` and `## Harness feedback` blocks:
 
   CI's PR-body job is the real gate; the local hook and this check only catch it
   earlier.
+
+If the plan is kept as a document, keep its `## Harness items applied` yaml
+block in the document, unchanged: `/trimtab-review` reads it from there when
+the document is in the diff.

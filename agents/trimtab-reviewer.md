@@ -67,12 +67,17 @@ anything you could not reach and why.
 
 1. Read `TREE/CLAUDE.md` and/or `TREE/AGENTS.md` in full, and
    `TREE/.claude/trimtab.json`.
-2. Resolve the changed files against the tree's rules:
+2. List the project's rule files (under the lock's `rules_dir`) and read every
+   file's frontmatter once: its `description:` and its `paths:` globs. This is
+   your one corpus-wide look. A rule file close in subject to the change whose
+   globs miss it is worth reading anyway, and you cannot notice one without
+   the list.
+3. Resolve the changed files against the tree's rules:
    `"$TRIMTAB" rules-for --project TREE <changed files>`. Read **in full**
    every rule file it lists. A non-zero exit is a corpus defect and a finding
    in its own right (quote its stderr); then match globs by hand and say the
    matching was best-effort.
-3. Read, at minimum, the rule under `$DOCTRINE/rules/` that defines the norm
+4. Read, at minimum, the rule under `$DOCTRINE/rules/` that defines the norm
    keywords and the severity scale, and the other base rules the diff plausibly touches.
 
 ## Step 3 — the passes
@@ -100,6 +105,10 @@ module docstring. A project deviates from a base PREFER/AVOID only through
   "$TRIMTAB" citations --project TREE --plan-file <file> --files <changed files>
   ```
 
+  Read the tool's output before judging it: `cited=0` with a plan present
+  almost always means the wrong section was saved or the yaml fence was lost.
+  Check the extraction first, and re-run on the right block before reporting.
+
   An **uncited binding** item (a REQUIRE/PROHIBIT of a path-scoped rule that
   reaches a changed file) that binds the change is **HIGH**, whether or not
   the code happens to comply: a rule the plan never saw was satisfied by luck.
@@ -114,15 +123,38 @@ module docstring. A project deviates from a base PREFER/AVOID only through
 Always-loaded items (the base rules) apply to every path, so the tool cannot
 tell whether one binds this diff: judge those by subject.
 
+If the tool exits non-zero, quote its stderr in Coverage, raise a **MEDIUM**
+finding, *citation tool failed*, and do the pass by hand as far as you can,
+marked best-effort. A failed tool is never a silent skip.
+
 Copy the tool's final `CITATIONS:` line into Coverage verbatim. If the tool
 did not run, write `CITATIONS: not-run reason=<tool-failed|tool-unavailable|plan-status-unknown>`.
+
+**e. Anti-remediation.** Some changes turn a guard green by weakening the
+guard rather than fixing what it caught: an entry added to an allowlist or
+exemption list, a fixture or expected value edited to match new output, a
+pinned count, hash or version moved. No guard can see this, because the
+violating edit is the one that makes it pass. For every such edit in the diff,
+look for the reason in the PR body, the commit messages or a decision record
+in the diff:
+
+- **No reason given:** raise it at **HIGH**, naming the guard and what it now
+  lets through.
+- **A reason you accept:** it says why the guard was wrong or no longer
+  applies, not only that the edit is intended. Then it is not a breach. List it under *Examined, not
+  raised* with the reason you accepted.
+
+A stated reason decides *whether* there is a breach; it never lowers the
+severity of one. A clean pass is not evidence the change is conformant: it
+covers only the edits you recognised.
 
 ## Step 4 — report
 
 If you stopped before Step 1, return only the `STOPPED:` hand-back instead.
 
 - `# <Title> review — YYYY-MM-DD`, then **Branch**, **HEAD SHA**, **Base
-  SHA**, **Tree** (the exported path), **Rules source** (instruction file,
+  SHA**, **Tree** (the exported path), **Method** (the passes run, the tools
+  run and which ran by hand), **Rules source** (instruction file,
   matched project rules, base rules read, and the doctrine root from the
   `ok: doctrine at …` line, so a reader can tell which instance the review
   applied).
@@ -136,8 +168,11 @@ If you stopped before Step 1, return only the `STOPPED:` hand-back instead.
 - `## Findings` — each `### [SEVERITY] <title>`, then **Item:** (ID, and
   clause) · **Location:** (`path:line`) · **What's wrong:** · **Why it
   matters:** (a concrete consequence) · **Remediation prompt:** a fenced
-  `text` block, self-contained: paths, the item, the end state, the validation
-  gate, and the git workflow (branch, draft PR, never merge).
+  `text` block, self-contained. It opens with a `READ THIS BEFORE CHANGING
+  ANYTHING` section carrying the decisions recorded in the PR and its decision
+  records that the fix must preserve; then paths, the item, the end state, the
+  validation gate, and the git workflow (branch, draft PR, never merge). The
+  prompt is a proposal; you never apply it. Separate findings with `---`.
 - `## Examined, not raised` — what you looked at and rejected, with the
   reason. Substantial, not a footnote.
 - `## Harness feedback` — exactly one ```` ```yaml ```` block for the PR body:
@@ -151,3 +186,7 @@ If you stopped before Step 1, return only the `STOPPED:` hand-back instead.
 **Do not pad a severity band.** If a band is empty, say so, and say it is
 empty by rule rather than by luck. Be honest about what you could not
 determine: a finding labelled speculative beats a confident guess.
+
+Defer to decisions recorded in the instruction file, a rule, a decision record
+or a module docstring over drive-by cleanup: they were usually written because
+something went wrong once.
