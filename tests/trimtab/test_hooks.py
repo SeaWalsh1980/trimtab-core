@@ -17,6 +17,8 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 PR_BODY_CHECK = REPO / "hooks" / "pr-body-check.sh"
 DRIFT = REPO / "hooks" / "doctrine-drift.sh"
 MARKER = "zz-body-marker-7f3a"
+PROJECT_LOCK = '{"trimtab_sha": "0", "id_prefix": "XP", "schema_version": 2}\n'
+PROJECT_RULE = "---\nid_prefix: XP-LAYERING\ndescription: x\n---\n\n## 1. Layers\n\n- **REQUIRE** inward imports.\n"
 
 
 def run(hook, payload, cwd=None, env=None):
@@ -30,6 +32,8 @@ def bash(command, cwd):
 
 
 class PrBodyCheck(unittest.TestCase):
+    """Builds a fixture instance, and for the project cases a fixture project, in a temporary directory."""
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.cwd = Path(self._tmp.name)
@@ -99,6 +103,49 @@ class PrBodyCheck(unittest.TestCase):
 
         self.assertEqual(done.returncode, 0)
         self.assertIn("TRIMTAB_INSTANCE is not set", done.stderr)
+
+    def project(self, *, repository=True):
+        """A project with a lock (`XP`) and one rule file (`XP-LAYERING`); a git repository unless told not."""
+        root = self.cwd / "project"
+        for rel, text in {".claude/trimtab.json": PROJECT_LOCK, ".claude/rules/layering.md": PROJECT_RULE}.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(text)
+        (root / "src" / "sub").mkdir(parents=True)
+        if repository:
+            git(root, "init", "-q")
+        return root
+
+    def project_body(self):
+        return (FIXTURES / "pr-tst2-ambiguous.md").read_text().replace(
+            "## Harness items applied\n```yaml\n- id: TST-2", "## Harness items applied\n```yaml\n- id: XP-LAYERING-1")
+
+    def check_in(self, command, cwd):
+        return run(PR_BODY_CHECK, bash(command, cwd), env=self.env)
+
+    def test_a_session_in_a_subdirectory_resolves_the_projects_own_ids(self):
+        root = self.project()
+        (root / "body.md").write_text(self.project_body())
+
+        done = self.check_in(f"gh pr create --title t --body-file {root / 'body.md'}", root / "src" / "sub")
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_a_body_file_path_is_read_relative_to_the_session_directory(self):
+        root = self.project()
+        (root / "src" / "sub" / "body.md").write_text(self.project_body())
+        (root / "body.md").write_text(f"Only prose here, {MARKER}.\n")
+
+        done = self.check_in("gh pr create --title t --body-file body.md", root / "src" / "sub")
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_outside_a_git_repository_the_directory_itself_is_the_project(self):
+        root = self.project(repository=False)
+        (root / "body.md").write_text(self.project_body())
+
+        done = self.check_in("gh pr create --title t --body-file body.md", root)
+
+        self.assertEqual(done.returncode, 0, done.stderr)
 
 
 class DoctrineDrift(unittest.TestCase):
