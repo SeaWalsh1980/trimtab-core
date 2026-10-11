@@ -102,7 +102,8 @@ class PrivateScrub(unittest.TestCase):
         self.assertEqual([(h.path, h.line, h.kind) for h in found], [("file.md", 1, "repo")])
 
     def test_a_consumer_repository_is_found(self):
-        self.assertEqual([h.kind for h in self.hits(f"x\n{CONSUMER}\n")], ["repo"])
+        # Its bare name is in it too.
+        self.assertEqual([h.kind for h in self.hits(f"x\n{CONSUMER}\n")], ["repo", "repo-name"])
 
     def test_a_routine_id_from_the_instance_is_found(self):
         self.assertEqual([h.kind for h in self.hits(f"id {ROUTINE_ID}\n")], ["id"])
@@ -218,7 +219,7 @@ class PrivateScrub(unittest.TestCase):
     def test_a_private_name_that_starts_with_the_bases_own_is_still_found(self):
         self.use_base("owner/consumer")
 
-        self.assertEqual([h.kind for h in self.hits(f"see {CONSUMER}\n")], ["repo"])
+        self.assertEqual([h.kind for h in self.hits(f"see {CONSUMER}\n")], ["repo", "repo-name"])
 
     def test_a_longer_name_that_starts_with_a_private_one_is_found(self):
         self.assertEqual([h.kind for h in self.hits(f"see {REPO_NAME}-api and {REPO_NAME}_old\n")], ["repo"])
@@ -231,6 +232,70 @@ class PrivateScrub(unittest.TestCase):
 
     def test_a_repository_name_in_a_clone_url_is_found(self):
         self.assertEqual([h.kind for h in self.hits(f"git clone git@github.com:{REPO_NAME}.git\n")], ["repo"])
+
+
+BARE_CONSUMER = "Lighthouse"
+# A consumer named like the base's package, as the instance itself is.
+PACKAGE_NAMED_CONSUMER = "Trimtab"
+
+
+class BareRepositoryNames(unittest.TestCase):
+    """A consumer's name without its owner, matched as a whole word.
+
+    Builds a fixture instance and tree in a temporary directory.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        isolate_git(self, self.root)
+        self.instance = make_instance(self.root)
+        self.set_consumers(f"Example/{BARE_CONSUMER}", f"Example/{PACKAGE_NAMED_CONSUMER}")
+        self.code_root = make_base(self.root)
+        self.tree = self.root / "tree"
+        self.tree.mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def set_consumers(self, *repos: str):
+        (self.instance / "consumers.json").write_text(json.dumps(
+            {"schema_version": 1, "consumers": [{"repo": r} for r in repos]}))
+
+    def terms(self):
+        return scrub.private_terms(self.instance, environ={}, code_root=self.code_root)
+
+    def bare_name_hits(self, text: str):
+        (self.tree / "file.md").write_text(text + "\n", encoding="utf-8")
+        return [h for h in scrub.scan(self.tree, self.terms()) if h.kind == "repo-name"]
+
+    def test_a_bare_consumer_name_in_any_case_or_in_brackets_is_found(self):
+        for text in (BARE_CONSUMER, BARE_CONSUMER.lower(), f"({BARE_CONSUMER})"):
+            with self.subTest(text=text):
+                self.assertEqual(len(self.bare_name_hits(text)), 1)
+
+    def test_a_longer_word_containing_a_bare_name_is_not_found(self):
+        name = BARE_CONSUMER.lower()
+        for text in (f"{name}s", f"my_{name}", f"{name}-2"):
+            with self.subTest(text=text):
+                self.assertEqual(self.bare_name_hits(text), [])
+
+    def test_the_bases_package_name_gives_no_bare_name_hit(self):
+        for text in ("trimtab", "trimtab-core", "bin/trimtab", "Trimtab"):
+            with self.subTest(text=text):
+                self.assertEqual(self.bare_name_hits(text), [])
+
+    def test_a_consumer_named_like_the_bases_own_repository_is_not_a_bare_name_term(self):
+        data = json.loads((self.instance / instance_file.FILE).read_text())
+        data["base"]["repo"] = f"Example/{BARE_CONSUMER}"
+        (self.instance / instance_file.FILE).write_text(json.dumps(data))
+
+        self.assertEqual(self.bare_name_hits(BARE_CONSUMER.upper()), [])
+
+    def test_an_instance_without_a_consumer_list_has_no_bare_name_term(self):
+        (self.instance / "consumers.json").unlink()
+
+        self.assertNotIn("repo-name", self.terms().patterns)
 
 
 class PublicScrub(unittest.TestCase):
