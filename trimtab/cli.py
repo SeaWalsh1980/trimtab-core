@@ -24,7 +24,7 @@ from trimtab.capture.sources import (
 from trimtab.lint import overrides, references, structure
 from trimtab.propose import render
 from trimtab.registry import harness, rules_for
-from trimtab.registry.lookup import registry_for
+from trimtab.registry.lookup import project_items, registry_for
 from trimtab.score import THRESHOLD, WINDOW_WEEKS, candidates, tally
 
 DEFAULT_LIMIT = 50  # every run is bounded; the watermark carries the rest
@@ -69,7 +69,15 @@ def cmd_registry(args) -> int:
 # ---- check-pr ------------------------------------------------------------
 
 def cmd_check_pr(args) -> int:
-    registry, problems = registry_for(_instance(args), Path(args.project))
+    prefix = None
+    if args.schema_only:
+        # A consumer's CI has no instance; resolving one, even from the environment, is not this mode.
+        if args.instance:
+            print("error: --schema-only reads no instance; it cannot be used with --instance", file=sys.stderr)
+            return 2
+        registry, prefix, problems = project_items(Path(args.project))
+    else:
+        registry, problems = registry_for(_instance(args), Path(args.project))
     if problems:
         print("cannot build the registry:", file=sys.stderr)
         return _print_problems(problems) or 1
@@ -86,9 +94,10 @@ def cmd_check_pr(args) -> int:
         body = sys.stdin.read()
     else:
         body = Path(args.body_file).read_text(encoding="utf-8")
-    result = check_body(body, registry, backfill=args.backfill)
+    result = check_body(body, registry, backfill=args.backfill, schema_only=args.schema_only, project_prefix=prefix)
     if result.ok:
-        print("PR block OK" + (" (legacy heading, backfill)" if result.block.legacy else ""))
+        print("PR block OK" + (" (legacy heading, backfill)" if result.block.legacy else "")
+              + (" (schema only: base IDs checked for shape)" if args.schema_only else ""))
         return 0
     return _print_problems(result.problems)
 
@@ -730,6 +739,9 @@ def build_parser() -> argparse.ArgumentParser:
     chk.add_argument("--repo", help="owner/name, with --pr")
     chk.add_argument("--project", default=".", help="project root, for its own IDs (default: .)")
     chk.add_argument("--backfill", action="store_true", help="accept the legacy `## Rules applied` heading")
+    chk.add_argument("--schema-only", action="store_true",
+                     help="read no instance: check the block's form, resolve only the project's own IDs, "
+                          "and check every other ID for shape (a consumer's CI)")
     chk.set_defaults(func=cmd_check_pr)
 
     ing = sub.add_parser("ingest", parents=[common], help="record merged PRs by watermark (dry run unless --apply)")

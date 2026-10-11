@@ -1,10 +1,12 @@
 """check-pr: the three-section PR block (ADR 0005)."""
 
+import tempfile
 import unittest
 from pathlib import Path
 
 from trimtab.capture.prblock import block_version, check_body
 from trimtab.items import Item, Strength
+from trimtab.registry.lookup import project_items
 
 
 def rule(item_id, strength, text=""):
@@ -183,6 +185,138 @@ class LegacyHeading(unittest.TestCase):
 
         self.assertEqual(result.problems, ())
         self.assertTrue(result.block.legacy)
+
+
+PROJECT_LOCK = '{"trimtab_sha": "0", "id_prefix": "XP", "schema_version": 2}\n'
+PROJECT_RULE = """---
+id_prefix: XP-LAYERING
+---
+
+## 1. Layers
+
+- **PREFER** thin adapters.
+
+## 2. Boundaries
+
+- **REQUIRE** ports to own their types.
+"""
+
+
+def block(*ids, feedback=""):
+    applied = "".join(f"- id: {i}\n  why: applied\n" for i in ids)
+    return (f"<!-- trimtab-block: 1 -->\n\n## Harness items applied\n```yaml\n{applied}```\n\n"
+            f"## Harness feedback\n```yaml\n{feedback}```\n\n## Process cost\n```yaml\n```\n")
+
+
+def graded(item_id):
+    return block("none", feedback=f"- id: {item_id}\n  kind: missed\n  scope: project\n"
+                                   "  evidence: a finding\n  severity: MEDIUM\n")
+
+
+class SchemaOnly(unittest.TestCase):
+    """`schema_only`, for a consumer's CI with no instance: base IDs by shape, the project's own resolved.
+
+    Builds a fixture project (a lock with prefix XP and one rule file) in a temporary directory.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        project = Path(self._tmp.name) / "project"
+        (project / ".claude" / "rules").mkdir(parents=True)
+        (project / ".claude" / "trimtab.json").write_text(PROJECT_LOCK, encoding="utf-8")
+        (project / ".claude" / "rules" / "layering.md").write_text(PROJECT_RULE, encoding="utf-8")
+        self.registry, self.prefix, problems = project_items(project)
+        self.assertEqual(problems, [])
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def check(self, body, prefix="project"):
+        return check_body(body, self.registry, schema_only=True,
+                          project_prefix=self.prefix if prefix == "project" else prefix)
+
+    def test_a_block_citing_base_and_project_ids_passes_with_no_base_registry(self):
+        self.assertEqual(self.check(block("ENG-2", "XP-LAYERING-1")).problems, ())
+
+    def test_an_unknown_base_id_passes_schema_only(self):
+        self.assertEqual(self.check(block("ENG-99")).problems, ())
+
+    def test_the_same_unknown_base_id_fails_a_full_check(self):
+        self.assertIn("unknown-id", codes(check_body(block("ENG-99"), self.registry)))
+
+    def test_an_unknown_project_id_still_fails(self):
+        self.assertIn("unknown-id", codes(self.check(block("XP-LAYERING-99"))))
+
+    def test_a_base_id_of_the_wrong_shape_fails(self):
+        self.assertIn("unknown-id", codes(self.check(block("eng-2"))))
+
+    def test_a_base_item_graded_below_binding_is_not_strength_checked(self):
+        self.assertEqual(self.check(graded("ENG-2")).problems, ())
+
+    def test_a_project_require_graded_medium_still_fails(self):
+        self.assertIn("severity-below-binding", codes(self.check(graded("XP-LAYERING-2"))))
+
+    def test_a_missing_section_still_fails(self):
+        body = block("ENG-2").split("## Process cost")[0]
+
+        self.assertIn("missing-section", codes(self.check(body)))
+
+    def test_prose_instead_of_yaml_still_fails(self):
+        body = block("ENG-2").replace("```yaml\n- id: ENG-2\n  why: applied\n```", "Applied ENG-2.")
+
+        self.assertIn("not-yaml", codes(self.check(body)))
+
+    def test_a_feedback_kind_outside_the_vocabulary_still_fails(self):
+        body = graded("ENG-2").replace("kind: missed", "kind: confusing")
+
+        self.assertIn("bad-value", codes(self.check(body)))
+
+    def test_none_without_why_still_fails(self):
+        body = block("ENG-2").replace("- id: ENG-2\n  why: applied\n", "- id: none\n")
+
+        self.assertIn("missing-field", codes(self.check(body)))
+
+    def test_without_a_lock_every_id_is_checked_for_shape_only(self):
+        self.assertEqual(self.check(block("XP-LAYERING-99"), prefix=None).problems, ())
+
+    def test_a_problem_message_never_quotes_the_body(self):
+        result = self.check(block("XP-LAYERING-abc123"))
+
+        self.assertTrue(result.problems)
+        self.assertFalse(any("abc123" in str(p) for p in result.problems))
+
+
+class SchemaOnlyProject(unittest.TestCase):
+    """`project_items` reads the project alone. Builds fixture projects in a temporary directory."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.project = Path(self._tmp.name) / "project"
+        (self.project / ".claude").mkdir(parents=True)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_a_project_without_a_lock_has_no_items_and_no_prefix(self):
+        self.assertEqual(project_items(self.project), ({}, None, []))
+
+    def test_an_unreadable_lock_is_a_problem_not_a_fallback_to_shape_only(self):
+        (self.project / ".claude" / "trimtab.json").write_text("{not json", encoding="utf-8")
+
+        _, prefix, problems = project_items(self.project)
+
+        self.assertIsNone(prefix)
+        self.assertEqual([p.code for p in problems], ["bad-config"])
+
+    def test_a_project_rule_outside_the_projects_prefix_is_a_problem(self):
+        (self.project / ".claude" / "trimtab.json").write_text(PROJECT_LOCK, encoding="utf-8")
+        (self.project / ".claude" / "rules").mkdir()
+        (self.project / ".claude" / "rules" / "x.md").write_text(
+            PROJECT_RULE.replace("XP-LAYERING", "OTHER"), encoding="utf-8")
+
+        _, _, problems = project_items(self.project)
+
+        self.assertEqual([p.code for p in problems], ["bad-prefix"])
 
 
 class BlockVersion(unittest.TestCase):
