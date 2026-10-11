@@ -104,7 +104,8 @@ on its `**HEAD SHA:**` line. Then the window, one of three ways, recorded in
    starts exactly where the previous review ended, so consecutive windows
    neither overlap nor leave a gap, and no finding is counted twice by the
    retro.
-3. **Otherwise** (no previous report, no SHA on its header line, or a SHA the
+3. **Otherwise** (no previous report, a report that cannot be read, say a
+   branch deleted since it was listed, no SHA on its header line, or a SHA the
    branch no longer contains): by date, with
    `WINDOW_START_DATE` set to `LAST`, else 7 days ago
    (`date -u -d '7 days ago' +%F`), and
