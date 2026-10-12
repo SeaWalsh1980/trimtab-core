@@ -1,0 +1,20 @@
+{
+  "name": "Trimtab conformance · $project_repo",
+  "cron_expression": "0 4 * * 4",
+  "enabled": false,
+  "mcp_connections": [],
+  "job_config": {
+    "ccr": {
+      "environment_id": "$environment_id",
+      "events": [ { "data": { "message": { "role": "user", "content": $prompt_json } } } ],
+      "session_context": {
+        "allowed_tools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep"],
+        "model": "claude-opus-5",
+        "sources": [
+          { "git_repository": { "url": "https://github.com/$instance_repo" } },
+          { "git_repository": { "url": "https://github.com/$project_repo" } }
+        ]
+      }
+    }
+  }
+}
