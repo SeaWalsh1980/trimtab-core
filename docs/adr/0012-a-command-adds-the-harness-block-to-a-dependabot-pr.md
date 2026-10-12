@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted.
+Accepted. Amended 2026-10-12 by ADR 0019: the PR is read through REST, so
+Dependabot's login is `dependabot[bot]` with `user.type` `Bot`, and
+`--workflow` takes the workflow's file name.
 
 ## Context
 
