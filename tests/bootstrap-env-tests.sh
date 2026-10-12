@@ -337,6 +337,22 @@ check_cli_reaches_sessions_by_name() {
   fi
 }
 
+# The hook trims a trailing / from the config dir, so the probe must compare
+# against the same trimmed spelling, or a healthy install dies.
+check_cli_probe_accepts_a_config_dir_with_a_trailing_slash() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  set +e
+  out=$(CLAUDE_CONFIG_DIR="$h/.claude/" XDG_DATA_HOME="$h/share" "$live" --no-timer --allow-worktree --instance "$inst" 2>&1)
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 && "$out" == *"session-path puts the installed CLI first on PATH through the symlink"* ]]; then
+    pass "the CLI probe accepts a config dir spelt with a trailing slash"
+  else
+    fail "the CLI probe accepts a config dir spelt with a trailing slash" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
 check_silent_session_path_fails_the_install() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
@@ -711,6 +727,7 @@ check_sandbox_without_own_store_leaves_store_alone
 check_observer_failure_records_but_withholds_retention
 check_silent_guard_mcp_fails_the_install
 check_cli_reaches_sessions_by_name
+check_cli_probe_accepts_a_config_dir_with_a_trailing_slash
 check_silent_session_path_fails_the_install
 check_retention_spares_a_snapshot_systemd_links_into
 check_missing_pyyaml_is_named

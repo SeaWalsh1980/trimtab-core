@@ -604,12 +604,14 @@ if [[ -x "$CLAUDE_HOME/hooks/session-path.sh" ]]; then
   found=$(env -i PATH=/usr/bin:/bin bash -c '. "$1" && command -v trimtab' _ "$probe_env" 2>/dev/null)
   set -e
   rm -f "$probe_env"
-  if [[ "$found" == "$CLAUDE_HOME/bin/trimtab" ]]; then
+  # The hook trims a trailing / from the config dir; compare the same spelling.
+  want_cli="${CLAUDE_HOME%/}/bin/trimtab"
+  if [[ "$found" == "$want_cli" ]]; then
     ok "session-path puts the installed CLI first on PATH through the symlink"
   elif [[ $CHECK_ONLY -eq 1 ]]; then
-    note "session-path did not put $CLAUDE_HOME/bin/trimtab first on PATH (got: ${found:-nothing}) — sessions cannot run trimtab"
+    note "session-path did not put $want_cli first on PATH (got: ${found:-nothing}) — sessions cannot run trimtab"
   else
-    die "session-path did not put $CLAUDE_HOME/bin/trimtab first on PATH (got: ${found:-nothing}) — sessions could not run trimtab"
+    die "session-path did not put $want_cli first on PATH (got: ${found:-nothing}) — sessions could not run trimtab"
   fi
 elif [[ $CHECK_ONLY -eq 1 ]]; then
   note "session-path.sh not linked into $CLAUDE_HOME — CLI probe skipped"
