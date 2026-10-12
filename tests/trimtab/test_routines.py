@@ -16,6 +16,14 @@ ENV_ID = "placeholder-environment"
 # when unattended) and feeds PR events into the run.
 REMOTE_SESSION_SERVER = "mcp__claude-code-remote"
 REMOTE_SUBSCRIBE = "mcp__claude-code-remote__subscribe_pr_activity"
+# The guard probe: one exact command, and no other refusal stands in for it.
+PROBE_CLAUSES = ("`ls ~/.claude/hooks`", "`ls <that path>/hooks`",
+                 "refusal of any other command does not satisfy this check",
+                 "Quote the exact command and the refusal text")
+
+
+def prompt_of(spec):
+    return spec["job_config"]["ccr"]["events"][0]["data"]["message"]["content"]
 
 
 class Render(unittest.TestCase):
@@ -46,6 +54,12 @@ class Render(unittest.TestCase):
 
         refused = spec["job_config"]["ccr"]["session_context"]["disallowed_tools"]
         self.assertTrue({REMOTE_SESSION_SERVER, REMOTE_SUBSCRIBE} <= set(refused))
+
+    def test_the_guard_probe_requires_the_exact_command_and_no_other(self):
+        spec = routines.render("upstream-retro", routines.values(self.inst, {"environment_id": ENV_ID}))
+
+        prompt = prompt_of(spec)
+        self.assertEqual([c for c in PROBE_CLAUSES if c not in prompt], [])
 
     def test_the_source_is_the_instances_repository(self):
         spec = routines.render("upstream-retro", routines.values(self.inst, {"environment_id": ENV_ID}))
@@ -173,6 +187,12 @@ class PerProjectTemplate:
 
         refused = spec["job_config"]["ccr"]["session_context"]["disallowed_tools"]
         self.assertTrue({REMOTE_SESSION_SERVER, REMOTE_SUBSCRIBE} <= set(refused))
+
+    def test_the_guard_probe_requires_the_exact_command_and_no_other(self):
+        spec = self.rendered()
+
+        prompt = prompt_of(spec)
+        self.assertEqual([c for c in PROBE_CLAUSES if c not in prompt], [])
 
     def test_the_rendered_spec_holds_no_id_shape(self):
         spec = self.rendered()
