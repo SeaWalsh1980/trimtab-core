@@ -22,12 +22,17 @@ WRITING_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 BASH_BLOCK = re.compile(r"```bash\n(.*?)```", re.S)
 DOCTRINE_READERS = ("trimtab-planner", "trimtab-reviewer", "trimtab-silent-failure-hunter",
                     "trimtab-test-analyzer")
-# The whole snippet: the installed CLI, never the tree under review's, and the doctrine root
-# from `trimtab instance --root` and nowhere else (ADR 0008).
+# The whole snippet: the installed CLI by name (session-path.sh puts it first on PATH), never
+# the tree under review's, and the doctrine root from `trimtab instance --root` and nowhere
+# else (ADR 0008).
 DOCTRINE_SNIPPET = (
-    'TRIMTAB="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/trimtab"',
-    'DOCTRINE=$("$TRIMTAB" instance --root) && echo "ok: doctrine at $DOCTRINE"',
+    'DOCTRINE=$(trimtab instance --root) && echo "ok: doctrine at $DOCTRINE"',
 )
+# Every file a session follows. Each one runs with the guards live, and guard-paths refuses
+# any Bash call whose text names the config directory's bin/.
+SESSION_FILES = (sorted((REPO / "commands").glob("*.md")) + sorted((REPO / "agents").glob("*.md"))
+                 + sorted((REPO / "routines" / "templates").glob("*.prompt.md.tmpl")))
+CLI_BY_PATH = re.compile(r"\$\{?TRIMTAB\}?(?!_)|\bTRIMTAB=|bin/trimtab")
 
 
 def contracts(path: Path) -> dict[str, str]:
@@ -120,6 +125,36 @@ class DoctrineRoot(unittest.TestCase):
 
                 self.assertNotIn("readlink -f", text)
                 self.assertNotIn("TRIMTAB_ROOT", text)
+
+
+class InstalledCli(unittest.TestCase):
+    """Sessions call the installed CLI by name, the one spelling guard-paths lets through."""
+
+    def test_no_session_file_calls_the_cli_by_a_path_the_guards_refuse(self):
+        self.assertGreaterEqual(len(SESSION_FILES), 13)
+        for path in SESSION_FILES:
+            with self.subTest(file=path.name):
+                hits = CLI_BY_PATH.findall(path.read_text(encoding="utf-8"))
+
+                self.assertEqual(hits, [])
+
+    def test_each_routine_prompt_checks_the_cli_is_on_path(self):
+        for path in sorted((REPO / "routines" / "templates").glob("*.prompt.md.tmpl")):
+            with self.subTest(template=path.name):
+                text = path.read_text(encoding="utf-8")
+
+                self.assertIn("`command -v trimtab`", text)
+                self.assertIn("`trimtab --help`", text)
+
+    def test_each_routine_prompt_proves_the_guards_block_before_it_trusts_them(self):
+        # Files being present is not enforcement: the prompt has the session try a
+        # call guard-paths must refuse, and stop if it is not refused.
+        for path in sorted((REPO / "routines" / "templates").glob("*.prompt.md.tmpl")):
+            with self.subTest(template=path.name):
+                text = " ".join(path.read_text(encoding="utf-8").split())
+
+                self.assertIn("must be refused by guard-paths", text)
+                self.assertIn("If it is not refused, stop.", text)
 
 
 class Routines(unittest.TestCase):

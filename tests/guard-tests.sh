@@ -75,6 +75,7 @@ mkdir -p "$CP_REPO"/hooks "$CP_REPO"/rules "$CP_REPO"/bin \
 : > "$CP_REPO/rules/Example.md"
 : > "$CP_REPO/rules/Keywords.md"
 : > "$CP_REPO/bin/env-names.sh"
+: > "$CP_REPO/bin/trimtab"
 : > "$CP_REPO/CLAUDE.md"
 : > "$CP_REPO/settings.base.json"
 : > "$CP_REPO/machine.example.json"
@@ -303,6 +304,35 @@ t guard-paths.sh 0 "bash reading a plan file"                 "$(j Bash "{\"comm
 # and an attacker nothing. Read freely, write through a pull request.
 t guard-paths.sh 0 "Read of a live hook still allowed"        "$(j Read "{\"file_path\":\"$CP_HOME/hooks/guard-paths.sh\"}")"
 t guard-paths.sh 0 "Read of a live rule still allowed"        "$(j Read "{\"file_path\":\"$CP_REPO/rules/Example.md\"}")"
+
+echo "== guard-paths: the installed CLI, called by name =="
+# Sessions reach bin/trimtab through PATH (hooks/session-path.sh puts the config
+# directory's bin/ first), so the commands, agents and routine prompts call it
+# by its bare name. A bare word holds no / or ., so the path scan never sees it,
+# and the file that runs is still the protected one: no exemption, no new route.
+# The calls below are the methods' own; each must pass with the guards live.
+t guard-paths.sh 0 "CLI by name: --help"                      "$(j Bash '{"command":"trimtab --help"}')"
+t guard-paths.sh 0 "CLI by name: on PATH, then --help"        "$(j Bash '{"command":"command -v trimtab && trimtab --help >/dev/null && echo ok"}')"
+t guard-paths.sh 0 "CLI by name: the doctrine root"           "$(j Bash '{"command":"DOCTRINE=$(trimtab instance --root) && echo \"ok: doctrine at $DOCTRINE\""}')"
+t guard-paths.sh 0 "CLI by name: the instance repository"     "$(j Bash '{"command":"ISSUES=$(trimtab instance --repo) && gh api \"repos/$ISSUES/labels/harness-feedback\" --jq .name"}')"
+t guard-paths.sh 0 "CLI by name: rules-for on a tree"         "$(j Bash '{"command":"trimtab rules-for --project \"$TREE\" src/app/main.py docs/x.md"}')"
+t guard-paths.sh 0 "CLI by name: lint structure"              "$(j Bash '{"command":"trimtab lint structure --project \"$TREE\" --sections"}')"
+t guard-paths.sh 0 "CLI by name: check-pr on a body file"     "$(j Bash '{"command":"trimtab check-pr --body-file /tmp/review/body.md"}')"
+t guard-paths.sh 0 "CLI by name: ingest dry run"              "$(j Bash '{"command":"trimtab ingest --dry-run --repo owner/project --ledger-from-labels"}')"
+t guard-paths.sh 0 "CLI by name: propose dry run"             "$(j Bash '{"command":"trimtab propose --dry-run --check-open --repo owner/project --ledger-from-labels"}')"
+# ...while the file itself, and the config directory around it, stay closed to
+# every write route, whatever spelling names them.
+t guard-paths.sh 2 "CLI file: Write through the config dir"   "$(j Write "{\"file_path\":\"$CP_HOME/bin/trimtab\",\"content\":\"x\"}")"
+t guard-paths.sh 2 "CLI file: Edit through the realpath"      "$(j Edit "{\"file_path\":\"$CP_REPO/bin/trimtab\"}")"
+t guard-paths.sh 2 "CLI file: redirect into it"               "$(j Bash "{\"command\":\"echo x > $CP_HOME/bin/trimtab\"}")"
+t guard-paths.sh 2 "CLI file: cp over it, \$CLAUDE_CONFIG_DIR" "$(j Bash '{"command":"cp /tmp/x $CLAUDE_CONFIG_DIR/bin/trimtab"}')"
+CP_REAL_HOME="$HOME"; HOME="$CPTMP/home"   # one case only; see the fixture note
+t guard-paths.sh 2 "CLI file: sed -i through ~/.claude"       "$(j Bash '{"command":"sed -i s/x/y/ ~/.claude/bin/trimtab"}')"
+HOME="$CP_REAL_HOME"
+t guard-paths.sh 2 "CLI file: tee from the CLI into it"       "$(j Bash "{\"command\":\"trimtab --help | tee $CP_REPO/bin/trimtab\"}")"
+t guard-paths.sh 2 "CLI by name: output redirected into settings" "$(j Bash "{\"command\":\"trimtab instance --json > $CP_HOME/settings.json\"}")"
+t guard-paths.sh 2 "CLI by name: output appended to a live rule" "$(j Bash "{\"command\":\"trimtab instance --root >> $CP_REPO/rules/Example.md\"}")"
+t guard-paths.sh 2 "CLI by name: a control-plane argument"    "$(j Bash "{\"command\":\"trimtab check-pr --body-file $CP_HOME/hooks/guard-paths.sh\"}")"
 
 echo "== guard-paths: two trees (ADR 0002) =="
 # The split layout (ADR 0008): the mechanism links (hooks, bin, commands, agents) resolve
