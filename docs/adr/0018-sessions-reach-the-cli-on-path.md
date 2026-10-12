@@ -85,6 +85,12 @@ ours to configure.
   session can already do; it does not change what any later session runs.
 - Accepted: a session can edit `CLAUDE_ENV_FILE` for its own later calls. The
   file is per session, so this reaches no other session.
+- Inherited, not added: `settings.base.json` registers every hook by
+  `$HOME/.claude/hooks/…`, this one included, while the hook itself honours
+  `CLAUDE_CONFIG_DIR`. A session whose config directory is elsewhere runs the
+  registered paths, not its own, for every hook, the guards among them. This
+  record does not change that; it is a gap of all the registrations, recorded
+  for a decision of its own.
 
 ## Trial, still open
 
