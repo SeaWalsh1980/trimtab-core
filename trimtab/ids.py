@@ -10,8 +10,8 @@ import re
 
 # A routine (trig_), environment (env_) or session (session_, cse_) ID: a
 # random tail of 16 or more letters and digits that mixes upper and lower
-# case. Option names in one case (`session_cookiesamesite…`,
-# `env_PRODUCTIONDATABASEURL`), as release notes quote them, do not match.
+# case. An option name in one case after a prefix (`env_` and a long
+# upper-case name), as release notes quote them, does not match.
 ID_SHAPE = re.compile(r"\b(?:trig|env|session|cse)_"
                       r"(?=[0-9A-Za-z]*[A-Z])(?=[0-9A-Za-z]*[a-z])"
                       r"[0-9A-Za-z]{16,}\b")

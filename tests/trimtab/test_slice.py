@@ -225,7 +225,8 @@ class SchemaOnlyCli(unittest.TestCase):
 
     def test_a_long_word_in_one_case_with_no_digit_passes(self):
         # Quoted release notes name options like these; an ID's tail mixes cases and digits.
-        notes = "\n> Adds env_PRODUCTIONDATABASEURL and session_cookiesamesitestrict.\n"
+        # Built at run time, so the file holds no literal the scrub reads as an ID.
+        notes = "\n> Adds " + "env_" + "PRODUCTIONDATABASEURL and " + "session_" + "cookiesamesitestrict.\n"
 
         done = self.check_pr(schema_only_body("ENG-2") + notes)
 

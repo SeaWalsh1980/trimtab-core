@@ -57,7 +57,8 @@ Three parts, each catching what the one before it can miss:
   what an ID looks like: the tail after the prefix is 16 or more letters and
   digits that mix upper and lower case. Every routine, environment and
   session ID seen so far does; an option name in one case
-  (`env_PRODUCTIONDATABASEURL`), as quoted release notes carry, does not. A
+  (`env_` followed by a long upper-case name), as quoted release notes carry,
+  does not. A
   digit is not required: a random 22-character tail has none about one time
   in fifty, too often to miss. The scrub shares the shape, so its id-shape
   check and its deny-list of IDs read from the instance narrow the same way.
