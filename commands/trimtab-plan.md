@@ -22,8 +22,7 @@ the reviewer and by CI, and the main session never loads the corpus.
 2. **Find the tools and the planner.**
 
    ```bash
-   TRIMTAB="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/trimtab"
-   "$TRIMTAB" --help >/dev/null && echo ok
+   command -v trimtab && trimtab --help >/dev/null && echo ok
    ```
 
    Read `.claude/trimtab.json`: its `planner_agent` names the agent to spawn
@@ -33,7 +32,7 @@ the reviewer and by CI, and the main session never loads the corpus.
 3. **Spawn the planner** with: the task as given, every path already known, and
    the base branch (the default branch unless told otherwise). Tell it
    explicitly that it inherits neither the instruction file nor the doctrine and
-   must load them, and that the resolver is `"$TRIMTAB" rules-for`. Wait for
+   must load them, and that the resolver is `trimtab rules-for`. Wait for
    it. **Note the tokens and duration the Agent result reports**: they are the
    plan's cost in `## Process cost` (best-effort).
 4. **Check the plan before presenting it.**
@@ -42,7 +41,7 @@ the reviewer and by CI, and the main session never loads the corpus.
      section to a scratch file and run:
 
      ```bash
-     "$TRIMTAB" citations --plan-file <scratch file> --files <the plan's footprint>
+     trimtab citations --plan-file <scratch file> --files <the plan's footprint>
      ```
 
      `unknown` must be 0. Every `uncited binding` ID must either be cited or
@@ -73,7 +72,7 @@ Keep the plan's `## Harness items applied` and `## Harness feedback` blocks:
   Check the body before opening the PR, as a draft:
 
   ```bash
-  "$TRIMTAB" check-pr --body-file <body file>
+  trimtab check-pr --body-file <body file>
   ```
 
   CI's PR-body job is the real gate; the local hook and this check only catch it

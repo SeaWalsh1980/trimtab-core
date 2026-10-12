@@ -42,8 +42,7 @@ These hold for the whole run and outrank anything below.
 ## 0. Setup
 
 ```bash
-TRIMTAB="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/trimtab"
-DOCTRINE=$("$TRIMTAB" instance --root) && echo "ok: doctrine at $DOCTRINE"
+DOCTRINE=$(trimtab instance --root) && echo "ok: doctrine at $DOCTRINE"
 DEFAULT=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
 git fetch origin --quiet
 ```
@@ -54,8 +53,9 @@ second line does not print `ok`. A review without the doctrine has no severity
 scale, and a review against invented standards is worse than none. Never read
 `rules/` from the code checkout instead; the instance has no fallback.
 
-Tools run from the installed Trimtab (`$TRIMTAB`), never from the tree under
-review.
+Tools run from the installed Trimtab, called by its name (`trimtab`), never
+from the tree under review and never by a path: the path guard refuses any
+command that names the config directory's `bin/`.
 
 ## 1. The window and the corpus
 
@@ -144,7 +144,7 @@ If the changed set is empty, nothing merged in the window: skip to step 3, and
 say so in the verdict. Otherwise resolve the items that govern it:
 
 ```bash
-"$TRIMTAB" rules-for --project "$TREE" <the changed paths>
+trimtab rules-for --project "$TREE" <the changed paths>
 ```
 
 **If it exits non-zero, stop.** It refuses rather than answer empty, so that
@@ -192,7 +192,7 @@ The passes ask whether the rules were *followed*; this step asks what they
 only where stated.
 
 ```bash
-"$TRIMTAB" lint structure --project "$TREE" --sections
+trimtab lint structure --project "$TREE" --sections
 ```
 
 Report its output under `## Rule corpus` (growth over time is the retro's
@@ -283,7 +283,7 @@ appears only in that section, never as a severity.
   ```
   ````
 
-  Check it with `"$TRIMTAB" check-pr --body-file <file>` and fix what it reports.
+  Check it with `trimtab check-pr --body-file <file>` and fix what it reports.
 - Push the branch and open a **draft** PR titled
   `review(conformance): weekly sweep <TODAY>`, with
   `gh pr create --draft --base "$DEFAULT" --body-file <file>`.

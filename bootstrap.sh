@@ -587,6 +587,38 @@ if [[ -n "$pat" && -x "$CLAUDE_HOME/hooks/guard-secrets.sh" ]]; then
   fi
 fi
 
+# ---- 5b. the CLI reaches sessions by name -------------------------------
+# guard-paths refuses any Bash call whose text names the config directory's
+# bin/, so sessions call the CLI by name, and session-path.sh is what puts it
+# first on PATH (ADR 0018). A hook that writes nothing usable leaves every
+# /trimtab-* method and routine failing on its first call, so it is probed end
+# to end through the symlink, as the guards are: the env file it writes, run as
+# Claude Code runs it before a Bash call, must resolve `trimtab` to this
+# install's bin/. die, not note, in an install: a routine's setup script must
+# fail loudly rather than start a session that cannot run its method.
+if [[ -x "$CLAUDE_HOME/hooks/session-path.sh" ]]; then
+  probe_env=$(mktemp -t session-path-probe.XXXXXX)
+  set +e
+  printf '%s' '{"hook_event_name":"SessionStart","source":"startup"}' \
+    | CLAUDE_CONFIG_DIR="$CLAUDE_HOME" CLAUDE_ENV_FILE="$probe_env" "$CLAUDE_HOME/hooks/session-path.sh" >/dev/null 2>&1
+  found=$(env -i PATH=/usr/bin:/bin bash -c '. "$1" && command -v trimtab' _ "$probe_env" 2>/dev/null)
+  set -e
+  rm -f "$probe_env"
+  # The hook trims a trailing / from the config dir; compare the same spelling.
+  want_cli="${CLAUDE_HOME%/}/bin/trimtab"
+  if [[ "$found" == "$want_cli" ]]; then
+    ok "session-path puts the installed CLI first on PATH through the symlink"
+  elif [[ $CHECK_ONLY -eq 1 ]]; then
+    note "session-path did not put $want_cli first on PATH (got: ${found:-nothing}) — sessions cannot run trimtab"
+  else
+    die "session-path did not put $want_cli first on PATH (got: ${found:-nothing}) — sessions could not run trimtab"
+  fi
+elif [[ $CHECK_ONLY -eq 1 ]]; then
+  note "session-path.sh not linked into $CLAUDE_HOME — CLI probe skipped"
+else
+  die "session-path.sh not linked into $CLAUDE_HOME after section 3 — sessions could not run trimtab"
+fi
+
 # ---- 6. verify the rule-usage observer records ------------------------
 # This hook cannot block anything, so the only failure it can have is
 # silence — and silence reads exactly like a quiet week in the weekly

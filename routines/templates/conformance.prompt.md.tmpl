@@ -4,7 +4,13 @@ Run the weekly conformance review of $project_repo and deliver its report as a D
 
 # Before anything else: are the guards live?
 
-The environment's setup script runs `bootstrap.sh` before this session starts. Confirm it did: the config directory's `hooks/` holds the four `guard-*.sh` scripts, its `bin/trimtab --help` runs, and its `settings.json` registers the guards. **If any check fails, stop.** Open nothing, write nothing, and say in your final message which check failed. An unguarded run is worse than no run.
+The environment's setup script runs `bootstrap.sh` before this session starts. Confirm it did, in this order:
+
+1. With the Read tool (not Glob or Grep: the path guard checks their paths), read the config directory's `settings.json` and its `hooks/guard-paths.sh`, `guard-bash.sh`, `guard-secrets.sh`, `guard-security.sh` and `guard-mcp.sh`. Each exists, and `settings.json` registers them.
+2. Run `command -v trimtab`, then `trimtab --help`. Both succeed, and the first prints a path in the config directory's `bin/`. Call the CLI by its name only: the path guard refuses any command that names the config directory's `bin/`.
+3. Prove the guards block, not only that their files exist: run `ls` on the config directory's `hooks/`, written as an absolute path: under the value of `CLAUDE_CONFIG_DIR` if it is set, otherwise under `~/.claude` (`ls ~/.claude/hooks`). Never write it with a shell default (`:-`). That call must be refused by guard-paths. If it is not refused, stop.
+
+**If any check fails, stop.** Open nothing, write nothing, and say in your final message which check failed. An unguarded run is worse than no run.
 
 # Authorisation
 

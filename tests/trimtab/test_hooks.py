@@ -1,4 +1,4 @@
-"""The two unregistered hooks: pr-body-check.sh (PreToolUse) and doctrine-drift.sh (SessionStart).
+"""The trimtab hooks: pr-body-check.sh (PreToolUse), doctrine-drift.sh and session-path.sh (SessionStart).
 
 Each runs as Claude Code would run it: the script, a JSON payload on stdin,
 exit code and streams observed.
@@ -16,6 +16,8 @@ REPO = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 PR_BODY_CHECK = REPO / "hooks" / "pr-body-check.sh"
 DRIFT = REPO / "hooks" / "doctrine-drift.sh"
+SESSION_PATH = REPO / "hooks" / "session-path.sh"
+SETTINGS_BASE = REPO / "settings.base.json"
 MARKER = "zz-body-marker-7f3a"
 PROJECT_LOCK = '{"trimtab_sha": "0", "id_prefix": "XP", "schema_version": 2}\n'
 PROJECT_RULE = "---\nid_prefix: XP-LAYERING\ndescription: x\n---\n\n## 1. Layers\n\n- **REQUIRE** inward imports.\n"
@@ -283,6 +285,128 @@ class DoctrineDrift(unittest.TestCase):
 
     def test_a_malformed_payload_exits_zero(self):
         self.assertEqual(run(DRIFT, "garbage").returncode, 0)
+
+
+class SessionPath(unittest.TestCase):
+    """The CLI reaches a session's Bash calls by name, through CLAUDE_ENV_FILE.
+
+    Builds a fixture config directory, a decoy `trimtab` and the env file in a
+    temporary directory. A later Bash call is simulated as Claude Code runs one:
+    the env file's contents first, then the command.
+    """
+
+    STARTUP = {"hook_event_name": "SessionStart", "source": "startup"}
+    INSTALLED = "installed-cli-7c1e"
+    DECOY = "decoy-cli-41b9"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        root = Path(self._tmp.name)
+        self.config = root / "config"
+        self.decoys = root / "decoys"
+        self.env_file = root / "session-env" / "hook.sh"
+        self.env_file.parent.mkdir()
+        self.cli(self.config / "bin", self.INSTALLED)
+        self.cli(self.decoys, self.DECOY)
+        self.env = {"PATH": f"{self.decoys}:/usr/bin:/bin", "HOME": str(root / "home"),
+                    "CLAUDE_CONFIG_DIR": str(self.config), "CLAUDE_ENV_FILE": str(self.env_file)}
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    @staticmethod
+    def cli(directory, marker):
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "trimtab").write_text(f"#!/bin/sh\necho {marker}\n")
+        (directory / "trimtab").chmod(0o755)
+
+    def start(self, payload=None):
+        return run(SESSION_PATH, self.STARTUP if payload is None else payload, env=self.env)
+
+    def later_bash_call(self, command):
+        script = f'. "{self.env_file}"\n{command}\n'
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                              env={"PATH": self.env["PATH"]}, timeout=30)
+
+    def test_a_later_bash_call_runs_the_installed_cli_by_name(self):
+        self.start()
+
+        done = self.later_bash_call("trimtab --help")
+
+        self.assertEqual(done.stdout.strip(), self.INSTALLED)
+
+    def test_the_installed_cli_wins_over_one_already_on_path(self):
+        self.start()
+
+        done = self.later_bash_call("command -v trimtab")
+
+        self.assertEqual(done.stdout.strip(), str(self.config / "bin" / "trimtab"))
+
+    def test_the_line_names_the_config_directory_absolutely(self):
+        # Neither ~ nor $HOME: the env file runs in whatever shell Claude Code
+        # starts, and a session's HOME is not the guard's to trust.
+        self.start()
+
+        text = self.env_file.read_text()
+
+        self.assertIn(f"{self.config}/bin", text)
+        self.assertNotIn("~", text)
+        self.assertNotIn("$HOME", text)
+
+    def test_starting_again_adds_no_second_line(self):
+        self.start()
+        self.start({"hook_event_name": "SessionStart", "source": "compact"})
+
+        lines = [line for line in self.env_file.read_text().splitlines() if f"{self.config}/bin" in line]
+
+        self.assertEqual(len(lines), 1)
+
+    def test_lines_other_hooks_wrote_are_kept(self):
+        other = 'export OTHER_HOOK_VALUE="kept"\n'
+        self.env_file.write_text(other)
+
+        self.start()
+
+        self.assertTrue(self.env_file.read_text().startswith(other))
+
+    def test_without_an_env_file_it_warns_and_exits_zero(self):
+        del self.env["CLAUDE_ENV_FILE"]
+
+        done = self.start()
+
+        self.assertEqual(done.returncode, 0)
+        self.assertIn("trimtab is not on PATH", json.loads(done.stdout)["systemMessage"])
+
+    def test_without_the_installed_cli_it_warns_and_writes_nothing(self):
+        (self.config / "bin" / "trimtab").unlink()
+
+        done = self.start()
+
+        self.assertEqual(done.returncode, 0)
+        self.assertIn("trimtab is not on PATH", json.loads(done.stdout)["systemMessage"])
+        self.assertFalse(self.env_file.exists())
+
+    def test_without_a_config_dir_setting_it_uses_the_home_default(self):
+        home_config = Path(self.env["HOME"]) / ".claude"
+        self.cli(home_config / "bin", self.INSTALLED)
+        del self.env["CLAUDE_CONFIG_DIR"]
+
+        self.start()
+
+        self.assertIn(f"{home_config}/bin", self.env_file.read_text())
+
+    def test_a_malformed_payload_still_puts_the_cli_on_path(self):
+        done = self.start("garbage")
+
+        self.assertEqual(done.returncode, 0)
+        self.assertEqual(self.later_bash_call("trimtab").stdout.strip(), self.INSTALLED)
+
+    def test_the_base_settings_register_it_at_session_start(self):
+        groups = json.loads(SETTINGS_BASE.read_text())["hooks"]["SessionStart"]
+
+        commands = [h["command"] for g in groups for h in g["hooks"]]
+
+        self.assertIn('"$HOME/.claude/hooks/session-path.sh"', commands)
 
 
 if __name__ == "__main__":

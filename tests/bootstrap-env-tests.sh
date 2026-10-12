@@ -323,6 +323,49 @@ check_silent_guard_mcp_fails_the_install() {
   fi
 }
 
+# Sessions reach the CLI by name only through session-path.sh (ADR 0018). An
+# install whose hook writes nothing usable would start sessions, routines among
+# them, that fail every method's first call: the install must refuse, and say so.
+check_cli_reaches_sessions_by_name() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"session-path puts the installed CLI first on PATH through the symlink"* ]]; then
+    pass "an install proves the CLI reaches sessions by name"
+  else
+    fail "an install proves the CLI reaches sessions by name" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# The hook trims a trailing / from the config dir, so the probe must compare
+# against the same trimmed spelling, or a healthy install dies.
+check_cli_probe_accepts_a_config_dir_with_a_trailing_slash() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  set +e
+  out=$(CLAUDE_CONFIG_DIR="$h/.claude/" XDG_DATA_HOME="$h/share" "$live" --no-timer --allow-worktree --instance "$inst" 2>&1)
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 && "$out" == *"session-path puts the installed CLI first on PATH through the symlink"* ]]; then
+    pass "the CLI probe accepts a config dir spelt with a trailing slash"
+  else
+    fail "the CLI probe accepts a config dir spelt with a trailing slash" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+check_silent_session_path_fails_the_install() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n' > "$snap_new/hooks/session-path.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"session-path did not put"*"sessions could not run trimtab"* ]]; then
+    pass "a session-path hook that writes nothing fails the install"
+  else
+    fail "a session-path hook that writes nothing fails the install" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
 # A unit linked into a snapshot dangles when the snapshot goes, and the timer
 # silently never runs; --no-timer installs do not relink it.
 check_retention_spares_a_snapshot_systemd_links_into() {
@@ -683,6 +726,9 @@ check_rerun_from_same_base_keeps_predecessor
 check_sandbox_without_own_store_leaves_store_alone
 check_observer_failure_records_but_withholds_retention
 check_silent_guard_mcp_fails_the_install
+check_cli_reaches_sessions_by_name
+check_cli_probe_accepts_a_config_dir_with_a_trailing_slash
+check_silent_session_path_fails_the_install
 check_retention_spares_a_snapshot_systemd_links_into
 check_missing_pyyaml_is_named
 check_instance_without_claude_md_drops_a_dangling_link
