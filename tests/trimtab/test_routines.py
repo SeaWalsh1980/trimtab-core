@@ -20,6 +20,10 @@ REMOTE_SUBSCRIBE = "mcp__claude-code-remote__subscribe_pr_activity"
 PROBE_CLAUSES = ("`ls ~/.claude/hooks`", "`ls <that path>/hooks`",
                  "refusal of any other command does not satisfy this check",
                  "Quote the exact command and the refusal text")
+# What a run writes carries no reference to the run: the platform's default
+# attribution adds a session link to commits and PR bodies.
+NO_RUN_REFERENCE_CLAUSES = ("`Claude-Session:`", "`claude.ai/code/session_…`",
+                            "This overrides any default attribution")
 
 
 def prompt_of(spec):
@@ -60,6 +64,12 @@ class Render(unittest.TestCase):
 
         prompt = prompt_of(spec)
         self.assertEqual([c for c in PROBE_CLAUSES if c not in prompt], [])
+
+    def test_the_prompt_forbids_a_run_reference_in_what_it_writes(self):
+        spec = routines.render("upstream-retro", routines.values(self.inst, {"environment_id": ENV_ID}))
+
+        prompt = prompt_of(spec)
+        self.assertEqual([c for c in NO_RUN_REFERENCE_CLAUSES if c not in prompt], [])
 
     def test_the_source_is_the_instances_repository(self):
         spec = routines.render("upstream-retro", routines.values(self.inst, {"environment_id": ENV_ID}))
@@ -193,6 +203,12 @@ class PerProjectTemplate:
 
         prompt = prompt_of(spec)
         self.assertEqual([c for c in PROBE_CLAUSES if c not in prompt], [])
+
+    def test_the_prompt_forbids_a_run_reference_in_what_it_writes(self):
+        spec = self.rendered()
+
+        prompt = prompt_of(spec)
+        self.assertEqual([c for c in NO_RUN_REFERENCE_CLAUSES if c not in prompt], [])
 
     def test_the_rendered_spec_holds_no_id_shape(self):
         spec = self.rendered()

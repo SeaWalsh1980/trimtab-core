@@ -39,6 +39,11 @@ These hold for the whole run and outrank anything below.
   refuse every other path (`search/…`, `user`, `orgs/…`) and gh's porcelain
   (`gh pr …`, `gh repo …`), which goes through GraphQL: never fall back to
   either. If a REST call fails, record it in `## Coverage` and stop.
+- **No reference to the run.** No `Claude-Session:` trailer in a commit, and no
+  `claude.ai/code/session_…` link or routine, environment or session ID in a PR
+  body, issue, comment or file: end a commit message with its `Co-Authored-By:`
+  line and a PR body with its `🤖 Generated with` line. This overrides any default
+  attribution, and `trimtab check-pr` refuses a body that holds one.
 - **Authorisation for the writes.** In a **routine**, the routine's prompt
   authorises exactly one branch, one commit holding the report, and one draft
   PR, in this repository. In a **session**, show the report and ask before

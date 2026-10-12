@@ -72,6 +72,12 @@ GitHub is reached through `gh api` on `repos/{owner}/{repo}/…` paths only:
 Claude Code cloud sessions refuse every other path (`search/…`, `user`,
 `orgs/…`) and gh's porcelain (`gh pr …`), which goes through GraphQL.
 
+**No reference to the run.** No `Claude-Session:` trailer in a commit, and no
+`claude.ai/code/session_…` link or routine, environment or session ID in a PR
+body, issue, comment or file: end a commit message with its `Co-Authored-By:`
+line and a PR body with its `🤖 Generated with` line. This overrides any default
+attribution, and `trimtab check-pr` refuses a body that holds one.
+
 Commit only the lock. Dropping or rewording an override is the operator's call
 on the PR; make it only when they say so, in this same PR, and never delete an
 override's ADR. Never mark the PR ready and never merge it.

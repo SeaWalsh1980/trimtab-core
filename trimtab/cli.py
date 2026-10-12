@@ -17,6 +17,7 @@ from trimtab import dependabot
 from trimtab import instance, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_body, parse_applied
+from trimtab.items import Problem
 from trimtab.capture.sources import (
     FixtureContents, FixtureIssues, FixtureSource, GhContents, GhIssues, GhPullRequests, GhSource, SourceError,
     changed_files, open_feedback_issues,
@@ -96,11 +97,15 @@ def cmd_check_pr(args) -> int:
     else:
         body = Path(args.body_file).read_text(encoding="utf-8")
     result = check_body(body, registry, backfill=args.backfill, schema_only=args.schema_only, project_prefix=prefix)
-    if result.ok:
+    # Anywhere in the body, not only the block: a run's default attribution
+    # appends its session link after the last section (ADR 0022).
+    run_ids = [Problem("id-shape", f"line {n}", "a routine, environment or session ID; remove the reference")
+               for n in scrub.id_shape_lines(body)]
+    if result.ok and not run_ids:
         print("PR block OK" + (" (legacy heading, backfill)" if result.block.legacy else "")
               + (" (schema only: base IDs checked for shape)" if args.schema_only else ""))
         return 0
-    return _print_problems(result.problems)
+    return _print_problems([*result.problems, *run_ids])
 
 
 # ---- ingest / propose ------------------------------------------------------

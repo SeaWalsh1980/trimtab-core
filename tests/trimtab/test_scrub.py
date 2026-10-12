@@ -327,6 +327,9 @@ class PublicScrub(unittest.TestCase):
         self.assertEqual(self.kinds('{"repo": "owner/x"}\n', name="cfg.json"), ["repo-field"])
         self.assertEqual(self.kinds('{"repo": "owner/x"}\n', name="tests/fixture.json"), [])
 
+    def test_a_run_session_id_shape_is_found(self):
+        self.assertEqual(self.kinds("cse_" + "0123456789abcdefABCD" + "\n"), ["id-shape"])
+
     def test_an_id_shape_inside_tests_is_still_found(self):
         self.assertEqual(self.kinds("trig_" + "0123456789abcdefABCD" + "\n", name="tests/t.py"), ["id-shape"])
 

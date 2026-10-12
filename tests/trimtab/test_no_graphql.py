@@ -21,6 +21,13 @@ GH_API_PATH = re.compile(
     r"""\bgh\s+api((?:\s+(?:-X|--method)\s+[A-Z]+|\s+-H\s+(?:"[^"]*"|'[^']*'|\S+)|\s+--paginate)*)"""
     r"""\s+["']?(?P<path>[^\s"'`]+)"""
 )
+# GitHub search syntax: a `--search` flag or a search qualifier. Only the search
+# API reads it, and cloud sessions refuse that API.
+SEARCH_SYNTAX = re.compile(r"--search\b|\bin:title\b|\bis:(?:pr|issue|merged|open|closed)\b")
+# A shipped file that opens a PR carries the rule that keeps the run's own
+# reference out of what it writes.
+OPENS_A_PR = re.compile(r"\bgh\s+api\s+-X\s+POST\s+\S*pulls\b")
+NO_RUN_REFERENCE = "`Claude-Session:`"
 
 
 def shipped_files():
@@ -80,6 +87,39 @@ class NoShippedFileCallsAPathOutsideRepos(unittest.TestCase):
                  "gh api 'repos/{owner}/{repo}/pulls/<n>/files' --paginate --jq .", "`gh api` on a REST path"]
 
         self.assertEqual(unscoped_lines("\n".join(lines)), [])
+
+
+def search_lines(text):
+    return [n for n, line in enumerate(text.splitlines(), 1) if SEARCH_SYNTAX.search(line)]
+
+
+class NoShippedFileUsesSearchSyntax(unittest.TestCase):
+    def test_no_shipped_file_uses_search_syntax(self):
+        found = {str(p.relative_to(REPO)): search_lines(p.read_text(encoding="utf-8")) for p in shipped_files()}
+
+        self.assertEqual({path: lines for path, lines in found.items() if lines}, {})
+
+    def test_the_check_catches_search_syntax(self):
+        lines = ['(`--search "structure in:title updated:>=x"`)', "q=repo:o/r is:pr is:merged",
+                 "gh label list --search harness"]
+
+        self.assertEqual(search_lines("\n".join(lines)), [1, 2, 3])
+
+    def test_the_check_lets_listings_through(self):
+        lines = ['gh api "repos/$REPO/pulls?state=closed&sort=updated"', "never `search/…` either",
+                 "the title starts `[<ID>]`"]
+
+        self.assertEqual(search_lines("\n".join(lines)), [])
+
+
+class EveryShippedFileThatOpensAPrKeepsTheRunOut(unittest.TestCase):
+    def test_every_file_that_opens_a_pr_forbids_a_run_reference(self):
+        opening = [p for p in shipped_files() if OPENS_A_PR.search(p.read_text(encoding="utf-8"))]
+
+        missing = [str(p.relative_to(REPO)) for p in opening if NO_RUN_REFERENCE not in p.read_text(encoding="utf-8")]
+
+        self.assertTrue(opening)
+        self.assertEqual(missing, [])
 
 
 if __name__ == "__main__":

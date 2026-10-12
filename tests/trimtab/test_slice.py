@@ -25,6 +25,8 @@ CONFIG = {
 
 
 AS_OF = "2026-10-01"
+# The tail of a routine, environment or session ID; tests prepend the prefix.
+RUN_ID_TAIL = "01" + "A1b2C3d4E5f6G7h8J9k0"
 
 
 def pr(number, fixture, merged_at):
@@ -92,6 +94,17 @@ class Slice(unittest.TestCase):
 
         self.assertEqual(done.returncode, 1)
         self.assertIn("not-yaml", done.stderr)
+
+    def test_check_pr_fails_a_session_link_after_a_valid_block(self):
+        body = (FIXTURES / "pr-tst2-ambiguous.md").read_text(encoding="utf-8")
+        body += "\nhttps://claude.ai/code/" + "session_" + RUN_ID_TAIL + "\n"
+
+        done = subprocess.run([str(TRIMTAB), "check-pr", "--body-file", "-"], input=body,
+                              capture_output=True, text=True, cwd=self.project, env=self.env)
+
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("id-shape", done.stderr)
+        self.assertNotIn(RUN_ID_TAIL, done.stderr)
 
     def test_check_pr_passes_a_valid_block_from_stdin(self):
         body = (FIXTURES / "pr-tst2-ambiguous.md").read_text(encoding="utf-8")
@@ -191,6 +204,24 @@ class SchemaOnlyCli(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn("unknown-id", done.stderr)
         self.assertNotIn("zz9secret", done.stderr)
+
+    def test_a_run_reference_in_the_body_fails_naming_its_line_not_its_value(self):
+        for prefix in ("session_", "cse_", "trig_", "env_"):
+            with self.subTest(prefix=prefix):
+                reference = prefix + RUN_ID_TAIL  # built at run time: never a literal ID in a file
+                body = schema_only_body("ENG-2") + f"\nhttps://claude.ai/code/{reference}\n"
+
+                done = self.check_pr(body)
+
+                self.assertEqual(done.returncode, 1)
+                self.assertIn("id-shape", done.stderr)
+                self.assertIn(f"line {body.count(chr(10))}", done.stderr)
+                self.assertNotIn(RUN_ID_TAIL, done.stderr)
+
+    def test_a_short_word_with_an_id_prefix_passes(self):
+        done = self.check_pr(schema_only_body("ENG-2") + "\nThe env_file and session_url settings.\n")
+
+        self.assertEqual(done.returncode, 0, done.stderr)
 
 
 if __name__ == "__main__":
