@@ -796,7 +796,7 @@ def build_parser() -> argparse.ArgumentParser:
                          epilog=DEPENDABOT_EXIT_CODES)
     dep.add_argument("pr", type=int, help="the PR number")
     dep.add_argument("--repo", required=True, help="owner/name")
-    dep.add_argument("--workflow", required=True, help="the workflow whose failed run to re-run, e.g. ci.yml")
+    dep.add_argument("--workflow", required=True, help="the workflow whose failed run to re-run, by file name, e.g. ci.yml")
     dep.add_argument("--project", default=".", help="project root, for its own IDs (default: .)")
     dmode = dep.add_mutually_exclusive_group()
     dmode.add_argument("--dry-run", action="store_true", help="report only (the default)")

@@ -22,8 +22,8 @@ from typing import Iterable, Mapping, Protocol
 from trimtab.capture.prblock import APPLIED, COST, FEEDBACK, SECTIONS, check_body
 from trimtab.items import Item, Problem
 
-# What `gh pr view --json author` reports for Dependabot; REST says `dependabot[bot]`.
-DEPENDABOT_LOGIN = "app/dependabot"
+# What REST (`user.login` on a pull) reports for Dependabot, with `user.type` "Bot".
+DEPENDABOT_LOGIN = "dependabot[bot]"
 # GitHub refuses a PR body longer than this many characters.
 MAX_BODY = 65536
 # Runs of one workflow at one head SHA: a handful at most, so this bound is never reached in practice.
