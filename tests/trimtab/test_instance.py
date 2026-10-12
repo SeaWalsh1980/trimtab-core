@@ -139,6 +139,31 @@ def lock(**fields):
     return json.dumps({**LOCK, **fields})
 
 
+class AtCommit(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = make_instance(Path(self._tmp.name), commit=True)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_it_reads_the_base_pinned_at_a_commit(self):
+        head = subprocess.run(["git", "-C", str(self.root), "rev-parse", "HEAD"], capture_output=True,
+                              text=True, check=True).stdout.strip()
+
+        self.assertEqual(instance.at_commit(self.root, head).base_sha, "0" * 40)
+
+    def test_anything_but_a_commit_name_is_refused_before_git_sees_it(self):
+        for value in ("--output=/tmp/x", "HEAD", "main", "abc", 7):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(instance.InstanceFileError, "not a commit name"):
+                    instance.at_commit(self.root, value)
+
+    def test_an_unknown_commit_is_an_instance_file_error(self):
+        with self.assertRaises(instance.InstanceFileError):
+            instance.at_commit(self.root, "e" * 40)
+
+
 class LockSchema(unittest.TestCase):
     """Each row of the lock's schema table is one test."""
 
@@ -168,6 +193,26 @@ class LockSchema(unittest.TestCase):
     def test_a_newer_schema_is_refused(self):
         _, problems = project_config.parse(lock(schema_version=3))
         self.assertIn("newer", problems[0].message)
+
+    def test_a_lock_without_base_sha_reads_it_as_none(self):
+        config, _ = project_config.parse(lock(schema_version=2))
+        self.assertIsNone(config.base_sha)
+
+    def test_a_full_base_sha_is_read(self):
+        config, problems = project_config.parse(lock(schema_version=2, base_sha="a" * 40))
+        self.assertEqual((problems, config.base_sha), ([], "a" * 40))
+
+    def test_a_base_sha_that_is_not_a_full_commit_sha_is_refused_naming_the_key(self):
+        for value in ("a" * 12, "main", "A" * 40, 7):
+            with self.subTest(value=value):
+                _, problems = project_config.parse(lock(schema_version=2, base_sha=value))
+                self.assertEqual([p.code for p in problems], ["bad-config"])
+                self.assertIn("base_sha", problems[0].message)
+
+    def test_a_bad_base_sha_says_how_to_repair_it(self):
+        _, problems = project_config.parse(lock(schema_version=2, base_sha="main"))
+
+        self.assertIn("remove it and re-run /trimtab-bump", problems[0].message)
 
 
 class CliInstanceJson(unittest.TestCase):

@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from instance_fixture import env_for, git, make_instance
+from instance_fixture import INSTANCE_JSON, env_for, git, make_instance
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -201,6 +201,42 @@ class DoctrineDrift(unittest.TestCase):
 
         self.assertEqual(done.returncode, 0)
         self.assertIn("doctrine has changed", json.loads(done.stdout)["systemMessage"])
+
+    def test_a_base_sha_matching_the_base_the_locked_instance_pins_is_silent(self):
+        self.lock(base_sha=INSTANCE_JSON["base"]["sha"])
+
+        done = self.start()
+
+        self.assertEqual((done.returncode, done.stdout), (0, ""))
+
+    def test_a_base_sha_other_than_the_base_the_locked_instance_pins_warns(self):
+        self.lock(base_sha="1" * 40)
+
+        done = self.start()
+
+        self.assertEqual(done.returncode, 0)
+        message = json.loads(done.stdout)["systemMessage"]
+        self.assertIn("base_sha 111111111111 is not the base", message)
+        self.assertIn("/trimtab-bump", message)
+
+    def test_a_base_sha_the_locked_instance_cannot_confirm_warns(self):
+        (self.instance / "instance.json").unlink()
+        git(self.instance, "commit", "-qam", "drop instance.json")
+        self.installed = git(self.instance, "rev-parse", "HEAD")
+        self.lock(base_sha="1" * 40)
+
+        done = self.start()
+
+        self.assertIn("cannot read the base pinned", json.loads(done.stdout)["systemMessage"])
+
+    def test_a_base_sha_that_is_not_a_full_commit_sha_warns(self):
+        self.lock(base_sha="main")
+
+        done = self.start()
+
+        message = json.loads(done.stdout)["systemMessage"]
+        self.assertIn("base_sha that is not a full commit SHA", message)
+        self.assertIn("remove it and re-run /trimtab-bump", message)
 
     def test_a_project_that_has_not_adopted_is_silent(self):
         done = self.start()
