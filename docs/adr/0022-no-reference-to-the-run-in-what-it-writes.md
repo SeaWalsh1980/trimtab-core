@@ -59,7 +59,8 @@ Three parts, each catching what the one before it can miss:
   session ID seen so far does; an option name in one case
   (`env_PRODUCTIONDATABASEURL`), as quoted release notes carry, does not. A
   digit is not required: a random 22-character tail has none about one time
-  in fifty, too often to miss.
+  in fifty, too often to miss. The scrub shares the shape, so its id-shape
+  check and its deny-list of IDs read from the instance narrow the same way.
 - **The rule.** The routine prompts and every command that commits or opens a
   PR say: no `Claude-Session:` trailer, no session link or ID; a commit ends at
   `Co-Authored-By:`, a PR body at its `🤖 Generated with` line; this overrides
@@ -100,8 +101,10 @@ step 4's PR listing. A static test fails on search syntax in shipped files.
 - Accepted: the check reads the whole body, text the project did not write
   included, such as a Dependabot PR's quoted release notes. A word there with
   an ID's shape fails the consumer's CI after `dependabot-block` has passed
-  its own re-check (`check_body`); the CI gate has no override, and the
-  remedy is editing that line of the body. The narrowed shape makes it rare.
+  its own re-check (`check_body`); the CI gate has no override. The remedy is
+  editing that line of the body, which holds only until Dependabot rewrites
+  the body on its next rebase; a PR it keeps rebasing fails again each time,
+  until it merges. The narrowed shape makes it rare.
 - Accepted: an ID whose tail happens to lack upper or lower case is missed.
   For a random tail of 22 letters and digits that is about one in eighty
   thousand. A mixed-case word after a prefix (`session_CookieSameSite…`)

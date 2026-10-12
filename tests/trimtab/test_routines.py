@@ -9,6 +9,7 @@ from pathlib import Path
 
 from instance_fixture import REPO_NAME, env_for, make_instance
 from trimtab import roots, routines
+from trimtab.ids import ID_SHAPE
 
 TRIMTAB = roots.code_root() / "bin" / "trimtab"
 ENV_ID = "placeholder-environment"
@@ -86,7 +87,7 @@ class Render(unittest.TestCase):
     def test_the_rendered_spec_holds_no_id_shape(self):
         spec = routines.render("upstream-retro", routines.values(self.inst, {"environment_id": "placeholder"}))
 
-        self.assertIsNone(re.search(r"(trig|env|session)_[A-Za-z0-9]{16,}", json.dumps(spec)))
+        self.assertIsNone(ID_SHAPE.search(json.dumps(spec)))
 
     def test_an_instance_without_an_instance_file_is_an_error_not_a_blank_repository(self):
         inst = make_instance(Path(self.tmp.name) / "bare", instance_json=False)
@@ -213,7 +214,7 @@ class PerProjectTemplate:
     def test_the_rendered_spec_holds_no_id_shape(self):
         spec = self.rendered()
 
-        self.assertIsNone(re.search(r"(trig|env|session)_[A-Za-z0-9]{16,}", json.dumps(spec)))
+        self.assertIsNone(ID_SHAPE.search(json.dumps(spec)))
 
     def test_a_missing_project_repository_is_an_error_naming_it(self):
         with self.assertRaises(routines.RenderError) as caught:
