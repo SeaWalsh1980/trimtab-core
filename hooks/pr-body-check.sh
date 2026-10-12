@@ -11,15 +11,20 @@
 # OPEN: on its own errors, a missing python3, or a body it cannot read without
 # running the command, it allows. CI is the gate.
 #
-# Fast path: a command that contains neither `gh pr` nor a `gh api` call
-# naming `pulls` exits before python3 starts, so the cost on ordinary Bash
-# calls is one bash startup (latencies in
+# Fast path: python3 starts only for a command holding `gh pr`, or a `gh api`
+# call naming `pulls` together with a sign of a write (a method flag, a field
+# or `--input`). Anything else, a plain read of pulls included, exits after
+# one bash startup (latencies in
 # docs/adr/0005-harness-items-by-id-and-the-evidence-loop.md). The adapter
-# decides the rest: a read of a pull, or another endpoint, passes there.
+# decides the rest: a read, or another endpoint, passes there.
 
 payload=$(cat) || exit 0
-fast='gh[[:space:]]+(pr|api.*pulls)'
-[[ "$payload" =~ $fast ]] || exit 0
+porcelain='gh[[:space:]]+pr'
+rest='gh[[:space:]]+api.*pulls'
+write='(-X|--method|-f|-F|--raw-field|--field|--input)'
+if ! [[ "$payload" =~ $porcelain ]]; then
+  [[ "$payload" =~ $rest && "$payload" =~ $write ]] || exit 0
+fi
 command -v python3 >/dev/null 2>&1 || exit 0
 python3 -P -c '' >/dev/null 2>&1 || exit 0   # an interpreter without -P: fail open, CI is the gate
 

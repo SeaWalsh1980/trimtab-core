@@ -1,10 +1,16 @@
 """PreToolUse adapter: check the PR body a `gh pr create|edit` command would send.
 
 It reads the REST form too: `gh api` POST to `repos/<o>/<r>/pulls` (create)
-and PATCH to `repos/<o>/<r>/pulls/<n>` (edit), with the body in
-`-f body=…`, `-F body=@<file>` or an `--input <file>` JSON object. The base
-reaches GitHub through REST only, so without this its own PRs would pass
-unread.
+and PATCH to `repos/<o>/<r>/pulls/<n>` (edit), however the owner, repository
+and number are spelled (a shell variable, gh's `{owner}/{repo}`, a full URL).
+The body is the `--input <file>` JSON object's `body` when `--input` is
+given (gh then sends fields as query parameters), and otherwise `-f body=…`
+or `-F body=@<file>`. The base reaches GitHub through REST only, so without
+this its own PRs would pass unread.
+
+Not covered: `PATCH repos/<o>/<r>/issues/<n>` with a body also rewrites a
+PR's body, but offline the hook cannot tell a PR's number from an issue's,
+and checking every issue edit would block ordinary issues. CI is the gate.
 
 Policy, not a guard (ADR 0005). It fails OPEN on its own errors and on
 anything it cannot evaluate without running the command (a body built by
@@ -43,8 +49,12 @@ API_VALUED = {"-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--
               "-t", "--template", "--hostname", "-p", "--preview", "--cache"}
 API_RAW_FIELD = {"-f", "--raw-field"}
 API_TYPED_FIELD = {"-F", "--field"}
-PULLS = re.compile(r"/?repos/[^/]+/[^/]+/pulls/?")
-PULL = re.compile(r"/?repos/[^/]+/[^/]+/pulls/\d+/?")
+# Matched by shape, not by literal segments: the owner and repository are often
+# one shell variable (`repos/$REPO/pulls`) or gh's `{owner}/{repo}`, the number
+# a variable too, and gh also takes a full URL.
+_REPOS = r"(?:https?://[^/\s]+/)?/?repos/.+"
+PULLS = re.compile(_REPOS + r"/pulls/?")
+PULL = re.compile(_REPOS + r"/pulls/[^/]+/?")
 
 ALLOW, BLOCK = 0, 2
 
@@ -89,12 +99,21 @@ def _gh_pr(tokens: list[str]) -> tuple[str, list[str]] | None:
 
 
 def _api_options(args: list[str]) -> tuple[str | None, str | None, list[tuple[str, str]]]:
-    """(method, path, [(option, value)]) for `gh api` arguments; `--opt=value` is split."""
+    """(method, path, [(option, value)]) for `gh api` arguments.
+
+    `--opt=value` is split, and so is a short option with its value attached
+    (`-XPATCH`, `-X=PATCH`, `-fbody=…`), as gh's flag parser accepts them.
+    """
     method, path, options = None, None, []
     i = 0
     while i < len(args):
         arg = args[i]
-        name, eq, value = arg.partition("=") if arg.startswith("--") else (arg, "", "")
+        if arg.startswith("--"):
+            name, eq, value = arg.partition("=")
+        elif len(arg) > 2 and arg[:2] in API_VALUED:
+            name, eq, value = arg[:2], "=", arg[2:].removeprefix("=")
+        else:
+            name, eq, value = arg, "", ""
         if name in API_VALUED:
             if not eq:
                 if i + 1 >= len(args):
@@ -139,16 +158,11 @@ def _read(cwd: Path, path: str) -> tuple[str, str | None]:
 
 
 def api_body_of(action: str, options: list[tuple[str, str]], cwd: Path) -> tuple[str, str | None]:
-    """('check', body) | ('block', reason) | ('allow', reason), for the `gh api` form."""
-    for name, value in options:
-        key, eq, field = value.partition("=")
-        if key != "body" or not eq:
-            continue
-        if any(u in field for u in UNEVALUATED):
-            return "allow", "the body is built by the shell; CI checks it"
-        if name in API_TYPED_FIELD and field.startswith("@"):
-            return _read(cwd, field[1:])
-        return "check", field
+    """('check', body) | ('block', reason) | ('allow', reason), for the `gh api` form.
+
+    With `--input`, gh sends that file as the request body and any fields as
+    query parameters, so the file is read and the fields are not.
+    """
     source = next((value for name, value in options if name == "--input"), None)
     if source is not None:
         verdict, text = _read(cwd, source)
@@ -161,6 +175,18 @@ def api_body_of(action: str, options: list[tuple[str, str]], cwd: Path) -> tuple
         body = payload.get("body") if isinstance(payload, dict) else None
         if isinstance(body, str):
             return "check", body
+    else:
+        for name, value in options:
+            if name not in API_RAW_FIELD | API_TYPED_FIELD:
+                continue
+            key, eq, field = value.partition("=")
+            if key != "body" or not eq:
+                continue
+            if any(u in field for u in UNEVALUATED):
+                return "allow", "the body is built by the shell; CI checks it"
+            if name in API_TYPED_FIELD and field.startswith("@"):
+                return _read(cwd, field[1:])
+            return "check", field
     if action == "create":
         return "block", "no body was given"
     return "allow", "the body is not being changed"

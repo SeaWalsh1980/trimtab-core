@@ -153,6 +153,65 @@ class PrBodyCheck(unittest.TestCase):
 
         self.assertEqual((done.returncode, done.stdout, done.stderr), (0, "", ""))
 
+    def test_the_shipped_commands_create_line_with_a_bad_body_is_blocked(self):
+        # The owner and repository are one variable: the form the retro and conformance methods use.
+        done = self.check('gh api -X POST "repos/$REPO/pulls" -f title=t -f head=b -f base="$DEFAULT" '
+                          "-F draft=true -F body=@bad.md --jq .html_url")
+
+        self.assertEqual(done.returncode, 2)
+
+    def test_the_shipped_commands_create_line_with_a_valid_body_is_allowed(self):
+        done = self.check('gh api -X POST "repos/$REPO/pulls" -f title=t -f head=b -f base="$DEFAULT" '
+                          "-F draft=true -F body=@good.md --jq .html_url")
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_a_create_through_ghs_owner_and_repo_placeholders_is_checked(self):
+        done = self.check("gh api -X POST 'repos/{owner}/{repo}/pulls' -f title=t -F body=@bad.md")
+
+        self.assertEqual(done.returncode, 2)
+
+    def test_a_create_through_a_full_url_is_checked(self):
+        done = self.check("gh api -X POST https://api.github.com/repos/o/r/pulls -F body=@bad.md")
+
+        self.assertEqual(done.returncode, 2)
+
+    def test_an_edit_of_a_pull_named_by_variables_is_checked(self):
+        self.assertEqual(self.check('gh api -X PATCH "repos/$REPO/pulls/$N" -F body=@bad.md').returncode, 2)
+
+    def test_a_method_attached_to_its_flag_is_read(self):
+        self.assertEqual(self.check("gh api -XPATCH repos/o/r/pulls/12 -F body=@bad.md").returncode, 2)
+
+    def test_with_input_the_file_is_the_body_and_fields_are_not(self):
+        # gh sends the --input file as the body and fields as query parameters.
+        (self.cwd / "pull.json").write_text(json.dumps({"title": "t", "body": f"prose {MARKER}"}))
+
+        done = self.check("gh api -X POST repos/o/r/pulls -F body=@good.md --input pull.json")
+
+        self.assertEqual(done.returncode, 2)
+
+    def stub_python(self):
+        """A python3 on PATH that only records that it ran; returns (env, marker)."""
+        stub, marker = self.cwd / "stub-bin", self.cwd / "python-ran"
+        stub.mkdir()
+        (stub / "python3").write_text(f"#!/bin/sh\n: > '{marker}'\n")
+        (stub / "python3").chmod(0o755)
+        return {**self.env, "PATH": f"{stub}:{self.env.get('PATH', '')}"}, marker
+
+    def test_a_read_of_pulls_never_starts_python(self):
+        env, marker = self.stub_python()
+
+        run(PR_BODY_CHECK, bash('gh api "repos/$REPO/pulls?state=open&per_page=100" --jq .', self.cwd), env=env)
+
+        self.assertFalse(marker.exists())
+
+    def test_a_write_to_pulls_starts_python(self):
+        env, marker = self.stub_python()
+
+        run(PR_BODY_CHECK, bash('gh api -X POST "repos/$REPO/pulls" -F body=@bad.md', self.cwd), env=env)
+
+        self.assertTrue(marker.exists())
+
     def test_a_rest_body_from_stdin_is_left_to_ci(self):
         self.assertEqual(self.check("gh api -X POST repos/o/r/pulls --input - < pull.json").returncode, 0)
 
