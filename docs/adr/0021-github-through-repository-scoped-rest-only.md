@@ -106,7 +106,11 @@ no new dependency.
   wider `--ingest-weeks` reads it.
 - Accepted: a repository that closes more than 1000 PRs in 8 weeks cannot
   rebuild its ledger, and one that closes more than 1000 in 2 weeks cannot
-  ingest, until the bound is raised. That is loud by design.
+  ingest, until the bound is raised. That is loud by design. With
+  `--ledger-from-labels` (every routine) the 8-week rebuild runs first, so it
+  is the binding scan: past its bound the run stops before ingesting
+  anything, even when the 2-week ingest scan alone would fit. Raising the
+  bound, not the ingest floor, is the remedy.
 - Accepted: a PR updated while a scan is paging moves to the front and shifts
   the pages. The scan counts a PR seen twice once, but can miss the PR that
   moved; it is updated, so the next run reads it.

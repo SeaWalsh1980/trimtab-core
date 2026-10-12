@@ -238,6 +238,15 @@ class TheIngestFloor(unittest.TestCase):
 
         self.assertIn("--ingest-weeks 4", out.split("to apply:")[1])
 
+    def test_propose_names_the_floor_too(self):
+        done = subprocess.run([str(TRIMTAB), "propose", "--dry-run", "--fixture", str(self.pulls),
+                               "--ledger-from-labels", "--as-of", self.AS_OF,
+                               "--issues-fixture", str(self.pulls.parent / "issues.json")],
+                              capture_output=True, text=True, cwd=self.project, env=self.env)
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("ingest floor: PRs merged before 2026-09-27 are not read", done.stdout)
+
 
 def git(root, *args):
     return subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", *args],

@@ -167,12 +167,16 @@ def _store(args, source, config, registry):
     return store
 
 
+def _print_floor(floor) -> None:
+    if floor:
+        print(f"ingest floor: PRs merged before {floor} are not read (--ingest-weeks)")
+
+
 def _report(config, todo, records, since, floor) -> None:
     t = tally(records, since=since)
     valid, total = t.coverage
     share = f" ({100 * valid // total}%)" if total else ""
-    if floor:
-        print(f"ingest floor: PRs merged before {floor} are not read (--ingest-weeks)")
+    _print_floor(floor)
     print(f"to record: {len(todo.records)} PRs"
           + (f" ({len(todo.already_recorded)} recorded before an interrupted label step)"
              if todo.already_recorded else ""))
@@ -279,6 +283,7 @@ def cmd_propose(args) -> int:
     except SourceError as err:
         print(f"error: {err}", file=sys.stderr)
         return 2
+    _print_floor(_floor(args))
     proposals = candidates(tally(ingest.all_records(ledger, todo), since=_since(args)), threshold=args.threshold)
     project = args.repo or config.id_prefix
     drafts = [render(p, registry, project=project) for p in proposals]
