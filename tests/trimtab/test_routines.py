@@ -12,6 +12,10 @@ from trimtab import roots, routines
 
 TRIMTAB = roots.code_root() / "bin" / "trimtab"
 ENV_ID = "placeholder-environment"
+# The session's own MCP server: its PR subscription asks the operator (a stall
+# when unattended) and feeds PR events into the run.
+REMOTE_SESSION_SERVER = "mcp__claude-code-remote"
+REMOTE_SUBSCRIBE = "mcp__claude-code-remote__subscribe_pr_activity"
 
 
 class Render(unittest.TestCase):
@@ -36,6 +40,12 @@ class Render(unittest.TestCase):
         self.assertIs(spec["enabled"], False)
         self.assertEqual(spec["mcp_connections"], [])
         self.assertIn("/trimtab-upstream-retro", spec["job_config"]["ccr"]["events"][0]["data"]["message"]["content"])
+
+    def test_the_session_refuses_the_remote_session_mcp_tools(self):
+        spec = routines.render("upstream-retro", routines.values(self.inst, {"environment_id": ENV_ID}))
+
+        refused = spec["job_config"]["ccr"]["session_context"]["disallowed_tools"]
+        self.assertTrue({REMOTE_SESSION_SERVER, REMOTE_SUBSCRIBE} <= set(refused))
 
     def test_the_source_is_the_instances_repository(self):
         spec = routines.render("upstream-retro", routines.values(self.inst, {"environment_id": ENV_ID}))
@@ -155,7 +165,14 @@ class PerProjectTemplate:
         spec = self.rendered()
 
         context, expected = spec["job_config"]["ccr"]["session_context"], upstream["job_config"]["ccr"]["session_context"]
-        self.assertEqual((context["allowed_tools"], context["model"]), (expected["allowed_tools"], expected["model"]))
+        keys = ("allowed_tools", "disallowed_tools", "model")
+        self.assertEqual([context[k] for k in keys], [expected[k] for k in keys])
+
+    def test_the_session_refuses_the_remote_session_mcp_tools(self):
+        spec = self.rendered()
+
+        refused = spec["job_config"]["ccr"]["session_context"]["disallowed_tools"]
+        self.assertTrue({REMOTE_SESSION_SERVER, REMOTE_SUBSCRIBE} <= set(refused))
 
     def test_the_rendered_spec_holds_no_id_shape(self):
         spec = self.rendered()
