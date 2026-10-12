@@ -154,9 +154,15 @@ def record_of(pr: PullRequest, registry: Mapping[str, Item], backfill: bool = Fa
 
 
 def plan(source: PullRequestSource, ledger: Ledger, config: ProjectConfig,
-         registry: Mapping[str, Item], limit: int, backfill: bool = False) -> IngestPlan:
-    """What a run would record. Reads only."""
-    since = config.adopted_at[:10] if config.adopted_at and not backfill else None
+         registry: Mapping[str, Item], limit: int, backfill: bool = False,
+         floor: str | None = None) -> IngestPlan:
+    """What a run would record. Reads only.
+
+    PRs merged since the later of the adoption and `floor` (a YYYY-MM-DD day)
+    are read; a backfill reads from the start and ignores both.
+    """
+    bounds = [] if backfill else [d for d in (config.adopted_at[:10] if config.adopted_at else None, floor) if d]
+    since = max(bounds) if bounds else None
     pulls = source.unlabelled_merged(LABEL, since, limit)
     skipped = tuple(p.number for p in pulls if p.number <= config.baseline_pr and not backfill)
     newer = tuple(p.number for p in pulls if p.number not in skipped and _too_new(p.body))

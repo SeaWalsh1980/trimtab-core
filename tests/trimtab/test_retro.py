@@ -188,6 +188,57 @@ class TwoWeeklyRuns(unittest.TestCase):
         self.assertNotIn("confirm: ", again)
 
 
+class TheIngestFloor(unittest.TestCase):
+    """Builds a fixture project, instance and PR file in a temporary directory.
+
+    `ingest` reads PRs merged since the later of the adoption and its floor,
+    `--ingest-weeks` before the run (default 2), and says where it starts.
+    """
+
+    MERGED_THREE_WEEKS_AGO = "2026-09-20T00:00:00Z"
+    AS_OF = "2026-10-11"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        tmp = Path(self._tmp.name)
+        self.project, self.pulls = tmp / "project", tmp / "pulls.json"
+        self.env = env_for(make_instance(tmp))
+        (self.project / ".claude").mkdir(parents=True)
+        (self.project / ".claude" / "trimtab.json").write_text(json.dumps(CONFIG))
+        self.pulls.write_text(json.dumps([{"number": 101, "body": AMBIGUOUS,
+                                           "merged_at": self.MERGED_THREE_WEEKS_AGO, "labels": []}]))
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def dry_run(self, *args):
+        done = subprocess.run([str(TRIMTAB), "ingest", "--dry-run", "--fixture", str(self.pulls),
+                               "--ledger-from-labels", "--as-of", self.AS_OF, *args],
+                              capture_output=True, text=True, cwd=self.project, env=self.env)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout
+
+    def test_a_pr_merged_before_the_default_two_week_floor_is_not_read(self):
+        out = self.dry_run()
+
+        self.assertIn("to record: 0 PRs", out)
+
+    def test_the_report_names_the_floor(self):
+        out = self.dry_run()
+
+        self.assertIn("ingest floor: PRs merged before 2026-09-27 are not read", out)
+
+    def test_a_wider_floor_reads_the_pr(self):
+        out = self.dry_run("--ingest-weeks", "4")
+
+        self.assertIn("to record: 1 PRs", out)
+
+    def test_the_apply_command_keeps_the_floor(self):
+        out = self.dry_run("--ingest-weeks", "4")
+
+        self.assertIn("--ingest-weeks 4", out.split("to apply:")[1])
+
+
 def git(root, *args):
     return subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", *args],
                           check=True, capture_output=True, text=True).stdout.strip()

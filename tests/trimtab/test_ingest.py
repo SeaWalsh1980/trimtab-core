@@ -44,7 +44,8 @@ class FakeGitHub:
         self.fail_label_once = fail_label_once
 
     def unlabelled_merged(self, label, merged_since, limit):
-        todo = [p for n, p in sorted(self.pulls.items()) if label not in self.labels[n]]
+        todo = [p for n, p in sorted(self.pulls.items()) if label not in self.labels[n]
+                and (merged_since is None or p.merged_at[:10] >= merged_since)]
         return todo[:limit]
 
     def add_label(self, number, label):
@@ -118,8 +119,8 @@ class SliceAcceptance(unittest.TestCase):
 
 class Watermark(unittest.TestCase):
     def test_prs_at_or_below_the_baseline_count_as_ingested_without_reading(self):
-        github = FakeGitHub([PullRequest(9, body(), "2026-09-26T00:00:00Z"),
-                             PullRequest(10, body(), "2026-09-26T00:00:00Z"),
+        github = FakeGitHub([PullRequest(9, body(), "2026-09-27T00:00:00Z"),
+                             PullRequest(10, body(), "2026-09-27T00:00:00Z"),
                              PullRequest(11, body(), "2026-09-28T00:00:00Z")])
 
         todo = plan(github, Ledger(), CONFIG, REGISTRY, limit=50)
@@ -146,6 +147,32 @@ class Watermark(unittest.TestCase):
             apply(todo, store.load(), store, github, confirm=stale)
 
         self.assertEqual(store.load().records, {})
+
+
+class IngestFloor(unittest.TestCase):
+    """A run reads PRs merged since the later of the adoption and its floor, so each run's read stays bounded."""
+
+    def setUp(self):
+        self.github = FakeGitHub([PullRequest(11, body(), "2026-09-28T00:00:00Z"),
+                                  PullRequest(12, body(), "2026-10-05T00:00:00Z")])
+
+    def test_a_pr_merged_before_the_floor_is_not_read(self):
+        todo = plan(self.github, Ledger(), CONFIG, REGISTRY, limit=50, floor="2026-10-01")
+
+        self.assertEqual([r.number for r in todo.records], [12])
+
+    def test_a_floor_before_the_adoption_reads_from_the_adoption(self):
+        github = FakeGitHub([PullRequest(11, body(), "2026-09-26T00:00:00Z"),
+                             PullRequest(12, body(), "2026-09-28T00:00:00Z")])
+
+        todo = plan(github, Ledger(), CONFIG, REGISTRY, limit=50, floor="2026-09-01")
+
+        self.assertEqual([r.number for r in todo.records], [12])
+
+    def test_a_backfill_ignores_the_floor(self):
+        todo = plan(self.github, Ledger(), CONFIG, REGISTRY, limit=50, backfill=True, floor="2026-10-01")
+
+        self.assertEqual([r.number for r in todo.records], [11, 12])
 
 
 class BlockVersion(unittest.TestCase):
