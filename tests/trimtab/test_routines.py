@@ -91,6 +91,112 @@ class Render(unittest.TestCase):
             routines.render("../templates/upstream-retro", {"environment_id": ENV_ID, "instance_repo": REPO_NAME})
 
 
+PROJECT_REPO = "owner/project"
+
+
+class PerProjectTemplate:
+    """Shared cases for a routine bound to one project: rendered with --set project_repo."""
+
+    ROUTINE = ""
+    COMMAND = ""
+    NOUN = ""
+    CRON = ""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.inst = make_instance(Path(self.tmp.name))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def rendered(self, **overrides: str) -> dict:
+        given = {"environment_id": ENV_ID, "project_repo": PROJECT_REPO, **overrides}
+        return routines.render(self.ROUTINE, routines.values(self.inst, given))
+
+    def test_it_renders_with_no_placeholder_left(self):
+        spec = self.rendered()
+
+        text = json.dumps(spec)
+        self.assertNotIn("$", text)
+        self.assertEqual(spec["job_config"]["ccr"]["environment_id"], ENV_ID)
+
+    def test_it_stays_disabled_with_no_connectors(self):
+        spec = self.rendered()
+
+        self.assertIs(spec["enabled"], False)
+        self.assertEqual(spec["mcp_connections"], [])
+
+    def test_its_prompt_runs_the_command(self):
+        spec = self.rendered()
+
+        self.assertIn(self.COMMAND, spec["job_config"]["ccr"]["events"][0]["data"]["message"]["content"])
+
+    def test_its_sources_are_the_instance_then_the_project(self):
+        spec = self.rendered()
+
+        sources = spec["job_config"]["ccr"]["session_context"]["sources"]
+        self.assertEqual(sources, [{"git_repository": {"url": f"https://github.com/{REPO_NAME}"}},
+                                   {"git_repository": {"url": f"https://github.com/{PROJECT_REPO}"}}])
+
+    def test_its_name_carries_the_project_repository(self):
+        # The session step finds the routine by this name, not by a stored ID.
+        spec = self.rendered()
+
+        self.assertEqual(spec["name"], f"Trimtab {self.NOUN} · {PROJECT_REPO}")
+
+    def test_it_runs_on_its_own_schedule(self):
+        spec = self.rendered()
+
+        self.assertEqual(spec["cron_expression"], self.CRON)
+
+    def test_it_runs_with_the_same_tools_and_model_as_the_upstream_retro(self):
+        upstream = routines.render("upstream-retro", routines.values(self.inst, {"environment_id": ENV_ID}))
+
+        spec = self.rendered()
+
+        context, expected = spec["job_config"]["ccr"]["session_context"], upstream["job_config"]["ccr"]["session_context"]
+        self.assertEqual((context["allowed_tools"], context["model"]), (expected["allowed_tools"], expected["model"]))
+
+    def test_the_rendered_spec_holds_no_id_shape(self):
+        spec = self.rendered()
+
+        self.assertIsNone(re.search(r"(trig|env|session)_[A-Za-z0-9]{16,}", json.dumps(spec)))
+
+    def test_a_missing_project_repository_is_an_error_naming_it(self):
+        with self.assertRaises(routines.RenderError) as caught:
+            routines.render(self.ROUTINE, routines.values(self.inst, {"environment_id": ENV_ID}))
+
+        self.assertIn("project_repo", str(caught.exception))
+
+    def test_a_missing_environment_is_an_error_naming_it(self):
+        with self.assertRaises(routines.RenderError) as caught:
+            routines.render(self.ROUTINE, routines.values(self.inst, {"project_repo": PROJECT_REPO}))
+
+        self.assertIn("environment_id", str(caught.exception))
+
+    def test_a_value_holding_a_quote_stays_one_string(self):
+        smuggled = 'x", "enabled": true, "y": "z'
+
+        spec = self.rendered(project_repo=smuggled)
+
+        self.assertIs(spec["enabled"], False)
+        self.assertEqual(spec["name"], f"Trimtab {self.NOUN} · {smuggled}")
+
+
+class ConformanceTemplate(PerProjectTemplate, unittest.TestCase):
+    ROUTINE = "conformance"
+    COMMAND = "/trimtab-conformance"
+    NOUN = "conformance"
+    CRON = "0 4 * * 4"
+
+
+class RetroTemplate(PerProjectTemplate, unittest.TestCase):
+    ROUTINE = "retro"
+    COMMAND = "/trimtab-retro"
+    NOUN = "retro"
+    CRON = "0 7 * * 6"
+
+
 class Values(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -230,6 +336,16 @@ class SetupScript(unittest.TestCase):
         self.run_setup()
 
         self.assertEqual((clone / "calls").read_text().splitlines(), ["--no-timer", "--check --no-timer"])
+
+    def test_a_project_clone_beside_the_instance_clone_is_not_taken_for_one(self):
+        # A per-project routine clones the instance and the project; the
+        # project holds path-scoped rules but neither the shim nor a root rules/.
+        self.source("instance", under=self.start)
+        (self.start / "project" / ".claude" / "rules").mkdir(parents=True)
+
+        done = self.run_setup()
+
+        self.assertEqual((done.returncode, done.stdout), (0, self.BOOTSTRAPPED))
 
     def test_no_instance_clone_fails_loudly(self):
         self.source("project", rules=False)
