@@ -139,6 +139,23 @@ class EveryCallIsRepositoryScopedRest(unittest.TestCase):
 
                 self.assertEqual(gh.calls, [])
 
+    def test_a_percent_encoded_dot_segment_is_refused_before_gh_runs(self):
+        for path in ("repos/%2e%2e/search/issues", "repos/o/r/%2E%2E/%2e%2e/user", "repos/o/r/.%2e/x"):
+            with self.subTest(path=path):
+                gh = FakeGh()
+
+                with self.assertRaises(SourceError):
+                    GhApi(run=gh).call("GET", path)
+
+                self.assertEqual(gh.calls, [])
+
+    def test_a_percent_encoded_workflow_name_still_passes(self):
+        gh = FakeGh(default=json.dumps({"workflow_runs": []}))
+
+        GhPullRequests(REPO, run=gh).runs(HEAD_SHA, "ci checks.yml", 10)
+
+        self.assertEqual(path_of(gh.argvs()[0]), f"repos/{REPO}/actions/workflows/ci%20checks.yml/runs")
+
 
 class TheClosedPullsScan(unittest.TestCase):
     """Merged PRs come from the repository's closed pulls, most recently updated first, filtered here."""

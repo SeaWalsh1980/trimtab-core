@@ -17,7 +17,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, unquote, urlencode
 
 from trimtab.capture.ingest import PullRequest
 from trimtab.dependabot import CiRun, HostError, PullRequestView
@@ -60,8 +60,8 @@ class GhApi:
         if not target.lstrip("/").startswith("repos/"):
             raise SourceError(f"gh api {target} is not used: Claude Code cloud sessions allow only "
                               "repository-scoped REST paths (repos/{owner}/{repo}/...)")
-        if any(segment in (".", "..") for segment in target.split("/")):
-            # The server may normalise a dot segment into a path outside repos/.
+        if any(segment in (".", "..") for segment in unquote(target).split("/")):
+            # The server may normalise a dot segment, percent-encoded or not, into a path outside repos/.
             raise SourceError(f"gh api {target} is not used: a path with a . or .. segment may leave repos/")
         argv = ["gh", "api", "-X", method, path + (f"?{urlencode(query)}" if query else "")]
         if accept:
@@ -167,8 +167,10 @@ class GhSource:
         self._scans: dict[str, list[_ClosedPull]] = {}
 
     def unlabelled_merged(self, label: str, merged_since: str | None, limit: int) -> list[PullRequest]:
-        # Oldest first (ADR 0005), so a bounded run makes progress rather than
-        # re-reading the newest PRs.
+        # Oldest merged first (ADR 0005), so a bounded run makes progress rather
+        # than re-reading the newest PRs. A backfill (no date) returns the first
+        # `limit` found oldest created first, then sorted by merge time: not the
+        # oldest merged overall, but each run still moves forward.
         _within_scan(limit)
         if merged_since is None:
             rows = self._oldest_unlabelled(label, limit)
