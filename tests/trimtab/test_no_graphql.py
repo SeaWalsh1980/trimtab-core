@@ -25,8 +25,11 @@ GH_API_PATH = re.compile(
 # API reads it, and cloud sessions refuse that API.
 SEARCH_SYNTAX = re.compile(r"--search\b|\bin:title\b|\bis:(?:pr|issue|merged|open|closed)\b")
 # A shipped file that opens a PR carries the rule that keeps the run's own
-# reference out of what it writes.
-OPENS_A_PR = re.compile(r"\bgh\s+api\s+-X\s+POST\s+\S*pulls\b")
+# reference out of what it writes. A `gh api` call that POSTs to `pulls`,
+# whatever the flag's spelling or place.
+GH_API = re.compile(r"\bgh\s+api\b")
+POST = re.compile(r"(?:-X|--method)\s+POST\b")
+PULLS = re.compile(r"\bpulls\b")
 NO_RUN_REFERENCE = "`Claude-Session:`"
 
 
@@ -112,14 +115,30 @@ class NoShippedFileUsesSearchSyntax(unittest.TestCase):
         self.assertEqual(search_lines("\n".join(lines)), [])
 
 
+def opens_a_pr(text):
+    return any(GH_API.search(line) and POST.search(line) and PULLS.search(line) for line in text.splitlines())
+
+
 class EveryShippedFileThatOpensAPrKeepsTheRunOut(unittest.TestCase):
     def test_every_file_that_opens_a_pr_forbids_a_run_reference(self):
-        opening = [p for p in shipped_files() if OPENS_A_PR.search(p.read_text(encoding="utf-8"))]
+        opening = [p for p in shipped_files() if opens_a_pr(p.read_text(encoding="utf-8"))]
 
         missing = [str(p.relative_to(REPO)) for p in opening if NO_RUN_REFERENCE not in p.read_text(encoding="utf-8")]
 
         self.assertTrue(opening)
         self.assertEqual(missing, [])
+
+    def test_a_pr_is_opened_whatever_the_flags_spelling_or_place(self):
+        for line in ("gh api -X POST 'repos/{owner}/{repo}/pulls' -F body=@f",
+                     'gh api "repos/$REPO/pulls" -X POST -F body=@f',
+                     "gh api --method POST repos/o/r/pulls -F draft=true"):
+            with self.subTest(line=line):
+                self.assertTrue(opens_a_pr(line))
+
+    def test_reading_pulls_is_not_opening_one(self):
+        lines = ['gh api "repos/$REPO/pulls?state=open&per_page=100"', "gh api -X POST repos/o/r/issues/5/labels"]
+
+        self.assertFalse(opens_a_pr("\n".join(lines)))
 
 
 if __name__ == "__main__":

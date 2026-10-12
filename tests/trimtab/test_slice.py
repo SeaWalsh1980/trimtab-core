@@ -223,6 +223,14 @@ class SchemaOnlyCli(unittest.TestCase):
 
         self.assertEqual(done.returncode, 0, done.stderr)
 
+    def test_a_long_word_in_one_case_with_no_digit_passes(self):
+        # Quoted release notes name options like these; an ID's tail mixes cases and digits.
+        notes = "\n> Adds env_PRODUCTIONDATABASEURL and session_cookiesamesitestrict.\n"
+
+        done = self.check_pr(schema_only_body("ENG-2") + notes)
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

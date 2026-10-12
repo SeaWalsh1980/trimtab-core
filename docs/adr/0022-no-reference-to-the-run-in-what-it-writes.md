@@ -53,7 +53,13 @@ Three parts, each catching what the one before it can miss:
   `prblock.check_pr_body`: `check_body` plus the ID scan. `check_body` is
   unchanged, so the PR-body hook (a control), `ingest` and `dependabot-block`
   behave as before. The ID shape moves from the scrub to `trimtab/ids.py`,
-  shared by both, and now also covers `cse_` session IDs.
+  shared by both, and now also covers `cse_` session IDs. It is narrowed to
+  what an ID looks like: the tail after the prefix is 16 or more letters and
+  digits that mix upper and lower case. Every routine, environment and
+  session ID seen so far does; an option name in one case
+  (`env_PRODUCTIONDATABASEURL`), as quoted release notes carry, does not. A
+  digit is not required: a random 22-character tail has none about one time
+  in fifty, too often to miss.
 - **The rule.** The routine prompts and every command that commits or opens a
   PR say: no `Claude-Session:` trailer, no session link or ID; a commit ends at
   `Co-Authored-By:`, a PR body at its `🤖 Generated with` line; this overrides
@@ -91,9 +97,21 @@ step 4's PR listing. A static test fails on search syntax in shipped files.
   a consumer's CI once its pin includes this change. So the setting is
   installed before, or with, the first pin that carries this check; until it
   is, the remedy is deleting the line from the body.
-- Accepted: the shape can match a long identifier with no underscore after
-  its prefix (`env_` and 16 or more letters or digits), and the CI gate has no
-  override; the body is reworded. Real identifiers rarely take that form.
+- Accepted: the check reads the whole body, text the project did not write
+  included, such as a Dependabot PR's quoted release notes. A word there with
+  an ID's shape fails the consumer's CI after `dependabot-block` has passed
+  its own re-check (`check_body`); the CI gate has no override, and the
+  remedy is editing that line of the body. The narrowed shape makes it rare.
+- Accepted: an ID whose tail happens to lack upper or lower case is missed.
+  For a random tail of 22 letters and digits that is about one in eighty
+  thousand. A mixed-case word after a prefix (`session_CookieSameSite…`)
+  still matches; that is the remaining false positive.
+- Accepted: only the body is checked. A run reference in a PR title, or in an
+  issue or PR comment a run posts, fails nothing; the prompt rule covers them
+  and no check does.
+- The PR-body hook keeps `check_body`, so a local session's hook passes a body
+  that a consumer's CI then fails. The hook adopts `check_pr_body` in its own
+  control change.
 - Accepted: commit messages are not checked by the base. Until the setting is
   installed, and if it fails, a trailer can still land; the scrub of the
   consumer's history (the operator's ID scan) is what finds it.
