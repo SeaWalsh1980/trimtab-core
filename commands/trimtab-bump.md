@@ -63,8 +63,13 @@ trimtab check-pr --body-file "$BODY"
 git add .claude/trimtab.json
 git commit -m "chore(trimtab): move the lock to <new short SHA>"
 git push -u origin HEAD
-gh pr create --draft --title "chore(trimtab): move the lock to <new short SHA>" --body-file "$BODY"
+DEFAULT=$(gh api 'repos/{owner}/{repo}' --jq .default_branch)
+gh api -X POST 'repos/{owner}/{repo}/pulls' -f title="chore(trimtab): move the lock to <new short SHA>" \
+  -f head="$(git branch --show-current)" -f base="$DEFAULT" -F draft=true -F body=@"$BODY" --jq .html_url
 ```
+
+GitHub is reached through `gh api` on REST paths only: gh's porcelain
+(`gh pr …`) goes through GraphQL, which Claude Code cloud sessions refuse.
 
 Commit only the lock. Dropping or rewording an override is the operator's call
 on the PR; make it only when they say so, in this same PR, and never delete an

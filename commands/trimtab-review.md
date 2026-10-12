@@ -22,9 +22,12 @@ git archive "$HEAD_SHA" | tar -x -C "$TREE"
 git diff --name-only --no-renames "$BASE_SHA".."$HEAD_SHA"
 ```
 
-For a PR number, take `headRefOid` and `baseRefOid` from
-`gh pr view <n> --json headRefOid,baseRefOid,files,body`, fetch the head, and
-export that SHA instead. **Uncommitted changes are not reviewed**; if
+For a PR number, take its head and base SHAs and body from
+`gh api 'repos/{owner}/{repo}/pulls/<n>' --jq '{head: .head.sha, base: .base.sha, body}'`
+and its files from
+`gh api 'repos/{owner}/{repo}/pulls/<n>/files' --paginate --jq '.[].filename'`
+(REST only: gh's porcelain goes through GraphQL, which Claude Code cloud
+sessions refuse), fetch the head, and export that SHA instead. **Uncommitted changes are not reviewed**; if
 `git status --porcelain` shows any, say so in the report. Tools run from the
 installed Trimtab, called by its name (`trimtab`), never from the tree under
 review and never by a path: the path guard refuses any command that names the
