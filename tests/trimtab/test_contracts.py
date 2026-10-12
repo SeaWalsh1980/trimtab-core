@@ -156,6 +156,22 @@ class InstalledCli(unittest.TestCase):
                 self.assertIn("must be refused by guard-paths", text)
                 self.assertIn("If it is not refused, stop.", text)
 
+    def test_each_rendered_prompt_probes_the_config_dir_it_actually_uses(self):
+        # guard-paths protects CLAUDE_CONFIG_DIR when it is set, and ~/.claude only
+        # otherwise. A probe of the wrong directory is never refused, and the run
+        # stops on a live guard. The prompt names the variable without a `$` (no
+        # `$` survives rendering), and forbids the `:-` spelling the scan may miss.
+        with tempfile.TemporaryDirectory() as tmp:
+            given = routines.values(make_instance(Path(tmp)),
+                                    {"environment_id": "placeholder", "project_repo": "owner/project"})
+            for name in ("conformance", "retro", "upstream-retro"):
+                with self.subTest(routine=name):
+                    prompt = routines.render(name, given)["job_config"]["ccr"]["events"][0]["data"]["message"]["content"]
+
+                    self.assertIn("under the value of `CLAUDE_CONFIG_DIR` if it is set", prompt)
+                    self.assertIn("otherwise under `~/.claude` (`ls ~/.claude/hooks`)", prompt)
+                    self.assertIn("Never write it with a shell default (`:-`).", prompt)
+
 
 class Routines(unittest.TestCase):
     """A loop routine states its connectors, and is created disabled until a run is read."""

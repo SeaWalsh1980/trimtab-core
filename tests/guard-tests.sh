@@ -333,6 +333,13 @@ t guard-paths.sh 2 "CLI file: tee from the CLI into it"       "$(j Bash "{\"comm
 t guard-paths.sh 2 "CLI by name: output redirected into settings" "$(j Bash "{\"command\":\"trimtab instance --json > $CP_HOME/settings.json\"}")"
 t guard-paths.sh 2 "CLI by name: output appended to a live rule" "$(j Bash "{\"command\":\"trimtab instance --root >> $CP_REPO/rules/Example.md\"}")"
 t guard-paths.sh 2 "CLI by name: a control-plane argument"    "$(j Bash "{\"command\":\"trimtab check-pr --body-file $CP_HOME/hooks/guard-paths.sh\"}")"
+# The routine prompts prove the guards are live with a call guard-paths must
+# refuse, spelt as they spell it: the set config dir, else the home default.
+t guard-paths.sh 2 "routine probe: ls the set config dir's hooks" "$(j Bash '{"command":"ls \"$CLAUDE_CONFIG_DIR/hooks\""}')"
+CP_REAL_HOME="$HOME"; HOME="$CPTMP/home"   # one case only; see the fixture note
+CP_REAL_CFG="$CLAUDE_CONFIG_DIR"; unset CLAUDE_CONFIG_DIR
+t guard-paths.sh 2 "routine probe: ls the default config dir's hooks" "$(j Bash '{"command":"ls ~/.claude/hooks"}')"
+export CLAUDE_CONFIG_DIR="$CP_REAL_CFG"; HOME="$CP_REAL_HOME"
 
 echo "== guard-paths: two trees (ADR 0002) =="
 # The split layout (ADR 0008): the mechanism links (hooks, bin, commands, agents) resolve
