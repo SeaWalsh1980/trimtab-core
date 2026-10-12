@@ -38,6 +38,9 @@ command that names the config directory's `bin/`, so a SessionStart hook
 (`hooks/session-path.sh`) puts that directory first on PATH, and the file that
 runs stays one the guards protect (ADR 0018).
 
+The routine templates, how to render them, and the operator's step after every
+pin move are in [`routines/README.md`](routines/README.md).
+
 `trimtab instance --check` checks that an instance's `instance.json` and
 `consumers.json` load, and exits 2 naming the file that does not; an
 instance's CI runs it.
