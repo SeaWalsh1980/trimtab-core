@@ -1,9 +1,12 @@
 """Infrastructure: where merged PRs come from. GitHub through `gh api`, or a fixture file.
 
-Every GitHub call is `gh api` on a REST path. gh's porcelain (`gh pr list`,
-`gh issue create`, `gh repo view`, ...) goes through GraphQL, which Claude Code
-cloud sessions refuse, so a routine that used it could not run at all. `GhApi`
-refuses a GraphQL path outright, and every `Gh*` class goes through it.
+Every GitHub call is `gh api` on a repository-scoped REST path,
+`repos/{owner}/{repo}/...`. gh's porcelain (`gh pr list`, `gh issue create`,
+`gh repo view`, ...) goes through GraphQL, and Claude Code cloud sessions
+refuse GraphQL and every REST path outside the repositories they are bound to
+(`search/`, `user`, `orgs/`, ...), so a routine that used one could not run at
+all. `GhApi` refuses any other path outright, and every `Gh*` class goes
+through it.
 """
 
 from __future__ import annotations
@@ -11,9 +14,10 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, unquote, urlencode
 
 from trimtab.capture.ingest import PullRequest
 from trimtab.dependabot import CiRun, HostError, PullRequestView
@@ -22,8 +26,9 @@ from trimtab.upstream import Issue
 GH_TIMEOUT_SECONDS = 60
 # REST's largest page; a list call reads pages of this size until its limit.
 PER_PAGE = 100
-# GitHub's search API returns at most this many results for one query.
-SEARCH_RESULT_CAP = 1000
+# Closed PRs one scan of a repository's pulls reads at most; past it the scan
+# is an error, not a cut-off, since a PR it did not reach could be one it needs.
+SCAN_LIMIT = 1000
 
 
 class SourceError(HostError):
@@ -44,15 +49,20 @@ def _subprocess_run(argv: list, stdin: str | None) -> subprocess.CompletedProces
 
 
 class GhApi:
-    """`gh api` on REST paths, never GraphQL."""
+    """`gh api` on repository-scoped REST paths, never GraphQL or another REST path."""
 
     def __init__(self, run: Run | None = None):
         self._run = run or _subprocess_run
 
     def call(self, method: str, path: str, query: Mapping | None = None, body=None,
              accept: str | None = None) -> str:
-        if path.strip("/").split("/")[0].split("?")[0] == "graphql":
-            raise SourceError("gh api graphql is not used: Claude Code cloud sessions refuse GitHub GraphQL")
+        target = path.split("?")[0]
+        if not target.lstrip("/").startswith("repos/"):
+            raise SourceError(f"gh api {target} is not used: Claude Code cloud sessions allow only "
+                              "repository-scoped REST paths (repos/{owner}/{repo}/...)")
+        if any(segment in (".", "..") for segment in unquote(target).split("/")):
+            # The server may normalise a dot segment, percent-encoded or not, into a path outside repos/.
+            raise SourceError(f"gh api {target} is not used: a path with a . or .. segment may leave repos/")
         argv = ["gh", "api", "-X", method, path + (f"?{urlencode(query)}" if query else "")]
         if accept:
             argv += ["-H", f"Accept: {accept}"]
@@ -79,17 +89,13 @@ class GhApi:
         except ValueError as err:
             raise SourceError(f"{what} returned unexpected JSON") from err
 
-    def pages(self, path: str, query: Mapping, limit: int, what: str, key: str | None = None) -> list:
+    def pages(self, path: str, query: Mapping, limit: int, what: str) -> list:
         """Up to `limit` rows of a list endpoint, page by page; a short page is the last one."""
         per_page = min(PER_PAGE, limit)
         rows: list = []
         page = 1
         while len(rows) < limit:
-            data = self.json("GET", path, what, query={**query, "per_page": per_page, "page": page})
-            if isinstance(data, dict) and data.get("incomplete_results") is True:
-                # Search timed out on part of the index: a partial answer would move the watermark wrongly.
-                raise SourceError(f"{what} returned incomplete results; run again")
-            batch = data.get(key) if key is not None and isinstance(data, dict) else data
+            batch = self.json("GET", path, what, query={**query, "per_page": per_page, "page": page})
             if not isinstance(batch, list):
                 raise SourceError(f"{what} returned unexpected JSON")
             rows += batch
@@ -111,36 +117,125 @@ class GhApi:
         return rows
 
 
-def _search_pulls(api: GhApi, query: str, order: str, limit: int) -> list[PullRequest]:
-    if limit > SEARCH_RESULT_CAP:
-        raise SourceError(f"GitHub search returns at most {SEARCH_RESULT_CAP} results; lower the limit")
-    what = "gh api search/issues"
-    rows = api.pages("search/issues", {"q": query, "sort": "created", "order": order}, limit, what, key="items")
+@dataclass(frozen=True)
+class _ClosedPull:
+    """One row of a repository's closed pulls: merged_at is "" for a PR closed without merging."""
+
+    number: int
+    body: str
+    merged_at: str
+    updated_at: str
+    labels: frozenset[str]
+
+    def pull(self) -> PullRequest:
+        return PullRequest(self.number, self.body, self.merged_at)
+
+
+def _closed_pull(r) -> _ClosedPull:
+    what = "gh api pulls"
     try:
-        return [PullRequest(int(r["number"]), r.get("body") or "", r["pull_request"].get("merged_at") or "")
-                for r in rows]
-    except (KeyError, TypeError, AttributeError, ValueError) as err:
+        row = _ClosedPull(number=r["number"], body=r.get("body") or "", merged_at=r["merged_at"] or "",
+                          updated_at=r["updated_at"], labels=frozenset(label["name"] for label in r["labels"]))
+    except (KeyError, TypeError, AttributeError) as err:
         raise SourceError(f"{what} returned unexpected JSON") from err
+    if not (_is_int(row.number) and isinstance(row.body, str) and isinstance(row.merged_at, str)
+            and isinstance(row.updated_at, str) and all(isinstance(n, str) for n in row.labels)):
+        raise SourceError(f"{what} returned unexpected JSON")
+    return row
+
+
+def _within_scan(limit: int) -> None:
+    if limit > SCAN_LIMIT:
+        raise SourceError(f"a scan of closed PRs reads at most {SCAN_LIMIT}; lower the limit")
 
 
 class GhSource:
+    """Merged PRs from `repos/<r>/pulls?state=closed`, filtered here by merge time and label.
+
+    The pulls endpoint filters by neither, so a dated read scans closed PRs
+    most recently updated first and stops at the first page that reaches the
+    date: a PR is updated when it merges, so none merged since the date lies
+    beyond that page. The scan is bounded (SCAN_LIMIT) and refused, not cut
+    off, past its bound.
+    """
+
     def __init__(self, repo: str, run: Run | None = None):
         self.repo = repo
         self.api = GhApi(run)
+        # Floor -> closed PRs updated since it. The ledger rebuild and the
+        # ingest in one run read the same listing; it is fetched once (ENG-6.2).
+        self._scans: dict[str, list[_ClosedPull]] = {}
 
     def unlabelled_merged(self, label: str, merged_since: str | None, limit: int) -> list[PullRequest]:
-        # Exact watermark query (ADR 0005), oldest first so a bounded run
-        # makes progress rather than re-reading the newest PRs.
-        query = f"repo:{self.repo} is:pr is:merged -label:{label}"
-        if merged_since:
-            query += f" merged:>={merged_since}"
-        return _search_pulls(self.api, query, "asc", limit)
+        # Oldest merged first (ADR 0005), so a bounded run makes progress rather
+        # than re-reading the newest PRs. A backfill (no date) returns the first
+        # `limit` found oldest created first, then sorted by merge time: not the
+        # oldest merged overall, but each run still moves forward.
+        _within_scan(limit)
+        if merged_since is None:
+            rows = self._oldest_unlabelled(label, limit)
+        else:
+            rows = [r for r in self._closed_since(merged_since)
+                    if r.merged_at and r.merged_at[:10] >= merged_since and label not in r.labels]
+        return [r.pull() for r in sorted(rows, key=lambda r: (r.merged_at, r.number))[:limit]]
 
     def labelled_merged(self, label: str, merged_since: str, limit: int) -> list[PullRequest]:
         # Newest first: the window is recent history, and a run that hits the
         # limit keeps the most recent evidence (the caller reports truncation).
-        query = f"repo:{self.repo} is:pr is:merged label:{label} merged:>={merged_since}"
-        return _search_pulls(self.api, query, "desc", limit)
+        _within_scan(limit)
+        rows = [r for r in self._closed_since(merged_since)
+                if r.merged_at and r.merged_at[:10] >= merged_since and label in r.labels]
+        return [r.pull() for r in sorted(rows, key=lambda r: (r.merged_at, r.number), reverse=True)[:limit]]
+
+    def _page(self, order: Mapping[str, str], page: int) -> list[_ClosedPull]:
+        data = self.api.json("GET", f"repos/{self.repo}/pulls", "gh api pulls",
+                             query={"state": "closed", **order, "per_page": PER_PAGE, "page": page})
+        if not isinstance(data, list):
+            raise SourceError("gh api pulls returned unexpected JSON")
+        return [_closed_pull(r) for r in data]
+
+    def _too_many(self, since: str) -> SourceError:
+        return SourceError(f"more than {SCAN_LIMIT} closed PRs on {self.repo} {since}; "
+                           "refusing to work from a partial list")
+
+    def _closed_since(self, floor: str) -> list[_ClosedPull]:
+        # A wider scan already read serves a narrower floor, so the rows can
+        # reach back before `floor`, unmerged ones included: every caller
+        # filters by merged_at itself.
+        for scanned, rows in self._scans.items():
+            if scanned <= floor:
+                return rows
+        found: dict[int, _ClosedPull] = {}
+        page = 1
+        while True:
+            batch = self._page({"sort": "updated", "direction": "desc"}, page)
+            for r in batch:
+                # A PR updated during the scan shifts the pages and can be seen twice.
+                found.setdefault(r.number, r)
+            if len(batch) < PER_PAGE or batch[-1].updated_at[:10] < floor:
+                break
+            if page * PER_PAGE >= SCAN_LIMIT:
+                raise self._too_many(f"were updated since {floor}")
+            page += 1
+        self._scans[floor] = list(found.values())
+        return self._scans[floor]
+
+    def _oldest_unlabelled(self, label: str, limit: int) -> list[_ClosedPull]:
+        """With no date, the oldest created first, until `limit` unlabelled merged PRs are found."""
+        found: dict[int, _ClosedPull] = {}
+        page = 1
+        while True:
+            batch = self._page({"sort": "created", "direction": "asc"}, page)
+            for r in batch:
+                if r.merged_at and label not in r.labels:
+                    found.setdefault(r.number, r)
+            if len(found) >= limit or len(batch) < PER_PAGE:
+                return list(found.values())
+            if page * PER_PAGE >= SCAN_LIMIT:
+                raise SourceError(f"more than {SCAN_LIMIT} closed PRs on {self.repo} precede the oldest {limit} "
+                                  f"not labelled {label}; a lower limit will not help: give the read a date "
+                                  "(no --backfill, --ingest-weeks above 0)")
+            page += 1
 
     def add_label(self, number: int, label: str) -> None:
         # A PR's labels are its issue's labels.

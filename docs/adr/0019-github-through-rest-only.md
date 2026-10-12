@@ -2,8 +2,13 @@
 
 ## Status
 
-Proposed. Becomes accepted once a guarded cloud routine runs `ingest` and its
-command end to end on this base (see "Trial, still open" below).
+Narrowed by ADR 0021 (2026-10-12): the trial below found REST paths outside
+`repos/` refused too, so every call is now repository-scoped, and the
+`search/issues` decisions here are superseded. The rest stands, still
+proposed.
+
+Was: proposed. Becomes accepted once a guarded cloud routine runs `ingest` and
+its command end to end on this base (see "Trial, still open" below).
 
 ## Context
 
@@ -111,3 +116,12 @@ refusal message named `repos/…` paths, and search is REST but not under
 `repos/`. The first guarded cloud routine run on this base settles it. If it
 is refused, this record is revisited and the result recorded here; the
 pulls-endpoint option above is the one to re-weigh.
+
+## Trial result (2026-10-12)
+
+Refused. The first guarded retro routine on this base got, on
+`ingest --dry-run --ledger-from-labels`'s first call, HTTP 403: sessions are
+bound to their configured repositories and must use repository-scoped
+endpoints (`repos/{owner}/{repo}/...`). GraphQL's refusal held as recorded
+above. The pulls-endpoint option was re-weighed, with a bound and a moving
+floor that answer the reason it lost here, and taken: ADR 0021.

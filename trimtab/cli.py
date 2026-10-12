@@ -29,6 +29,7 @@ from trimtab.score import THRESHOLD, WINDOW_WEEKS, candidates, tally
 
 DEFAULT_LIMIT = 50  # every run is bounded; the watermark carries the rest
 HISTORY_LIMIT = 500  # bounded: labelled PRs a ledger rebuild reads, newest first (ADR 0006)
+INGEST_WEEKS = 2  # bounded: an ingest reads PRs merged this recently (ADR 0021)
 
 
 def _print_problems(problems) -> int:
@@ -108,12 +109,22 @@ def _source(args):
     return FixtureSource(Path(args.fixture)) if args.fixture else GhSource(args.repo)
 
 
-def _since(args) -> str | None:
-    """The first day whose evidence still counts, or None for no window."""
-    if args.window_weeks <= 0:
+def _weeks_before(args, weeks: int) -> str | None:
+    """The day `weeks` before --as-of (default today), or None when weeks is 0 or less."""
+    if weeks <= 0:
         return None
     as_of = date.fromisoformat(args.as_of) if args.as_of else date.today()
-    return (as_of - timedelta(weeks=args.window_weeks)).isoformat()
+    return (as_of - timedelta(weeks=weeks)).isoformat()
+
+
+def _since(args) -> str | None:
+    """The first day whose evidence still counts, or None for no window."""
+    return _weeks_before(args, args.window_weeks)
+
+
+def _floor(args) -> str | None:
+    """The first day an ingest reads merged PRs from, or None (a backfill, or --ingest-weeks 0)."""
+    return None if args.backfill else _weeks_before(args, args.ingest_weeks)
 
 
 def _lock(project: Path):
@@ -156,10 +167,16 @@ def _store(args, source, config, registry):
     return store
 
 
-def _report(config, todo, records, since) -> None:
+def _print_floor(floor) -> None:
+    if floor:
+        print(f"ingest floor: PRs merged before {floor} are not read (--ingest-weeks)")
+
+
+def _report(config, todo, records, since, floor) -> None:
     t = tally(records, since=since)
     valid, total = t.coverage
     share = f" ({100 * valid // total}%)" if total else ""
+    _print_floor(floor)
     print(f"to record: {len(todo.records)} PRs"
           + (f" ({len(todo.already_recorded)} recorded before an interrupted label step)"
              if todo.already_recorded else ""))
@@ -193,7 +210,7 @@ def _replay(args) -> str:
         parts.append("--ledger-from-labels")
     if args.project != ".":
         parts.append(f"--project {args.project}")
-    parts += [f"--limit {args.limit}", f"--window-weeks {args.window_weeks}"]
+    parts += [f"--limit {args.limit}", f"--window-weeks {args.window_weeks}", f"--ingest-weeks {args.ingest_weeks}"]
     if getattr(args, "ledger_from_labels", False):
         parts.append(f"--history-limit {args.history_limit}")
     if args.as_of:
@@ -212,7 +229,8 @@ def cmd_ingest(args) -> int:
     try:
         store = _store(args, source, config, registry)
         ledger = store.load()
-        todo = ingest.plan(source, ledger, config, registry, limit=args.limit, backfill=args.backfill)
+        todo = ingest.plan(source, ledger, config, registry, limit=args.limit, backfill=args.backfill,
+                           floor=_floor(args))
     except SourceError as err:
         print(f"error: {err}", file=sys.stderr)
         return 2
@@ -220,7 +238,7 @@ def cmd_ingest(args) -> int:
     token = ingest.confirmation(todo)
     if not args.apply:
         print("ingest --dry-run: nothing recorded, nothing labelled")
-        _report(config, todo, ingest.all_records(ledger, todo), since)
+        _report(config, todo, ingest.all_records(ledger, todo), since, _floor(args))
         if todo.records:
             if not (args.ledger or args.ledger_from_labels):
                 print("to apply, add --ledger <path> or --ledger-from-labels")
@@ -240,7 +258,7 @@ def cmd_ingest(args) -> int:
         print(f"error after recording: {err}. Re-run: the record is kept and counts once.", file=sys.stderr)
         return 2
     print(f"recorded and labelled {len(done)} PRs")
-    _report(config, todo, store.load().records.values(), since)
+    _report(config, todo, store.load().records.values(), since, _floor(args))
     return 0
 
 
@@ -260,10 +278,12 @@ def cmd_propose(args) -> int:
     try:
         store = _store(args, source, config, registry)
         ledger = store.load()
-        todo = ingest.plan(source, ledger, config, registry, limit=args.limit, backfill=args.backfill)
+        todo = ingest.plan(source, ledger, config, registry, limit=args.limit, backfill=args.backfill,
+                           floor=_floor(args))
     except SourceError as err:
         print(f"error: {err}", file=sys.stderr)
         return 2
+    _print_floor(_floor(args))
     proposals = candidates(tally(ingest.all_records(ledger, todo), since=_since(args)), threshold=args.threshold)
     project = args.repo or config.id_prefix
     drafts = [render(p, registry, project=project) for p in proposals]
@@ -711,6 +731,9 @@ def _ingest_options(p) -> None:
                    help=f"labelled PRs read by --ledger-from-labels (default {HISTORY_LIMIT})")
     p.add_argument("--window-weeks", type=int, default=WINDOW_WEEKS,
                    help=f"evidence older than this has decayed; 0 for none (default {WINDOW_WEEKS})")
+    p.add_argument("--ingest-weeks", type=int, default=INGEST_WEEKS,
+                   help=f"read PRs merged within this many weeks, never before the adoption; 0 for since the "
+                        f"adoption (default {INGEST_WEEKS})")
     p.add_argument("--as-of", metavar="YYYY-MM-DD", help="the date the window ends (default: today)")
     p.add_argument("--backfill", action="store_true", help="include PRs below the baseline; read the legacy heading")
 

@@ -39,8 +39,11 @@ compare it with the render before running it.
   read the guard files and settings, find `trimtab` on PATH, and run one exact
   command that guard-paths must refuse, quoting it and the refusal; a refusal
   of any other command does not count. If any check fails, the run stops.
-- **GitHub through REST only** (ADR 0019). The commands the routines run use
-  `gh api`, never gh's GraphQL-backed porcelain, which cloud sessions refuse.
+- **GitHub through repository-scoped REST only** (ADR 0019, narrowed by ADR
+  0021). The commands the routines run use `gh api` on
+  `repos/{owner}/{repo}/…` paths, never another path (`search/…`, `user`,
+  `orgs/…`) or gh's GraphQL-backed porcelain: cloud sessions refuse both, and
+  allow only the repositories the routine names as sources.
 - **No remote-session MCP tools** (ADR 0020). The body refuses the session
   server's tools, so an unattended run neither waits on an approval nor takes
   in PR events after its work. On read-back, the routine's

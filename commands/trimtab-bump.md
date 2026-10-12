@@ -68,8 +68,9 @@ gh api -X POST 'repos/{owner}/{repo}/pulls' -f title="chore(trimtab): move the l
   -f head="$(git branch --show-current)" -f base="$DEFAULT" -F draft=true -F body=@"$BODY" --jq .html_url
 ```
 
-GitHub is reached through `gh api` on REST paths only: gh's porcelain
-(`gh pr …`) goes through GraphQL, which Claude Code cloud sessions refuse.
+GitHub is reached through `gh api` on `repos/{owner}/{repo}/…` paths only:
+Claude Code cloud sessions refuse every other path (`search/…`, `user`,
+`orgs/…`) and gh's porcelain (`gh pr …`), which goes through GraphQL.
 
 Commit only the lock. Dropping or rewording an override is the operator's call
 on the PR; make it only when they say so, in this same PR, and never delete an

@@ -1,31 +1,47 @@
-"""GitHub through `gh api` on REST paths only: cloud sessions refuse GraphQL, and gh's porcelain uses it."""
+"""GitHub through `gh api` on repository-scoped REST paths only.
+
+Claude Code cloud sessions refuse GraphQL, and gh's porcelain uses it; they
+also refuse every REST path outside `repos/{owner}/{repo}/...`, `search/`
+included.
+"""
 
 import json
 import unittest
 
 from gh_fake import FakeGh, method_of, path_of, query_of
 from trimtab.capture.sources import (
-    ISSUE_LIMIT, SEARCH_RESULT_CAP, GhApi, GhContents, GhIssues, GhPullRequests, GhSource, SourceError,
+    ISSUE_LIMIT, SCAN_LIMIT, GhApi, GhContents, GhIssues, GhPullRequests, GhSource, SourceError,
     open_feedback_issues,
 )
 
 REPO = "owner/repo"
 LABEL = "trimtab-ingested"
+OTHER_LABEL = "dependencies"
 FEEDBACK = "harness-feedback"
 SINCE = "2026-09-01"
+WINDOW_START = "2026-08-01"
+BEFORE_SINCE = "2026-08-20T00:00:00Z"
+AFTER_SINCE = "2026-09-10T00:00:00Z"
 PR = 76
 RUN_ID = 1001
 HEAD_SHA = "a" * 40
 WORKFLOW = "ci.yml"
 ISSUE_URL = "https://github.com/owner/repo/issues/9"
+PULLS = f"repos/{REPO}/pulls"
 
 
-def search_item(number, body="", merged_at="2026-10-01T12:00:00Z"):
-    return {"number": number, "body": body, "pull_request": {"merged_at": merged_at}}
+def pull(number, merged_at=AFTER_SINCE, updated_at=None, labels=(), body=""):
+    """One row of `GET repos/{o}/{r}/pulls`: a merged PR unless merged_at is None."""
+    return {"number": number, "body": body, "merged_at": merged_at,
+            "updated_at": updated_at or merged_at or AFTER_SINCE, "labels": [{"name": n} for n in labels]}
 
 
-def search_page(*items, incomplete=False):
-    return json.dumps({"total_count": len(items), "incomplete_results": incomplete, "items": list(items)})
+def page(*rows):
+    return json.dumps(list(rows))
+
+
+def full_page(start, **kwargs):
+    return page(*[pull(n, **kwargs) for n in range(start, start + 100)])
 
 
 def issue(number, title, closed_at=None, is_pr=False):
@@ -44,6 +60,7 @@ def every_call(gh):
     """Drive every public GitHub method once through `gh`."""
     source = GhSource(REPO, run=gh)
     source.unlabelled_merged(LABEL, SINCE, 10)
+    source.unlabelled_merged(LABEL, None, 10)
     source.labelled_merged(LABEL, SINCE, 10)
     source.add_label(PR, LABEL)
     source.body(PR)
@@ -61,7 +78,7 @@ def every_call(gh):
 
 def answering_everything():
     return FakeGh(answers={
-        "search/issues": search_page(),
+        ("GET", PULLS): "[]",
         f"repos/{REPO}/pulls/{PR}": pull_json(),
         ("GET", f"repos/{REPO}/issues"): "[]",
         ("POST", f"repos/{REPO}/issues"): json.dumps({"html_url": ISSUE_URL}),
@@ -69,7 +86,7 @@ def answering_everything():
     }, default="{}")
 
 
-class NoCommandPathUsesGraphQL(unittest.TestCase):
+class EveryCallIsRepositoryScopedRest(unittest.TestCase):
     def test_every_github_call_is_gh_api(self):
         gh = answering_everything()
 
@@ -77,12 +94,12 @@ class NoCommandPathUsesGraphQL(unittest.TestCase):
 
         self.assertEqual({tuple(argv[:2]) for argv in gh.argvs()}, {("gh", "api")})
 
-    def test_no_github_call_targets_graphql(self):
+    def test_every_github_call_targets_a_repository_path(self):
         gh = answering_everything()
 
         every_call(gh)
 
-        self.assertFalse([argv for argv in gh.argvs() if path_of(argv).strip("/").startswith("graphql")])
+        self.assertEqual([path_of(a) for a in gh.argvs() if not path_of(a).startswith(f"repos/{REPO}/")], [])
 
     def test_every_github_call_names_its_method(self):
         gh = answering_everything()
@@ -99,97 +116,217 @@ class NoCommandPathUsesGraphQL(unittest.TestCase):
 
         self.assertEqual(gh.calls, [])
 
+    def test_a_path_outside_repos_is_refused_before_gh_runs(self):
+        for path in ("search/issues", "/search/issues", "user", "orgs/owner/repos", "notifications",
+                     "repositories", "reposx/owner/repo"):
+            with self.subTest(path=path):
+                gh = FakeGh()
 
-class TheWatermarkSearch(unittest.TestCase):
-    def test_the_ingest_search_excludes_the_label_and_starts_at_the_watermark_oldest_first(self):
-        gh = FakeGh(default=search_page())
+                with self.assertRaises(SourceError):
+                    GhApi(run=gh).call("GET", path)
+
+                self.assertEqual(gh.calls, [])
+
+    def test_a_path_with_a_dot_segment_is_refused_before_gh_runs(self):
+        # The server may normalise a dot segment into a path outside repos/.
+        for path in ("repos/../search/issues", "repos/o/r/../../search/issues", "repos/./o/r",
+                     "/repos/../user"):
+            with self.subTest(path=path):
+                gh = FakeGh()
+
+                with self.assertRaises(SourceError):
+                    GhApi(run=gh).call("GET", path)
+
+                self.assertEqual(gh.calls, [])
+
+    def test_a_percent_encoded_dot_segment_is_refused_before_gh_runs(self):
+        for path in ("repos/%2e%2e/search/issues", "repos/o/r/%2E%2E/%2e%2e/user", "repos/o/r/.%2e/x"):
+            with self.subTest(path=path):
+                gh = FakeGh()
+
+                with self.assertRaises(SourceError):
+                    GhApi(run=gh).call("GET", path)
+
+                self.assertEqual(gh.calls, [])
+
+    def test_a_percent_encoded_workflow_name_still_passes(self):
+        gh = FakeGh(default=json.dumps({"workflow_runs": []}))
+
+        GhPullRequests(REPO, run=gh).runs(HEAD_SHA, "ci checks.yml", 10)
+
+        self.assertEqual(path_of(gh.argvs()[0]), f"repos/{REPO}/actions/workflows/ci%20checks.yml/runs")
+
+
+class TheClosedPullsScan(unittest.TestCase):
+    """Merged PRs come from the repository's closed pulls, most recently updated first, filtered here."""
+
+    def test_merged_prs_are_read_from_closed_pulls_most_recently_updated_first(self):
+        gh = FakeGh(default=page())
 
         GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
 
-        q = query_of(gh.argvs()[0])
-        self.assertEqual((q["q"], q["sort"], q["order"]),
-                         (f"repo:{REPO} is:pr is:merged -label:{LABEL} merged:>={SINCE}", "created", "asc"))
+        argv = gh.argvs()[0]
+        q = query_of(argv)
+        self.assertEqual((method_of(argv), path_of(argv), q["state"], q["sort"], q["direction"], q["per_page"]),
+                         ("GET", PULLS, "closed", "updated", "desc", "100"))
 
-    def test_the_ingest_search_without_a_watermark_has_no_date(self):
-        gh = FakeGh(default=search_page())
+    def test_reading_stops_at_the_first_page_that_reaches_the_floor(self):
+        last_page = page(*[pull(n) for n in range(100, 199)], pull(199, BEFORE_SINCE))
+        gh = FakeGh(answers={PULLS: [full_page(0), last_page]}, default=full_page(200))
 
-        GhSource(REPO, run=gh).unlabelled_merged(LABEL, None, 50)
+        GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
 
-        self.assertNotIn("merged:", query_of(gh.argvs()[0])["q"])
+        self.assertEqual([query_of(a)["page"] for a in gh.argvs()], ["1", "2"])
 
-    def test_the_ledger_rebuild_reads_labelled_prs_newest_first(self):
-        gh = FakeGh(default=search_page())
+    def test_a_short_page_is_the_last_one_read(self):
+        gh = FakeGh(answers={PULLS: [page(pull(1))]}, default=full_page(200))
 
-        GhSource(REPO, run=gh).labelled_merged(LABEL, SINCE, 500)
+        GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
 
-        q = query_of(gh.argvs()[0])
-        self.assertEqual((q["q"], q["order"]), (f"repo:{REPO} is:pr is:merged label:{LABEL} merged:>={SINCE}", "desc"))
+        self.assertEqual(len(gh.calls), 1)
 
-    def test_a_search_result_keeps_number_body_and_merge_time(self):
-        gh = FakeGh(default=search_page(search_item(7, "the body", "2026-10-02T08:00:00Z")))
+    def test_a_closed_pr_that_was_not_merged_is_left_out(self):
+        gh = FakeGh(default=page(pull(1), pull(2, merged_at=None)))
+
+        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
+
+        self.assertEqual([p.number for p in pulls], [1])
+
+    def test_a_pr_merged_before_the_floor_and_updated_after_it_is_left_out(self):
+        gh = FakeGh(default=page(pull(1), pull(2, merged_at=BEFORE_SINCE, updated_at=AFTER_SINCE)))
+
+        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
+
+        self.assertEqual([p.number for p in pulls], [1])
+
+    def test_ingest_leaves_out_prs_already_labelled(self):
+        gh = FakeGh(default=page(pull(1, labels=[LABEL]), pull(2, labels=[OTHER_LABEL])))
+
+        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
+
+        self.assertEqual([p.number for p in pulls], [2])
+
+    def test_the_ledger_rebuild_keeps_only_labelled_prs(self):
+        gh = FakeGh(default=page(pull(1, labels=[LABEL]), pull(2, labels=[OTHER_LABEL])))
+
+        pulls = GhSource(REPO, run=gh).labelled_merged(LABEL, SINCE, 50)
+
+        self.assertEqual([p.number for p in pulls], [1])
+
+    def test_ingest_takes_the_oldest_merged_first_up_to_its_limit(self):
+        gh = FakeGh(default=page(pull(3, "2026-09-12T00:00:00Z"), pull(1, "2026-09-14T00:00:00Z"),
+                                 pull(2, "2026-09-11T00:00:00Z")))
+
+        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 2)
+
+        self.assertEqual([p.number for p in pulls], [2, 3])
+
+    def test_the_ledger_rebuild_takes_the_newest_merged_first_up_to_its_limit(self):
+        gh = FakeGh(default=page(pull(3, "2026-09-12T00:00:00Z", labels=[LABEL]),
+                                 pull(1, "2026-09-14T00:00:00Z", labels=[LABEL]),
+                                 pull(2, "2026-09-11T00:00:00Z", labels=[LABEL])))
+
+        pulls = GhSource(REPO, run=gh).labelled_merged(LABEL, SINCE, 2)
+
+        self.assertEqual([p.number for p in pulls], [1, 3])
+
+    def test_a_pr_seen_on_two_pages_counts_once(self):
+        # A PR updated during the scan moves up the order and shifts the pages.
+        first = full_page(0)
+        second = page(pull(99), pull(100, BEFORE_SINCE))
+        gh = FakeGh(answers={PULLS: [first, second]})
+
+        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 500)
+
+        self.assertEqual(len(pulls), 100)
+
+    def test_a_pr_keeps_number_body_and_merge_time(self):
+        gh = FakeGh(default=page(pull(7, "2026-10-02T08:00:00Z", body="the body")))
 
         pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
 
         self.assertEqual([(p.number, p.body, p.merged_at) for p in pulls], [(7, "the body", "2026-10-02T08:00:00Z")])
 
     def test_a_null_body_reads_as_empty(self):
-        gh = FakeGh(default=search_page(search_item(7, None)))
+        gh = FakeGh(default=page(pull(7, body=None)))
 
         pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
 
         self.assertEqual(pulls[0].body, "")
 
-    def test_incomplete_search_results_are_refused(self):
-        gh = FakeGh(default=search_page(search_item(7), incomplete=True))
+    def test_more_closed_prs_than_the_scan_bound_are_refused_not_cut_off(self):
+        # A cut-off scan would let an unlabelled PR slip past the watermark unseen.
+        gh = FakeGh(default=full_page(0))
 
         with self.assertRaises(SourceError):
             GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
 
-    def test_a_limit_beyond_the_search_cap_is_refused_before_gh_runs(self):
-        gh = FakeGh(default=search_page())
+        self.assertEqual(len(gh.calls), SCAN_LIMIT // 100)
+
+    def test_a_limit_beyond_the_scan_bound_is_refused_before_gh_runs(self):
+        gh = FakeGh(default=page())
 
         with self.assertRaises(SourceError):
-            GhSource(REPO, run=gh).labelled_merged(LABEL, SINCE, SEARCH_RESULT_CAP + 1)
+            GhSource(REPO, run=gh).labelled_merged(LABEL, SINCE, SCAN_LIMIT + 1)
 
         self.assertEqual(gh.calls, [])
 
-    def test_a_search_item_without_a_pull_request_is_refused(self):
-        gh = FakeGh(default=search_page({"number": 7, "body": ""}))
+    def test_a_row_missing_its_merge_fields_is_refused(self):
+        gh = FakeGh(default=page({"number": 7, "body": ""}))
 
         with self.assertRaises(SourceError):
             GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
 
+    def test_a_listing_that_is_not_a_list_is_refused(self):
+        gh = FakeGh(default=json.dumps({"message": "x"}))
 
-class Paging(unittest.TestCase):
-    def test_a_full_page_leads_to_the_next(self):
-        gh = FakeGh(answers={"search/issues": [search_page(*[search_item(n) for n in range(100)]),
-                                                search_page(*[search_item(n) for n in range(100, 150)])]})
+        with self.assertRaises(SourceError):
+            GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
 
-        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 500)
+    def test_the_ledger_rebuild_and_ingest_in_one_run_read_the_listing_once(self):
+        gh = FakeGh(answers={PULLS: [page(pull(1, labels=[LABEL]), pull(2))]})
+        source = GhSource(REPO, run=gh)
 
-        self.assertEqual((len(pulls), [query_of(a)["page"] for a in gh.argvs()]), (150, ["1", "2"]))
+        rebuilt = source.labelled_merged(LABEL, WINDOW_START, 500)
+        todo = source.unlabelled_merged(LABEL, SINCE, 50)
 
-    def test_a_short_page_is_the_last_one_read(self):
-        gh = FakeGh(answers={"search/issues": [search_page(search_item(1))]}, default=search_page(search_item(2)))
+        self.assertEqual(([p.number for p in rebuilt], [p.number for p in todo], len(gh.calls)), ([1], [2], 1))
 
-        GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 500)
 
-        self.assertEqual(len(gh.calls), 1)
+class WithoutAFloor(unittest.TestCase):
+    """A backfill has no date: closed pulls are read oldest created first, until the limit is met."""
 
-    def test_reading_stops_at_the_limit(self):
-        full = search_page(*[search_item(n) for n in range(100)])
-        gh = FakeGh(default=full)
+    def test_closed_pulls_are_read_oldest_created_first(self):
+        gh = FakeGh(default=page())
 
-        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 120)
+        GhSource(REPO, run=gh).unlabelled_merged(LABEL, None, 50)
 
-        self.assertEqual((len(pulls), len(gh.calls)), (120, 2))
+        q = query_of(gh.argvs()[0])
+        self.assertEqual((q["state"], q["sort"], q["direction"]), ("closed", "created", "asc"))
 
-    def test_a_small_limit_asks_for_a_small_page(self):
-        gh = FakeGh(default=search_page())
+    def test_reading_stops_once_the_limit_is_met(self):
+        gh = FakeGh(answers={PULLS: [full_page(0, labels=[LABEL]), full_page(100)]}, default=full_page(200))
 
-        GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 10)
+        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, None, 50)
 
-        self.assertEqual(query_of(gh.argvs()[0])["per_page"], "10")
+        self.assertEqual(([p.number for p in pulls][:2], len(pulls), len(gh.calls)), ([100, 101], 50, 2))
+
+    def test_a_scan_past_its_bound_is_refused_not_cut_off(self):
+        gh = FakeGh(default=full_page(0, labels=[LABEL]))
+
+        with self.assertRaises(SourceError):
+            GhSource(REPO, run=gh).unlabelled_merged(LABEL, None, 50)
+
+        self.assertEqual(len(gh.calls), SCAN_LIMIT // 100)
+
+    def test_a_backfill_past_its_bound_names_a_dated_read(self):
+        # Lowering the limit does not help when labelled PRs fill the bound.
+        gh = FakeGh(default=full_page(0, labels=[LABEL]))
+
+        with self.assertRaises(SourceError) as caught:
+            GhSource(REPO, run=gh).unlabelled_merged(LABEL, None, 50)
+
+        self.assertIn("--backfill", str(caught.exception))
 
 
 class IssueListing(unittest.TestCase):
@@ -250,6 +387,14 @@ class IssueListing(unittest.TestCase):
         titles = GhIssues(REPO, run=gh).recent_titles(FEEDBACK, None)
 
         self.assertEqual(len(titles), ISSUE_LIMIT)
+
+    def test_reading_an_issue_listing_stops_at_a_short_page(self):
+        gh = FakeGh(answers={f"repos/{REPO}/issues": [json.dumps([issue(1, "t1")])]},
+                    default=json.dumps([issue(n, f"t{n}") for n in range(100)]))
+
+        GhIssues(REPO, run=gh).recent_titles(FEEDBACK, None)
+
+        self.assertEqual(len(gh.calls), 1)
 
     def test_open_feedback_issues_past_their_limit_are_refused(self):
         gh = FakeGh(default=json.dumps([issue(n, f"t{n}") for n in range(100)]))
