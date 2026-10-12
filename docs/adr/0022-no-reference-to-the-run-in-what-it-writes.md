@@ -32,8 +32,10 @@ Documented constraints: an empty `attribution.commit` or `attribution.pr` does
 not remove the link, `attribution.sessionUrl: false` does; a repository's
 committed `.claude/settings.json` is not read in a multi-repository cloud
 session (every per-project routine has two sources); CLAUDE.md is context,
-not enforced configuration. The settings the bootstrap installs are read in
-routine runs, as the guard hooks they register fire there.
+not enforced configuration. Expected, not yet observed: a routine run reads
+`attribution` from the settings the bootstrap installs. The guard hooks those
+settings register fire there, which shows the file is read, not that every
+key in it is honoured; the trial below settles it.
 
 ## Decision
 
@@ -47,10 +49,11 @@ Three parts, each catching what the one before it can miss:
 - **The check.** `trimtab check-pr` refuses a body holding a routine,
   environment or session ID shape anywhere, the block or not, and names the
   line, never the value. A consumer's CI runs it on every PR, so a link the
-  setting does not stop (the footer) fails there loudly. The ID shape is the
-  scrub's, which now also covers `cse_` session IDs. `check_body` is
-  unchanged: the PR-body hook (a control), `ingest` and `dependabot-block`
-  behave as before.
+  setting does not stop (the footer) fails there loudly. It is
+  `prblock.check_pr_body`: `check_body` plus the ID scan. `check_body` is
+  unchanged, so the PR-body hook (a control), `ingest` and `dependabot-block`
+  behave as before. The ID shape moves from the scrub to `trimtab/ids.py`,
+  shared by both, and now also covers `cse_` session IDs.
 - **The rule.** The routine prompts and every command that commits or opens a
   PR say: no `Claude-Session:` trailer, no session link or ID; a commit ends at
   `Co-Authored-By:`, a PR body at its `🤖 Generated with` line; this overrides
@@ -83,6 +86,14 @@ step 4's PR listing. A static test fails on search syntax in shipped files.
 
 - A PR body with a run reference fails `check-pr` locally and in a
   consumer's CI; the run or the operator removes the line.
+- The check is not limited to routines. A PR an operator opens from any cloud
+  or Remote Control session carries the session URL by default too, and fails
+  a consumer's CI once its pin includes this change. So the setting is
+  installed before, or with, the first pin that carries this check; until it
+  is, the remedy is deleting the line from the body.
+- Accepted: the shape can match a long identifier with no underscore after
+  its prefix (`env_` and 16 or more letters or digits), and the CI gate has no
+  override; the body is reworded. Real identifiers rarely take that form.
 - Accepted: commit messages are not checked by the base. Until the setting is
   installed, and if it fails, a trailer can still land; the scrub of the
   consumer's history (the operator's ID scan) is what finds it.

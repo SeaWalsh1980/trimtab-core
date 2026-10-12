@@ -21,6 +21,7 @@ from typing import Mapping
 
 import yaml
 
+from trimtab.ids import id_shape_lines
 from trimtab.items import ITEM_ID, Item, Problem, Strength
 from trimtab.registry.rules import clause_strength
 
@@ -369,3 +370,17 @@ def check_body(body: str, registry: Mapping[str, Item], backfill: bool = False, 
 
     block = Block(version=version, applied=applied, feedback=feedback, passes=passes, plan_tokens=plan_tokens)
     return CheckResult(block, tuple(problems))
+
+
+def check_pr_body(body: str, registry: Mapping[str, Item], backfill: bool = False, *,
+                  schema_only: bool = False, project_prefix: str | None = None) -> CheckResult:
+    """`check_body`, and no run reference anywhere in the body, the block or not (ADR 0022).
+
+    For `trimtab check-pr`, which a consumer's CI runs. The hook, `ingest` and
+    `dependabot-block` keep `check_body`: a past body holding a link stays a
+    valid record, and the hook is a control changed only in its own PR.
+    """
+    result = check_body(body, registry, backfill, schema_only=schema_only, project_prefix=project_prefix)
+    refs = tuple(Problem("id-shape", f"line {n}", "a routine, environment or session ID; remove the reference")
+                 for n in id_shape_lines(body or ""))
+    return CheckResult(result.block, result.problems + refs) if refs else result

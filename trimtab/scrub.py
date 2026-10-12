@@ -17,20 +17,14 @@ from pathlib import Path
 
 from trimtab import instance as instance_file
 from trimtab import roots
+from trimtab.ids import ID_SHAPE
 
-# A routine (trig_), environment (env_) or session (session_, cse_) ID.
-ID_SHAPE = re.compile(r"\b(?:trig|env|session|cse)_[0-9A-Za-z]{16,}\b")
 NUMBERED_DOC = re.compile(r"^\d{4}-.+\.md$")
 SKIP_DIRS = {".git", "__pycache__"}
 TEST_PARTS = {"tests", "test", "fixtures"}
 PATTERNS_ENV = "TRIMTAB_SECRET_PATTERNS"
 GIT_TIMEOUT_SECONDS = 5
 PACKAGE_NAME = "trimtab"  # the base's package: never a private name, though an instance may share it
-
-
-def id_shape_lines(text: str) -> list[int]:
-    """The numbers of the lines holding an ID shape: never the IDs themselves."""
-    return [n for n, line in enumerate(text.splitlines(), 1) if ID_SHAPE.search(line)]
 
 
 class ScrubError(Exception):
