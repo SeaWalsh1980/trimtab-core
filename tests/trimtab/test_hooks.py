@@ -106,6 +106,51 @@ class PrBodyCheck(unittest.TestCase):
         self.assertEqual(done.returncode, 0)
         self.assertIn("TRIMTAB_INSTANCE is not set", done.stderr)
 
+    def test_a_rest_create_with_a_valid_body_file_is_allowed(self):
+        done = self.check("gh api -X POST repos/o/r/pulls -f title=t -f head=b -f base=main "
+                          "-F draft=true -F body=@good.md")
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_a_rest_create_with_a_body_file_lacking_the_block_is_blocked(self):
+        done = self.check("gh api -X POST repos/o/r/pulls -f title=t -f head=b -f base=main -F body=@bad.md")
+
+        self.assertEqual(done.returncode, 2)
+        self.assertNotIn(MARKER, done.stderr + done.stdout)
+
+    def test_a_rest_create_with_an_inline_body_lacking_the_block_is_blocked(self):
+        self.assertEqual(self.check(f"gh api repos/o/r/pulls -f title=t -f 'body=prose {MARKER}'").returncode, 2)
+
+    def test_a_rest_create_without_a_body_is_blocked(self):
+        self.assertEqual(self.check("gh api --method=POST repos/o/r/pulls -f title=t -f head=b").returncode, 2)
+
+    def test_a_rest_create_whose_input_file_lacks_the_block_is_blocked(self):
+        (self.cwd / "pull.json").write_text(json.dumps({"title": "t", "body": f"prose {MARKER}"}))
+
+        self.assertEqual(self.check("gh api -X POST repos/o/r/pulls --input pull.json").returncode, 2)
+
+    def test_a_rest_create_whose_input_file_has_a_valid_body_is_allowed(self):
+        (self.cwd / "pull.json").write_text(json.dumps({"title": "t", "body": (self.cwd / "good.md").read_text()}))
+
+        done = self.check("gh api -X POST repos/o/r/pulls --input pull.json")
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_a_rest_edit_with_a_bad_body_file_is_blocked(self):
+        self.assertEqual(self.check("gh api -X PATCH repos/o/r/pulls/12 -F body=@bad.md").returncode, 2)
+
+    def test_a_rest_edit_without_a_body_is_allowed(self):
+        self.assertEqual(self.check("gh api -X PATCH repos/o/r/pulls/12 -f title=t").returncode, 0)
+
+    def test_a_rest_read_of_pulls_is_allowed(self):
+        self.assertEqual(self.check("gh api repos/o/r/pulls/12").returncode, 0)
+
+    def test_a_rest_call_to_another_endpoint_is_allowed(self):
+        self.assertEqual(self.check("gh api -X POST repos/o/r/issues -f title=t -F body=@bad.md").returncode, 0)
+
+    def test_a_rest_body_from_stdin_is_left_to_ci(self):
+        self.assertEqual(self.check("gh api -X POST repos/o/r/pulls --input - < pull.json").returncode, 0)
+
     def project(self, *, repository=True):
         """A project with a lock (`XP`) and one rule file (`XP-LAYERING`); a git repository unless told not."""
         root = self.cwd / "project"

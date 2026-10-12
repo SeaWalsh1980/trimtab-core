@@ -1,5 +1,11 @@
 """PreToolUse adapter: check the PR body a `gh pr create|edit` command would send.
 
+It reads the REST form too: `gh api` POST to `repos/<o>/<r>/pulls` (create)
+and PATCH to `repos/<o>/<r>/pulls/<n>` (edit), with the body in
+`-f body=…`, `-F body=@<file>` or an `--input <file>` JSON object. The base
+reaches GitHub through REST only, so without this its own PRs would pass
+unread.
+
 Policy, not a guard (ADR 0005). It fails OPEN on its own errors and on
 anything it cannot evaluate without running the command (a body built by
 `$(...)`, a body on stdin): CI is the real gate. It blocks (exit 2) only when it
@@ -16,6 +22,7 @@ behaviour). A `--body-file` path stays relative to `cwd`, as `gh` reads it.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -31,6 +38,13 @@ BODY_FILE = {"--body-file", "-F"}
 FILL = {"--fill", "--fill-first", "--fill-verbose", "-f"}
 UNEVALUATED = ("$(", "`", "${")
 GIT_TIMEOUT_SECONDS = 2
+# `gh api` options that take a value, so the path is the first token that is neither one nor its value.
+API_VALUED = {"-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "--input", "-q", "--jq",
+              "-t", "--template", "--hostname", "-p", "--preview", "--cache"}
+API_RAW_FIELD = {"-f", "--raw-field"}
+API_TYPED_FIELD = {"-F", "--field"}
+PULLS = re.compile(r"/?repos/[^/]+/[^/]+/pulls/?")
+PULL = re.compile(r"/?repos/[^/]+/[^/]+/pulls/\d+/?")
 
 ALLOW, BLOCK = 0, 2
 
@@ -60,13 +74,96 @@ def _segments(command: str) -> list[list[str]]:
     return [s for s in segments if s]
 
 
-def _gh_pr(tokens: list[str]) -> tuple[str, list[str]] | None:
-    """('create'|'edit', args) when the segment runs `gh pr create|edit`."""
+def _command(tokens: list[str]) -> list[str]:
     while tokens and "=" in tokens[0] and not tokens[0].startswith("-"):
         tokens = tokens[1:]  # leading VAR=value assignments
+    return tokens
+
+
+def _gh_pr(tokens: list[str]) -> tuple[str, list[str]] | None:
+    """('create'|'edit', args) when the segment runs `gh pr create|edit`."""
+    tokens = _command(tokens)
     if len(tokens) < 3 or Path(tokens[0]).name != "gh" or tokens[1] != "pr":
         return None
     return (tokens[2], tokens[3:]) if tokens[2] in ("create", "edit") else None
+
+
+def _api_options(args: list[str]) -> tuple[str | None, str | None, list[tuple[str, str]]]:
+    """(method, path, [(option, value)]) for `gh api` arguments; `--opt=value` is split."""
+    method, path, options = None, None, []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        name, eq, value = arg.partition("=") if arg.startswith("--") else (arg, "", "")
+        if name in API_VALUED:
+            if not eq:
+                if i + 1 >= len(args):
+                    break
+                i += 1
+                value = args[i]
+            options.append((name, value))
+            if name in ("-X", "--method"):
+                method = value.upper()
+        elif not arg.startswith("-") and path is None:
+            path = arg
+        i += 1
+    return method, path, options
+
+
+def _gh_api_pull(tokens: list[str]) -> tuple[str, list[tuple[str, str]]] | None:
+    """('create'|'edit', options) when the segment runs `gh api` POST to pulls or PATCH to one pull."""
+    tokens = _command(tokens)
+    if len(tokens) < 3 or Path(tokens[0]).name != "gh" or tokens[1] != "api":
+        return None
+    method, path, options = _api_options(tokens[2:])
+    if path is None:
+        return None
+    path = path.split("?", 1)[0]
+    if method is None:
+        # gh api defaults to GET, and to POST once any field or input is given.
+        method = "POST" if any(n in API_RAW_FIELD | API_TYPED_FIELD | {"--input"} for n, _ in options) else "GET"
+    if method == "POST" and PULLS.fullmatch(path):
+        return "create", options
+    if method == "PATCH" and PULL.fullmatch(path):
+        return "edit", options
+    return None
+
+
+def _read(cwd: Path, path: str) -> tuple[str, str | None]:
+    if path == "-" or any(u in path for u in UNEVALUATED):
+        return "allow", "the body comes from stdin or the shell; CI checks it"
+    try:
+        return "check", (cwd / path).read_text(encoding="utf-8")
+    except OSError:
+        return "allow", "the body file could not be read; CI checks it"
+
+
+def api_body_of(action: str, options: list[tuple[str, str]], cwd: Path) -> tuple[str, str | None]:
+    """('check', body) | ('block', reason) | ('allow', reason), for the `gh api` form."""
+    for name, value in options:
+        key, eq, field = value.partition("=")
+        if key != "body" or not eq:
+            continue
+        if any(u in field for u in UNEVALUATED):
+            return "allow", "the body is built by the shell; CI checks it"
+        if name in API_TYPED_FIELD and field.startswith("@"):
+            return _read(cwd, field[1:])
+        return "check", field
+    source = next((value for name, value in options if name == "--input"), None)
+    if source is not None:
+        verdict, text = _read(cwd, source)
+        if verdict != "check":
+            return verdict, text
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            return "allow", "the --input file is not JSON; CI checks it"
+        body = payload.get("body") if isinstance(payload, dict) else None
+        if isinstance(body, str):
+            return "check", body
+    if action == "create":
+        return "block", "no body was given"
+    return "allow", "the body is not being changed"
 
 
 def _option(args: list[str], names: set[str]) -> str | None:
@@ -89,12 +186,7 @@ def body_of(action: str, args: list[str], cwd: Path) -> tuple[str, str | None]:
             return "allow", "the body is built by the shell; CI checks it"
         return "check", inline
     if path is not None:
-        if path == "-" or any(u in path for u in UNEVALUATED):
-            return "allow", "the body comes from stdin or the shell; CI checks it"
-        try:
-            return "check", (cwd / path).read_text(encoding="utf-8")
-        except OSError:
-            return "allow", "the body file could not be read; CI checks it"
+        return _read(cwd, path)
     if action == "create":
         reason = "--fill takes the body from commits" if FILL & set(args) else "no body was given"
         return "block", reason
@@ -107,16 +199,20 @@ def decide(payload: dict) -> tuple[int, str]:
     command = (payload.get("tool_input") or {}).get("command") or ""
     cwd = Path(payload.get("cwd") or ".")
     for tokens in _segments(command):
-        found = _gh_pr(tokens)
-        if found is None:
+        porcelain, rest = _gh_pr(tokens), _gh_api_pull(tokens)
+        if porcelain is not None:
+            verdict, detail = body_of(*porcelain, cwd)
+        elif rest is not None:
+            verdict, detail = api_body_of(*rest, cwd)
+        else:
             continue
-        verdict, detail = body_of(*found, cwd)
         if verdict == "allow":
             continue
         if verdict == "block":
             return BLOCK, (f"pr-body-check: blocked: {detail}. The PR body needs the harness block "
                            "(## Harness items applied, ## Harness feedback, ## Process cost). Write it to a "
-                           "file, check it with `bin/trimtab check-pr --body-file <file>`, and pass --body-file.")
+                           "file, check it with `bin/trimtab check-pr --body-file <file>`, and pass the file "
+                           "(--body-file, or -F body=@<file> with gh api).")
         try:
             instance = roots.instance_root()
         except roots.InstanceError:
