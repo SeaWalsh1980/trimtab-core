@@ -46,7 +46,12 @@ no new dependency.
   would move the watermark wrongly.
 - **List reads stay bounded.** Pages are 100 at most, and reading stops at the
   existing limits (`--limit`, `--history-limit`, 500 issues). A limit above
-  GitHub's 1000-result search cap is refused before any call.
+  GitHub's 1000-result search cap is refused before any call. An issue
+  listing is used to rule out a duplicate, so one with more than 500 rows is
+  an error, not a cut-off: a partial list would let a duplicate through.
+  The old `gh issue list --limit 500` truncated silently.
+- **`closed_since` is a day.** Both the `since` query and the `closed_at`
+  comparison read it as `YYYY-MM-DD`; anything else is refused before a call.
 - **REST's shapes are read where the porcelain's were.** Dependabot is
   `dependabot[bot]` with `user.type` `Bot` (ADR 0012 named gh's
   `app/dependabot`). A merged PR is told from a closed one by `merged_at`.
@@ -91,9 +96,13 @@ no new dependency.
 - Accepted: GitHub's search index lags writes by seconds to minutes, which
   the porcelain's search also did; a PR merged moments before a run is picked
   up by the next one, as the watermark already allows.
-- Accepted: the issues endpoint lists PRs too. They are dropped, and they
-  count toward the 500-row read bound; a `harness-feedback` label is not put
-  on PRs, so the bound is not reached that way in practice.
+- Accepted: the issues endpoint lists PRs too. They are dropped, but they
+  count toward the 500-row bound, past which the listing is an error; a
+  `harness-feedback` label is not put on PRs, so the bound is not reached
+  that way in practice.
+- Accepted: an instance with more than 500 open, or recently closed,
+  `harness-feedback` issues cannot run `propose` or `upstream` until it
+  closes some or the bound is raised. That is loud by design.
 
 ## Trial, still open
 

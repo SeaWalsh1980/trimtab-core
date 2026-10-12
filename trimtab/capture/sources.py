@@ -98,6 +98,18 @@ class GhApi:
             page += 1
         return rows[:limit]
 
+    def all_pages(self, path: str, query: Mapping, limit: int, what: str) -> list:
+        """Every row of a list endpoint, or SourceError when there are more than `limit`.
+
+        For a list used to rule something out (a duplicate, a missing issue),
+        a cut-off answer is wrong, not short: so one row past the bound is
+        read, and finding it is an error rather than a silent truncation.
+        """
+        rows = self.pages(path, query, limit + 1, what)
+        if len(rows) > limit:
+            raise SourceError(f"{what} holds more than {limit} rows; refusing to work from a partial list")
+        return rows
+
 
 def _search_pulls(api: GhApi, query: str, order: str, limit: int) -> list[PullRequest]:
     if limit > SEARCH_RESULT_CAP:
@@ -187,7 +199,8 @@ def changed_files(root: Path, base: str) -> list[str]:
     return [line for line in done.stdout.splitlines() if line.strip()]
 
 
-ISSUE_LIMIT = 500  # bounded: issues one label listing reads
+ISSUE_LIMIT = 500  # bounded: issues one label listing reads; more is an error, not a cut-off
+DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def _issues_only(rows: list, what: str) -> list[dict]:
@@ -207,6 +220,9 @@ class GhIssues:
 
     def recent_titles(self, label: str, closed_since: str | None) -> list[str]:
         what = "gh api issues"
+        if closed_since is not None and not DATE.fullmatch(closed_since):
+            # Both the `since` query and the closed_at comparison read it as a day.
+            raise SourceError("closed_since must be a YYYY-MM-DD date")
         rows = self._issues(label, {"state": "open"})
         if closed_since:
             # `since` bounds by update time, and an issue is updated when it closes,
@@ -223,7 +239,7 @@ class GhIssues:
 
     def _issues(self, label: str, filters: Mapping[str, str]) -> list[dict]:
         what = "gh api issues"
-        rows = self.api.pages(f"repos/{self.repo}/issues", {"labels": label, **filters}, ISSUE_LIMIT, what)
+        rows = self.api.all_pages(f"repos/{self.repo}/issues", {"labels": label, **filters}, ISSUE_LIMIT, what)
         return _issues_only(rows, what)
 
     def create(self, title: str, body: str, labels) -> str:
@@ -352,8 +368,8 @@ class FixtureContents:
 
 def open_feedback_issues(repo: str, label: str, limit: int = ISSUE_LIMIT, run: Run | None = None) -> list[Issue]:
     what = "gh api issues"
-    rows = _issues_only(GhApi(run).pages(f"repos/{repo}/issues", {"labels": label, "state": "open"}, limit, what),
-                        what)
+    rows = _issues_only(GhApi(run).all_pages(f"repos/{repo}/issues", {"labels": label, "state": "open"}, limit,
+                                             what), what)
     try:
         return [Issue(int(r["number"]), r.get("title") or "", r.get("body") or "") for r in rows]
     except (ValueError, KeyError, TypeError) as err:

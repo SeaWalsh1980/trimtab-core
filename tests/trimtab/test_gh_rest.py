@@ -5,7 +5,8 @@ import unittest
 
 from gh_fake import FakeGh, method_of, path_of, query_of
 from trimtab.capture.sources import (
-    SEARCH_RESULT_CAP, GhApi, GhContents, GhIssues, GhPullRequests, GhSource, SourceError, open_feedback_issues,
+    ISSUE_LIMIT, SEARCH_RESULT_CAP, GhApi, GhContents, GhIssues, GhPullRequests, GhSource, SourceError,
+    open_feedback_issues,
 )
 
 REPO = "owner/repo"
@@ -234,6 +235,35 @@ class IssueListing(unittest.TestCase):
         self.assertEqual((method_of(argv), path_of(argv), json.loads(stdin), url),
                          ("POST", f"repos/{REPO}/issues",
                           {"title": "the title", "body": "the body", "labels": [FEEDBACK]}, ISSUE_URL))
+
+    def test_an_issue_listing_past_its_limit_is_refused_not_cut_off(self):
+        # A cut-off list could hide the issue that makes a proposal a duplicate.
+        gh = FakeGh(default=json.dumps([issue(n, f"t{n}") for n in range(100)]))
+
+        with self.assertRaises(SourceError):
+            GhIssues(REPO, run=gh).recent_titles(FEEDBACK, None)
+
+    def test_an_issue_listing_at_its_limit_is_read_whole(self):
+        full = [json.dumps([issue(p * 100 + n, f"t{p}-{n}") for n in range(100)]) for p in range(ISSUE_LIMIT // 100)]
+        gh = FakeGh(answers={f"repos/{REPO}/issues": full + ["[]"]})
+
+        titles = GhIssues(REPO, run=gh).recent_titles(FEEDBACK, None)
+
+        self.assertEqual(len(titles), ISSUE_LIMIT)
+
+    def test_open_feedback_issues_past_their_limit_are_refused(self):
+        gh = FakeGh(default=json.dumps([issue(n, f"t{n}") for n in range(100)]))
+
+        with self.assertRaises(SourceError):
+            open_feedback_issues(REPO, FEEDBACK, run=gh)
+
+    def test_a_closed_since_that_is_not_a_day_is_refused_before_gh_runs(self):
+        gh = FakeGh(default="[]")
+
+        with self.assertRaises(SourceError):
+            GhIssues(REPO, run=gh).recent_titles(FEEDBACK, "2026-09-01T00:00:00Z")
+
+        self.assertEqual(gh.calls, [])
 
     def test_an_issue_listing_that_is_not_a_list_is_refused(self):
         gh = FakeGh(default=json.dumps({"message": "x"}))
