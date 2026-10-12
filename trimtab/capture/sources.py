@@ -56,9 +56,13 @@ class GhApi:
 
     def call(self, method: str, path: str, query: Mapping | None = None, body=None,
              accept: str | None = None) -> str:
-        if not path.lstrip("/").startswith("repos/"):
-            raise SourceError(f"gh api {path.split('?')[0]} is not used: Claude Code cloud sessions allow only "
+        target = path.split("?")[0]
+        if not target.lstrip("/").startswith("repos/"):
+            raise SourceError(f"gh api {target} is not used: Claude Code cloud sessions allow only "
                               "repository-scoped REST paths (repos/{owner}/{repo}/...)")
+        if any(segment in (".", "..") for segment in target.split("/")):
+            # The server may normalise a dot segment into a path outside repos/.
+            raise SourceError(f"gh api {target} is not used: a path with a . or .. segment may leave repos/")
         argv = ["gh", "api", "-X", method, path + (f"?{urlencode(query)}" if query else "")]
         if accept:
             argv += ["-H", f"Accept: {accept}"]
@@ -193,6 +197,9 @@ class GhSource:
                            "refusing to work from a partial list")
 
     def _closed_since(self, floor: str) -> list[_ClosedPull]:
+        # A wider scan already read serves a narrower floor, so the rows can
+        # reach back before `floor`, unmerged ones included: every caller
+        # filters by merged_at itself.
         for scanned, rows in self._scans.items():
             if scanned <= floor:
                 return rows
@@ -223,7 +230,9 @@ class GhSource:
             if len(found) >= limit or len(batch) < PER_PAGE:
                 return list(found.values())
             if page * PER_PAGE >= SCAN_LIMIT:
-                raise self._too_many(f"precede the oldest {limit} not labelled {label}")
+                raise SourceError(f"more than {SCAN_LIMIT} closed PRs on {self.repo} precede the oldest {limit} "
+                                  f"not labelled {label}; a lower limit will not help: give the read a date "
+                                  "(no --backfill, --ingest-weeks above 0)")
             page += 1
 
     def add_label(self, number: int, label: str) -> None:

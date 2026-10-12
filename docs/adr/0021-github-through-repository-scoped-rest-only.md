@@ -41,7 +41,9 @@ no new dependency.
 
 - **Every GitHub call the base makes or prescribes is `gh api` on a
   `repos/{owner}/{repo}/...` path.** `GhApi` refuses any other path before gh
-  runs; the `graphql` refusal is now a case of it. A static test fails if a
+  runs; the `graphql` refusal is now a case of it. A path with a `.` or `..`
+  segment is refused too, since the server may normalise it out of `repos/`.
+  A static test fails if a
   command, agent or template calls `gh api` on another path.
 - **Merged PRs come from `repos/<r>/pulls?state=closed`**, filtered by merge
   time and label in the package. A dated read sorts by `updated` descending

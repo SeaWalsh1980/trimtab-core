@@ -127,6 +127,18 @@ class EveryCallIsRepositoryScopedRest(unittest.TestCase):
 
                 self.assertEqual(gh.calls, [])
 
+    def test_a_path_with_a_dot_segment_is_refused_before_gh_runs(self):
+        # The server may normalise a dot segment into a path outside repos/.
+        for path in ("repos/../search/issues", "repos/o/r/../../search/issues", "repos/./o/r",
+                     "/repos/../user"):
+            with self.subTest(path=path):
+                gh = FakeGh()
+
+                with self.assertRaises(SourceError):
+                    GhApi(run=gh).call("GET", path)
+
+                self.assertEqual(gh.calls, [])
+
 
 class TheClosedPullsScan(unittest.TestCase):
     """Merged PRs come from the repository's closed pulls, most recently updated first, filtered here."""
@@ -289,6 +301,15 @@ class WithoutAFloor(unittest.TestCase):
             GhSource(REPO, run=gh).unlabelled_merged(LABEL, None, 50)
 
         self.assertEqual(len(gh.calls), SCAN_LIMIT // 100)
+
+    def test_a_backfill_past_its_bound_names_a_dated_read(self):
+        # Lowering the limit does not help when labelled PRs fill the bound.
+        gh = FakeGh(default=full_page(0, labels=[LABEL]))
+
+        with self.assertRaises(SourceError) as caught:
+            GhSource(REPO, run=gh).unlabelled_merged(LABEL, None, 50)
+
+        self.assertIn("--backfill", str(caught.exception))
 
 
 class IssueListing(unittest.TestCase):
