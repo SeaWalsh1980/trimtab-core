@@ -21,11 +21,11 @@ changed-file list and **TREE**, an export of HEAD. Read files there, not in the
 working tree. If any is missing, ask; if you cannot, stop and say so.
 
 The doctrine is in the instance, which `trimtab instance` names, not in the
-checkout `bin/trimtab` links into:
+checkout the installed `trimtab` runs from. Call it by its name, never by its
+path (the path guard refuses the path):
 
 ```bash
-TRIMTAB="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/trimtab"
-DOCTRINE=$("$TRIMTAB" instance --root) && echo "ok: doctrine at $DOCTRINE"
+DOCTRINE=$(trimtab instance --root) && echo "ok: doctrine at $DOCTRINE"
 ```
 
 If it does not print `ok`, **stop**. Hand back a first line

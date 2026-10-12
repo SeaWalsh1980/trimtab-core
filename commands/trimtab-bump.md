@@ -18,9 +18,8 @@ iteration 4) are separate PRs. Do not mix them.
 ## 1. Plan the bump
 
 ```bash
-TRIMTAB="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/trimtab"
 BODY=$(mktemp --suffix=.md)
-"$TRIMTAB" bump --dry-run --to "${ARGUMENTS:-HEAD}" --body-file "$BODY"
+trimtab bump --dry-run --to "${ARGUMENTS:-HEAD}" --body-file "$BODY"
 ```
 
 `--to` is resolved in the **installed Trimtab checkout**, so a ref it does not
@@ -58,9 +57,9 @@ dropped and, if the project cannot comply, raised upstream.
 On a new branch from the default branch (`trimtab/bump-<new short SHA>`):
 
 ```bash
-"$TRIMTAB" bump --apply --confirm <token from step 1> --to <new SHA>
-"$TRIMTAB" lint overrides
-"$TRIMTAB" check-pr --body-file "$BODY"
+trimtab bump --apply --confirm <token from step 1> --to <new SHA>
+trimtab lint overrides
+trimtab check-pr --body-file "$BODY"
 git add .claude/trimtab.json
 git commit -m "chore(trimtab): move the lock to <new short SHA>"
 git push -u origin HEAD

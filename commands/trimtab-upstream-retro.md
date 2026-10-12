@@ -31,16 +31,18 @@ Work in a worktree of Trimtab on a branch from `main`: the canonical checkout
 is the live control plane, and the path guard protects it.
 
 ```bash
-TRIMTAB="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/trimtab"
+command -v trimtab && trimtab --help >/dev/null && echo ok
 git fetch origin --quiet
 ```
 
-Stop if `"$TRIMTAB" --help` fails, or if `consumers.json` does not parse.
+Stop if the first line does not print `ok`, or if `consumers.json` does not
+parse. Call the installed Trimtab by its name, never by its path: the path
+guard refuses any command that names the config directory's `bin/`.
 
 ## 1. Gather
 
 ```bash
-"$TRIMTAB" upstream
+trimtab upstream
 ```
 
 It reads, per consumer in `consumers.json`, the lock and `overrides.md` at the
@@ -89,18 +91,18 @@ Otherwise, on a branch `trimtab/upstream-<ID>-<YYYY-MM-DD>` from `main` (prefix
 `claude/` if the environment only lets you push those):
 
 1. Edit the one rule section. Keep its number and its ID.
-2. Regenerate the registry **with the branch's own** `bin/trimtab` and
-   **`--instance .`**, never `$TRIMTAB` or the `TRIMTAB_INSTANCE` default,
-   which name the installed checkout: `bin/trimtab registry --instance .`
-   (it refuses to write without the flag), then
-   `bin/trimtab registry --check --against origin/main --instance .`.
+2. Regenerate the registry against **the branch's own doctrine**, with
+   **`--instance .`**, never the `TRIMTAB_INSTANCE` default, which names the
+   installed checkout: `trimtab registry --instance .` (it refuses to write
+   without the flag), then
+   `trimtab registry --check --against origin/main --instance .`.
 3. Write the ADR, `docs/adr/NNNN-<short-title>.md`, next free number: context
    (the consumers and issues, by name and number), the decision, **the options
    considered including those rejected**, the consequences for consumers
    (whose overrides become unnecessary, whose `/trimtab-bump` will flag them),
    and status `proposed`.
-4. `bin/trimtab lint overrides --instance .` and
-   `bin/trimtab lint references --instance .` pass; the suite passes, run
+4. `trimtab lint overrides --instance .` and
+   `trimtab lint references --instance .` pass; the suite passes, run
    against this branch's doctrine for the same reason:
    `TRIMTAB_INSTANCE="$PWD" python3 -m unittest discover -s tests/trimtab`.
    Without it, the instance checks refuse any checkout that
@@ -108,7 +110,7 @@ Otherwise, on a branch `trimtab/upstream-<ID>-<YYYY-MM-DD>` from `main` (prefix
    installed checkout.
 5. The PR body: the evidence, the change, and the harness block (the IDs
    applied, including the instance's decision-record item for the ADR). Check it with
-   `"$TRIMTAB" check-pr --body-file <file>`, then
+   `trimtab check-pr --body-file <file>`, then
    `gh pr create --draft --title "[<ID>] <what changes>" --body-file <file>`.
 6. Comment on each `harness-feedback` issue it answers with the PR's link. Do
    not close the issue.
@@ -122,7 +124,7 @@ session of every consumer:
 
 ```bash
 BASELINE=$(git rev-list -1 --before="7 days ago" origin/main)
-"$TRIMTAB" lint structure --against "$BASELINE" --sections
+trimtab lint structure --against "$BASELINE" --sections
 ```
 
 For a `PROPOSE` finding, at most one structure PR per run, as `/trimtab-retro`

@@ -26,18 +26,19 @@ did.
 ## 0. Setup
 
 ```bash
-TRIMTAB="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/trimtab"
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 DEFAULT=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
 git fetch origin --quiet
 ```
 
 Read `.claude/trimtab.json`. **Stop** if it is absent (the project has not
-adopted Trimtab), if `"$TRIMTAB" --help` fails, or if either label is missing:
+adopted Trimtab), if `trimtab --help` fails (call the installed Trimtab by its
+name, never by its path: the path guard refuses the path), or if either label
+is missing:
 
 ```bash
 gh api "repos/$REPO/labels/trimtab-ingested" --jq .name
-ISSUES=$("$TRIMTAB" instance --repo) && gh api "repos/$ISSUES/labels/harness-feedback" --jq .name
+ISSUES=$(trimtab instance --repo) && gh api "repos/$ISSUES/labels/harness-feedback" --jq .name
 ```
 
 Each prints the label's name, or exits non-zero with a 404 when it is
@@ -55,7 +56,7 @@ The ledger is rebuilt from PRs already labelled, within the 8-week window, so
 the loop needs no disk (trimtab-core ADR 0006):
 
 ```bash
-"$TRIMTAB" ingest --dry-run --repo "$REPO" --ledger-from-labels
+trimtab ingest --dry-run --repo "$REPO" --ledger-from-labels
 ```
 
 It prints what it would record, the coverage (the share of ingested PRs with a
@@ -96,7 +97,7 @@ for a project proposal in step 4, with those reports as evidence.
 ## 4. Proposals, one per ID
 
 ```bash
-"$TRIMTAB" propose --dry-run --check-open --repo "$REPO" --ledger-from-labels
+trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels
 ```
 
 - **Upstream** proposals (base items) become issues on Trimtab labelled
@@ -123,7 +124,7 @@ for a project proposal in step 4, with those reports as evidence.
 
   Title `[<ID>] <what changes>`. The body carries the evidence (PR numbers,
   kinds, one line each, no quoted PR text) and the harness block; check it with
-  `"$TRIMTAB" check-pr --body-file <file>` and `"$TRIMTAB" lint overrides`
+  `trimtab check-pr --body-file <file>` and `trimtab lint overrides`
   before `gh pr create --draft --body-file <file>`. Never mark it ready.
 - Also consider the step 3 candidates the same way.
 
@@ -139,7 +140,7 @@ and growth since the last cadence:
 
 ```bash
 BASELINE=$(git rev-list -1 --before="7 days ago" "origin/$DEFAULT")
-"$TRIMTAB" lint structure --against "$BASELINE" --sections
+trimtab lint structure --against "$BASELINE" --sections
 ```
 
 For each `PROPOSE` finding, open **at most one** structure PR per run (the

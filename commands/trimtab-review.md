@@ -14,7 +14,6 @@ exists, the tree is pinned, and every pass records a status, cost and yield.
 A long review of a live working tree reviews a moving target. Pin it:
 
 ```bash
-TRIMTAB="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/trimtab"
 git fetch origin --quiet
 HEAD_SHA=$(git rev-parse HEAD)
 BASE_SHA=$(git merge-base origin/<default branch> "$HEAD_SHA")
@@ -27,7 +26,9 @@ For a PR number, take `headRefOid` and `baseRefOid` from
 `gh pr view <n> --json headRefOid,baseRefOid,files,body`, fetch the head, and
 export that SHA instead. **Uncommitted changes are not reviewed**; if
 `git status --porcelain` shows any, say so in the report. Tools run from the
-installed Trimtab (`$TRIMTAB`), never from the tree under review.
+installed Trimtab, called by its name (`trimtab`), never from the tree under
+review and never by a path: the path guard refuses any command that names the
+config directory's `bin/`.
 
 ## 2. State the plan's status — one of three
 
@@ -120,7 +121,7 @@ review:
 ````
 
 ```bash
-"$TRIMTAB" check-pr --body-file <scratch body>
+trimtab check-pr --body-file <scratch body>
 ```
 
 Fix what it reports before the body goes anywhere. Then `rm -r "$TREE"`.

@@ -32,11 +32,11 @@ them.
 1. Locate the installed Trimtab and its doctrine. Run its command line from
    there, never from a branch under review. The doctrine (`rules/`,
    `HARNESS.md`) is in the **instance**, which `trimtab instance` names; the
-   checkout `bin/trimtab` links into may hold only code:
+   checkout the installed `trimtab` runs from may hold only code. Call it by
+   its name, never by its path (the path guard refuses the path):
 
    ```bash
-   TRIMTAB="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/trimtab"
-   DOCTRINE=$("$TRIMTAB" instance --root) && echo "ok: doctrine at $DOCTRINE"
+   DOCTRINE=$(trimtab instance --root) && echo "ok: doctrine at $DOCTRINE"
    ```
 
    `$DOCTRINE` below is the path it prints. If it does not print `ok`, **stop
@@ -63,7 +63,7 @@ parent directory must exist unless the plan creates it and says so.
 ## Step 3 — resolve and read
 
 ```bash
-"$TRIMTAB" rules-for <every path in the footprint>
+trimtab rules-for <every path in the footprint>
 ```
 
 It prints, per path, the rule files that load for it, then the union to read

@@ -21,17 +21,17 @@ you analyse, you report.
 even when the project under review is Trimtab itself:
 
 ```bash
-TRIMTAB="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/trimtab"
-DOCTRINE=$("$TRIMTAB" instance --root) && echo "ok: doctrine at $DOCTRINE"
+DOCTRINE=$(trimtab instance --root) && echo "ok: doctrine at $DOCTRINE"
 ```
 
 The base doctrine (`rules/`, `HARNESS.md`) is in the **instance**, which
-`trimtab instance` names; the checkout `bin/trimtab` links into may hold only
-code. `$DOCTRINE` below is the path it prints. If it does not print `ok`,
+`trimtab instance` names; the checkout the installed `trimtab` runs from may
+hold only code. Call it by its name, never by its path (the path guard refuses
+the path). `$DOCTRINE` below is the path it prints. If it does not print `ok`,
 **stop**: a review without the doctrine has no severity scale. Hand back a
 first line `STOPPED: doctrine not resolved`, then its stderr, and no report:
 a stopped review must never read as a clean one. Never read `rules/` from the
-code checkout instead; the instance has no fallback. A later `"$TRIMTAB"`
+code checkout instead; the instance has no fallback. A later `trimtab`
 subcommand that fails has its pass run by hand, said so in Coverage; it is
 never quietly skipped.
 
@@ -73,7 +73,7 @@ anything you could not reach and why.
    globs miss it is worth reading anyway, and you cannot notice one without
    the list.
 3. Resolve the changed files against the tree's rules:
-   `"$TRIMTAB" rules-for --project TREE <changed files>`. Read **in full**
+   `trimtab rules-for --project TREE <changed files>`. Read **in full**
    every rule file it lists. A non-zero exit is a corpus defect and a finding
    in its own right (quote its stderr); then match globs by hand and say the
    matching was best-effort.
@@ -95,14 +95,14 @@ for a decision that is costly to reverse or rejected a credible alternative.
 **c. Precedence and overrides.** Instruction file > project rule > base rule >
 module docstring. A project deviates from a base PREFER/AVOID only through
 `overrides.md`; a silent contradiction of a base item is a finding. Run
-`"$TRIMTAB" lint overrides --project TREE` when the diff touches it.
+`trimtab lint overrides --project TREE` when the diff touches it.
 
 **d. Citations.** By plan status:
 
 - *Planned with citations*:
 
   ```bash
-  "$TRIMTAB" citations --project TREE --plan-file <file> --files <changed files>
+  trimtab citations --project TREE --plan-file <file> --files <changed files>
   ```
 
   Read the tool's output before judging it: `cited=0` with a plan present
