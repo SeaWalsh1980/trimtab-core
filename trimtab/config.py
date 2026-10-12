@@ -85,7 +85,8 @@ def parse(text: str, where: str = PATH) -> tuple[ProjectConfig | None, list[Prob
     if not isinstance(config.baseline_pr, int) or not isinstance(config.schema_version, int):
         return None, [Problem("bad-config", where, "baseline_pr and schema_version must be integers")]
     if config.base_sha is not None and not (isinstance(config.base_sha, str) and FULL_SHA.match(config.base_sha)):
-        return None, [Problem("bad-config", where, "base_sha must be a full 40-character lower-case commit SHA")]
+        return None, [Problem("bad-config", where, "base_sha must be a full 40-character lower-case commit SHA; "
+                                                   "remove it and re-run /trimtab-bump, which derives it")]
     return config, []
 
 

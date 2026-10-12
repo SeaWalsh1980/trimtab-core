@@ -234,7 +234,9 @@ class DoctrineDrift(unittest.TestCase):
 
         done = self.start()
 
-        self.assertIn("base_sha that is not a full commit SHA", json.loads(done.stdout)["systemMessage"])
+        message = json.loads(done.stdout)["systemMessage"]
+        self.assertIn("base_sha that is not a full commit SHA", message)
+        self.assertIn("remove it and re-run /trimtab-bump", message)
 
     def test_a_project_that_has_not_adopted_is_silent(self):
         done = self.start()

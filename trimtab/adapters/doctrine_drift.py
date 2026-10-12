@@ -40,7 +40,8 @@ def _base_sha_warnings(instance: Path, locked: object, base: object) -> list[str
     """`base_sha` must be the base the locked instance pins (ADR 0017): a reader without the
     instance runs that base on the strength of this copy, so a stale one runs the wrong code."""
     if not isinstance(base, str) or not project_config.FULL_SHA.match(base):
-        return [f"{project_config.PATH} has a base_sha that is not a full commit SHA."]
+        return [f"{project_config.PATH} has a base_sha that is not a full commit SHA; "
+                "remove it and re-run /trimtab-bump, which derives it."]
     if not project_config.is_commit_sha(locked):
         return []  # already reported above
     try:

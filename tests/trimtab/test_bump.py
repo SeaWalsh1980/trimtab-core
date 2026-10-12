@@ -154,6 +154,31 @@ class Bump(unittest.TestCase):
         self.assertEqual(json.loads(self.lock.read_text()),
                          {"trimtab_sha": self.v2, "base_sha": BASE_V2, "id_prefix": "SCR", "schema_version": 2})
 
+    def test_a_lock_without_base_sha_after_a_bad_one_was_removed_bumps(self):
+        self.lock.write_text(self.lock.read_text().replace(
+            '"id_prefix"', '"base_sha": "MAIN",\n  "id_prefix"'))
+        with self.assertRaises(bump.BumpError):
+            bump.plan(self.project, self.base, self.v2)
+        self.lock.write_text(self.lock.read_text().replace('"base_sha": "MAIN",\n  ', ""))
+
+        todo = bump.plan(self.project, self.base, self.v2)
+        bump.apply(self.project, todo, bump.confirmation(todo))
+
+        self.assertEqual(json.loads(self.lock.read_text())["base_sha"], BASE_V2)
+
+    def test_apply_refuses_a_rewrite_that_would_not_read_back_and_writes_nothing(self):
+        # A nested object holding the same key and value ahead of the real one:
+        # the text rewrite would land on the nested value, not the lock's.
+        self.lock.write_text(self.lock.read_text().replace(
+            '{\n', '{\n  "notes": {"base_sha": "%s"},\n' % BASE_V1, 1).replace(
+            '"id_prefix"', f'"base_sha": "{BASE_V1}",\n  "id_prefix"'))
+        todo = bump.plan(self.project, self.base, self.v2)
+        before = self.lock.read_text()
+
+        with self.assertRaisesRegex(bump.BumpError, "would not read back"):
+            bump.apply(self.project, todo, bump.confirmation(todo))
+        self.assertEqual(self.lock.read_text(), before)
+
     def test_a_current_lock_with_a_stale_base_sha_still_has_something_to_bump(self):
         self.lock.write_text(self.lock.read_text().replace(self.v1, self.v2).replace(
             '"id_prefix"', f'"base_sha": "{BASE_V1}",\n  "id_prefix"'))

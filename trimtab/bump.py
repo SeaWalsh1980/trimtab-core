@@ -126,8 +126,15 @@ def apply(project: Path, todo: BumpPlan, confirm: str) -> None:
     match, base = SHA_VALUE.search(text), BASE_VALUE.search(text)
     if match is None or match.group(2) != todo.old or (base.group(2) if base else None) != todo.base_old:
         raise BumpError("the lock changed since the dry run; run --dry-run again")
-    text = SHA_VALUE.sub(lambda m: m.group(1) + todo.new + m.group(3), text, count=1)
-    path.write_text(_with_base(text, todo.base_new), encoding="utf-8")
+    text = _with_base(SHA_VALUE.sub(lambda m: m.group(1) + todo.new + m.group(3), text, count=1), todo.base_new)
+    # The rewrite is textual, so read it back before writing: a nested or duplicate
+    # key could take the new value instead of the lock's own, and a consumer's CI
+    # runs whatever base_sha says.
+    written, _ = project_config.parse(text, where=str(path))
+    if written is None or (written.trimtab_sha, written.base_sha) != (todo.new, todo.base_new):
+        raise BumpError("the rewritten lock would not read back as the new SHAs (a nested or duplicate "
+                        "key?); nothing written, so edit the lock by hand")
+    path.write_text(text, encoding="utf-8")
 
 
 def _base_line(todo: BumpPlan) -> str:

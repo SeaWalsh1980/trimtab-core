@@ -209,6 +209,11 @@ class LockSchema(unittest.TestCase):
                 self.assertEqual([p.code for p in problems], ["bad-config"])
                 self.assertIn("base_sha", problems[0].message)
 
+    def test_a_bad_base_sha_says_how_to_repair_it(self):
+        _, problems = project_config.parse(lock(schema_version=2, base_sha="main"))
+
+        self.assertIn("remove it and re-run /trimtab-bump", problems[0].message)
+
 
 class CliInstanceJson(unittest.TestCase):
     """Integration at the file boundary: `trimtab instance --json` against a fixture instance.
