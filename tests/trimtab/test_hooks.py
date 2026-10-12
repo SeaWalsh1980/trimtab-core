@@ -148,6 +148,11 @@ class PrBodyCheck(unittest.TestCase):
     def test_a_rest_call_to_another_endpoint_is_allowed(self):
         self.assertEqual(self.check("gh api -X POST repos/o/r/issues -f title=t -F body=@bad.md").returncode, 0)
 
+    def test_a_rest_call_that_names_no_pulls_is_allowed_silently(self):
+        done = self.check("gh api repos/o/r/labels/x --jq .name")
+
+        self.assertEqual((done.returncode, done.stdout, done.stderr), (0, "", ""))
+
     def test_a_rest_body_from_stdin_is_left_to_ci(self):
         self.assertEqual(self.check("gh api -X POST repos/o/r/pulls --input - < pull.json").returncode, 0)
 
