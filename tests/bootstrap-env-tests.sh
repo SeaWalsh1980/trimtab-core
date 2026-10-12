@@ -323,7 +323,7 @@ check_silent_guard_mcp_fails_the_install() {
   fi
 }
 
-# Sessions reach the CLI by name only through session-path.sh (ADR 0017). An
+# Sessions reach the CLI by name only through session-path.sh (ADR 0018). An
 # install whose hook writes nothing usable would start sessions, routines among
 # them, that fail every method's first call: the install must refuse, and say so.
 check_cli_reaches_sessions_by_name() {

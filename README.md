@@ -33,6 +33,11 @@ root from `--instance`, then from `TRIMTAB_INSTANCE`, and otherwise stops
 with an error naming both. It reads doctrine only from the instance and code
 (agents, commands) only from its own checkout.
 
+Sessions call the CLI by its name, `trimtab`. The path guard refuses any
+command that names the config directory's `bin/`, so a SessionStart hook
+(`hooks/session-path.sh`) puts that directory first on PATH, and the file that
+runs stays one the guards protect (ADR 0018).
+
 `trimtab instance --check` checks that an instance's `instance.json` and
 `consumers.json` load, and exits 2 naming the file that does not; an
 instance's CI runs it.

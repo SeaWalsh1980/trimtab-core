@@ -590,7 +590,7 @@ fi
 # ---- 5b. the CLI reaches sessions by name -------------------------------
 # guard-paths refuses any Bash call whose text names the config directory's
 # bin/, so sessions call the CLI by name, and session-path.sh is what puts it
-# first on PATH (ADR 0017). A hook that writes nothing usable leaves every
+# first on PATH (ADR 0018). A hook that writes nothing usable leaves every
 # /trimtab-* method and routine failing on its first call, so it is probed end
 # to end through the symlink, as the guards are: the env file it writes, run as
 # Claude Code runs it before a Bash call, must resolve `trimtab` to this

@@ -7,7 +7,7 @@
 # holds no / or ., so the guard's path scan never sees it, and the file that
 # runs is still the protected one: no exemption in the guard, and no executable
 # outside the protected set. The options rejected for this, and why, are in
-# docs/adr/0017-sessions-reach-the-cli-on-path.md.
+# docs/adr/0018-sessions-reach-the-cli-on-path.md.
 #
 # The mechanism is CLAUDE_ENV_FILE: Claude Code runs that file's contents before
 # each Bash command of the session. The line written names the directory
