@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from trimtab import config as project_config
+from trimtab import instance as instance_file
 from trimtab import roots
 
 GIT_TIMEOUT_SECONDS = 5
@@ -33,6 +34,23 @@ def _git(root: Path, *args: str) -> str | None:
 def _common_dir(root: Path) -> Path | None:
     out = _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
     return Path(out).resolve() if out else None
+
+
+def _base_sha_warnings(instance: Path, locked: object, base: object) -> list[str]:
+    """`base_sha` must be the base the locked instance pins (ADR 0017): a reader without the
+    instance runs that base on the strength of this copy, so a stale one runs the wrong code."""
+    if not isinstance(base, str) or not project_config.FULL_SHA.match(base):
+        return [f"{project_config.PATH} has a base_sha that is not a full commit SHA."]
+    if not project_config.is_commit_sha(locked):
+        return []  # already reported above
+    try:
+        pinned = instance_file.at_commit(instance, locked, timeout=GIT_TIMEOUT_SECONDS).base_sha
+    except instance_file.InstanceFileError:
+        return [f"the instance cannot read the base pinned at {locked[:12]}, so base_sha cannot be checked."]
+    if pinned != base:
+        return [f"{project_config.PATH}'s base_sha {base[:12]} is not the base the locked instance "
+                f"{locked[:12]} pins ({pinned[:12]}). Move the lock with /trimtab-bump, which writes both."]
+    return []
 
 
 def warnings(cwd: Path) -> list[str]:
@@ -78,6 +96,8 @@ def warnings(cwd: Path) -> list[str]:
                            "items and move the lock (/trimtab-bump).")
             elif code != 0:
                 out.append(f"the instance cannot compare its doctrine at {locked[:12]} (unknown commit?).")
+    if "base_sha" in data:
+        out.extend(_base_sha_warnings(instance, locked, data["base_sha"]))
     version = data.get("schema_version")
     if isinstance(version, int) and version < project_config.SCHEMA_VERSION:
         out.append(f"{project_config.PATH} schema_version {version} is behind {project_config.SCHEMA_VERSION}; "

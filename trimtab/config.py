@@ -16,6 +16,9 @@ REQUIRED = ("trimtab_sha", "id_prefix", "schema_version")
 # file holds a routine ID.
 RETIRED = ("source", "routines")
 COMMIT_SHA = re.compile(r"^[0-9a-f]{7,40}$")
+# `base_sha` is read by consumers' CI to choose which base code runs there, so
+# only a full SHA: a short one can become ambiguous, and a ref can move.
+FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 def is_commit_sha(value) -> bool:
@@ -40,6 +43,9 @@ class ProjectConfig:
     cadence: str = "weekly"
     adopted_at: str | None = None
     baseline_pr: int = 0
+    # Derived, never chosen: the base SHA the instance at `trimtab_sha` pins,
+    # written by `trimtab bump` for a reader with no access to the instance.
+    base_sha: str | None = None
     warnings: tuple[str, ...] = field(default=(), compare=False)
 
 
@@ -78,6 +84,8 @@ def parse(text: str, where: str = PATH) -> tuple[ProjectConfig | None, list[Prob
         return None, [Problem("bad-config", where, "unexpected field types")]
     if not isinstance(config.baseline_pr, int) or not isinstance(config.schema_version, int):
         return None, [Problem("bad-config", where, "baseline_pr and schema_version must be integers")]
+    if config.base_sha is not None and not (isinstance(config.base_sha, str) and FULL_SHA.match(config.base_sha)):
+        return None, [Problem("bad-config", where, "base_sha must be a full 40-character lower-case commit SHA")]
     return config, []
 
 

@@ -374,11 +374,12 @@ def cmd_bump(args) -> int:
     except bump.BumpError as err:
         print(f"error: {err}", file=sys.stderr)
         return 2
-    if todo.old == todo.new:
+    if todo.is_current:
         print(f"the lock is already at {todo.new[:12]}; nothing to bump")
         return 0
     if not args.apply:
         print(f"bump --dry-run: {todo.old[:12]} -> {todo.new[:12]}; nothing written")
+        print(f"base_sha: {(todo.base_old or 'none')[:12]} -> {todo.base_new[:12]}")
         print(f"changed items: {len(todo.changes)}")
         for c in todo.changes:
             print(f"  {c.id:<10} {c.what:<10} {c.detail}")

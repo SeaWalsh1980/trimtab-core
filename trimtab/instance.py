@@ -1,7 +1,7 @@
 """instance.json: an instance's deployment values (ADR 0008).
 
-The only reader of the file (ARC-3). `parse` is pure; `load` and
-`patterns_path` touch the file system. The file holds no routine or
+The only reader of the file (ARC-3). `parse` is pure; `load`, `at_commit`
+and `patterns_path` touch the file system. The file holds no routine or
 environment ID, and has no field for one (see trimtab/routines.py).
 """
 
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -16,6 +17,7 @@ SCHEMA_VERSION = 1
 FILE = "instance.json"
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
+COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
 PACK = re.compile(r"^[a-z0-9-]+$")
 TOP = {"schema_version", "repo", "base", "guards"}
 BASE = {"repo", "sha"}
@@ -112,6 +114,28 @@ def load(root: Path) -> InstanceFile:
         data = json.loads(text)
     except json.JSONDecodeError as err:
         raise InstanceFileError(f"{FILE} is not valid JSON") from err
+    return parse(data)
+
+
+def at_commit(root: Path, sha: str, timeout: float = 30) -> InstanceFile:
+    """The instance.json committed at `sha` in the instance checkout at `root`.
+
+    `sha` may come from a project's lock, which is untrusted, so anything but a
+    hex object name is refused before git sees it.
+    """
+    if not isinstance(sha, str) or not COMMIT.fullmatch(sha):
+        raise InstanceFileError(f"{sha!r} is not a commit name")
+    try:
+        done = subprocess.run(["git", "-C", str(root), "show", f"{sha}:{FILE}"],
+                              capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as err:
+        raise InstanceFileError(f"{FILE} at {sha[:12]} cannot be read ({type(err).__name__})") from err
+    if done.returncode != 0:
+        raise InstanceFileError(f"the instance has no {FILE} at {sha[:12]}")
+    try:
+        data = json.loads(done.stdout)
+    except json.JSONDecodeError as err:
+        raise InstanceFileError(f"{FILE} at {sha[:12]} is not valid JSON") from err
     return parse(data)
 
 

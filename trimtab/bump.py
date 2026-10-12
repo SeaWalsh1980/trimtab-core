@@ -6,8 +6,13 @@ one, and flags each override citing a changed ID: "re-confirm or drop". The
 lock is written only behind a confirmation gate: `plan` reads, `apply` needs the
 dry run's token and refuses when the lock has moved since.
 
-The lock file is rewritten by replacing the one value, so its formatting and
-key order survive.
+The same write records `base_sha`, the base SHA the instance at the new
+`trimtab_sha` pins (ADR 0017), so a reader with no access to the instance can
+run the base the project was reviewed against. It is derived here and nowhere
+else: never chosen by hand.
+
+The lock file is rewritten by replacing values, so its formatting and key
+order survive.
 """
 
 from __future__ import annotations
@@ -20,11 +25,13 @@ from pathlib import Path
 from typing import Mapping
 
 from trimtab import config as project_config
+from trimtab import instance as instance_file
 from trimtab.items import Item
 from trimtab.lint.overrides import base_items_at, parse_entries
 from trimtab.registry.rules import OVERRIDES
 
 SHA_VALUE = re.compile(r'("trimtab_sha"\s*:\s*")([^"]*)(")')
+BASE_VALUE = re.compile(r'("base_sha"\s*:\s*")([^"]*)(")')
 
 
 class BumpError(Exception):
@@ -44,6 +51,13 @@ class BumpPlan:
     new: str
     changes: tuple[Change, ...]
     flagged: tuple[tuple[str, int], ...]  # (item ID, overrides.md entry number)
+    base_old: str | None  # the lock's base_sha, if it has one
+    base_new: str  # the base the instance at `new` pins
+    base_repo: str
+
+    @property
+    def is_current(self) -> bool:
+        return self.old == self.new and self.base_old == self.base_new
 
 
 def changes(before: Mapping[str, Item], after: Mapping[str, Item]) -> list[Change]:
@@ -74,6 +88,10 @@ def plan(project: Path, base_root: Path, new_sha: str) -> BumpPlan:
     after = base_items_at(base_root, new_sha)
     if after is None:
         raise BumpError(f"{new_sha[:12]} is not in the Trimtab checkout")
+    try:
+        pinned = instance_file.at_commit(base_root, new_sha)
+    except instance_file.InstanceFileError as err:
+        raise BumpError(f"cannot read the base the instance pins at {new_sha[:12]}: {err}") from err
     found = changes(before, after)
     changed = {c.id for c in found}
     flagged = []
@@ -81,12 +99,23 @@ def plan(project: Path, base_root: Path, new_sha: str) -> BumpPlan:
     if path.is_file():
         entries, _ = parse_entries(path.read_text(encoding="utf-8"))
         flagged = [(e.get("id"), n) for n, e in enumerate(entries, 1) if e.get("id") in changed]
-    return BumpPlan(config.trimtab_sha, new_sha, tuple(found), tuple(flagged))
+    return BumpPlan(config.trimtab_sha, new_sha, tuple(found), tuple(flagged),
+                    config.base_sha, pinned.base_sha, pinned.base_repo)
 
 
 def confirmation(todo: BumpPlan) -> str:
-    payload = json.dumps([todo.old, todo.new], sort_keys=True)
+    payload = json.dumps([todo.old, todo.new, todo.base_old, todo.base_new], sort_keys=True)
     return hashlib.sha256(payload.encode()).hexdigest()[:12]
+
+
+def _with_base(text: str, base: str) -> str:
+    """`text` with base_sha set to `base`: in place if present, else right after trimtab_sha."""
+    if BASE_VALUE.search(text):
+        return BASE_VALUE.sub(lambda m: m.group(1) + base + m.group(3), text, count=1)
+    match = SHA_VALUE.search(text)
+    line = text[text.rfind("\n", 0, match.start()) + 1:match.start()]
+    separator = ",\n" + line if not line.strip() else ", "  # one key per line, or a one-line lock
+    return text[:match.end()] + f'{separator}"base_sha": "{base}"' + text[match.end():]
 
 
 def apply(project: Path, todo: BumpPlan, confirm: str) -> None:
@@ -94,10 +123,21 @@ def apply(project: Path, todo: BumpPlan, confirm: str) -> None:
         raise BumpError("the confirmation does not match this bump; run --dry-run again")
     path = Path(project) / project_config.PATH
     text = path.read_text(encoding="utf-8")
-    match = SHA_VALUE.search(text)
-    if match is None or match.group(2) != todo.old:
+    match, base = SHA_VALUE.search(text), BASE_VALUE.search(text)
+    if match is None or match.group(2) != todo.old or (base.group(2) if base else None) != todo.base_old:
         raise BumpError("the lock changed since the dry run; run --dry-run again")
-    path.write_text(SHA_VALUE.sub(lambda m: m.group(1) + todo.new + m.group(3), text, count=1), encoding="utf-8")
+    text = SHA_VALUE.sub(lambda m: m.group(1) + todo.new + m.group(3), text, count=1)
+    path.write_text(_with_base(text, todo.base_new), encoding="utf-8")
+
+
+def _base_line(todo: BumpPlan) -> str:
+    line = f"`base_sha` becomes `{todo.base_new[:12]}`, the base the new instance pins"
+    if todo.base_old is None:
+        return line + " (the lock had none)."
+    if todo.base_old == todo.base_new:
+        return line + " (unchanged)."
+    return (line + f" (was `{todo.base_old[:12]}`; "
+            f"[compare](https://github.com/{todo.base_repo}/compare/{todo.base_old}...{todo.base_new})).")
 
 
 def pr_body(todo: BumpPlan, repo: str) -> str:
@@ -114,6 +154,7 @@ def pr_body(todo: BumpPlan, repo: str) -> str:
     return (
         f"Moves the Trimtab lock from `{todo.old[:12]}` to `{todo.new[:12]}` "
         f"([compare](https://github.com/{repo}/compare/{todo.old}...{todo.new})).\n\n"
+        f"{_base_line(todo)}\n\n"
         f"## Changed items\n\n| ID | Change | Detail |\n|---|---|---|\n{rows}\n\n"
         f"## Overrides to re-confirm\n\n{flags or 'None: no override cites a changed item.'}\n\n"
         "## Harness items applied\n```yaml\n- id: none\n"

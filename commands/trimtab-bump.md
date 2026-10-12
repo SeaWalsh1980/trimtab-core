@@ -25,9 +25,15 @@ BODY=$(mktemp --suffix=.md)
 
 `--to` is resolved in the **installed Trimtab checkout**, so a ref it does not
 have fails loudly; the operator fetches it there, not you. The dry run prints
-the old and new SHAs, every changed item (`added`, `removed`, `text`,
-`strength`, `withdrawn`), the overrides citing a changed item, and a
-confirmation token. It writes nothing but the PR body.
+the old and new SHAs, the `base_sha` move, every changed item (`added`,
+`removed`, `text`, `strength`, `withdrawn`), the overrides citing a changed
+item, and a confirmation token. It writes nothing but the PR body.
+
+`base_sha` is the base the instance at the new SHA pins, read from its
+`instance.json`. The apply step writes it beside `trimtab_sha`, so a CI that
+cannot read the instance runs the base the project is reviewed against
+(trimtab-core ADR 0017). Never edit it by hand. If the dry run cannot read it,
+stop and report.
 
 Stop and report if it says the lock is already current, or if an item was
 `removed` (a vanished ID without a withdrawal stub is a Trimtab defect: raise it
