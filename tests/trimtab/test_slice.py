@@ -309,8 +309,35 @@ class IdsCli(unittest.TestCase):
         done = self.ids(name)
 
         self.assertEqual(done.returncode, 1)
-        self.assertIn("file 1", done.stderr)
+        self.assertIn("argument 1", done.stderr)
         self.assertNotIn(RUN_ID_TAIL, done.stderr + done.stdout)
+
+    def test_a_name_with_a_one_case_id_shape_is_still_caught(self):
+        tail = "abcdefghij0123456789"
+        name = self.write("notes-" + "env_" + tail + ".md", "clean\n")
+
+        done = self.ids(name)
+
+        self.assertEqual(done.returncode, 1)
+        self.assertNotIn(tail, done.stderr + done.stdout)
+
+    def test_a_one_case_option_name_in_a_file_passes(self):
+        name = self.write("notes.md", "> Adds " + "env_" + "PRODUCTIONDATABASEURL" + ".\n")
+
+        done = self.ids(name)
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_a_staged_name_with_a_run_id_says_which_list_counts_it(self):
+        self.git("init", "-q")
+        self.write("notes-" + "cse_" + RUN_ID_TAIL + ".md", "clean\n")
+        self.git("add", "-A")
+
+        done = self.ids("--staged")
+
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("staged file 1 (counting the paths `git diff --cached --name-only` lists)", done.stderr)
+        self.assertNotIn(RUN_ID_TAIL, done.stderr)
 
     def test_a_missing_file_is_refused_naming_it_without_a_traceback(self):
         done = self.ids("gone.md")
@@ -415,7 +442,7 @@ class IdsCli(unittest.TestCase):
 
         self.assertEqual(done.returncode, 1)
         self.assertEqual(len(done.stderr.strip().splitlines()), 1)
-        self.assertIn("report.md\\nPR block OK: line 1", done.stderr)
+        self.assertIn("'report.md\\nPR block OK': line 1", done.stderr)
 
     def test_staged_with_nothing_staged_passes(self):
         self.git("init", "-q")

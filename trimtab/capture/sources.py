@@ -21,7 +21,7 @@ from typing import Callable, Mapping
 from urllib.parse import quote, unquote, urlencode
 
 from trimtab.capture.ingest import PullRequest
-from trimtab.ids import ID_SHAPE
+from trimtab.ids import ANY_ID_SHAPE
 from trimtab.dependabot import CiRun, HostError, PullRequestView
 from trimtab.upstream import Issue
 
@@ -304,7 +304,7 @@ def _git(cwd: Path, *args: str) -> bytes:
         raise SourceError(f"git {args[0]}: {type(err).__name__}") from err
     if done.returncode != 0:
         # git names the paths it could not use, and a path can hold a run's ID.
-        stderr = ID_SHAPE.sub("<id>", done.stderr.decode("utf-8", errors="replace")).strip()[:300]
+        stderr = ANY_ID_SHAPE.sub("<id>", done.stderr.decode("utf-8", errors="replace")).strip()[:300]
         raise SourceError(f"git {args[0]} exited {done.returncode}: {stderr}")
     return done.stdout
 

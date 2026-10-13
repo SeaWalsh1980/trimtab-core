@@ -337,8 +337,9 @@ class PublicScrub(unittest.TestCase):
     def test_an_id_shape_between_underscores_is_found(self):
         self.assertEqual(self.kinds("_notes_" + "trig_" + "0123456789abcdefABCD" + "_draft_\n"), ["id-shape"])
 
-    def test_an_option_name_in_one_case_is_not_an_id(self):
-        self.assertEqual(self.kinds("env_" + "PRODUCTIONDATABASEURL" + "\n"), [])
+    def test_a_one_case_tail_in_the_tree_is_still_an_id(self):
+        # The base's own tree carries no third-party text: the broad shape applies.
+        self.assertEqual(self.kinds("env_" + "abcdefghij0123456789" + "\n"), ["id-shape"])
 
     def test_an_id_shape_inside_tests_is_still_found(self):
         self.assertEqual(self.kinds("trig_" + "0123456789abcdefABCD" + "\n", name="tests/t.py"), ["id-shape"])

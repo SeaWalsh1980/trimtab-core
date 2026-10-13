@@ -65,8 +65,12 @@ Three parts, each catching what the one before it can miss:
   tail is random over all 62 letters and digits; if a single-case format
   appears, the lookaheads are dropped for its prefix. The shape is bounded by
   anything but a letter or digit, so an underscore beside an ID (Markdown
-  italics) does not hide it. The scrub shares the shape, so its id-shape check
-  and its deny-list of IDs read from the instance narrow the same way.
+  italics) does not hide it. The narrowing is for text a run reads but did not
+  write: a PR body and the content of a file it commits. Where no third party
+  writes, `ANY_ID_SHAPE` keeps the broad shape, in either case: the scrub of
+  the base's own tree and its deny-list of IDs read from the instance, the
+  routine templates' tests, file names, and git's messages. There a missed
+  ID costs more than a reworded word.
 - **The rule.** The routine prompts and every command that commits or opens a
   PR say: no `Claude-Session:` trailer, no session link or ID; a commit ends at
   `Co-Authored-By:`, a PR body at its `🤖 Generated with` line; this overrides
@@ -81,7 +85,9 @@ Three parts, each catching what the one before it can miss:
   has no content of its own and is skipped. git's own error text has any ID
   shape masked before it is shown, since git names the paths it could not use. A file's bytes are read with undecodable ones
   replaced, so a binary passes unless it holds an ID in plain text; a name
-  that holds one is a finding shown by its position, never printed. `trimtab
+  that holds one is a finding shown by its position in a list the reader can
+  reproduce (`git diff --cached --name-only`, or the arguments given), never
+  printed; a name with a newline or escape sequence is shown quoted. `trimtab
   ids FILE…` checks named files the same way. It is its own subcommand, not a
   `check-pr` mode: it checks files, not a PR body, and a whole commit in one
   call. Static tests fail if a shipped file
@@ -126,9 +132,10 @@ step 4's PR listing. A static test fails on search syntax in shipped files.
   editing that line of the body, which holds only until Dependabot rewrites
   the body on its next rebase; a PR it keeps rebasing fails again each time,
   until it merges. The narrowed shape makes it rare.
-- Accepted: an ID whose tail happens to lack upper or lower case is missed.
-  For a random tail of 22 letters and digits that is about one in eighty
-  thousand. A mixed-case word after a prefix (`session_CookieSameSite…`)
+- Accepted: in a PR body or a committed file's content, an ID whose tail
+  happens to lack upper or lower case is missed; for a random tail of 22
+  letters and digits that is about one in eighty thousand. The scrub, file
+  names and git's messages use the broad shape and miss none. A mixed-case word after a prefix (`session_CookieSameSite…`)
   still matches, including inside a snake_case name, since an underscore
   before the prefix no longer hides it; that is the remaining false positive.
 - Accepted: only the body is gated. A file a run commits is checked by the

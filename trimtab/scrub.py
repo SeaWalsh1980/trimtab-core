@@ -17,7 +17,7 @@ from pathlib import Path
 
 from trimtab import instance as instance_file
 from trimtab import roots
-from trimtab.ids import ID_SHAPE
+from trimtab.ids import ANY_ID_SHAPE
 
 NUMBERED_DOC = re.compile(r"^\d{4}-.+\.md$")
 SKIP_DIRS = {".git", "__pycache__"}
@@ -128,7 +128,7 @@ def private_terms(instance: Path, environ: Mapping[str, str], code_root: Path | 
     for path in (instance / "routines").rglob("*"):
         if path.is_file():
             try:
-                ids.update(ID_SHAPE.findall(path.read_bytes().decode("utf-8", errors="replace")))
+                ids.update(ANY_ID_SHAPE.findall(path.read_bytes().decode("utf-8", errors="replace")))
             except OSError as err:
                 raise ScrubError(f"routines/{path.name} cannot be read ({type(err).__name__})") from err
     doctrine = {p.name for p in (instance / "rules").glob("*.md")}
@@ -161,7 +161,7 @@ def public_terms(self_repo: str | None) -> Terms:
     own = re.escape(self_repo) if self_repo else r"(?!)"
     return Terms(
         patterns={
-            "id-shape": (ID_SHAPE,),
+            "id-shape": (ANY_ID_SHAPE,),
             "home-path": (re.compile(r"/home/[a-z_][a-z0-9_-]*/|/Users/[A-Za-z0-9_.-]+/"),),
             "repo-url": (re.compile(rf"github\.com/(?!{own}\b)[A-Za-z0-9-]+/[A-Za-z0-9._-]+"),),
             "repo-field": (re.compile(r'"repo"\s*:\s*"[^"/]+/[^"]+"'),),

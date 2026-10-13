@@ -467,14 +467,15 @@ class Failures(unittest.TestCase):
 
 class StagedFiles(unittest.TestCase):
     def test_a_git_failure_never_prints_an_id_shape_from_its_message(self):
-        # git names the path it could not use; a path can hold a run's ID.
-        tail = "01" + "A1b2C3d4E5f6G7h8J9k0"
-        missing = Path("/nonexistent") / ("notes-" + "session_" + tail)
+        # git names the path it could not use; a path can hold a run's ID, in any case.
+        for tail in ("01" + "A1b2C3d4E5f6G7h8J9k0", "abcdefghij" + "0123456789"):
+            with self.subTest(tail=tail):
+                missing = Path("/nonexistent") / ("notes-" + "session_" + tail)
 
-        with self.assertRaises(SourceError) as caught:
-            staged_files(missing)
+                with self.assertRaises(SourceError) as caught:
+                    staged_files(missing)
 
-        self.assertNotIn(tail, str(caught.exception))
+                self.assertNotIn(tail, str(caught.exception))
 
 
 if __name__ == "__main__":

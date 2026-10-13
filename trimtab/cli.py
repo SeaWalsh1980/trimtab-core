@@ -17,7 +17,7 @@ from trimtab import dependabot
 from trimtab import instance, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
-from trimtab.ids import ID_SHAPE
+from trimtab.ids import ANY_ID_SHAPE
 from trimtab.items import Problem
 from trimtab.capture.sources import (
     FixtureContents, FixtureIssues, FixtureSource, GhContents, GhIssues, GhPullRequests, GhSource, SourceError,
@@ -111,12 +111,16 @@ def _ids_targets(args) -> list[tuple[str, bytes | None]] | None:
         return None
 
 
-def _shown(i: int, name: str) -> str:
-    """How a checked file is named in output: by position when its name holds an ID, escaped when it holds a
-    newline or an escape sequence (so each finding stays on one line), and as itself otherwise."""
-    if ID_SHAPE.search(name):
-        return f"file {i}"
-    return name if name.isprintable() else name.encode("unicode_escape").decode("ascii")
+def _shown(i: int, name: str, staged: bool) -> str:
+    """How a checked file is named in output: by its position in a list the reader can reproduce when its
+    name holds an ID (in either case: no third party writes file names), quoted and escaped when it holds a
+    newline or an escape sequence (so each finding stays on one line and cannot pass for a plain name), and
+    as itself otherwise."""
+    if ANY_ID_SHAPE.search(name):
+        if staged:
+            return f"staged file {i} (counting the paths `git diff --cached --name-only` lists)"
+        return f"argument {i}"
+    return name if name.isprintable() else repr(name)
 
 
 def cmd_ids(args) -> int:
@@ -134,8 +138,8 @@ def cmd_ids(args) -> int:
         return 0
     unreadable, problems = False, []
     for i, (name, content) in enumerate(targets, 1):
-        label = _shown(i, name)
-        if ID_SHAPE.search(name):
+        label = _shown(i, name, args.staged)
+        if ANY_ID_SHAPE.search(name):
             problems.append(Problem("id-shape", label, "its name holds a routine, environment or session ID; rename it"))
         if content is None:
             try:
