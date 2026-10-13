@@ -385,7 +385,10 @@ def check_pr_body(body: str, registry: Mapping[str, Item], backfill: bool = Fals
     return CheckResult(result.block, result.problems + refs) if refs else result
 
 
-def run_references(text: str) -> tuple[Problem, ...]:
-    """A routine, environment or session ID anywhere in `text`, by line, never by value (ADR 0022)."""
-    return tuple(Problem("id-shape", f"line {n}", "a routine, environment or session ID; remove the reference")
+def run_references(text: str, where: str = "") -> tuple[Problem, ...]:
+    """A routine, environment or session ID anywhere in `text`, by line, never by value (ADR 0022).
+
+    `where` prefixes each location, such as the file the text came from.
+    """
+    return tuple(Problem("id-shape", f"{where}line {n}", "a routine, environment or session ID; remove the reference")
                  for n in id_shape_lines(text or ""))

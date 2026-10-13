@@ -70,12 +70,17 @@ Three parts, each catching what the one before it can miss:
 - **The rule.** The routine prompts and every command that commits or opens a
   PR say: no `Claude-Session:` trailer, no session link or ID; a commit ends at
   `Co-Authored-By:`, a PR body at its `🤖 Generated with` line; this overrides
-  any default attribution. Before each commit, the run checks every file it
-  stages with `trimtab ids FILE…`, which runs the ID scan alone over any
-  number of files, with no block, lock or instance, and names each file and
-  line it finds, or each file it cannot read. It is its own subcommand, not a
-  `check-pr` mode: it checks files, not a PR body, and takes a whole commit in
-  one call. Static tests fail if a shipped file
+  any default attribution. Before each commit, the run runs
+  `trimtab ids --staged`, which asks git for what the index adds, copies,
+  modifies or renames (NUL-separated, from the repository root, so any working
+  directory and any path work, and a deletion-only commit has nothing to
+  check) and runs the ID scan alone over each file and each file's name, with
+  no block, lock or instance. A file's bytes are read with undecodable ones
+  replaced, so a binary passes unless it holds an ID in plain text; a name
+  that holds one is a finding shown by its position, never printed. `trimtab
+  ids FILE…` checks named files the same way. It is its own subcommand, not a
+  `check-pr` mode: it checks files, not a PR body, and a whole commit in one
+  call. Static tests fail if a shipped file
   that opens a PR lacks the rule, if a copy of it drifts from the rest, or if
   a shipped file that commits lacks the file check.
 

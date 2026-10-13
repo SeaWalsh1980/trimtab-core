@@ -17,10 +17,11 @@ from trimtab import dependabot
 from trimtab import instance, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
+from trimtab.ids import ID_SHAPE
 from trimtab.items import Problem
 from trimtab.capture.sources import (
     FixtureContents, FixtureIssues, FixtureSource, GhContents, GhIssues, GhPullRequests, GhSource, SourceError,
-    changed_files, open_feedback_issues,
+    changed_files, open_feedback_issues, staged_files,
 )
 from trimtab.lint import overrides, references, structure
 from trimtab.propose import render
@@ -95,22 +96,53 @@ def _text_of(path: str) -> str | None:
         return None
 
 
+def _ids_targets(args) -> list[tuple[str, Path]] | None:
+    """(name, path) per file to check: those given, or what git stages. None after printing why not."""
+    if args.staged == bool(args.files):
+        print("error: give FILE... or --staged, one or the other", file=sys.stderr)
+        return None
+    if not args.staged:
+        return [(name, Path(name)) for name in args.files]
+    try:
+        root, names = staged_files(Path.cwd())
+    except SourceError as err:
+        print(f"error: --staged: {err}", file=sys.stderr)
+        return None
+    return [(name, root / name) for name in names]
+
+
 def cmd_ids(args) -> int:
-    """The files a run is about to commit, checked for a run reference (ADR 0022). No block, lock or instance."""
+    """What a run is about to commit, checked for a run reference (ADR 0022). No block, lock or instance.
+
+    A file's bytes are read with undecodable ones replaced, so a binary passes
+    unless it holds an ID in plain text. A name that holds one is itself a
+    finding, and is shown by its position, never printed.
+    """
+    targets = _ids_targets(args)
+    if targets is None:
+        return 2
+    if not targets:
+        print("nothing staged: no run reference to check")
+        return 0
     unreadable, problems = False, []
-    for path in args.files:
-        text = _text_of(path)
-        if text is None:
+    for i, (name, path) in enumerate(targets, 1):
+        label = f"file {i}" if ID_SHAPE.search(name) else name
+        if label != name:
+            problems.append(Problem("id-shape", label, "its name holds a routine, environment or session ID; rename it"))
+        try:
+            text = path.read_bytes().decode("utf-8", errors="replace")
+        except OSError as err:
+            print(f"error: {label}: cannot be read ({type(err).__name__})", file=sys.stderr)
             unreadable = True
             continue
-        problems += [Problem(p.code, f"{path}: {p.where}", p.message) for p in run_references(text)]
+        problems += run_references(text, where=f"{label}: ")
     if problems:
         _print_problems(problems)
     if unreadable:
         return 2
     if problems:
         return 1
-    print(f"no run reference in {len(args.files)} file(s)")
+    print(f"no run reference in {len(targets)} file(s)")
     return 0
 
 
@@ -806,7 +838,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     ids = sub.add_parser("ids", help="check files a run is about to commit for a routine, environment or "
                                      "session ID; no block, lock or instance is read")
-    ids.add_argument("files", nargs="+", metavar="FILE", help="the files to check, e.g. what a commit stages")
+    ids.add_argument("files", nargs="*", metavar="FILE", help="the files to check")
+    ids.add_argument("--staged", action="store_true",
+                     help="check what the git index stages instead (added, copied, modified or renamed files)")
     ids.set_defaults(func=cmd_ids)
 
     ing = sub.add_parser("ingest", parents=[common], help="record merged PRs by watermark (dry run unless --apply)")

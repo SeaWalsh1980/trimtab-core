@@ -234,9 +234,10 @@ class SchemaOnlyCli(unittest.TestCase):
 
 
 class IdsCli(unittest.TestCase):
-    """`trimtab ids FILE...`: the files a run is about to commit, checked for a run reference only.
+    """`trimtab ids`: what a run is about to commit, checked for a run reference only.
 
-    Writes the files in a temporary directory that holds no lock and names no instance.
+    Writes files, and for `--staged` a git repository, in a temporary directory
+    that holds no lock and names no instance.
     """
 
     def setUp(self):
@@ -247,12 +248,17 @@ class IdsCli(unittest.TestCase):
         self._tmp.cleanup()
 
     def write(self, name, text):
-        (self.dir / name).write_text(text, encoding="utf-8")
+        path = self.dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
         return name
 
-    def ids(self, *names):
-        return subprocess.run([str(TRIMTAB), "ids", *names], capture_output=True, text=True, cwd=self.dir,
-                              env=env_for(None))
+    def ids(self, *args, cwd=None):
+        return subprocess.run([str(TRIMTAB), "ids", *args], capture_output=True, text=True,
+                              cwd=cwd or self.dir, env=env_for(None))
+
+    def git(self, *args):
+        git(self.dir, *args)
 
     def test_a_file_holding_a_run_reference_fails_naming_it_and_its_line_not_the_value(self):
         name = self.write("report.md", "# Report\n\nfindings\n" + "_Generated in " + "session_" + RUN_ID_TAIL + "_\n")
@@ -281,14 +287,29 @@ class IdsCli(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("no run reference in 2 file(s)", done.stdout)
 
-    def test_a_file_that_is_not_text_is_refused_naming_it_without_a_traceback(self):
+    def test_a_binary_file_with_no_reference_passes(self):
         (self.dir / "image.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\x00")
 
         done = self.ids("image.png")
 
-        self.assertEqual(done.returncode, 2)
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_a_reference_inside_a_binary_file_is_found(self):
+        (self.dir / "image.png").write_bytes(b"\x89PNG\xff\x00 " + ("env_" + RUN_ID_TAIL).encode() + b" \xfe")
+
+        done = self.ids("image.png")
+
+        self.assertEqual(done.returncode, 1)
         self.assertIn("image.png", done.stderr)
-        self.assertNotIn("Traceback", done.stderr)
+
+    def test_a_file_named_with_a_run_id_fails_without_printing_its_name(self):
+        name = self.write("notes-" + "cse_" + RUN_ID_TAIL + ".md", "clean\n")
+
+        done = self.ids(name)
+
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("file 1", done.stderr)
+        self.assertNotIn(RUN_ID_TAIL, done.stderr + done.stdout)
 
     def test_a_missing_file_is_refused_naming_it_without_a_traceback(self):
         done = self.ids("gone.md")
@@ -297,10 +318,56 @@ class IdsCli(unittest.TestCase):
         self.assertIn("gone.md", done.stderr)
         self.assertNotIn("Traceback", done.stderr)
 
-    def test_no_file_is_a_usage_error(self):
+    def test_files_and_staged_together_is_a_usage_error(self):
+        done = self.ids("--staged", self.write("a.md", "x\n"))
+
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("--staged", done.stderr)
+
+    def test_neither_files_nor_staged_is_a_usage_error(self):
         done = self.ids()
 
         self.assertEqual(done.returncode, 2)
+
+    def test_staged_checks_what_git_stages_from_any_subdirectory_spaces_included(self):
+        self.git("init", "-q")
+        self.write("docs/runbooks/Local development.md", "x " + "session_" + RUN_ID_TAIL + "\n")
+        self.write("docs/clean.md", "clean\n")
+        self.write("unstaged.md", "x " + "trig_" + RUN_ID_TAIL + "\n")
+        self.git("add", "docs")
+
+        done = self.ids("--staged", cwd=self.dir / "docs")
+
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("Local development.md: line 1", done.stderr)
+        self.assertNotIn("unstaged.md", done.stderr)
+        self.assertNotIn(RUN_ID_TAIL, done.stderr)
+
+    def test_staged_with_nothing_staged_passes(self):
+        self.git("init", "-q")
+
+        done = self.ids("--staged")
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("nothing staged", done.stdout)
+
+    def test_staged_with_only_a_deletion_passes(self):
+        self.git("init", "-q")
+        self.write("old.md", "old\n")
+        self.git("add", "old.md")
+        self.git("commit", "-q", "-m", "x")
+        self.git("rm", "-q", "old.md")
+
+        done = self.ids("--staged")
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("nothing staged", done.stdout)
+
+    def test_staged_outside_a_repository_is_refused(self):
+        done = self.ids("--staged")
+
+        self.assertEqual(done.returncode, 2)
+        self.assertNotIn("Traceback", done.stderr)
 
     def test_check_pr_refuses_a_missing_body_file_without_a_traceback(self):
         done = subprocess.run([str(TRIMTAB), "check-pr", "--schema-only", "--project", str(self.dir),
@@ -310,6 +377,11 @@ class IdsCli(unittest.TestCase):
         self.assertEqual(done.returncode, 2)
         self.assertIn("gone.md", done.stderr)
         self.assertNotIn("Traceback", done.stderr)
+
+
+def git(root, *args):
+    return subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", *args],
+                          check=True, capture_output=True, text=True).stdout.strip()
 
 
 if __name__ == "__main__":

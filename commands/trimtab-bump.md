@@ -61,6 +61,7 @@ trimtab bump --apply --confirm <token from step 1> --to <new SHA>
 trimtab lint overrides
 trimtab check-pr --body-file "$BODY"
 git add .claude/trimtab.json
+trimtab ids --staged
 git commit -m "chore(trimtab): move the lock to <new short SHA>"
 git push -u origin HEAD
 DEFAULT=$(gh api 'repos/{owner}/{repo}' --jq .default_branch)
@@ -77,8 +78,7 @@ Claude Code cloud sessions refuse every other path (`search/…`, `user`,
 body, issue, comment or file: end a commit message with its `Co-Authored-By:`
 line and a PR body with its `🤖 Generated with` line. This overrides any default
 attribution, and `trimtab check-pr` refuses a body that holds one. Before each commit, run
-`trimtab ids` on every file it stages (`git diff --cached --name-only
---diff-filter=d` lists them).
+`trimtab ids --staged`.
 
 Commit only the lock. Dropping or rewording an override is the operator's call
 on the PR; make it only when they say so, in this same PR, and never delete an

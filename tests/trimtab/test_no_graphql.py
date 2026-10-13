@@ -40,7 +40,7 @@ COMMITS = re.compile(r"\bgit\s+commit\b")
 # a literal `git commit`: named, since a pattern cannot tell prose from a step.
 COMMITTING_COMMANDS = ("commands/trimtab-bump.md", "commands/trimtab-conformance.md",
                        "commands/trimtab-retro.md", "commands/trimtab-upstream-retro.md")
-IDS_CHECK = "`trimtab ids`"
+IDS_CHECK = "`trimtab ids --staged`"
 
 
 def shipped_files():

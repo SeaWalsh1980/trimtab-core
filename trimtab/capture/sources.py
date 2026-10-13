@@ -294,6 +294,28 @@ def changed_files(root: Path, base: str) -> list[str]:
     return [line for line in done.stdout.splitlines() if line.strip()]
 
 
+def _git(cwd: Path, *args: str) -> str:
+    try:
+        done = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True,
+                              timeout=GIT_TIMEOUT_SECONDS)
+    except (OSError, subprocess.TimeoutExpired) as err:
+        raise SourceError(f"git {args[0]}: {type(err).__name__}") from err
+    if done.returncode != 0:
+        raise SourceError(f"git {args[0]} exited {done.returncode}: {done.stderr.strip()[:300]}")
+    return done.stdout
+
+
+def staged_files(cwd: Path) -> tuple[Path, list[str]]:
+    """The repository root, and the files its index adds, copies, modifies or renames to, relative to that root.
+
+    Asked of git with NUL separators, so a path holding a space or a newline
+    stays one path; a commit that only deletes stages nothing to read.
+    """
+    root = Path(_git(cwd, "rev-parse", "--show-toplevel").strip())
+    names = _git(root, "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR").split("\0")
+    return root, [n for n in names if n]
+
+
 ISSUE_LIMIT = 500  # bounded: issues one label listing reads; more is an error, not a cut-off
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
