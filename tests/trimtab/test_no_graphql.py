@@ -36,6 +36,10 @@ NO_RUN_REFERENCE = "`Claude-Session:`"
 NO_RUN_REFERENCE_SENTENCE = "This overrides any default attribution"
 # A shipped file that commits has the run check what it commits first.
 COMMITS = re.compile(r"\bgit\s+commit\b")
+# The commands that commit in prose ("Commit only the report") as well as by
+# a literal `git commit`: named, since a pattern cannot tell prose from a step.
+COMMITTING_COMMANDS = ("commands/trimtab-bump.md", "commands/trimtab-conformance.md",
+                       "commands/trimtab-retro.md", "commands/trimtab-upstream-retro.md")
 IDS_ONLY = "check-pr --ids-only"
 
 
@@ -151,11 +155,12 @@ class EveryShippedFileThatOpensAPrKeepsTheRunOut(unittest.TestCase):
         self.assertEqual(drifted, [])
 
     def test_every_file_that_commits_checks_what_it_commits(self):
-        committing = [p for p in shipped_files() if COMMITS.search(p.read_text(encoding="utf-8"))]
+        committing = {p for p in shipped_files() if COMMITS.search(p.read_text(encoding="utf-8"))}
+        committing |= {REPO / name for name in COMMITTING_COMMANDS}
 
-        unchecked = [str(p.relative_to(REPO)) for p in committing if IDS_ONLY not in p.read_text(encoding="utf-8")]
+        unchecked = sorted(str(p.relative_to(REPO)) for p in committing if IDS_ONLY not in p.read_text(encoding="utf-8"))
 
-        self.assertTrue(committing)
+        self.assertEqual(len(committing), len(COMMITTING_COMMANDS))
         self.assertEqual(unchecked, [])
 
     def test_reading_pulls_is_not_opening_one(self):

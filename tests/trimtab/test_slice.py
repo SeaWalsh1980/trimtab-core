@@ -265,6 +265,24 @@ class IdsOnlyCli(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("no run reference", done.stdout)
 
+    def test_a_file_that_is_not_text_is_refused_naming_it_without_a_traceback(self):
+        self.file.write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\x00")
+
+        done = subprocess.run([str(TRIMTAB), "check-pr", "--ids-only", "--body-file", str(self.file)],
+                              capture_output=True, text=True, cwd=self.dir, env=env_for(None))
+
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("report.md", done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+
+    def test_a_missing_file_is_refused_naming_it_without_a_traceback(self):
+        done = subprocess.run([str(TRIMTAB), "check-pr", "--ids-only", "--body-file", str(self.dir / "gone.md")],
+                              capture_output=True, text=True, cwd=self.dir, env=env_for(None))
+
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("gone.md", done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+
     def test_ids_only_with_schema_only_is_a_usage_error_naming_both_flags(self):
         done = self.check("# Report\n", "--schema-only")
 

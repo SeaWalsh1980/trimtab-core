@@ -117,7 +117,8 @@ step 4's PR listing. A static test fails on search syntax in shipped files.
 - Accepted: an ID whose tail happens to lack upper or lower case is missed.
   For a random tail of 22 letters and digits that is about one in eighty
   thousand. A mixed-case word after a prefix (`session_CookieSameSite…`)
-  still matches; that is the remaining false positive.
+  still matches, including inside a snake_case name, since an underscore
+  before the prefix no longer hides it; that is the remaining false positive.
 - Accepted: only the body is gated. A file a run commits is checked by the
   run itself (`--ids-only`, a step the method prescribes, not a gate); the
   consumer's CI does not scan changed files, which would be a change to its

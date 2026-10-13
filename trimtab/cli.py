@@ -82,7 +82,13 @@ def _pr_body(args) -> str | None:
             return None
     if args.body_file == "-":
         return sys.stdin.read()
-    return Path(args.body_file).read_text(encoding="utf-8")
+    try:
+        return Path(args.body_file).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as err:
+        # Loud and typed: an unattended run stops at a named refusal, not a traceback.
+        print(f"error: --body-file {args.body_file}: cannot be read as UTF-8 text ({type(err).__name__})",
+              file=sys.stderr)
+        return None
 
 
 def cmd_check_pr(args) -> int:
