@@ -6,6 +6,10 @@ Proposed (2026-10-13). Becomes accepted once a guarded cloud routine on a
 base carrying both parts below opens a PR whose commits and body hold no
 reference to the run (see "Trial, still open").
 
+2026-10-14: the first part, the setting (`attribution.sessionUrl` in
+`settings.base.json`), lands in the pull request that adds this line, with a
+bootstrap test that pins it in the installed settings.
+
 ## Context
 
 A routine, environment or session ID is never written into a file, PR, commit
