@@ -111,6 +111,14 @@ def _ids_targets(args) -> list[tuple[str, bytes | None]] | None:
         return None
 
 
+def _shown(i: int, name: str) -> str:
+    """How a checked file is named in output: by position when its name holds an ID, escaped when it holds a
+    newline or an escape sequence (so each finding stays on one line), and as itself otherwise."""
+    if ID_SHAPE.search(name):
+        return f"file {i}"
+    return name if name.isprintable() else name.encode("unicode_escape").decode("ascii")
+
+
 def cmd_ids(args) -> int:
     """What a run is about to commit, checked for a run reference (ADR 0022). No block, lock or instance.
 
@@ -126,13 +134,9 @@ def cmd_ids(args) -> int:
         return 0
     unreadable, problems = False, []
     for i, (name, content) in enumerate(targets, 1):
-        # A name holding an ID is shown by position; one with a newline or an
-        # escape sequence is shown escaped, so each finding stays on one line.
+        label = _shown(i, name)
         if ID_SHAPE.search(name):
-            label = f"file {i}"
             problems.append(Problem("id-shape", label, "its name holds a routine, environment or session ID; rename it"))
-        else:
-            label = name if name.isprintable() else name.encode("unicode_escape").decode("ascii")
         if content is None:
             try:
                 content = Path(name).read_bytes()

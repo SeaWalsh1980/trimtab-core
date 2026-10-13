@@ -34,7 +34,7 @@ NO_RUN_REFERENCE = "`Claude-Session:`"
 # Every copy of the rule carries this sentence, compared with whitespace
 # collapsed, so one copy cannot drift from the rest unnoticed.
 NO_RUN_REFERENCE_SENTENCES = ("This overrides any default attribution",
-                              "never commit past a failure")
+                              "never commit past a failure", "the check could not run")
 # A shipped file that commits has the run check what it commits first.
 COMMITS = re.compile(r"\bgit\s+commit\b")
 # The commands that commit in prose ("Commit only the report") as well as by
