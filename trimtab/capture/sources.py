@@ -21,6 +21,7 @@ from typing import Callable, Mapping
 from urllib.parse import quote, unquote, urlencode
 
 from trimtab.capture.ingest import PullRequest
+from trimtab.ids import ID_SHAPE
 from trimtab.dependabot import CiRun, HostError, PullRequestView
 from trimtab.upstream import Issue
 
@@ -302,9 +303,13 @@ def _git(cwd: Path, *args: str) -> bytes:
     except (OSError, subprocess.TimeoutExpired) as err:
         raise SourceError(f"git {args[0]}: {type(err).__name__}") from err
     if done.returncode != 0:
-        stderr = done.stderr.decode("utf-8", errors="replace").strip()[:300]
+        # git names the paths it could not use, and a path can hold a run's ID.
+        stderr = ID_SHAPE.sub("<id>", done.stderr.decode("utf-8", errors="replace")).strip()[:300]
         raise SourceError(f"git {args[0]} exited {done.returncode}: {stderr}")
     return done.stdout
+
+
+GITLINK = b"160000"  # a submodule's entry: a commit, with no content of its own to read
 
 
 def staged_files(cwd: Path) -> list[tuple[str, bytes]]:
@@ -313,12 +318,20 @@ def staged_files(cwd: Path) -> list[tuple[str, bytes]]:
 
     Paths come NUL-separated, so one holding a space or a newline stays one
     path, and are decoded as the OS does (`os.fsdecode`), so any name works;
-    a commit that only deletes stages nothing to read.
+    a commit that only deletes stages nothing to read. A submodule entry is
+    skipped. Content is read by object ID, so no path reaches git's messages.
     """
     root = Path(os.fsdecode(_git(cwd, "rev-parse", "--show-toplevel").strip()))
-    names = [os.fsdecode(n) for n in _git(root, "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR")
-             .split(b"\0") if n]
-    return [(name, _git(root, "cat-file", "blob", f":{name}")) for name in names]
+    staged = {n for n in _git(root, "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR").split(b"\0") if n}
+    if not staged:
+        return []
+    files = []
+    # Each index entry is `<mode> <object> <stage>\t<path>`.
+    for entry in _git(root, "ls-files", "--stage", "-z").split(b"\0"):
+        meta, _, path = entry.partition(b"\t")
+        if path in staged and meta.split(b" ")[0] != GITLINK:
+            files.append((os.fsdecode(path), _git(root, "cat-file", "blob", meta.split(b" ")[1].decode("ascii"))))
+    return files
 
 
 ISSUE_LIMIT = 500  # bounded: issues one label listing reads; more is an error, not a cut-off

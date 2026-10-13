@@ -76,8 +76,10 @@ Three parts, each catching what the one before it can miss:
   directory and any path, UTF-8 or not, work, and a deletion-only commit has
   nothing to check) and runs the ID scan alone over each file and each file's
   name, with no block, lock or instance. It reads the content staged in the
-  index (`git cat-file blob :<path>`), which is what the commit records, not
-  the working copy. A file's bytes are read with undecodable ones
+  index, by object ID (`git ls-files --stage`, then `git cat-file blob`),
+  which is what the commit records, not the working copy; a submodule entry
+  has no content of its own and is skipped. git's own error text has any ID
+  shape masked before it is shown, since git names the paths it could not use. A file's bytes are read with undecodable ones
   replaced, so a binary passes unless it holds an ID in plain text; a name
   that holds one is a finding shown by its position, never printed. `trimtab
   ids FILE…` checks named files the same way. It is its own subcommand, not a

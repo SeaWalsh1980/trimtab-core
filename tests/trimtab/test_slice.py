@@ -377,13 +377,31 @@ class IdsCli(unittest.TestCase):
 
     def test_staged_takes_a_name_that_is_not_utf8_without_a_traceback(self):
         self.git("init", "-q")
-        (self.dir / os.fsdecode(b"caf\xe9.md")).write_text("clean\n", encoding="utf-8")
+        try:
+            (self.dir / os.fsdecode(b"caf\xe9.md")).write_text("clean\n", encoding="utf-8")
+        except OSError:
+            self.skipTest("this file system holds UTF-8 names only")
         self.git("add", "-A")
 
         done = self.ids("--staged")
 
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertNotIn("Traceback", done.stderr)
+
+    def test_staged_skips_a_submodule_bump(self):
+        self.git("init", "-q")
+        self.write("README.md", "clean\n")
+        self.git("add", "README.md")
+        self.git("commit", "-q", "-m", "x")
+        commit = git(self.dir, "rev-parse", "HEAD")
+        self.git("update-index", "--add", "--cacheinfo", f"160000,{commit},vendor/lib")
+        self.write("docs.md", "clean\n")
+        self.git("add", "docs.md")
+
+        done = self.ids("--staged")
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("no run reference in 1 file(s)", done.stdout)
 
     def test_staged_with_nothing_staged_passes(self):
         self.git("init", "-q")

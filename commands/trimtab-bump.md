@@ -57,6 +57,7 @@ dropped and, if the project cannot comply, raised upstream.
 On a new branch from the default branch (`trimtab/bump-<new short SHA>`):
 
 ```bash
+set -e  # a failed step, the ID check included, stops the block before the push
 trimtab bump --apply --confirm <token from step 1> --to <new SHA>
 trimtab lint overrides
 trimtab check-pr --body-file "$BODY"
