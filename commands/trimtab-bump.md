@@ -61,8 +61,7 @@ trimtab bump --apply --confirm <token from step 1> --to <new SHA>
 trimtab lint overrides
 trimtab check-pr --body-file "$BODY"
 git add .claude/trimtab.json
-trimtab ids --staged
-git commit -m "chore(trimtab): move the lock to <new short SHA>"
+trimtab ids --staged && git commit -m "chore(trimtab): move the lock to <new short SHA>"
 git push -u origin HEAD
 DEFAULT=$(gh api 'repos/{owner}/{repo}' --jq .default_branch)
 gh api -X POST 'repos/{owner}/{repo}/pulls' -f title="chore(trimtab): move the lock to <new short SHA>" \

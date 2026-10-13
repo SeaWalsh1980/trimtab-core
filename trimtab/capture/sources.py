@@ -12,6 +12,7 @@ through it.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -294,26 +295,30 @@ def changed_files(root: Path, base: str) -> list[str]:
     return [line for line in done.stdout.splitlines() if line.strip()]
 
 
-def _git(cwd: Path, *args: str) -> str:
+def _git(cwd: Path, *args: str) -> bytes:
+    """git's stdout as bytes: a path need not be UTF-8."""
     try:
-        done = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True,
-                              timeout=GIT_TIMEOUT_SECONDS)
+        done = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, timeout=GIT_TIMEOUT_SECONDS)
     except (OSError, subprocess.TimeoutExpired) as err:
         raise SourceError(f"git {args[0]}: {type(err).__name__}") from err
     if done.returncode != 0:
-        raise SourceError(f"git {args[0]} exited {done.returncode}: {done.stderr.strip()[:300]}")
+        stderr = done.stderr.decode("utf-8", errors="replace").strip()[:300]
+        raise SourceError(f"git {args[0]} exited {done.returncode}: {stderr}")
     return done.stdout
 
 
-def staged_files(cwd: Path) -> tuple[Path, list[str]]:
-    """The repository root, and the files its index adds, copies, modifies or renames to, relative to that root.
+def staged_files(cwd: Path) -> list[tuple[str, bytes]]:
+    """Each file the index adds, copies, modifies or renames to: its path from the repository root, and the
+    content staged for it, which is what the commit records, whatever the working copy now holds.
 
-    Asked of git with NUL separators, so a path holding a space or a newline
-    stays one path; a commit that only deletes stages nothing to read.
+    Paths come NUL-separated, so one holding a space or a newline stays one
+    path, and are decoded as the OS does (`os.fsdecode`), so any name works;
+    a commit that only deletes stages nothing to read.
     """
-    root = Path(_git(cwd, "rev-parse", "--show-toplevel").strip())
-    names = _git(root, "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR").split("\0")
-    return root, [n for n in names if n]
+    root = Path(os.fsdecode(_git(cwd, "rev-parse", "--show-toplevel").strip()))
+    names = [os.fsdecode(n) for n in _git(root, "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR")
+             .split(b"\0") if n]
+    return [(name, _git(root, "cat-file", "blob", f":{name}")) for name in names]
 
 
 ISSUE_LIMIT = 500  # bounded: issues one label listing reads; more is an error, not a cut-off

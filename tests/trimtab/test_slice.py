@@ -6,6 +6,7 @@ instance's (hermetic: no real doctrine is read), so `TST-2` is its second sectio
 """
 
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -255,7 +256,7 @@ class IdsCli(unittest.TestCase):
 
     def ids(self, *args, cwd=None):
         return subprocess.run([str(TRIMTAB), "ids", *args], capture_output=True, text=True,
-                              cwd=cwd or self.dir, env=env_for(None))
+                              cwd=cwd or self.dir, env=hermetic_git_env(env_for(None)))
 
     def git(self, *args):
         git(self.dir, *args)
@@ -343,6 +344,47 @@ class IdsCli(unittest.TestCase):
         self.assertNotIn("unstaged.md", done.stderr)
         self.assertNotIn(RUN_ID_TAIL, done.stderr)
 
+    def test_staged_checks_the_staged_content_not_the_working_copy(self):
+        self.git("init", "-q")
+        name = self.write("report.md", "x " + "session_" + RUN_ID_TAIL + "\n")
+        self.git("add", name)
+        self.write(name, "cleaned on disk, not re-staged\n")
+
+        done = self.ids("--staged")
+
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("report.md: line 1", done.stderr)
+
+    def test_staged_ignores_an_unstaged_edit(self):
+        self.git("init", "-q")
+        name = self.write("report.md", "clean\n")
+        self.git("add", name)
+        self.write(name, "x " + "session_" + RUN_ID_TAIL + "\n")
+
+        done = self.ids("--staged")
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_staged_reads_a_file_deleted_from_disk_after_staging(self):
+        self.git("init", "-q")
+        name = self.write("report.md", "clean\n")
+        self.git("add", name)
+        (self.dir / name).unlink()
+
+        done = self.ids("--staged")
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_staged_takes_a_name_that_is_not_utf8_without_a_traceback(self):
+        self.git("init", "-q")
+        (self.dir / os.fsdecode(b"caf\xe9.md")).write_text("clean\n", encoding="utf-8")
+        self.git("add", "-A")
+
+        done = self.ids("--staged")
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+
     def test_staged_with_nothing_staged_passes(self):
         self.git("init", "-q")
 
@@ -379,9 +421,14 @@ class IdsCli(unittest.TestCase):
         self.assertNotIn("Traceback", done.stderr)
 
 
+def hermetic_git_env(env=None):
+    """No global or system git config: a developer's hooks or signing must not reach the test (TST-1)."""
+    return {**(env if env is not None else os.environ), "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+
 def git(root, *args):
     return subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", *args],
-                          check=True, capture_output=True, text=True).stdout.strip()
+                          check=True, capture_output=True, text=True, env=hermetic_git_env()).stdout.strip()
 
 
 if __name__ == "__main__":

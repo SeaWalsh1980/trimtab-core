@@ -96,19 +96,19 @@ def _text_of(path: str) -> str | None:
         return None
 
 
-def _ids_targets(args) -> list[tuple[str, Path]] | None:
-    """(name, path) per file to check: those given, or what git stages. None after printing why not."""
+def _ids_targets(args) -> list[tuple[str, bytes | None]] | None:
+    """(name, content) per file to check: the files given (content read later), or what git stages, with the
+    staged content. None after printing why not."""
     if args.staged == bool(args.files):
         print("error: give FILE... or --staged, one or the other", file=sys.stderr)
         return None
     if not args.staged:
-        return [(name, Path(name)) for name in args.files]
+        return [(name, None) for name in args.files]
     try:
-        root, names = staged_files(Path.cwd())
+        return staged_files(Path.cwd())
     except SourceError as err:
         print(f"error: --staged: {err}", file=sys.stderr)
         return None
-    return [(name, root / name) for name in names]
 
 
 def cmd_ids(args) -> int:
@@ -125,17 +125,18 @@ def cmd_ids(args) -> int:
         print("nothing staged: no run reference to check")
         return 0
     unreadable, problems = False, []
-    for i, (name, path) in enumerate(targets, 1):
+    for i, (name, content) in enumerate(targets, 1):
         label = f"file {i}" if ID_SHAPE.search(name) else name
         if label != name:
             problems.append(Problem("id-shape", label, "its name holds a routine, environment or session ID; rename it"))
-        try:
-            text = path.read_bytes().decode("utf-8", errors="replace")
-        except OSError as err:
-            print(f"error: {label}: cannot be read ({type(err).__name__})", file=sys.stderr)
-            unreadable = True
-            continue
-        problems += run_references(text, where=f"{label}: ")
+        if content is None:
+            try:
+                content = Path(name).read_bytes()
+            except OSError as err:
+                print(f"error: {label}: cannot be read ({type(err).__name__})", file=sys.stderr)
+                unreadable = True
+                continue
+        problems += run_references(content.decode("utf-8", errors="replace"), where=f"{label}: ")
     if problems:
         _print_problems(problems)
     if unreadable:

@@ -73,9 +73,11 @@ Three parts, each catching what the one before it can miss:
   any default attribution. Before each commit, the run runs
   `trimtab ids --staged`, which asks git for what the index adds, copies,
   modifies or renames (NUL-separated, from the repository root, so any working
-  directory and any path work, and a deletion-only commit has nothing to
-  check) and runs the ID scan alone over each file and each file's name, with
-  no block, lock or instance. A file's bytes are read with undecodable ones
+  directory and any path, UTF-8 or not, work, and a deletion-only commit has
+  nothing to check) and runs the ID scan alone over each file and each file's
+  name, with no block, lock or instance. It reads the content staged in the
+  index (`git cat-file blob :<path>`), which is what the commit records, not
+  the working copy. A file's bytes are read with undecodable ones
   replaced, so a binary passes unless it holds an ID in plain text; a name
   that holds one is a finding shown by its position, never printed. `trimtab
   ids FILE…` checks named files the same way. It is its own subcommand, not a
@@ -144,6 +146,10 @@ step 4's PR listing. A static test fails on search syntax in shipped files.
   The routine prompt asks the run to report such a footer.
 - Words like `env_file` or `session_url` pass: the shape needs 16 or more
   characters after the prefix.
+- Accepted: `trimtab ids` reads each file whole, one git call per staged
+  file, so a very large staged binary costs its size in memory, twice. The
+  files a run commits are reports and rule text; streaming in chunks is left
+  until a run stages something large.
 
 ## Trial, still open
 
