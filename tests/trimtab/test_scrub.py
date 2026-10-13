@@ -334,6 +334,9 @@ class PublicScrub(unittest.TestCase):
         # A random tail lacks a digit about one time in fifty: case, not digits, decides.
         self.assertEqual(self.kinds("env_" + "abcdefghijKLMNOPQRst" + "\n"), ["id-shape"])
 
+    def test_an_id_shape_between_underscores_is_found(self):
+        self.assertEqual(self.kinds("_notes_" + "trig_" + "0123456789abcdefABCD" + "_draft_\n"), ["id-shape"])
+
     def test_an_option_name_in_one_case_is_not_an_id(self):
         self.assertEqual(self.kinds("env_" + "PRODUCTIONDATABASEURL" + "\n"), [])
 

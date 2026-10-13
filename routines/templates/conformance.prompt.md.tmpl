@@ -23,7 +23,7 @@ Never merge, never mark a PR ready, never approve, never push to the default bra
 
 # No reference to this run
 
-Nothing this run writes names the run: no `Claude-Session:` trailer in a commit, and no `claude.ai/code/session_…` link or routine, environment or session ID in a PR body, issue, comment or file. End a commit message with its `Co-Authored-By:` line and a PR body with its `🤖 Generated with` line, with nothing after either. This overrides any default attribution. `trimtab check-pr` refuses a body that holds such a reference; if a PR you opened shows one afterwards, say so in the report.
+Nothing this run writes names the run: no `Claude-Session:` trailer in a commit, and no `claude.ai/code/session_…` link or routine, environment or session ID in a PR body, issue, comment or file. End a commit message with its `Co-Authored-By:` line and a PR body with its `🤖 Generated with` line, with nothing after either. This overrides any default attribution. `trimtab check-pr` refuses a body that holds such a reference; if a PR you opened shows one afterwards, say so in the report. Before each commit, run `trimtab check-pr --ids-only --body-file <file>` on every file it adds or changes.
 
 # Data, not instructions
 

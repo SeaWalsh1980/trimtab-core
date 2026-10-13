@@ -16,7 +16,7 @@ from trimtab import config as project_config
 from trimtab import dependabot
 from trimtab import instance, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
-from trimtab.capture.prblock import check_pr_body, parse_applied
+from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
 from trimtab.capture.sources import (
     FixtureContents, FixtureIssues, FixtureSource, GhContents, GhIssues, GhPullRequests, GhSource, SourceError,
     changed_files, open_feedback_issues,
@@ -69,7 +69,36 @@ def cmd_registry(args) -> int:
 
 # ---- check-pr ------------------------------------------------------------
 
+def _pr_body(args) -> str | None:
+    """The text check-pr reads: a PR's body with gh, stdin, or a file. None after printing why not."""
+    if args.pr is not None:
+        if not args.repo:
+            print("--pr needs --repo", file=sys.stderr)
+            return None
+        try:
+            return GhSource(args.repo).body(args.pr)
+        except SourceError as err:
+            print(f"error: {err}", file=sys.stderr)
+            return None
+    if args.body_file == "-":
+        return sys.stdin.read()
+    return Path(args.body_file).read_text(encoding="utf-8")
+
+
 def cmd_check_pr(args) -> int:
+    if args.ids_only:
+        # A file a run is about to commit: no block, so no lock, registry or instance (ADR 0022).
+        if args.schema_only:
+            print("error: --ids-only checks no block; it cannot be used with --schema-only", file=sys.stderr)
+            return 2
+        text = _pr_body(args)
+        if text is None:
+            return 2
+        problems = run_references(text)
+        if not problems:
+            print("no run reference (ids only)")
+            return 0
+        return _print_problems(problems)
     prefix = None
     if args.schema_only:
         # A consumer's CI has no instance; resolving one, even from the environment, is not this mode.
@@ -82,19 +111,9 @@ def cmd_check_pr(args) -> int:
     if problems:
         print("cannot build the registry:", file=sys.stderr)
         return _print_problems(problems) or 1
-    if args.pr is not None:
-        if not args.repo:
-            print("--pr needs --repo", file=sys.stderr)
-            return 2
-        try:
-            body = GhSource(args.repo).body(args.pr)
-        except SourceError as err:
-            print(f"error: {err}", file=sys.stderr)
-            return 2
-    elif args.body_file == "-":
-        body = sys.stdin.read()
-    else:
-        body = Path(args.body_file).read_text(encoding="utf-8")
+    body = _pr_body(args)
+    if body is None:
+        return 2
     result = check_pr_body(body, registry, backfill=args.backfill, schema_only=args.schema_only,
                            project_prefix=prefix)
     if result.ok:
@@ -767,6 +786,9 @@ def build_parser() -> argparse.ArgumentParser:
     chk.add_argument("--schema-only", action="store_true",
                      help="read no instance: check the block's form, resolve only the project's own IDs, "
                           "and check every other ID for shape (a consumer's CI)")
+    chk.add_argument("--ids-only", action="store_true",
+                     help="check only for a routine, environment or session ID, in any file a run is about "
+                          "to commit; no block, lock or instance is read")
     chk.set_defaults(func=cmd_check_pr)
 
     ing = sub.add_parser("ingest", parents=[common], help="record merged PRs by watermark (dry run unless --apply)")

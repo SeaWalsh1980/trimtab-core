@@ -56,17 +56,25 @@ Three parts, each catching what the one before it can miss:
   shared by both, and now also covers `cse_` session IDs. It is narrowed to
   what an ID looks like: the tail after the prefix is 16 or more letters and
   digits that mix upper and lower case. Every routine, environment and
-  session ID seen so far does; an option name in one case
+  session ID seen so far does: each tail is 24 characters, `01` and then 22
+  letters and digits in both cases (two routines, one environment and one
+  run's session, read 2026-10-12). An option name in one case
   (`env_` followed by a long upper-case name), as quoted release notes carry,
-  does not. A
-  digit is not required: a random 22-character tail has none about one time
-  in fifty, too often to miss. The scrub shares the shape, so its id-shape
-  check and its deny-list of IDs read from the instance narrow the same way.
+  does not match. A digit is not required: a random 22-character tail has none
+  about one time in fifty, too often to miss. The miss rate below assumes the
+  tail is random over all 62 letters and digits; if a single-case format
+  appears, the lookaheads are dropped for its prefix. The shape is bounded by
+  anything but a letter or digit, so an underscore beside an ID (Markdown
+  italics) does not hide it. The scrub shares the shape, so its id-shape check
+  and its deny-list of IDs read from the instance narrow the same way.
 - **The rule.** The routine prompts and every command that commits or opens a
   PR say: no `Claude-Session:` trailer, no session link or ID; a commit ends at
   `Co-Authored-By:`, a PR body at its `🤖 Generated with` line; this overrides
-  any default attribution. A static test fails if a shipped file that opens a
-  PR lacks the rule.
+  any default attribution. Before each commit, the run checks every file it
+  adds or changes with `trimtab check-pr --ids-only`, which runs the ID scan
+  alone, with no block, lock or instance. Static tests fail if a shipped file
+  that opens a PR lacks the rule, if a copy of it drifts from the rest, or if
+  a shipped file that commits lacks the file check.
 
 The retro's structure step also loses its last GitHub search syntax
 (`--search "… in:title …"`), which cloud sessions refuse (ADR 0021); it reuses
@@ -110,9 +118,12 @@ step 4's PR listing. A static test fails on search syntax in shipped files.
   For a random tail of 22 letters and digits that is about one in eighty
   thousand. A mixed-case word after a prefix (`session_CookieSameSite…`)
   still matches; that is the remaining false positive.
-- Accepted: only the body is checked. A run reference in a PR title, or in an
-  issue or PR comment a run posts, fails nothing; the prompt rule covers them
-  and no check does.
+- Accepted: only the body is gated. A file a run commits is checked by the
+  run itself (`--ids-only`, a step the method prescribes, not a gate); the
+  consumer's CI does not scan changed files, which would be a change to its
+  workflow, a control there, and is deferred to it. A run reference in a PR
+  title, or in an issue or PR comment a run posts, is covered by the prompt
+  rule alone.
 - The PR-body hook keeps `check_body`, so a local session's hook passes a body
   that a consumer's CI then fails. The hook adopts `check_pr_body` in its own
   control change.

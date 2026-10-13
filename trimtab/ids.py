@@ -12,9 +12,11 @@ import re
 # random tail of 16 or more letters and digits that mixes upper and lower
 # case. An option name in one case after a prefix (`env_` and a long
 # upper-case name), as release notes quote them, does not match.
-ID_SHAPE = re.compile(r"\b(?:trig|env|session|cse)_"
+# Bounded by anything but a letter or digit, so an underscore beside it (Markdown
+# italics, `x_session_…_draft`) does not hide it, as a word boundary would.
+ID_SHAPE = re.compile(r"(?<![0-9A-Za-z])(?:trig|env|session|cse)_"
                       r"(?=[0-9A-Za-z]*[A-Z])(?=[0-9A-Za-z]*[a-z])"
-                      r"[0-9A-Za-z]{16,}\b")
+                      r"[0-9A-Za-z]{16,}(?![0-9A-Za-z])")
 
 
 def id_shape_lines(text: str) -> list[int]:

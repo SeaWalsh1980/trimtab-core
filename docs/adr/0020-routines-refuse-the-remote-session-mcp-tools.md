@@ -75,3 +75,17 @@ The field's location rests on the read-back shape above, not on a routine
 that sets it. The first update of a routine from a render on this base reads
 it back; the result is recorded here, and if the list is empty, this record
 is revisited before any rejected option is.
+
+## Trial result (2026-10-12)
+
+Partly held. A per-project routine updated from a render read back with both
+entries in `session_request.config.disallowed_tools`, and its manual run made
+no call to the server's tools. But the run, after publishing a draft PR and
+ending with its report, was resumed once by a notification for that PR: the
+platform, not the refused tool, delivered it. The resumed turn read the PR's
+check runs and ended. So the decision stops the stall it was taken for, and
+the consequence "no PR event reaches the session after the method's work"
+does not hold for a run that publishes a PR. The untrusted wake-up this record
+meant to keep out is not fully kept out; what reaches the session is limited
+to the PR the run itself opened. Not yet decided: whether that needs a further
+control, or is accepted.

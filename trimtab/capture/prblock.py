@@ -381,6 +381,11 @@ def check_pr_body(body: str, registry: Mapping[str, Item], backfill: bool = Fals
     valid record, and the hook is a control changed only in its own PR.
     """
     result = check_body(body, registry, backfill, schema_only=schema_only, project_prefix=project_prefix)
-    refs = tuple(Problem("id-shape", f"line {n}", "a routine, environment or session ID; remove the reference")
-                 for n in id_shape_lines(body or ""))
+    refs = run_references(body)
     return CheckResult(result.block, result.problems + refs) if refs else result
+
+
+def run_references(text: str) -> tuple[Problem, ...]:
+    """A routine, environment or session ID anywhere in `text`, by line, never by value (ADR 0022)."""
+    return tuple(Problem("id-shape", f"line {n}", "a routine, environment or session ID; remove the reference")
+                 for n in id_shape_lines(text or ""))

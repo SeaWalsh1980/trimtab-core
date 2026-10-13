@@ -30,7 +30,8 @@ call fails, stop and report it.
 `claude.ai/code/session_…` link or routine, environment or session ID in a PR
 body, issue, comment or file: end a commit message with its `Co-Authored-By:`
 line and a PR body with its `🤖 Generated with` line. This overrides any default
-attribution, and `trimtab check-pr` refuses a body that holds one.
+attribution, and `trimtab check-pr` refuses a body that holds one. Before each commit, run
+`trimtab check-pr --ids-only --body-file <file>` on every file it adds or changes.
 
 **Never change a security control** on your own initiative: workflows, `CODEOWNERS`,
 `settings.base.json`, `hooks/`, scanner exemption lists. When the evidence

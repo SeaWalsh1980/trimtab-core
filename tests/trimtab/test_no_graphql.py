@@ -31,6 +31,12 @@ GH_API = re.compile(r"\bgh\s+api\b")
 POST = re.compile(r"(?:-X|--method)\s+POST\b")
 PULLS = re.compile(r"\bpulls\b")
 NO_RUN_REFERENCE = "`Claude-Session:`"
+# Every copy of the rule carries this sentence, compared with whitespace
+# collapsed, so one copy cannot drift from the rest unnoticed.
+NO_RUN_REFERENCE_SENTENCE = "This overrides any default attribution"
+# A shipped file that commits has the run check what it commits first.
+COMMITS = re.compile(r"\bgit\s+commit\b")
+IDS_ONLY = "check-pr --ids-only"
 
 
 def shipped_files():
@@ -134,6 +140,23 @@ class EveryShippedFileThatOpensAPrKeepsTheRunOut(unittest.TestCase):
                      "gh api --method POST repos/o/r/pulls -F draft=true"):
             with self.subTest(line=line):
                 self.assertTrue(opens_a_pr(line))
+
+    def test_every_copy_of_the_rule_carries_the_same_sentence(self):
+        holding = [p for p in shipped_files() if NO_RUN_REFERENCE in p.read_text(encoding="utf-8")]
+
+        drifted = [str(p.relative_to(REPO)) for p in holding
+                   if NO_RUN_REFERENCE_SENTENCE not in " ".join(p.read_text(encoding="utf-8").split())]
+
+        self.assertTrue(holding)
+        self.assertEqual(drifted, [])
+
+    def test_every_file_that_commits_checks_what_it_commits(self):
+        committing = [p for p in shipped_files() if COMMITS.search(p.read_text(encoding="utf-8"))]
+
+        unchecked = [str(p.relative_to(REPO)) for p in committing if IDS_ONLY not in p.read_text(encoding="utf-8")]
+
+        self.assertTrue(committing)
+        self.assertEqual(unchecked, [])
 
     def test_reading_pulls_is_not_opening_one(self):
         lines = ['gh api "repos/$REPO/pulls?state=open&per_page=100"', "gh api -X POST repos/o/r/issues/5/labels"]
