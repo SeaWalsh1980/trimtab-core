@@ -327,6 +327,20 @@ class PublicScrub(unittest.TestCase):
         self.assertEqual(self.kinds('{"repo": "owner/x"}\n', name="cfg.json"), ["repo-field"])
         self.assertEqual(self.kinds('{"repo": "owner/x"}\n', name="tests/fixture.json"), [])
 
+    def test_a_run_session_id_shape_is_found(self):
+        self.assertEqual(self.kinds("cse_" + "0123456789abcdefABCD" + "\n"), ["id-shape"])
+
+    def test_an_id_shape_with_no_digit_is_found(self):
+        # A random tail lacks a digit about one time in fifty: case, not digits, decides.
+        self.assertEqual(self.kinds("env_" + "abcdefghijKLMNOPQRst" + "\n"), ["id-shape"])
+
+    def test_an_id_shape_between_underscores_is_found(self):
+        self.assertEqual(self.kinds("_notes_" + "trig_" + "0123456789abcdefABCD" + "_draft_\n"), ["id-shape"])
+
+    def test_a_one_case_tail_in_the_tree_is_still_an_id(self):
+        # The base's own tree carries no third-party text: the broad shape applies.
+        self.assertEqual(self.kinds("env_" + "abcdefghij0123456789" + "\n"), ["id-shape"])
+
     def test_an_id_shape_inside_tests_is_still_found(self):
         self.assertEqual(self.kinds("trig_" + "0123456789abcdefABCD" + "\n", name="tests/t.py"), ["id-shape"])
 

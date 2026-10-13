@@ -44,9 +44,18 @@ compare it with the render before running it.
   `repos/{owner}/{repo}/…` paths, never another path (`search/…`, `user`,
   `orgs/…`) or gh's GraphQL-backed porcelain: cloud sessions refuse both, and
   allow only the repositories the routine names as sources.
+- **No reference to the run** (ADR 0022). Nothing a run writes carries a
+  `Claude-Session:` trailer, a session link or a routine, environment or
+  session ID; the prompt overrides the default attribution, every run checks
+  what it commits with `trimtab ids --staged` and never commits past a
+  failure, and `check-pr` refuses such a PR body. The setting that turns the session link off
+  (`attribution.sessionUrl: false`) is a control change of its own: check
+  that the installed `settings.base.json` carries it before relying on it.
 - **No remote-session MCP tools** (ADR 0020). The body refuses the session
-  server's tools, so an unattended run neither waits on an approval nor takes
-  in PR events after its work. On read-back, the routine's
+  server's tools, so an unattended run does not wait on an approval. It can
+  still be woken after its work: a run that publishes a PR was resumed once by
+  the platform's notification for that PR (observed 2026-10-12, a read-only
+  turn; see ADR 0020's trial result). On read-back, the routine's
   `session_request.config.disallowed_tools` must list them; if it is empty,
   do not enable the routine.
 

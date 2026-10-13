@@ -61,16 +61,26 @@ trimtab bump --apply --confirm <token from step 1> --to <new SHA>
 trimtab lint overrides
 trimtab check-pr --body-file "$BODY"
 git add .claude/trimtab.json
-git commit -m "chore(trimtab): move the lock to <new short SHA>"
-git push -u origin HEAD
-DEFAULT=$(gh api 'repos/{owner}/{repo}' --jq .default_branch)
-gh api -X POST 'repos/{owner}/{repo}/pulls' -f title="chore(trimtab): move the lock to <new short SHA>" \
-  -f head="$(git branch --show-current)" -f base="$DEFAULT" -F draft=true -F body=@"$BODY" --jq .html_url
+# The check gates the commit, the push and the PR: a failure stops all three.
+trimtab ids --staged && git commit -m "chore(trimtab): move the lock to <new short SHA>" \
+  && git push -u origin HEAD \
+  && DEFAULT=$(gh api 'repos/{owner}/{repo}' --jq .default_branch) \
+  && gh api -X POST 'repos/{owner}/{repo}/pulls' -f title="chore(trimtab): move the lock to <new short SHA>" \
+    -f head="$(git branch --show-current)" -f base="$DEFAULT" -F draft=true -F body=@"$BODY" --jq .html_url
 ```
 
 GitHub is reached through `gh api` on `repos/{owner}/{repo}/…` paths only:
 Claude Code cloud sessions refuse every other path (`search/…`, `user`,
 `orgs/…`) and gh's porcelain (`gh pr …`), which goes through GraphQL.
+
+**No reference to the run.** No `Claude-Session:` trailer in a commit, and no
+`claude.ai/code/session_…` link or routine, environment or session ID in a PR
+body, issue, comment or file: end a commit message with its `Co-Authored-By:`
+line and a PR body with its `🤖 Generated with` line. This overrides any default
+attribution, and `trimtab check-pr` refuses a body that holds one. Before each commit, run
+`trimtab ids --staged`. If it exits 1, remove the reference, stage again and
+re-run it; never commit past a failure. If it exits 2, the check could not run:
+stop and report it.
 
 Commit only the lock. Dropping or rewording an override is the operator's call
 on the PR; make it only when they say so, in this same PR, and never delete an

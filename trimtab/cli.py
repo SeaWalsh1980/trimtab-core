@@ -16,10 +16,12 @@ from trimtab import config as project_config
 from trimtab import dependabot
 from trimtab import instance, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
-from trimtab.capture.prblock import check_body, parse_applied
+from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
+from trimtab.ids import ID_SHAPE
+from trimtab.items import Problem
 from trimtab.capture.sources import (
     FixtureContents, FixtureIssues, FixtureSource, GhContents, GhIssues, GhPullRequests, GhSource, SourceError,
-    changed_files, open_feedback_issues,
+    changed_files, open_feedback_issues, staged_files,
 )
 from trimtab.lint import overrides, references, structure
 from trimtab.propose import render
@@ -69,6 +71,96 @@ def cmd_registry(args) -> int:
 
 # ---- check-pr ------------------------------------------------------------
 
+def _pr_body(args) -> str | None:
+    """The text check-pr reads: a PR's body with gh, stdin, or a file. None after printing why not."""
+    if args.pr is not None:
+        if not args.repo:
+            print("--pr needs --repo", file=sys.stderr)
+            return None
+        try:
+            return GhSource(args.repo).body(args.pr)
+        except SourceError as err:
+            print(f"error: {err}", file=sys.stderr)
+            return None
+    if args.body_file == "-":
+        return sys.stdin.read()
+    return _text_of(args.body_file)
+
+
+def _text_of(path: str) -> str | None:
+    """A file's text, or None after naming it: a missing or non-UTF-8 file is a refusal, not a traceback."""
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as err:
+        print(f"error: {path}: cannot be read as UTF-8 text ({type(err).__name__})", file=sys.stderr)
+        return None
+
+
+def _ids_targets(args) -> list[tuple[int, str, bytes | None]] | None:
+    """(position, name, content) per file to check: the files given, by argument position (content read
+    later), or what git stages, by position in its listing, with the staged content. None after printing
+    why not."""
+    if args.staged == bool(args.files):
+        print("error: give FILE... or --staged, one or the other", file=sys.stderr)
+        return None
+    if not args.staged:
+        return [(i, name, None) for i, name in enumerate(args.files, 1)]
+    try:
+        return staged_files(Path.cwd())
+    except SourceError as err:
+        print(f"error: --staged: {err}", file=sys.stderr)
+        return None
+
+
+def _shown(i: int, name: str, staged: bool) -> str:
+    """How a checked file is named in output: by its position in a list the reader can reproduce when its
+    name holds an ID (mixed case, as IDs are: people name files, and `env_` plus a long config name is not
+    one), quoted and escaped when it holds a newline or an escape sequence (so each finding stays on one
+    line and cannot pass for a plain name), and as itself otherwise."""
+    if ID_SHAPE.search(name):
+        if staged:
+            return (f"staged file {i} (counting the paths "
+                    f"`git diff --cached --name-only --no-renames --diff-filter=ACMRT` lists)")
+        return f"argument {i}"
+    return name if name.isprintable() else repr(name)
+
+
+def cmd_ids(args) -> int:
+    """What a run is about to commit, checked for a run reference (ADR 0022). No block, lock or instance.
+
+    A file's bytes are read with undecodable ones replaced, so a binary passes
+    unless it holds an ID in plain text. A name that holds one is itself a
+    finding, and is shown by its position, never printed.
+    """
+    targets = _ids_targets(args)
+    if targets is None:
+        return 2
+    if not targets:
+        print("nothing staged to read: no run reference to check")
+        return 0
+    unreadable, problems = False, []
+    for i, name, content in targets:
+        label = _shown(i, name, args.staged)
+        if ID_SHAPE.search(name):
+            problems.append(Problem("id-shape", label, "its name holds a routine, environment or session ID; rename it"))
+        if content is None:
+            try:
+                content = Path(name).read_bytes()
+            except OSError as err:
+                print(f"error: {label}: cannot be read ({type(err).__name__})", file=sys.stderr)
+                unreadable = True
+                continue
+        problems += run_references(content.decode("utf-8", errors="replace"), where=f"{label}: ")
+    if problems:
+        _print_problems(problems)
+    if unreadable:
+        return 2
+    if problems:
+        return 1
+    print(f"no run reference in {len(targets)} file(s)")
+    return 0
+
+
 def cmd_check_pr(args) -> int:
     prefix = None
     if args.schema_only:
@@ -82,20 +174,11 @@ def cmd_check_pr(args) -> int:
     if problems:
         print("cannot build the registry:", file=sys.stderr)
         return _print_problems(problems) or 1
-    if args.pr is not None:
-        if not args.repo:
-            print("--pr needs --repo", file=sys.stderr)
-            return 2
-        try:
-            body = GhSource(args.repo).body(args.pr)
-        except SourceError as err:
-            print(f"error: {err}", file=sys.stderr)
-            return 2
-    elif args.body_file == "-":
-        body = sys.stdin.read()
-    else:
-        body = Path(args.body_file).read_text(encoding="utf-8")
-    result = check_body(body, registry, backfill=args.backfill, schema_only=args.schema_only, project_prefix=prefix)
+    body = _pr_body(args)
+    if body is None:
+        return 2
+    result = check_pr_body(body, registry, backfill=args.backfill, schema_only=args.schema_only,
+                           project_prefix=prefix)
     if result.ok:
         print("PR block OK" + (" (legacy heading, backfill)" if result.block.legacy else "")
               + (" (schema only: base IDs checked for shape)" if args.schema_only else ""))
@@ -756,7 +839,9 @@ def build_parser() -> argparse.ArgumentParser:
     reg.add_argument("--against", metavar="REF", help="also fail on IDs listed in HARNESS.md at REF but gone now")
     reg.set_defaults(func=cmd_registry)
 
-    chk = sub.add_parser("check-pr", parents=[common], help="validate a PR body's harness block")
+    chk = sub.add_parser("check-pr", parents=[common],
+                         help="validate a PR body's harness block, and refuse a routine, environment or session "
+                              "ID anywhere in the body")
     body = chk.add_mutually_exclusive_group(required=True)
     body.add_argument("--body-file", help="file holding the PR body, or - for stdin")
     body.add_argument("--pr", type=int, help="read the body of this PR with gh (needs --repo)")
@@ -767,6 +852,13 @@ def build_parser() -> argparse.ArgumentParser:
                      help="read no instance: check the block's form, resolve only the project's own IDs, "
                           "and check every other ID for shape (a consumer's CI)")
     chk.set_defaults(func=cmd_check_pr)
+
+    ids = sub.add_parser("ids", help="check files a run is about to commit for a routine, environment or "
+                                     "session ID; no block, lock or instance is read")
+    ids.add_argument("files", nargs="*", metavar="FILE", help="the files to check")
+    ids.add_argument("--staged", action="store_true",
+                     help="check what the git index stages instead (added, copied, modified or renamed files)")
+    ids.set_defaults(func=cmd_ids)
 
     ing = sub.add_parser("ingest", parents=[common], help="record merged PRs by watermark (dry run unless --apply)")
     _ingest_options(ing)

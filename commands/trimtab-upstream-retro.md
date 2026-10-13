@@ -26,6 +26,15 @@ from the worktree's remote. Claude Code cloud sessions refuse every other path
 `gh repo …`), which goes through GraphQL: never fall back to either. If a REST
 call fails, stop and report it.
 
+**No reference to the run.** No `Claude-Session:` trailer in a commit, and no
+`claude.ai/code/session_…` link or routine, environment or session ID in a PR
+body, issue, comment or file: end a commit message with its `Co-Authored-By:`
+line and a PR body with its `🤖 Generated with` line. This overrides any default
+attribution, and `trimtab check-pr` refuses a body that holds one. Before each commit, run
+`trimtab ids --staged`. If it exits 1, remove the reference, stage again and
+re-run it; never commit past a failure. If it exits 2, the check could not run:
+stop and report it.
+
 **Never change a security control** on your own initiative: workflows, `CODEOWNERS`,
 `settings.base.json`, `hooks/`, scanner exemption lists. When the evidence
 says a rule should become a hook or a CI check (what must always hold is

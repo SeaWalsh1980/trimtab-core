@@ -29,6 +29,15 @@ every other path (`search/…`, `user`, `orgs/…`) and gh's porcelain
 (`gh pr …`, `gh issue …`, `gh repo …`), which goes through GraphQL: never fall
 back to either. If a REST call fails, stop and report it.
 
+**No reference to the run.** No `Claude-Session:` trailer in a commit, and no
+`claude.ai/code/session_…` link or routine, environment or session ID in a PR
+body, issue, comment or file: end a commit message with its `Co-Authored-By:`
+line and a PR body with its `🤖 Generated with` line. This overrides any default
+attribution, and `trimtab check-pr` refuses a body that holds one. Before each commit, run
+`trimtab ids --staged`. If it exits 1, remove the reference, stage again and
+re-run it; never commit past a failure. If it exits 2, the check could not run:
+stop and report it.
+
 ## 0. Setup
 
 ```bash
@@ -50,8 +59,8 @@ ISSUES=$(trimtab instance --repo) && gh api "repos/$ISSUES/labels/harness-feedba
 Each prints the label's name, or exits non-zero with a 404 when it is
 missing. Upstream issues go to the instance's repository, which its
 `instance.json` names; `instance --repo` exits non-zero when that file is
-missing or invalid, so stop then too. Look labels up by exact name: `gh label list --search` also matches
-descriptions, so it can report a missing label as present.
+missing or invalid, so stop then too. Look labels up by exact name, as above: a
+label search also matches descriptions, so it can report a missing label as present.
 
 Creating a label is the operator's decision, not the loop's. Report what is
 missing and stop.
@@ -163,7 +172,10 @@ trimtab lint structure --against "$BASELINE" --sections
 
 For each `PROPOSE` finding, open **at most one** structure PR per run (the
 largest section not marked `stays`), unless a structure PR is open or was
-closed within the window (`--search "structure in:title updated:>=<window start>"`).
+closed within the window: read the open PRs and the closed PRs updated within
+the window as in step 4 (reuse that listing if step 4 read it this run), and
+match titles starting `structure`. A listing stopped at its 10th page cannot
+rule one out: say so and open no structure PR this run.
 It moves **one section** to where it belongs: a path-scoped rule (path-specific), a command or skill (a procedure),
 `docs/` (a reference table), or an ADR (reasoning); or deletes it when
 it is derivable from the codebase. **Session-wide REQUIRE/PROHIBIT content stays

@@ -12,6 +12,7 @@ through it.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from typing import Callable, Mapping
 from urllib.parse import quote, unquote, urlencode
 
 from trimtab.capture.ingest import PullRequest
+from trimtab.ids import ANY_ID_SHAPE
 from trimtab.dependabot import CiRun, HostError, PullRequestView
 from trimtab.upstream import Issue
 
@@ -292,6 +294,55 @@ def changed_files(root: Path, base: str) -> list[str]:
     if done.returncode != 0:
         raise SourceError(f"git diff {base}...HEAD exited {done.returncode}: {done.stderr.strip()[:300]}")
     return [line for line in done.stdout.splitlines() if line.strip()]
+
+
+def _git(cwd: Path, *args: str) -> bytes:
+    """git's stdout as bytes: a path need not be UTF-8."""
+    try:
+        done = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, timeout=GIT_TIMEOUT_SECONDS)
+    except (OSError, subprocess.TimeoutExpired) as err:
+        raise SourceError(f"git {args[0]}: {type(err).__name__}") from err
+    if done.returncode != 0:
+        # git names the paths it could not use, and a path can hold a run's ID.
+        stderr = ANY_ID_SHAPE.sub("<id>", done.stderr.decode("utf-8", errors="replace")).strip()[:300]
+        raise SourceError(f"git {args[0]} exited {done.returncode}: {stderr}")
+    return done.stdout
+
+
+GITLINK = b"160000"  # a submodule's entry: a commit, with no content of its own to read
+
+
+# Added, copied, modified or type-changed against HEAD; with renames off, a
+# renamed file is a deletion (nothing to read) and an addition (read).
+STAGED = ("diff", "--cached", "--no-renames", "--diff-filter=ACMRT")
+
+
+def staged_files(cwd: Path) -> list[tuple[int, str, bytes]]:
+    """Each file the index adds, copies, modifies or changes the type of: its position in the listing of
+    `git diff --cached --name-only --no-renames --diff-filter=ACMRT` (from 1, so a reader can find it
+    there), its path from the repository root, and the content staged for it, which is what the commit
+    records, whatever the working copy now holds.
+
+    The raw listing gives each path with its staged mode and object, so the
+    content is read by object ID: no path reaches git's messages, and no index
+    lookup can miss a path (a sparse index collapses directories). Paths come
+    NUL-separated, so one holding a space or a newline stays one path, and are
+    decoded as the OS does (`os.fsdecode`), so any name works; a commit that
+    only deletes stages nothing to read. A submodule entry has no content of
+    its own: it keeps its place in the count and is not read.
+    """
+    root = Path(os.fsdecode(_git(cwd, "rev-parse", "--show-toplevel").strip()))
+    # Pairs of `:<old mode> <new mode> <old object> <new object> <status>` and a path.
+    fields = _git(root, *STAGED, "--raw", "-z").split(b"\0")
+    files = []
+    for position, (meta, path) in enumerate(zip(fields[0::2], fields[1::2]), 1):
+        try:
+            _, mode, _, obj, _ = meta.lstrip(b":").split(b" ")
+        except ValueError as err:
+            raise SourceError("git diff --raw returned an entry that could not be parsed") from err
+        if mode != GITLINK:
+            files.append((position, os.fsdecode(path), _git(root, "cat-file", "blob", obj.decode("ascii"))))
+    return files
 
 
 ISSUE_LIMIT = 500  # bounded: issues one label listing reads; more is an error, not a cut-off
