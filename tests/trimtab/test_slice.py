@@ -312,14 +312,13 @@ class IdsCli(unittest.TestCase):
         self.assertIn("argument 1", done.stderr)
         self.assertNotIn(RUN_ID_TAIL, done.stderr + done.stdout)
 
-    def test_a_name_with_a_one_case_id_shape_is_still_caught(self):
-        tail = "abcdefghij0123456789"
-        name = self.write("notes-" + "env_" + tail + ".md", "clean\n")
+    def test_an_ordinary_name_in_one_case_is_not_taken_for_an_id(self):
+        # People name files: a config name after a prefix is not an ID, which mixes cases.
+        name = self.write("config-" + "env_" + "productionoverrides" + ".yaml", "clean\n")
 
         done = self.ids(name)
 
-        self.assertEqual(done.returncode, 1)
-        self.assertNotIn(tail, done.stderr + done.stdout)
+        self.assertEqual(done.returncode, 0, done.stderr)
 
     def test_a_one_case_option_name_in_a_file_passes(self):
         name = self.write("notes.md", "> Adds " + "env_" + "PRODUCTIONDATABASEURL" + ".\n")
@@ -336,7 +335,7 @@ class IdsCli(unittest.TestCase):
         done = self.ids("--staged")
 
         self.assertEqual(done.returncode, 1)
-        self.assertIn("staged file 1 (counting the paths `git diff --cached --name-only --diff-filter=ACMR` lists)",
+        self.assertIn("staged file 1 (counting the paths `git diff --cached --name-only --no-renames --diff-filter=ACMRT` lists)",
                       done.stderr)
         self.assertNotIn(RUN_ID_TAIL, done.stderr)
 

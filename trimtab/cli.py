@@ -17,7 +17,7 @@ from trimtab import dependabot
 from trimtab import instance, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
-from trimtab.ids import ANY_ID_SHAPE
+from trimtab.ids import ID_SHAPE
 from trimtab.items import Problem
 from trimtab.capture.sources import (
     FixtureContents, FixtureIssues, FixtureSource, GhContents, GhIssues, GhPullRequests, GhSource, SourceError,
@@ -114,12 +114,13 @@ def _ids_targets(args) -> list[tuple[int, str, bytes | None]] | None:
 
 def _shown(i: int, name: str, staged: bool) -> str:
     """How a checked file is named in output: by its position in a list the reader can reproduce when its
-    name holds an ID (in either case: no third party writes file names), quoted and escaped when it holds a
-    newline or an escape sequence (so each finding stays on one line and cannot pass for a plain name), and
-    as itself otherwise."""
-    if ANY_ID_SHAPE.search(name):
+    name holds an ID (mixed case, as IDs are: people name files, and `env_` plus a long config name is not
+    one), quoted and escaped when it holds a newline or an escape sequence (so each finding stays on one
+    line and cannot pass for a plain name), and as itself otherwise."""
+    if ID_SHAPE.search(name):
         if staged:
-            return f"staged file {i} (counting the paths `git diff --cached --name-only --diff-filter=ACMR` lists)"
+            return (f"staged file {i} (counting the paths "
+                    f"`git diff --cached --name-only --no-renames --diff-filter=ACMRT` lists)")
         return f"argument {i}"
     return name if name.isprintable() else repr(name)
 
@@ -140,7 +141,7 @@ def cmd_ids(args) -> int:
     unreadable, problems = False, []
     for i, name, content in targets:
         label = _shown(i, name, args.staged)
-        if ANY_ID_SHAPE.search(name):
+        if ID_SHAPE.search(name):
             problems.append(Problem("id-shape", label, "its name holds a routine, environment or session ID; rename it"))
         if content is None:
             try:

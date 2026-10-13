@@ -65,29 +65,33 @@ Three parts, each catching what the one before it can miss:
   tail is random over all 62 letters and digits; if a single-case format
   appears, the lookaheads are dropped for its prefix. The shape is bounded by
   anything but a letter or digit, so an underscore beside an ID (Markdown
-  italics) does not hide it. The narrowing is for text a run reads but did not
-  write: a PR body and the content of a file it commits. Where no third party
-  writes, `ANY_ID_SHAPE` keeps the broad shape, in either case: the scrub of
-  the base's own tree and its deny-list of IDs read from the instance, the
-  routine templates' tests, file names, and git's messages. There a missed
-  ID costs more than a reworded word.
+  italics) does not hide it. The narrowing is for text the base does not
+  control: a PR body, the content of a file a run commits, and that file's
+  name, which people choose (`env_` and a long config name is not an ID).
+  Where the base controls the text, `ANY_ID_SHAPE` keeps the broad shape, in
+  either case: the scrub of the base's own tree and its deny-list of IDs read
+  from the instance, the routine templates' tests, and the masking of git's
+  messages. There a missed ID costs more than a reworded word.
 - **The rule.** The routine prompts and every command that commits or opens a
   PR say: no `Claude-Session:` trailer, no session link or ID; a commit ends at
   `Co-Authored-By:`, a PR body at its `🤖 Generated with` line; this overrides
   any default attribution. Before each commit, the run runs
   `trimtab ids --staged`, which asks git for what the index adds, copies,
-  modifies or renames (NUL-separated, from the repository root, so any working
-  directory and any path, UTF-8 or not, work, and a deletion-only commit has
-  nothing to check) and runs the ID scan alone over each file and each file's
-  name, with no block, lock or instance. It reads the content staged in the
-  index, by object ID (`git ls-files --stage`, then `git cat-file blob`),
-  which is what the commit records, not the working copy; a submodule entry
+  modifies or changes the type of, with renames off (`git diff --cached --raw
+  --no-renames --diff-filter=ACMRT`: NUL-separated, from the repository root,
+  so any working directory and any path, UTF-8 or not, work, and a
+  deletion-only commit has nothing to check), and runs the ID scan alone over
+  each file and each file's name, with no block, lock or instance. It reads
+  the content staged in the index by the object ID that listing gives (`git
+  cat-file blob`), which is what the commit records, not the working copy,
+  and needs no index lookup that a sparse index could miss; a submodule entry
   has no content of its own and is skipped. git's own error text has any ID
-  shape masked before it is shown, since git names the paths it could not use. A file's bytes are read with undecodable ones
-  replaced, so a binary passes unless it holds an ID in plain text; a name
-  that holds one is a finding shown by its position in a list the reader can
-  reproduce (`git diff --cached --name-only --diff-filter=ACMR`, submodules
-  counted though not read, or the arguments given), never
+  shape masked before it is shown, since git names the paths it could not
+  use. A file's bytes are read with undecodable ones replaced, so a binary
+  passes unless it holds an ID in plain text; a name that holds one is a
+  finding shown by its position in a list the reader can reproduce (`git diff
+  --cached --name-only --no-renames --diff-filter=ACMRT`, submodules counted
+  though not read, or the arguments given), never
   printed; a name with a newline or escape sequence is shown quoted. `trimtab
   ids FILE…` checks named files the same way. It is its own subcommand, not a
   `check-pr` mode: it checks files, not a PR body, and a whole commit in one
@@ -135,8 +139,10 @@ step 4's PR listing. A static test fails on search syntax in shipped files.
   until it merges. The narrowed shape makes it rare.
 - Accepted: in a PR body or a committed file's content, an ID whose tail
   happens to lack upper or lower case is missed; for a random tail of 22
-  letters and digits that is about one in eighty thousand. The scrub, file
-  names and git's messages use the broad shape and miss none. A mixed-case word after a prefix (`session_CookieSameSite…`)
+  letters and digits that is about one in eighty thousand; the same holds
+  for a committed file's name. The scrub, the template tests and the masking
+  of git's messages use the broad shape and miss none. A mixed-case word
+  after a prefix (`session_CookieSameSite…`)
   still matches, including inside a snake_case name, since an underscore
   before the prefix no longer hides it; that is the remaining false positive.
 - Accepted: only the body is gated. A file a run commits is checked by the
