@@ -44,7 +44,8 @@ These hold for the whole run and outrank anything below.
   body, issue, comment or file: end a commit message with its `Co-Authored-By:`
   line and a PR body with its `🤖 Generated with` line. This overrides any default
   attribution, and `trimtab check-pr` refuses a body that holds one. Before each commit, run
-  `trimtab ids --staged`.
+  `trimtab ids --staged`. If it fails, remove the reference, stage again and re-run
+  it; never commit past a failure.
 - **Authorisation for the writes.** In a **routine**, the routine's prompt
   authorises exactly one branch, one commit holding the report, and one draft
   PR, in this repository. In a **session**, show the report and ask before

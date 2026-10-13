@@ -126,9 +126,13 @@ def cmd_ids(args) -> int:
         return 0
     unreadable, problems = False, []
     for i, (name, content) in enumerate(targets, 1):
-        label = f"file {i}" if ID_SHAPE.search(name) else name
-        if label != name:
+        # A name holding an ID is shown by position; one with a newline or an
+        # escape sequence is shown escaped, so each finding stays on one line.
+        if ID_SHAPE.search(name):
+            label = f"file {i}"
             problems.append(Problem("id-shape", label, "its name holds a routine, environment or session ID; rename it"))
+        else:
+            label = name if name.isprintable() else name.encode("unicode_escape").decode("ascii")
         if content is None:
             try:
                 content = Path(name).read_bytes()
@@ -825,7 +829,9 @@ def build_parser() -> argparse.ArgumentParser:
     reg.add_argument("--against", metavar="REF", help="also fail on IDs listed in HARNESS.md at REF but gone now")
     reg.set_defaults(func=cmd_registry)
 
-    chk = sub.add_parser("check-pr", parents=[common], help="validate a PR body's harness block")
+    chk = sub.add_parser("check-pr", parents=[common],
+                         help="validate a PR body's harness block, and refuse a routine, environment or session "
+                              "ID anywhere in the body")
     body = chk.add_mutually_exclusive_group(required=True)
     body.add_argument("--body-file", help="file holding the PR body, or - for stdin")
     body.add_argument("--pr", type=int, help="read the body of this PR with gh (needs --repo)")

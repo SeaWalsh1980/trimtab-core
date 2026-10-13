@@ -403,6 +403,20 @@ class IdsCli(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("no run reference in 1 file(s)", done.stdout)
 
+    def test_a_name_with_a_newline_stays_on_one_finding_line(self):
+        self.git("init", "-q")
+        try:
+            self.write("report.md\nPR block OK", "x " + "env_" + RUN_ID_TAIL + "\n")
+        except OSError:
+            self.skipTest("this file system refuses a newline in a name")
+        self.git("add", "-A")
+
+        done = self.ids("--staged")
+
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(len(done.stderr.strip().splitlines()), 1)
+        self.assertIn("report.md\\nPR block OK: line 1", done.stderr)
+
     def test_staged_with_nothing_staged_passes(self):
         self.git("init", "-q")
 

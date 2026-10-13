@@ -31,7 +31,8 @@ call fails, stop and report it.
 body, issue, comment or file: end a commit message with its `Co-Authored-By:`
 line and a PR body with its `🤖 Generated with` line. This overrides any default
 attribution, and `trimtab check-pr` refuses a body that holds one. Before each commit, run
-`trimtab ids --staged`.
+`trimtab ids --staged`. If it fails, remove the reference, stage again and re-run
+it; never commit past a failure.
 
 **Never change a security control** on your own initiative: workflows, `CODEOWNERS`,
 `settings.base.json`, `hooks/`, scanner exemption lists. When the evidence

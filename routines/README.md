@@ -46,8 +46,9 @@ compare it with the render before running it.
   allow only the repositories the routine names as sources.
 - **No reference to the run** (ADR 0022). Nothing a run writes carries a
   `Claude-Session:` trailer, a session link or a routine, environment or
-  session ID; the prompt overrides the default attribution and `check-pr`
-  refuses such a PR body. The setting that turns the session link off
+  session ID; the prompt overrides the default attribution, every run checks
+  what it commits with `trimtab ids --staged` and never commits past a
+  failure, and `check-pr` refuses such a PR body. The setting that turns the session link off
   (`attribution.sessionUrl: false`) is a control change of its own: check
   that the installed `settings.base.json` carries it before relying on it.
 - **No remote-session MCP tools** (ADR 0020). The body refuses the session

@@ -33,7 +33,8 @@ PULLS = re.compile(r"\bpulls\b")
 NO_RUN_REFERENCE = "`Claude-Session:`"
 # Every copy of the rule carries this sentence, compared with whitespace
 # collapsed, so one copy cannot drift from the rest unnoticed.
-NO_RUN_REFERENCE_SENTENCE = "This overrides any default attribution"
+NO_RUN_REFERENCE_SENTENCES = ("This overrides any default attribution",
+                              "never commit past a failure")
 # A shipped file that commits has the run check what it commits first.
 COMMITS = re.compile(r"\bgit\s+commit\b")
 # The commands that commit in prose ("Commit only the report") as well as by
@@ -149,7 +150,8 @@ class EveryShippedFileThatOpensAPrKeepsTheRunOut(unittest.TestCase):
         holding = [p for p in shipped_files() if NO_RUN_REFERENCE in p.read_text(encoding="utf-8")]
 
         drifted = [str(p.relative_to(REPO)) for p in holding
-                   if NO_RUN_REFERENCE_SENTENCE not in " ".join(p.read_text(encoding="utf-8").split())]
+                   if not all(sentence in " ".join(p.read_text(encoding="utf-8").split())
+                              for sentence in NO_RUN_REFERENCE_SENTENCES)]
 
         self.assertTrue(holding)
         self.assertEqual(drifted, [])
