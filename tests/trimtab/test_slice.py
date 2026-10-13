@@ -336,8 +336,26 @@ class IdsCli(unittest.TestCase):
         done = self.ids("--staged")
 
         self.assertEqual(done.returncode, 1)
-        self.assertIn("staged file 1 (counting the paths `git diff --cached --name-only` lists)", done.stderr)
+        self.assertIn("staged file 1 (counting the paths `git diff --cached --name-only --diff-filter=ACMR` lists)",
+                      done.stderr)
         self.assertNotIn(RUN_ID_TAIL, done.stderr)
+
+    def test_a_staged_names_position_matches_the_listing_it_names(self):
+        # A deletion is not in that listing; a submodule is, though nothing reads it.
+        self.git("init", "-q")
+        self.write("a-old.md", "old\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "x")
+        self.git("rm", "-q", "a-old.md")
+        commit = git(self.dir, "rev-parse", "HEAD")
+        self.git("update-index", "--add", "--cacheinfo", f"160000,{commit},b-vendor")
+        name = self.write("c-notes-" + "cse_" + RUN_ID_TAIL + ".md", "clean\n")
+        self.git("add", name)  # not -A: that would drop the submodule entry, which has nothing on disk
+
+        done = self.ids("--staged")
+
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("staged file 2 (", done.stderr)
 
     def test_a_missing_file_is_refused_naming_it_without_a_traceback(self):
         done = self.ids("gone.md")

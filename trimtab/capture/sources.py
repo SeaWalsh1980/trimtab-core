@@ -312,26 +312,34 @@ def _git(cwd: Path, *args: str) -> bytes:
 GITLINK = b"160000"  # a submodule's entry: a commit, with no content of its own to read
 
 
-def staged_files(cwd: Path) -> list[tuple[str, bytes]]:
-    """Each file the index adds, copies, modifies or renames to: its path from the repository root, and the
-    content staged for it, which is what the commit records, whatever the working copy now holds.
+STAGED_LISTING = ("diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR")
+
+
+def staged_files(cwd: Path) -> list[tuple[int, str, bytes]]:
+    """Each file the index adds, copies, modifies or renames to: its position in the listing of
+    `git diff --cached --name-only --diff-filter=ACMR` (from 1, so a reader can find it there), its path
+    from the repository root, and the content staged for it, which is what the commit records, whatever
+    the working copy now holds.
 
     Paths come NUL-separated, so one holding a space or a newline stays one
     path, and are decoded as the OS does (`os.fsdecode`), so any name works;
-    a commit that only deletes stages nothing to read. A submodule entry is
-    skipped. Content is read by object ID, so no path reaches git's messages.
+    a commit that only deletes stages nothing to read. A submodule entry has
+    no content of its own: it keeps its place in the count and is not read.
+    Content is read by object ID, so no path reaches git's messages.
     """
     root = Path(os.fsdecode(_git(cwd, "rev-parse", "--show-toplevel").strip()))
-    staged = {n for n in _git(root, "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR").split(b"\0") if n}
-    if not staged:
+    listing = [n for n in _git(root, *STAGED_LISTING).split(b"\0") if n]
+    if not listing:
         return []
-    files = []
     # Each index entry is `<mode> <object> <stage>\t<path>`.
+    index = {}
     for entry in _git(root, "ls-files", "--stage", "-z").split(b"\0"):
         meta, _, path = entry.partition(b"\t")
-        if path in staged and meta.split(b" ")[0] != GITLINK:
-            files.append((os.fsdecode(path), _git(root, "cat-file", "blob", meta.split(b" ")[1].decode("ascii"))))
-    return files
+        if path:
+            mode, obj = meta.split(b" ")[:2]
+            index[path] = (mode, obj.decode("ascii"))
+    return [(i, os.fsdecode(path), _git(root, "cat-file", "blob", index[path][1]))
+            for i, path in enumerate(listing, 1) if index[path][0] != GITLINK]
 
 
 ISSUE_LIMIT = 500  # bounded: issues one label listing reads; more is an error, not a cut-off

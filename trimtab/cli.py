@@ -96,14 +96,15 @@ def _text_of(path: str) -> str | None:
         return None
 
 
-def _ids_targets(args) -> list[tuple[str, bytes | None]] | None:
-    """(name, content) per file to check: the files given (content read later), or what git stages, with the
-    staged content. None after printing why not."""
+def _ids_targets(args) -> list[tuple[int, str, bytes | None]] | None:
+    """(position, name, content) per file to check: the files given, by argument position (content read
+    later), or what git stages, by position in its listing, with the staged content. None after printing
+    why not."""
     if args.staged == bool(args.files):
         print("error: give FILE... or --staged, one or the other", file=sys.stderr)
         return None
     if not args.staged:
-        return [(name, None) for name in args.files]
+        return [(i, name, None) for i, name in enumerate(args.files, 1)]
     try:
         return staged_files(Path.cwd())
     except SourceError as err:
@@ -118,7 +119,7 @@ def _shown(i: int, name: str, staged: bool) -> str:
     as itself otherwise."""
     if ANY_ID_SHAPE.search(name):
         if staged:
-            return f"staged file {i} (counting the paths `git diff --cached --name-only` lists)"
+            return f"staged file {i} (counting the paths `git diff --cached --name-only --diff-filter=ACMR` lists)"
         return f"argument {i}"
     return name if name.isprintable() else repr(name)
 
@@ -134,10 +135,10 @@ def cmd_ids(args) -> int:
     if targets is None:
         return 2
     if not targets:
-        print("nothing staged: no run reference to check")
+        print("nothing staged to read: no run reference to check")
         return 0
     unreadable, problems = False, []
-    for i, (name, content) in enumerate(targets, 1):
+    for i, name, content in targets:
         label = _shown(i, name, args.staged)
         if ANY_ID_SHAPE.search(name):
             problems.append(Problem("id-shape", label, "its name holds a routine, environment or session ID; rename it"))

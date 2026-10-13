@@ -86,7 +86,8 @@ Three parts, each catching what the one before it can miss:
   shape masked before it is shown, since git names the paths it could not use. A file's bytes are read with undecodable ones
   replaced, so a binary passes unless it holds an ID in plain text; a name
   that holds one is a finding shown by its position in a list the reader can
-  reproduce (`git diff --cached --name-only`, or the arguments given), never
+  reproduce (`git diff --cached --name-only --diff-filter=ACMR`, submodules
+  counted though not read, or the arguments given), never
   printed; a name with a newline or escape sequence is shown quoted. `trimtab
   ids FILE…` checks named files the same way. It is its own subcommand, not a
   `check-pr` mode: it checks files, not a PR body, and a whole commit in one
