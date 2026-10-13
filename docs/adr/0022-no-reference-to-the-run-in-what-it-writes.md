@@ -71,8 +71,11 @@ Three parts, each catching what the one before it can miss:
   PR say: no `Claude-Session:` trailer, no session link or ID; a commit ends at
   `Co-Authored-By:`, a PR body at its `🤖 Generated with` line; this overrides
   any default attribution. Before each commit, the run checks every file it
-  adds or changes with `trimtab check-pr --ids-only`, which runs the ID scan
-  alone, with no block, lock or instance. Static tests fail if a shipped file
+  stages with `trimtab ids FILE…`, which runs the ID scan alone over any
+  number of files, with no block, lock or instance, and names each file and
+  line it finds, or each file it cannot read. It is its own subcommand, not a
+  `check-pr` mode: it checks files, not a PR body, and takes a whole commit in
+  one call. Static tests fail if a shipped file
   that opens a PR lacks the rule, if a copy of it drifts from the rest, or if
   a shipped file that commits lacks the file check.
 
@@ -120,7 +123,7 @@ step 4's PR listing. A static test fails on search syntax in shipped files.
   still matches, including inside a snake_case name, since an underscore
   before the prefix no longer hides it; that is the remaining false positive.
 - Accepted: only the body is gated. A file a run commits is checked by the
-  run itself (`--ids-only`, a step the method prescribes, not a gate); the
+  run itself (`trimtab ids`, a step the method prescribes, not a gate); the
   consumer's CI does not scan changed files, which would be a change to its
   workflow, a control there, and is deferred to it. A run reference in a PR
   title, or in an issue or PR comment a run posts, is covered by the prompt

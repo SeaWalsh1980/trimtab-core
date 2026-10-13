@@ -34,7 +34,8 @@ back to either. If a REST call fails, stop and report it.
 body, issue, comment or file: end a commit message with its `Co-Authored-By:`
 line and a PR body with its `🤖 Generated with` line. This overrides any default
 attribution, and `trimtab check-pr` refuses a body that holds one. Before each commit, run
-`trimtab check-pr --ids-only --body-file <file>` on every file it adds or changes.
+`trimtab ids` on every file it stages (`git diff --cached --name-only
+--diff-filter=d` lists them).
 
 ## 0. Setup
 

@@ -17,6 +17,7 @@ from trimtab import dependabot
 from trimtab import instance, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
+from trimtab.items import Problem
 from trimtab.capture.sources import (
     FixtureContents, FixtureIssues, FixtureSource, GhContents, GhIssues, GhPullRequests, GhSource, SourceError,
     changed_files, open_feedback_issues,
@@ -82,29 +83,38 @@ def _pr_body(args) -> str | None:
             return None
     if args.body_file == "-":
         return sys.stdin.read()
+    return _text_of(args.body_file)
+
+
+def _text_of(path: str) -> str | None:
+    """A file's text, or None after naming it: a missing or non-UTF-8 file is a refusal, not a traceback."""
     try:
-        return Path(args.body_file).read_text(encoding="utf-8")
+        return Path(path).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as err:
-        # Loud and typed: an unattended run stops at a named refusal, not a traceback.
-        print(f"error: --body-file {args.body_file}: cannot be read as UTF-8 text ({type(err).__name__})",
-              file=sys.stderr)
+        print(f"error: {path}: cannot be read as UTF-8 text ({type(err).__name__})", file=sys.stderr)
         return None
 
 
-def cmd_check_pr(args) -> int:
-    if args.ids_only:
-        # A file a run is about to commit: no block, so no lock, registry or instance (ADR 0022).
-        if args.schema_only:
-            print("error: --ids-only checks no block; it cannot be used with --schema-only", file=sys.stderr)
-            return 2
-        text = _pr_body(args)
+def cmd_ids(args) -> int:
+    """The files a run is about to commit, checked for a run reference (ADR 0022). No block, lock or instance."""
+    unreadable, problems = False, []
+    for path in args.files:
+        text = _text_of(path)
         if text is None:
-            return 2
-        problems = run_references(text)
-        if not problems:
-            print("no run reference (ids only)")
-            return 0
-        return _print_problems(problems)
+            unreadable = True
+            continue
+        problems += [Problem(p.code, f"{path}: {p.where}", p.message) for p in run_references(text)]
+    if problems:
+        _print_problems(problems)
+    if unreadable:
+        return 2
+    if problems:
+        return 1
+    print(f"no run reference in {len(args.files)} file(s)")
+    return 0
+
+
+def cmd_check_pr(args) -> int:
     prefix = None
     if args.schema_only:
         # A consumer's CI has no instance; resolving one, even from the environment, is not this mode.
@@ -792,10 +802,12 @@ def build_parser() -> argparse.ArgumentParser:
     chk.add_argument("--schema-only", action="store_true",
                      help="read no instance: check the block's form, resolve only the project's own IDs, "
                           "and check every other ID for shape (a consumer's CI)")
-    chk.add_argument("--ids-only", action="store_true",
-                     help="check only for a routine, environment or session ID, in any file a run is about "
-                          "to commit; no block, lock or instance is read")
     chk.set_defaults(func=cmd_check_pr)
+
+    ids = sub.add_parser("ids", help="check files a run is about to commit for a routine, environment or "
+                                     "session ID; no block, lock or instance is read")
+    ids.add_argument("files", nargs="+", metavar="FILE", help="the files to check, e.g. what a commit stages")
+    ids.set_defaults(func=cmd_ids)
 
     ing = sub.add_parser("ingest", parents=[common], help="record merged PRs by watermark (dry run unless --apply)")
     _ingest_options(ing)

@@ -40,7 +40,7 @@ COMMITS = re.compile(r"\bgit\s+commit\b")
 # a literal `git commit`: named, since a pattern cannot tell prose from a step.
 COMMITTING_COMMANDS = ("commands/trimtab-bump.md", "commands/trimtab-conformance.md",
                        "commands/trimtab-retro.md", "commands/trimtab-upstream-retro.md")
-IDS_ONLY = "check-pr --ids-only"
+IDS_CHECK = "`trimtab ids`"
 
 
 def shipped_files():
@@ -155,12 +155,13 @@ class EveryShippedFileThatOpensAPrKeepsTheRunOut(unittest.TestCase):
         self.assertEqual(drifted, [])
 
     def test_every_file_that_commits_checks_what_it_commits(self):
-        committing = {p for p in shipped_files() if COMMITS.search(p.read_text(encoding="utf-8"))}
-        committing |= {REPO / name for name in COMMITTING_COMMANDS}
+        literal = {str(p.relative_to(REPO)) for p in shipped_files() if COMMITS.search(p.read_text(encoding="utf-8"))}
+        committing = literal | set(COMMITTING_COMMANDS)
 
-        unchecked = sorted(str(p.relative_to(REPO)) for p in committing if IDS_ONLY not in p.read_text(encoding="utf-8"))
+        unchecked = sorted(n for n in committing if IDS_CHECK not in (REPO / n).read_text(encoding="utf-8"))
 
-        self.assertEqual(len(committing), len(COMMITTING_COMMANDS))
+        # A file that commits by a literal `git commit` but is not named is listed, so it is added to the names.
+        self.assertEqual(sorted(literal - set(COMMITTING_COMMANDS)), [])
         self.assertEqual(unchecked, [])
 
     def test_reading_pulls_is_not_opening_one(self):

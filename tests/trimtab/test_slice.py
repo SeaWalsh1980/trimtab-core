@@ -233,62 +233,83 @@ class SchemaOnlyCli(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
 
 
-class IdsOnlyCli(unittest.TestCase):
-    """`check-pr --ids-only`: a file a run is about to commit, checked for a run reference only.
+class IdsCli(unittest.TestCase):
+    """`trimtab ids FILE...`: the files a run is about to commit, checked for a run reference only.
 
-    Writes the file in a temporary directory that holds no lock and names no instance.
+    Writes the files in a temporary directory that holds no lock and names no instance.
     """
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self._tmp.name)
-        self.file = self.dir / "report.md"
 
     def tearDown(self):
         self._tmp.cleanup()
 
-    def check(self, text, *extra):
-        self.file.write_text(text, encoding="utf-8")
-        return subprocess.run([str(TRIMTAB), "check-pr", "--ids-only", "--body-file", str(self.file), *extra],
-                              capture_output=True, text=True, cwd=self.dir, env=env_for(None))
+    def write(self, name, text):
+        (self.dir / name).write_text(text, encoding="utf-8")
+        return name
 
-    def test_a_file_holding_a_run_reference_fails_naming_its_line_not_its_value(self):
-        done = self.check("# Report\n\nfindings\n" + "_Generated in " + "session_" + RUN_ID_TAIL + "_\n")
+    def ids(self, *names):
+        return subprocess.run([str(TRIMTAB), "ids", *names], capture_output=True, text=True, cwd=self.dir,
+                              env=env_for(None))
+
+    def test_a_file_holding_a_run_reference_fails_naming_it_and_its_line_not_the_value(self):
+        name = self.write("report.md", "# Report\n\nfindings\n" + "_Generated in " + "session_" + RUN_ID_TAIL + "_\n")
+
+        done = self.ids(name)
 
         self.assertEqual(done.returncode, 1)
-        self.assertIn("id-shape: line 4", done.stderr)
+        self.assertIn("report.md: line 4", done.stderr)
         self.assertNotIn(RUN_ID_TAIL, done.stderr)
 
-    def test_a_clean_file_passes_with_no_block_lock_or_instance(self):
-        done = self.check("# Report\n\nNo harness block here, and none is needed.\n")
+    def test_several_files_are_checked_in_one_call_and_only_the_one_with_a_reference_is_named(self):
+        clean = self.write("clean.md", "# Clean\n")
+        dirty = self.write("dirty.md", "x " + "trig_" + RUN_ID_TAIL + "\n")
+
+        done = self.ids(clean, dirty)
+
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("dirty.md", done.stderr)
+        self.assertNotIn("clean.md", done.stderr)
+
+    def test_clean_files_pass_with_no_block_lock_or_instance(self):
+        names = [self.write("a.md", "# A\n"), self.write("b.md", "No harness block, and none is needed.\n")]
+
+        done = self.ids(*names)
 
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("no run reference", done.stdout)
+        self.assertIn("no run reference in 2 file(s)", done.stdout)
 
     def test_a_file_that_is_not_text_is_refused_naming_it_without_a_traceback(self):
-        self.file.write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\x00")
+        (self.dir / "image.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\x00")
 
-        done = subprocess.run([str(TRIMTAB), "check-pr", "--ids-only", "--body-file", str(self.file)],
-                              capture_output=True, text=True, cwd=self.dir, env=env_for(None))
+        done = self.ids("image.png")
 
         self.assertEqual(done.returncode, 2)
-        self.assertIn("report.md", done.stderr)
+        self.assertIn("image.png", done.stderr)
         self.assertNotIn("Traceback", done.stderr)
 
     def test_a_missing_file_is_refused_naming_it_without_a_traceback(self):
-        done = subprocess.run([str(TRIMTAB), "check-pr", "--ids-only", "--body-file", str(self.dir / "gone.md")],
-                              capture_output=True, text=True, cwd=self.dir, env=env_for(None))
+        done = self.ids("gone.md")
 
         self.assertEqual(done.returncode, 2)
         self.assertIn("gone.md", done.stderr)
         self.assertNotIn("Traceback", done.stderr)
 
-    def test_ids_only_with_schema_only_is_a_usage_error_naming_both_flags(self):
-        done = self.check("# Report\n", "--schema-only")
+    def test_no_file_is_a_usage_error(self):
+        done = self.ids()
 
         self.assertEqual(done.returncode, 2)
-        self.assertIn("--ids-only", done.stderr)
-        self.assertIn("--schema-only", done.stderr)
+
+    def test_check_pr_refuses_a_missing_body_file_without_a_traceback(self):
+        done = subprocess.run([str(TRIMTAB), "check-pr", "--schema-only", "--project", str(self.dir),
+                               "--body-file", str(self.dir / "gone.md")],
+                              capture_output=True, text=True, cwd=self.dir, env=env_for(None))
+
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("gone.md", done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
 
 
 if __name__ == "__main__":

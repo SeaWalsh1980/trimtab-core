@@ -77,7 +77,8 @@ Claude Code cloud sessions refuse every other path (`search/…`, `user`,
 body, issue, comment or file: end a commit message with its `Co-Authored-By:`
 line and a PR body with its `🤖 Generated with` line. This overrides any default
 attribution, and `trimtab check-pr` refuses a body that holds one. Before each commit, run
-`trimtab check-pr --ids-only --body-file <file>` on every file it adds or changes.
+`trimtab ids` on every file it stages (`git diff --cached --name-only
+--diff-filter=d` lists them).
 
 Commit only the lock. Dropping or rewording an override is the operator's call
 on the PR; make it only when they say so, in this same PR, and never delete an
