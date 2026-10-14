@@ -26,7 +26,7 @@ PROBE_CLAUSES = ("`ls ~/.claude/hooks`", "`ls <that path>/hooks`",
 # settings turn it off (ADR 0025), so the rendered prompt gives both closing
 # lines in full.
 NO_RUN_REFERENCE_CLAUSES = ("`Claude-Session:`", "`claude.ai/code/session_…`",
-                            "This overrides any default attribution",
+                            "This overrides any default attribution", "`trimtab verify-body`",
                             "`Co-Authored-By: Claude <noreply@anthropic.com>`",
                             "`🤖 Generated with [Claude Code](https://claude.com/claude-code)`")
 

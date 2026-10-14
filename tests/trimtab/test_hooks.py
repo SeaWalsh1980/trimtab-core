@@ -160,6 +160,13 @@ class PrBodyCheck(unittest.TestCase):
 
         self.assertEqual(done.returncode, 2)
 
+    def test_a_create_inside_a_command_substitution_is_still_checked(self):
+        # The shipped commands capture the new PR's number for `trimtab verify-body` (ADR 0024).
+        done = self.check('N=$(gh api -X POST "repos/$REPO/pulls" -f title=t -f head=b -F body=@bad.md '
+                          '--jq .number) && trimtab verify-body --repo "$REPO" --pull "$N" --body-file bad.md')
+
+        self.assertEqual(done.returncode, 2)
+
     def test_the_shipped_commands_create_line_with_a_valid_body_is_allowed(self):
         done = self.check('gh api -X POST "repos/$REPO/pulls" -f title=t -f head=b -f base="$DEFAULT" '
                           "-F draft=true -F body=@good.md --jq .html_url")

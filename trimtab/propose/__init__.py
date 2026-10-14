@@ -19,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
-from typing import Mapping, Protocol, Sequence
+from typing import Callable, ContextManager, Mapping, Protocol, Sequence
 
 from trimtab.items import Item, Proposal
 from trimtab.registry.rules import RuleType
@@ -67,14 +67,24 @@ def render(proposal: Proposal, registry: Mapping[str, Item], project: str | None
     return Draft(kind, proposal.item_id, title, body, (ISSUE_LABEL,) if kind == "issue" else ())
 
 
+@dataclass(frozen=True)
+class Filer:
+    """Files one issue and returns what the sink reports for it (its URL); given out only inside `filing`."""
+
+    create: Callable[[str, str, Sequence[str]], str]
+
+
 class IssueSink(Protocol):
-    destination: str  # where `create` files issues; part of the confirmation
+    destination: str  # where `filing` files issues; part of the confirmation
 
     def recent_titles(self, label: str, closed_since: str | None) -> list[str]:
         """Titles of issues with `label` that are open, or were closed on or after `closed_since`."""
         ...
 
-    def create(self, title: str, body: str, labels: Sequence[str]) -> str: ...
+    def filing(self) -> ContextManager[Filer]:
+        """Issues are filed only inside this block; on leaving it, however it is left, every one filed is
+        checked, and an error is raised if one is not what was sent."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -99,8 +109,38 @@ def confirmation(todo: IssuePlan) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:12]
 
 
+class OpeningStopped(Exception):
+    """Opening stopped at one draft: `opened` were filed before it, `not_opened` (item IDs) were not tried.
+
+    `cause` is the sink's error; the draft it stopped at may or may not exist, as the cause says. `also` is an
+    earlier stop this one followed: a create that failed, then a read-back that failed too. Both are kept, since
+    the create's cause may say its issue may have been filed.
+    """
+
+    def __init__(self, opened: list[str], stopped_at: str, not_opened: list[str], cause: Exception,
+                 also: OpeningStopped | None = None):
+        super().__init__(f"opening stopped at {stopped_at}: {cause}")
+        self.opened, self.stopped_at, self.not_opened, self.cause = opened, stopped_at, not_opened, cause
+        self.also = also
+
+
 def open_issues(todo: IssuePlan, sink: IssueSink, confirm: str) -> list[str]:
     """Open each planned issue. Returns what the sink reports for each (its URL)."""
     if confirm != confirmation(todo):
         raise StaleProposals("the proposals changed since the dry run; run --dry-run again")
-    return [sink.create(d.title, d.body, d.labels) for d in todo.to_open]
+    opened: list[str] = []
+    stopped: OpeningStopped | None = None
+    try:
+        with sink.filing() as filer:  # what was opened is read back on leaving, even part-way
+            for i, d in enumerate(todo.to_open):
+                try:
+                    opened.append(filer.create(d.title, d.body, d.labels))
+                except Exception as err:  # raised below with what was opened, so no URL is lost
+                    stopped = OpeningStopped(opened, d.item_id, [x.item_id for x in todo.to_open[i + 1:]], err)
+                    break
+    except Exception as err:
+        raise OpeningStopped(opened, "the read-back", stopped.not_opened if stopped else [], err,
+                             also=stopped) from err
+    if stopped is not None:
+        raise stopped
+    return opened

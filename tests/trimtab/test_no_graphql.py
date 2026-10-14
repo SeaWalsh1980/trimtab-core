@@ -38,7 +38,12 @@ NO_RUN_REFERENCE = "`Claude-Session:`"
 NO_RUN_REFERENCE_SENTENCES = ("`Co-Authored-By: Claude <noreply@anthropic.com>`",
                               "`🤖 Generated with [Claude Code](https://claude.com/claude-code)`",
                               "This overrides any default attribution",
-                              "never commit past a failure", "the check could not run")
+                              "never commit past a failure", "the check could not run",
+                              "Read back each PR or comment you create with `trimtab verify-body`")
+# A `gh api` call that POSTs a body GitHub may add to (a PR, a comment) has
+# `trimtab verify-body` after it on the same command line (ADR 0024).
+WRITES_A_BODY = re.compile(r"\b(?:pulls|comments)\b")
+VERIFY_BODY = "trimtab verify-body"
 # A shipped file that commits has the run check what it commits first.
 COMMITS = re.compile(r"\bgit\s+commit\b")
 # The commands that commit in prose ("Commit only the report") as well as by
@@ -174,6 +179,59 @@ class EveryShippedFileThatOpensAPrKeepsTheRunOut(unittest.TestCase):
         lines = ['gh api "repos/$REPO/pulls?state=open&per_page=100"', "gh api -X POST repos/o/r/issues/5/labels"]
 
         self.assertFalse(opens_a_pr("\n".join(lines)))
+
+
+def command_lines(text):
+    """(first file line, command line) pairs: a line ending in a backslash continues onto the next."""
+    pending, start = [], None
+    for n, line in enumerate(text.splitlines(), 1):
+        start = start or n
+        if line.endswith("\\"):
+            pending.append(line[:-1])
+            continue
+        yield start, " ".join(pending + [line])
+        pending, start = [], None
+    if pending:
+        yield start, " ".join(pending)
+
+
+def unverified_writes(text):
+    """First file lines of command lines that POST a PR or a comment and do not run `trimtab verify-body` after it."""
+    found = []
+    for n, line in command_lines(text):
+        post = POST.search(line)
+        if GH_API.search(line) and post and WRITES_A_BODY.search(line) and VERIFY_BODY not in line[post.start():]:
+            found.append(n)
+    return found
+
+
+class EveryPrOrCommentARunCreatesIsReadBack(unittest.TestCase):
+    def test_every_shipped_pr_or_comment_is_read_back(self):
+        found = {str(p.relative_to(REPO)): unverified_writes(p.read_text(encoding="utf-8")) for p in shipped_files()}
+
+        self.assertEqual({path: lines for path, lines in found.items() if lines}, {})
+
+    def test_the_check_catches_a_write_with_no_read_back(self):
+        lines = ["gh api -X POST 'repos/{owner}/{repo}/pulls' -F body=@f --jq .html_url",
+                 "gh api -X POST 'repos/{owner}/{repo}/issues/<n>/comments' -f body=x",
+                 'trimtab verify-body --pull 1 --body-file f && gh api "repos/$R/pulls" -X POST -F body=@f']
+
+        self.assertEqual(unverified_writes("\n".join(lines)), [1, 2, 3])
+
+    def test_the_check_lets_a_write_followed_by_its_read_back_through(self):
+        text = ("N=$(gh api -X POST \"repos/$REPO/pulls\" -F body=@f --jq .number) \\\n"
+                "  && trimtab verify-body --repo \"$REPO\" --pull \"$N\" --body-file f\n"
+                "gh api -X POST repos/o/r/issues/5/labels -f labels[]=x")
+
+        self.assertEqual(unverified_writes(text), [])
+
+    def test_a_write_is_reported_at_its_file_line_after_a_continued_command(self):
+        text = ("one \\\n"
+                "  two \\\n"
+                "  three\n"
+                "gh api -X POST repos/o/r/pulls -F body=@f")
+
+        self.assertEqual(unverified_writes(text), [4])
 
 
 if __name__ == "__main__":
