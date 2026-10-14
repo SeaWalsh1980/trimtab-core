@@ -276,6 +276,16 @@ class VerifyBodies(unittest.TestCase):
 
         self.assertEqual(repo.writes, [("issue", 1), ("issue", 3)])
 
+    def test_a_changed_body_is_named_even_when_github_also_failed_for_another(self):
+        repo = FailingRepository({("issue", 1): SENT, ("issue", 2): SENT, ("issue", 3): SENT + "\nchanged"},
+                                 failing_read=("issue", 1))
+
+        with self.assertRaises(WrittenBodyError) as caught:
+            verify_bodies(repo, self.targets(1, 2, 3), settle_seconds=0, sleep=repo.sleep)
+
+        self.assertEqual(caught.exception.targets, [("issue", 3), ("issue", 1)])
+        self.assertIsInstance(caught.exception.__cause__, SourceError)
+
     def test_a_failed_write_back_does_not_stop_the_next(self):
         repo = FailingRepository({("issue", 1): with_footer(SENT), ("issue", 2): with_footer(SENT)},
                                  failing_write=("issue", 1))

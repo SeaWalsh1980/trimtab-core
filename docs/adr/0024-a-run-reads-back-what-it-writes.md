@@ -46,7 +46,13 @@ The upstream retro also comments on issues.
     or write, and is never written back.
   When several bodies are read back together, every one is checked and
   every footer found is taken off before the run fails; one error then
-  names each PR, issue or comment that failed. Errors never quote a body.
+  names each PR, issue or comment that failed. A GitHub error reading or
+  writing one body does not stop the others either: alone, it is raised as
+  it came once the rest are done; with a body that failed, both are named
+  in one error. Errors never quote a body.
+- **An interrupt is not held up.** Ctrl-C inside the filing block skips the
+  wait and the read-back and goes on at once, with a note naming each issue
+  filed so far, to check with `trimtab verify-body`.
 - **`trimtab verify-body`** does it for a PR (`--pull N`, the number the POST
   returned), an issue (`--issue N`) or a comment
   (`--comment ID`), against `--body-file` or `--body`. Exit 0 is the body

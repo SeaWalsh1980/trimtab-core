@@ -76,9 +76,9 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
     """Read back each target after one shared wait; take the platform footer off every one that carries it, wait
     once more, and require them identical. Any other change, or a run reference, fails, but only after every
     target has been checked and every footer taken off: one WrittenBodyError names each target that failed.
-    A read or write that fails (GitHub) does not stop the others either; the first such error is then raised
-    as it came, ahead of any WrittenBodyError. The caller supplies the wait (`sleep`): waiting is the outer
-    layer's."""
+    A read or write that fails (GitHub) does not stop the others either. If that is all that failed, the first
+    such error is raised as it came; if a body also failed, the WrittenBodyError names both, each by its target.
+    The caller supplies the wait (`sleep`): waiting is the outer layer's."""
 
     def wait() -> None:
         if settle_seconds > 0:
@@ -93,21 +93,21 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
                                              f"({', '.join(p.where for p in references)})"))
     # A read or write that fails for one body is kept and re-raised at the end, so every footer the batch can
     # reach is still taken off first.
-    errors: list[Exception] = []
+    errors: list[tuple[tuple[str, int], Exception]] = []
 
     def read(kind: str, number: int) -> str | None:
         try:
             return bodies.read(kind, number)
-        except Exception as err:  # re-raised below, after the rest of the batch
-            errors.append(err)
+        except Exception as err:  # raised below, after the rest of the batch
+            errors.append(((kind, number), err))
             return None
 
     def write(kind: str, number: int, sent: str) -> bool:
         try:
             bodies.write(kind, number, sent)
             return True
-        except Exception as err:  # re-raised below, after the rest of the batch
-            errors.append(err)
+        except Exception as err:  # raised below, after the rest of the batch
+            errors.append(((kind, number), err))
             return False
 
     held = {target for target, _ in failures}
@@ -133,11 +133,14 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
         body = read(kind, number)
         if body is not None and compare(sent, body) is not Readback.SAME:
             failures.append(((kind, number), "the platform's footer came back after the body sent was written again"))
-    if errors:
-        raise errors[0]  # GitHub's error, as raised: the caller decides what an unread body means
+    if errors and not failures:
+        raise errors[0][1]  # GitHub's error, as raised: the caller decides what an unread body means
     if failures:
-        raise WrittenBodyError("; ".join(f"{kind} {number}: {why}" for (kind, number), why in failures),
-                               [target for target, _ in failures])
+        # Both kinds name their bodies: a changed body is never hidden behind a GitHub error.
+        why = [f"{kind} {number}: {reason}" for (kind, number), reason in failures]
+        why += [f"{kind} {number}: not read back ({err})" for (kind, number), err in errors]
+        raise WrittenBodyError("; ".join(why), [t for t, _ in failures] + [t for t, _ in errors]) from (
+            errors[0][1] if errors else None)
     return [outcomes[(kind, number)] for kind, number, _ in targets]
 
 
