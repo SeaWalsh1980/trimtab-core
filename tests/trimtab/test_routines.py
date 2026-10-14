@@ -60,6 +60,11 @@ class Render(unittest.TestCase):
         refused = spec["job_config"]["ccr"]["session_context"]["disallowed_tools"]
         self.assertTrue({REMOTE_SESSION_SERVER, REMOTE_SUBSCRIBE} <= set(refused))
 
+    def test_the_session_names_no_model_so_it_runs_the_platform_default(self):
+        spec = routines.render("upstream-retro", routines.values(self.inst, {"environment_id": ENV_ID}))
+
+        self.assertNotIn("model", spec["job_config"]["ccr"]["session_context"])
+
     def test_the_guard_probe_requires_the_exact_command_and_no_other(self):
         spec = routines.render("upstream-retro", routines.values(self.inst, {"environment_id": ENV_ID}))
 
@@ -191,7 +196,7 @@ class PerProjectTemplate:
 
         context, expected = spec["job_config"]["ccr"]["session_context"], upstream["job_config"]["ccr"]["session_context"]
         keys = ("allowed_tools", "disallowed_tools", "model")
-        self.assertEqual([context[k] for k in keys], [expected[k] for k in keys])
+        self.assertEqual([context.get(k) for k in keys], [expected.get(k) for k in keys])
 
     def test_the_session_refuses_the_remote_session_mcp_tools(self):
         spec = self.rendered()
