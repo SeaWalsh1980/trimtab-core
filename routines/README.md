@@ -48,9 +48,15 @@ compare it with the render before running it.
   `Claude-Session:` trailer, a session link or a routine, environment or
   session ID; the prompt overrides the default attribution, every run checks
   what it commits with `trimtab ids --staged` and never commits past a
-  failure, and `check-pr` refuses such a PR body. The setting that turns the session link off
-  (`attribution.sessionUrl: false`) is a control change of its own: check
-  that the installed `settings.base.json` carries it before relying on it.
+  failure, and `check-pr` refuses such a PR body. The setting that turns attribution off
+  (`"attribution": {"commit": "", "pr": "", "sessionUrl": false}`, ADR 0025)
+  is a control change of its own: check
+  that the generated `~/.claude/settings.json` (what Claude Code reads, after
+  the instance and machine layers merge) carries it before relying on it.
+  That checks this machine only: a routine's settings are the ones its cloud
+  environment's setup script (`environment-setup.sh`) installed, from the pin
+  that environment last built, so after a pin move change the setup script's
+  text (below) before a run relies on it, and read the run's log.
 - **No remote-session MCP tools** (ADR 0020). The body refuses the session
   server's tools, so an unattended run does not wait on an approval. It can
   still be woken after its work: a run that publishes a PR was resumed once by

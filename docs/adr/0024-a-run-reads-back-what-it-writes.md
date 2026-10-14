@@ -7,6 +7,11 @@ carrying this change opens a PR, `trimtab verify-body` exits 0, and the PR's
 body, read afterwards, holds no reference to the run (see "Trial, still
 open").
 
+2026-10-14: the companion settings change named below as
+`attribution: false` landed as
+`"attribution": {"commit": "", "pr": "", "sessionUrl": false}` instead
+(`docs/adr/0025-installed-settings-turn-commit-and-pr-attribution-off.md`).
+
 ## Context
 
 ADR 0022's trial (2026-10-14) ran a per-project routine on a base whose
@@ -88,6 +93,9 @@ The upstream retro also comments on issues.
 - **`attribution: false` in the installed settings.** Taken as well, as its
   own control change: whether it stops the footer is a trial of that change.
   This one does not depend on it, and stays useful if it does not.
+  (2026-10-14: that change landed as
+  `{"commit": "", "pr": "", "sessionUrl": false}`, not `false`; see ADR
+  0025.)
 - **Routines push branches only, and the operator opens each PR.** Rejected:
   it gives up the routines' output for a leak this change bounds. Kept as the
   fallback if a footer cannot be taken off.

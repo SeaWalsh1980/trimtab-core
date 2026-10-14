@@ -2,6 +2,10 @@
 
 ## Status
 
+Superseded in part by ADR 0025 (2026-10-14): the setting. The check and the
+rule stand; when this record is accepted is stated at the end of "Trial
+result" below.
+
 Proposed (2026-10-13). Becomes accepted once a guarded cloud routine on a
 base carrying both parts below opens a PR whose commits and body hold no
 reference to the run (see "Trial, still open").
@@ -12,6 +16,10 @@ bootstrap test that pins it in the installed settings.
 
 2026-10-14: the trial ran; the commit was clean and the PR body was not (see
 "Trial result" below). ADR 0024 adds reading back what a run writes.
+
+2026-10-14: the setting part is superseded by ADR 0025
+(`docs/adr/0025-installed-settings-turn-commit-and-pr-attribution-off.md`),
+which turns commit and PR attribution off as well as the session link.
 
 ## Context
 

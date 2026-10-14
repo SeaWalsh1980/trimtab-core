@@ -86,17 +86,26 @@ PY
   fi
 }
 
-# A run's commits and PR bodies carry its session link unless the installed
-# settings turn that off (docs/adr/0022-no-reference-to-the-run-in-what-it-writes.md). The key must survive the merge and
-# the pruning of empty containers, so it is read back from the generated file.
-check_installed_settings_drop_the_session_url() {
+# A run's commits and PR bodies carry its session link and default attribution
+# unless the installed settings turn them off
+# (docs/adr/0022-no-reference-to-the-run-in-what-it-writes.md,
+# docs/adr/0025-installed-settings-turn-commit-and-pr-attribution-off.md). The
+# empty strings must survive the merge and the pruning of empty containers, so
+# the value is read back from the generated file and compared as JSON, exactly.
+check_installed_settings_turn_commit_and_pr_attribution_off() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
   boot "$h" "$live" --instance "$inst"
-  if [[ $rc -eq 0 && "$(settings_get "$h" attribution.sessionUrl)" == False ]]; then
-    pass "the installed settings carry attribution.sessionUrl false"
+  local found=""
+  [[ $rc -eq 0 ]] && found=$(python3 - "$h/.claude/settings.json" <<'PY'
+import json, sys
+print(json.dumps(json.load(open(sys.argv[1])).get("attribution"), sort_keys=True))
+PY
+)
+  if [[ $rc -eq 0 && "$found" == '{"commit": "", "pr": "", "sessionUrl": false}' ]]; then
+    pass "the installed settings turn commit and PR attribution and the session link off"
   else
-    fail "the installed settings carry attribution.sessionUrl false" "rc=$rc"
+    fail "the installed settings turn commit and PR attribution and the session link off" "rc=$rc attribution=${found:-<unread>}"
   fi
 }
 
@@ -119,8 +128,10 @@ check_refuses_disable_all_hooks() {
 check_refuses_a_layer_that_sets_attribution() {
   local h inst layer value
   for layer in settings.instance.json machine.json; do
-    # The last value repeats the base's own on main: refused too (ADR 0026).
-    for value in '{"commit": "x"}' '{"sessionUrl": true}' 'false' 'null' '{"sessionUrl": false}'; do
+    # The last two are values the base itself has set, the current one last: a
+    # layer repeating the base's exact value is refused too (ADR 0026).
+    for value in '{"commit": "x"}' '{"sessionUrl": true}' 'false' 'null' '{"sessionUrl": false}' \
+                 '{"commit": "", "pr": "", "sessionUrl": false}'; do
       h=$(new_home); inst=$(inst_of "$h")
       echo "{\"attribution\": $value}" > "$inst/$layer"
       boot "$h" "$live" --instance "$inst"
@@ -772,7 +783,7 @@ check_accepts_python_3_11
 check_refuses_python_that_reports_no_version
 check_writes_instance_values
 check_base_hooks_survive
-check_installed_settings_drop_the_session_url
+check_installed_settings_turn_commit_and_pr_attribution_off
 check_refuses_disable_all_hooks
 check_refuses_a_layer_that_sets_attribution
 check_attribution_refusal_leaves_a_live_install_alone
