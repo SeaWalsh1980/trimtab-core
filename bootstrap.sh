@@ -252,8 +252,10 @@ fi
 # lists concatenate without duplicates, scalars override. After every layer the
 # base's hook registrations must still be present: a layer that loses one would
 # switch a guard off silently, so the merge refuses and nothing is written. It
-# refuses, for the same reason, a layer whose env sets any HOOK_ALLOW_* key,
-# and an instance or machine layer that sets `attribution`, which the base owns.
+# refuses, for the same reason, a layer whose env sets any HOOK_ALLOW_* key. It
+# also refuses an instance or machine layer that sets `attribution`, for a
+# different one: the base owns that key, so that what runs write carries no
+# reference to the run (ADR 0022, ADR 0026).
 mkdir -p "$CLAUDE_HOME"
 generated=$(python3 - "$BASE" "$INSTANCE" "$values" <<'PY'
 import json, sys, os
@@ -309,7 +311,7 @@ for position, (name, layer) in enumerate(layers):
     # Any layer after the base (position 0), any value.
     if position > 0 and "attribution" in layer:
         refuse(name, "sets `attribution`, which the base owns",
-               "the installed attribution would differ from the base's (remove the key)")
+               "only the base may set it, even to the same value (remove the key)")
     merged = merge(merged, layer)
     hooks = merged.get("hooks", {})
     if not isinstance(hooks, dict):
