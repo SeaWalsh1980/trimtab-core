@@ -3,7 +3,9 @@
 ## Status
 
 Superseded in part by ADR 0025 (2026-10-14): the setting. The check and the
-rule stand; the trial below is run against ADR 0025's setting.
+rule stand; the trial below is run against ADR 0025's setting. This record
+becomes accepted when that trial passes, with ADR 0025's setting in place of
+the first part below; the trial's result is recorded in both.
 
 Proposed (2026-10-13). Becomes accepted once a guarded cloud routine on a
 base carrying both parts below opens a PR whose commits and body hold no

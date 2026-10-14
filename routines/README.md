@@ -50,7 +50,8 @@ compare it with the render before running it.
   what it commits with `trimtab ids --staged` and never commits past a
   failure, and `check-pr` refuses such a PR body. The setting that turns attribution off
   (`"attribution": false`, ADR 0025) is a control change of its own: check
-  that the installed `settings.base.json` carries it before relying on it.
+  that the generated `~/.claude/settings.json` (what Claude Code reads, after
+  the instance and machine layers merge) carries it before relying on it.
 - **No remote-session MCP tools** (ADR 0020). The body refuses the session
   server's tools, so an unattended run does not wait on an approval. It can
   still be woken after its work: a run that publishes a PR was resumed once by

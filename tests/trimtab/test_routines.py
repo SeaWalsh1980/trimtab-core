@@ -22,9 +22,13 @@ PROBE_CLAUSES = ("`ls ~/.claude/hooks`", "`ls <that path>/hooks`",
                  "refusal of any other command does not satisfy this check",
                  "Quote the exact command and the refusal text")
 # What a run writes carries no reference to the run: the platform's default
-# attribution adds a session link to commits and PR bodies.
+# attribution adds a session link to commits and PR bodies. The installed
+# settings turn it off (ADR 0025), so the rendered prompt gives both closing
+# lines in full.
 NO_RUN_REFERENCE_CLAUSES = ("`Claude-Session:`", "`claude.ai/code/session_…`",
-                            "This overrides any default attribution")
+                            "This overrides any default attribution",
+                            "`Co-Authored-By: Claude <noreply@anthropic.com>`",
+                            "`🤖 Generated with [Claude Code](https://claude.com/claude-code)`")
 
 
 def prompt_of(spec):
