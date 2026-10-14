@@ -2,6 +2,9 @@
 
 ## Status
 
+Superseded in part by ADR 0025 (2026-10-14): the setting. The check and the
+rule stand; the trial below is run against ADR 0025's setting.
+
 Proposed (2026-10-13). Becomes accepted once a guarded cloud routine on a
 base carrying both parts below opens a PR whose commits and body hold no
 reference to the run (see "Trial, still open").

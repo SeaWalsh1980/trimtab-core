@@ -48,8 +48,8 @@ compare it with the render before running it.
   `Claude-Session:` trailer, a session link or a routine, environment or
   session ID; the prompt overrides the default attribution, every run checks
   what it commits with `trimtab ids --staged` and never commits past a
-  failure, and `check-pr` refuses such a PR body. The setting that turns the session link off
-  (`attribution.sessionUrl: false`) is a control change of its own: check
+  failure, and `check-pr` refuses such a PR body. The setting that turns attribution off
+  (`"attribution": false`, ADR 0025) is a control change of its own: check
   that the installed `settings.base.json` carries it before relying on it.
 - **No remote-session MCP tools** (ADR 0020). The body refuses the session
   server's tools, so an unattended run does not wait on an approval. It can
