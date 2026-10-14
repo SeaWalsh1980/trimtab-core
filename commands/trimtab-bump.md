@@ -65,9 +65,14 @@ git add .claude/trimtab.json
 trimtab ids --staged && git commit -m "chore(trimtab): move the lock to <new short SHA>" \
   && git push -u origin HEAD \
   && DEFAULT=$(gh api 'repos/{owner}/{repo}' --jq .default_branch) \
-  && gh api -X POST 'repos/{owner}/{repo}/pulls' -f title="chore(trimtab): move the lock to <new short SHA>" \
-    -f head="$(git branch --show-current)" -f base="$DEFAULT" -F draft=true -F body=@"$BODY" --jq .html_url
+  && REPO=$(gh api 'repos/{owner}/{repo}' --jq .full_name) \
+  && gh api -X POST "repos/$REPO/pulls" -f title="chore(trimtab): move the lock to <new short SHA>" \
+    -f head="$(git branch --show-current)" -f base="$DEFAULT" -F draft=true -F body=@"$BODY" --jq .html_url \
+  && trimtab verify-body --repo "$REPO" --head "$(git branch --show-current)" --body-file "$BODY"
 ```
+
+`verify-body` reads the PR back: exit 0 is the body sent (it may say it took
+the platform's session footer off); exit 1 or 2: stop and report it.
 
 GitHub is reached through `gh api` on `repos/{owner}/{repo}/…` paths only:
 Claude Code cloud sessions refuse every other path (`search/…`, `user`,
@@ -80,7 +85,9 @@ line and a PR body with its `🤖 Generated with` line. This overrides any defau
 attribution, and `trimtab check-pr` refuses a body that holds one. Before each commit, run
 `trimtab ids --staged`. If it exits 1, remove the reference, stage again and
 re-run it; never commit past a failure. If it exits 2, the check could not run:
-stop and report it.
+stop and report it. Read back each PR or comment you create with
+`trimtab verify-body`, which takes off the platform's session footer; if it
+does not exit 0, stop and report it.
 
 Commit only the lock. Dropping or rewording an override is the operator's call
 on the PR; make it only when they say so, in this same PR, and never delete an

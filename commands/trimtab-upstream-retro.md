@@ -12,7 +12,9 @@ the decision record that a change to a default every consumer inherits needs.
 
 **Authorisation for the writes.** In a **routine**, the routine's prompt
 authorises exactly: branches and draft PRs on Trimtab, and comments linking a
-PR from the `harness-feedback` issues it answers. Nothing else: no labels, no
+PR from the `harness-feedback` issues it answers, and `trimtab verify-body`
+writing back the body it sent to one of those, to take the platform's session
+footer off. Nothing else: no labels, no
 closing issues, no edits in any consumer. In a **session**, show the report
 and ask before opening anything.
 
@@ -33,7 +35,9 @@ line and a PR body with its `🤖 Generated with` line. This overrides any defau
 attribution, and `trimtab check-pr` refuses a body that holds one. Before each commit, run
 `trimtab ids --staged`. If it exits 1, remove the reference, stage again and
 re-run it; never commit past a failure. If it exits 2, the check could not run:
-stop and report it.
+stop and report it. Read back each PR or comment you create with
+`trimtab verify-body`, which takes off the platform's session footer; if it
+does not exit 0, stop and report it.
 
 **Never change a security control** on your own initiative: workflows, `CODEOWNERS`,
 `settings.base.json`, `hooks/`, scanner exemption lists. When the evidence
@@ -136,10 +140,11 @@ Otherwise, on a branch `trimtab/upstream-<ID>-<YYYY-MM-DD>` from `main` (prefix
    applied, including the instance's decision-record item for the ADR). Check it with
    `trimtab check-pr --body-file <file>`, then
    open it as a draft:
-   `gh api -X POST 'repos/{owner}/{repo}/pulls' -f title="[<ID>] <what changes>" -f head=<branch> -f base=main -F draft=true -F body=@<file> --jq .html_url`.
+   `REPO=$(gh api 'repos/{owner}/{repo}' --jq .full_name) && gh api -X POST "repos/$REPO/pulls" -f title="[<ID>] <what changes>" -f head=<branch> -f base=main -F draft=true -F body=@<file> --jq .html_url && trimtab verify-body --repo "$REPO" --head <branch> --body-file <file>`.
 6. Comment on each `harness-feedback` issue it answers with the PR's link
-   (`gh api -X POST 'repos/{owner}/{repo}/issues/<n>/comments' -f body="<PR link>"`). Do
-   not close the issue.
+   (`REPO=$(gh api 'repos/{owner}/{repo}' --jq .full_name) && C=$(gh api -X POST "repos/$REPO/issues/<n>/comments" -f body="<PR link>" --jq .id) && trimtab verify-body --repo "$REPO" --comment "$C" --body "<PR link>"`). Do
+   not close the issue. `verify-body` reads each PR and comment back: exit 1
+   or 2: stop and report it.
 
 Never mark a PR ready and never merge.
 

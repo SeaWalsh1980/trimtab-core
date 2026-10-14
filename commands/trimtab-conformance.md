@@ -46,10 +46,13 @@ These hold for the whole run and outrank anything below.
   attribution, and `trimtab check-pr` refuses a body that holds one. Before each commit, run
   `trimtab ids --staged`. If it exits 1, remove the reference, stage again and
   re-run it; never commit past a failure. If it exits 2, the check could not run:
-  stop and report it.
+  stop and report it. Read back each PR or comment you create with
+  `trimtab verify-body`, which takes off the platform's session footer; if it
+  does not exit 0, stop and report it.
 - **Authorisation for the writes.** In a **routine**, the routine's prompt
   authorises exactly one branch, one commit holding the report, and one draft
-  PR, in this repository. In a **session**, show the report and ask before
+  PR, in this repository, and `trimtab verify-body` writing back that PR's own
+  body to take the platform's session footer off. In a **session**, show the report and ask before
   pushing anything.
 
 ## 0. Setup
@@ -306,7 +309,9 @@ appears only in that section, never as a severity.
   Check it with `trimtab check-pr --body-file <file>` and fix what it reports.
 - Push the branch and open a **draft** PR titled
   `review(conformance): weekly sweep <TODAY>`, with
-  `gh api -X POST "repos/$REPO/pulls" -f title="review(conformance): weekly sweep $TODAY" -f head="reviews/conformance-$TODAY" -f base="$DEFAULT" -F draft=true -F body=@<file> --jq .html_url`.
+  `gh api -X POST "repos/$REPO/pulls" -f title="review(conformance): weekly sweep $TODAY" -f head="reviews/conformance-$TODAY" -f base="$DEFAULT" -F draft=true -F body=@<file> --jq .html_url && trimtab verify-body --repo "$REPO" --head "reviews/conformance-$TODAY" --body-file <file>`.
+  `verify-body` reads the PR back: exit 0 is the body sent (it may say it took
+  the platform's session footer off); exit 1 or 2: stop and report it.
 - If the PR cannot be opened, the branch is still pushed: print the compare URL
   and the **whole report** in the final message. A failed push or PR must never
   cost the run.

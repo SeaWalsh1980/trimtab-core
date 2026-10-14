@@ -21,6 +21,7 @@ from typing import Callable, Mapping
 from urllib.parse import quote, unquote, urlencode
 
 from trimtab.capture.ingest import PullRequest
+from trimtab.capture.written import WrittenBodyError, verify_body
 from trimtab.ids import ANY_ID_SHAPE
 from trimtab.dependabot import CiRun, HostError, PullRequestView
 from trimtab.upstream import Issue
@@ -389,11 +390,53 @@ class GhIssues:
         return _issues_only(rows, what)
 
     def create(self, title: str, body: str, labels) -> str:
+        """The new issue's URL, once its body reads back as the one sent (ADR 0024)."""
         data = self.api.json("POST", f"repos/{self.repo}/issues", "gh api issues",
                              body={"title": title, "body": body, "labels": list(labels)})
-        if not (isinstance(data, dict) and isinstance(data.get("html_url"), str)):
+        if not (isinstance(data, dict) and isinstance(data.get("html_url"), str) and _is_int(data.get("number"))):
             raise SourceError("gh api issues returned unexpected JSON")
+        try:
+            verify_body(GhBodies(self.repo, api=self.api), "issue", data["number"], body)
+        except WrittenBodyError as err:
+            raise WrittenBodyError(f"{data['html_url']}: {err}; edit its body by hand") from err
         return data["html_url"]
+
+
+# Where each kind of body lives, under one repository.
+BODY_PATHS = {"pull": "pulls/{n}", "issue": "issues/{n}", "comment": "issues/comments/{n}"}
+
+
+class GhBodies:
+    """The body of a PR, an issue or a comment, read and written whole, for reading back what a run wrote."""
+
+    def __init__(self, repo: str, run: Run | None = None, api: GhApi | None = None):
+        self.repo = repo
+        self.api = api or GhApi(run)
+
+    def _path(self, kind: str, number: int) -> str:
+        if kind not in BODY_PATHS or not _is_int(number):
+            raise SourceError(f"no body path for {kind!r} {number!r}")
+        return f"repos/{self.repo}/" + BODY_PATHS[kind].format(n=number)
+
+    def read(self, kind: str, number: int) -> str:
+        data = self.api.json("GET", self._path(kind, number), f"gh api {kind}")
+        if not isinstance(data, dict) or not isinstance(data.get("body") or "", str):
+            raise SourceError(f"gh api {kind} returned unexpected JSON")
+        return data.get("body") or ""
+
+    def write(self, kind: str, number: int, body: str) -> None:
+        self.api.call("PATCH", self._path(kind, number), body={"body": body})
+
+    def pull_for_head(self, branch: str) -> int:
+        """The one open PR whose head is `branch` in this repository; none or several is an error."""
+        owner = self.repo.split("/", 1)[0]
+        rows = self.api.json("GET", f"repos/{self.repo}/pulls", "gh api pulls",
+                             query={"state": "open", "head": f"{owner}:{branch}", "per_page": PER_PAGE})
+        if not isinstance(rows, list) or not all(isinstance(r, dict) and _is_int(r.get("number")) for r in rows):
+            raise SourceError("gh api pulls returned unexpected JSON")
+        if len(rows) != 1:
+            raise SourceError(f"{len(rows)} open PRs have the head {branch}; expected exactly one")
+        return rows[0]["number"]
 
 
 SHA = re.compile(r"[0-9a-f]{40}")

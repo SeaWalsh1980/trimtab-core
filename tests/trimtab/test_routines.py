@@ -24,7 +24,7 @@ PROBE_CLAUSES = ("`ls ~/.claude/hooks`", "`ls <that path>/hooks`",
 # What a run writes carries no reference to the run: the platform's default
 # attribution adds a session link to commits and PR bodies.
 NO_RUN_REFERENCE_CLAUSES = ("`Claude-Session:`", "`claude.ai/code/session_…`",
-                            "This overrides any default attribution")
+                            "This overrides any default attribution", "`trimtab verify-body`")
 
 
 def prompt_of(spec):

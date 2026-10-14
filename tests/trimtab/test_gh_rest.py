@@ -11,7 +11,7 @@ from pathlib import Path
 
 from gh_fake import FakeGh, method_of, path_of, query_of
 from trimtab.capture.sources import (
-    ISSUE_LIMIT, SCAN_LIMIT, GhApi, GhContents, GhIssues, GhPullRequests, GhSource, SourceError,
+    ISSUE_LIMIT, SCAN_LIMIT, GhApi, GhBodies, GhContents, GhIssues, GhPullRequests, GhSource, SourceError,
     open_feedback_issues, staged_files,
 )
 
@@ -68,6 +68,10 @@ def every_call(gh):
     issues = GhIssues(REPO, run=gh)
     issues.recent_titles(FEEDBACK, SINCE)
     issues.create("title", "body", [FEEDBACK])
+    bodies = GhBodies(REPO, run=gh)
+    for kind in ("pull", "issue", "comment"):
+        bodies.read(kind, PR)
+        bodies.write(kind, PR, "body")
     pulls = GhPullRequests(REPO, run=gh)
     pulls.view(PR)
     pulls.set_body(PR, "body")
@@ -82,7 +86,8 @@ def answering_everything():
         ("GET", PULLS): "[]",
         f"repos/{REPO}/pulls/{PR}": pull_json(),
         ("GET", f"repos/{REPO}/issues"): "[]",
-        ("POST", f"repos/{REPO}/issues"): json.dumps({"html_url": ISSUE_URL}),
+        ("POST", f"repos/{REPO}/issues"): json.dumps({"html_url": ISSUE_URL, "number": 9}),
+        ("GET", f"repos/{REPO}/issues/9"): json.dumps({"body": "body"}),
         f"repos/{REPO}/actions/workflows/{WORKFLOW}/runs": json.dumps({"workflow_runs": []}),
     }, default="{}")
 
@@ -365,11 +370,12 @@ class IssueListing(unittest.TestCase):
         self.assertEqual([i.number for i in found], [1])
 
     def test_creating_an_issue_sends_it_on_stdin_and_returns_its_url(self):
-        gh = FakeGh(default=json.dumps({"html_url": ISSUE_URL}))
+        gh = FakeGh(answers={("POST", f"repos/{REPO}/issues"): json.dumps({"html_url": ISSUE_URL, "number": 9})},
+                    default=json.dumps({"body": "the body"}))
 
         url = GhIssues(REPO, run=gh).create("the title", "the body", [FEEDBACK])
 
-        (argv, stdin), = gh.calls
+        argv, stdin = gh.calls[0]
         self.assertEqual((method_of(argv), path_of(argv), json.loads(stdin), url),
                          ("POST", f"repos/{REPO}/issues",
                           {"title": "the title", "body": "the body", "labels": [FEEDBACK]}, ISSUE_URL))
