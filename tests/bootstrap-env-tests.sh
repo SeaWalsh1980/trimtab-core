@@ -120,6 +120,51 @@ check_refuses_disable_all_hooks() {
   fi
 }
 
+# The base owns attribution (docs/adr/0026-bootstrap-refuses-an-attribution-override.md).
+# A later layer's value would replace or reshape it with no warning, and the
+# session link would come back in commits and PR bodies. Any value is refused,
+# a scalar or an object, and nothing is written.
+check_refuses_a_layer_that_sets_attribution() {
+  local h inst layer value
+  for layer in settings.instance.json machine.json; do
+    # The last value repeats the base's own on main: refused too (ADR 0026).
+    for value in '{"commit": "x"}' '{"sessionUrl": true}' 'false' 'null' '{"sessionUrl": false}'; do
+      h=$(new_home); inst=$(inst_of "$h")
+      echo "{\"attribution\": $value}" > "$inst/$layer"
+      boot "$h" "$live" --instance "$inst"
+      # The refusal line itself names the layer: bootstrap prints machine.json's
+      # name on every run, so a bare match would pass whichever layer was refused.
+      if [[ $rc -eq 1 && "$out" == *"REFUSED: $layer sets \`attribution\`"* \
+            && ! -e "$h/.claude/settings.json" ]] && no_links "$h"; then
+        pass "refuses attribution $value in $layer before anything is written"
+      else
+        fail "refuses attribution $value in $layer before anything is written" "rc=$rc"; echo "$out" | tail -5
+      fi
+    done
+  done
+}
+
+# Over a live install the refusal leaves it as it was: the settings file is
+# byte-for-byte the same and the links point where they did. A fresh home
+# cannot show this, since it has no settings.json to overwrite.
+check_attribution_refusal_leaves_a_live_install_alone() {
+  local h inst before links_before
+  h=$(new_home); inst=$(inst_of "$h")
+  boot "$h" "$live" --instance "$inst"
+  [[ $rc -eq 0 ]] || { fail "an attribution refusal leaves a live install alone" "first install rc=$rc"; return; }
+  before=$(sha256sum < "$h/.claude/settings.json")
+  links_before=$(readlink "$h/.claude/hooks")
+  echo '{"attribution": {"commit": "x"}}' > "$inst/machine.json"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 1 && "$out" == *"REFUSED: machine.json sets \`attribution\`"* \
+        && "$(sha256sum < "$h/.claude/settings.json")" == "$before" \
+        && "$(readlink "$h/.claude/hooks")" == "$links_before" ]]; then
+    pass "an attribution refusal leaves a live install's settings and links as they were"
+  else
+    fail "an attribution refusal leaves a live install's settings and links as they were" "rc=$rc"; echo "$out" | tail -5
+  fi
+}
+
 check_refuses_hooks_replaced() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
@@ -737,6 +782,8 @@ check_writes_instance_values
 check_base_hooks_survive
 check_installed_settings_turn_commit_and_pr_attribution_off
 check_refuses_disable_all_hooks
+check_refuses_a_layer_that_sets_attribution
+check_attribution_refusal_leaves_a_live_install_alone
 check_refuses_hooks_replaced
 check_refuses_hook_allow_in_machine_env
 check_refuses_hook_allow_in_instance_env

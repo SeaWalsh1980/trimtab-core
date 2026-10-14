@@ -252,7 +252,10 @@ fi
 # lists concatenate without duplicates, scalars override. After every layer the
 # base's hook registrations must still be present: a layer that loses one would
 # switch a guard off silently, so the merge refuses and nothing is written. It
-# refuses, for the same reason, a layer whose env sets any HOOK_ALLOW_* key.
+# refuses, for the same reason, a layer whose env sets any HOOK_ALLOW_* key. It
+# also refuses an instance or machine layer that sets `attribution`, for a
+# different one: the base owns that key, so that what runs write carries no
+# reference to the run (ADR 0022, ADR 0026).
 mkdir -p "$CLAUDE_HOME"
 generated=$(python3 - "$BASE" "$INSTANCE" "$values" <<'PY'
 import json, sys, os
@@ -289,7 +292,7 @@ def refuse(layer, why, effect="the guards would not run"):
     print(f"REFUSED: {layer} {why}; {effect}. No link was switched and settings.json was not written.", file=sys.stderr)
     sys.exit(3)
 merged = {}
-for name, layer in layers:
+for position, (name, layer) in enumerate(layers):
     # A guard override is the operator's, exported before launching claude. In a
     # layer's env it would be written into the generated settings and lift that
     # guard for every session, with every registration still intact. Any value
@@ -302,6 +305,13 @@ for name, layer in layers:
     if overrides:
         refuse(name, f"sets {', '.join(overrides)} in env",
                "the guards would allow everything in every session (export an override before launching claude instead)")
+    # The base owns attribution: a later layer's value would replace or reshape
+    # it with no warning, and what runs write could carry attribution or the
+    # session link again (docs/adr/0026-bootstrap-refuses-an-attribution-override.md).
+    # Any layer after the base (position 0), any value.
+    if position > 0 and "attribution" in layer:
+        refuse(name, "sets `attribution`, which the base owns",
+               "only the base may set it, even to the same value (remove the key)")
     merged = merge(merged, layer)
     hooks = merged.get("hooks", {})
     if not isinstance(hooks, dict):
