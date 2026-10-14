@@ -19,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
-from typing import Mapping, Protocol, Sequence
+from typing import Callable, ContextManager, Mapping, Protocol, Sequence
 
 from trimtab.items import Item, Proposal
 from trimtab.registry.rules import RuleType
@@ -67,17 +67,23 @@ def render(proposal: Proposal, registry: Mapping[str, Item], project: str | None
     return Draft(kind, proposal.item_id, title, body, (ISSUE_LABEL,) if kind == "issue" else ())
 
 
+@dataclass(frozen=True)
+class Filer:
+    """Files one issue and returns what the sink reports for it (its URL); given out only inside `filing`."""
+
+    create: Callable[[str, str, Sequence[str]], str]
+
+
 class IssueSink(Protocol):
-    destination: str  # where `create` files issues; part of the confirmation
+    destination: str  # where `filing` files issues; part of the confirmation
 
     def recent_titles(self, label: str, closed_since: str | None) -> list[str]:
         """Titles of issues with `label` that are open, or were closed on or after `closed_since`."""
         ...
 
-    def create(self, title: str, body: str, labels: Sequence[str]) -> str: ...
-
-    def read_back(self) -> None:
-        """Check every issue created since the last call; raise if one is not what was sent."""
+    def filing(self) -> ContextManager[Filer]:
+        """Issues are filed only inside this block; on leaving it, however it is left, every one filed is
+        checked, and an error is raised if one is not what was sent."""
         ...
 
 
@@ -120,14 +126,14 @@ def open_issues(todo: IssuePlan, sink: IssueSink, confirm: str) -> list[str]:
         raise StaleProposals("the proposals changed since the dry run; run --dry-run again")
     opened: list[str] = []
     stopped: OpeningStopped | None = None
-    for i, d in enumerate(todo.to_open):
-        try:
-            opened.append(sink.create(d.title, d.body, d.labels))
-        except Exception as err:  # raised below with what was opened, so no URL is lost
-            stopped = OpeningStopped(opened, d.item_id, [x.item_id for x in todo.to_open[i + 1:]], err)
-            break
     try:
-        sink.read_back()  # what was opened is read back even when opening stopped part-way
+        with sink.filing() as filer:  # what was opened is read back on leaving, even part-way
+            for i, d in enumerate(todo.to_open):
+                try:
+                    opened.append(filer.create(d.title, d.body, d.labels))
+                except Exception as err:  # raised below with what was opened, so no URL is lost
+                    stopped = OpeningStopped(opened, d.item_id, [x.item_id for x in todo.to_open[i + 1:]], err)
+                    break
     except Exception as err:
         not_opened = [stopped.stopped_at, *stopped.not_opened] if stopped else []
         raise OpeningStopped(opened, "the read-back", not_opened, err) from err

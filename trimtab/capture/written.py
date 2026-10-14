@@ -25,12 +25,12 @@ SETTLE_SECONDS = 10.0
 class WrittenBodyError(Exception):
     """A body read back is not the one sent, or still holds a run reference. Never quotes the body.
 
-    `target` is the (kind, number) it is about, when there is one.
+    `targets` are the (kind, number) pairs it is about, each named in the message.
     """
 
-    def __init__(self, message: str, target: tuple[str, int] | None = None):
+    def __init__(self, message: str, targets: list[tuple[str, int]] | None = None):
         super().__init__(message)
-        self.target = target
+        self.targets = targets or []
 
 
 class Readback(enum.Enum):
@@ -73,39 +73,46 @@ Target = tuple[str, int, str]  # (kind, number, body sent)
 
 def verify_bodies(bodies: Bodies, targets: list[Target], *,
                   settle_seconds: float, sleep: Callable[[float], None]) -> list[Readback]:
-    """Read back each target after one shared wait; take the platform footer off those that carry it, wait once
-    more, and require them identical; refuse any other change or a run reference (WrittenBodyError, naming its
-    target). The caller supplies the wait (`sleep`): waiting is the outer layer's."""
+    """Read back each target after one shared wait; take the platform footer off every one that carries it, wait
+    once more, and require them identical. Any other change, or a run reference, fails, but only after every
+    target has been checked and every footer taken off: one WrittenBodyError names each target that failed.
+    The caller supplies the wait (`sleep`): waiting is the outer layer's."""
 
     def wait() -> None:
         if settle_seconds > 0:
             sleep(settle_seconds)
 
-    # First: a body that holds a reference fails before any wait, and is never written back.
+    failures: list[tuple[tuple[str, int], str]] = []
+    # A body that holds a reference fails before any wait, and is never written back.
     for kind, number, sent in targets:
         references = run_references(sent)
         if references:
-            raise WrittenBodyError(f"the body holds a run reference ({', '.join(p.where for p in references)})",
-                                   (kind, number))
-    if not targets:
-        return []
-    wait()
-    outcomes = []
-    for kind, number, sent in targets:
+            failures.append(((kind, number), f"the body holds a run reference "
+                                             f"({', '.join(p.where for p in references)})"))
+    held = {target for target, _ in failures}
+    checked = [t for t in targets if (t[0], t[1]) not in held]
+    outcomes: dict[tuple[str, int], Readback] = {}
+    if checked:
+        wait()
+    for kind, number, sent in checked:
         outcome = compare(sent, bodies.read(kind, number))
         if outcome is Readback.DIFFERS:
-            raise WrittenBodyError(outcome.value, (kind, number))
-        outcomes.append(outcome)
-    footed = [t for t, outcome in zip(targets, outcomes) if outcome is Readback.FOOTER]
+            failures.append(((kind, number), outcome.value))
+        else:
+            outcomes[(kind, number)] = outcome
+    # Every footer found is taken off, whatever else in the batch failed.
+    footed = [t for t in checked if outcomes.get((t[0], t[1])) is Readback.FOOTER]
     for kind, number, sent in footed:
         bodies.write(kind, number, sent)
     if footed:
         wait()
-        for kind, number, sent in footed:
-            if compare(sent, bodies.read(kind, number)) is not Readback.SAME:
-                raise WrittenBodyError("the platform's footer came back after the body sent was written again",
-                                       (kind, number))
-    return outcomes
+    for kind, number, sent in footed:
+        if compare(sent, bodies.read(kind, number)) is not Readback.SAME:
+            failures.append(((kind, number), "the platform's footer came back after the body sent was written again"))
+    if failures:
+        raise WrittenBodyError("; ".join(f"{kind} {number}: {why}" for (kind, number), why in failures),
+                               [target for target, _ in failures])
+    return [outcomes[(kind, number)] for kind, number, _ in targets]
 
 
 def verify_body(bodies: Bodies, kind: str, number: int, sent: str, *,

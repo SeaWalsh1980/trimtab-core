@@ -11,6 +11,7 @@ through it.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -18,13 +19,14 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Callable, Iterator, Mapping
 from urllib.parse import quote, unquote, urlencode
 
 from trimtab.capture.ingest import PullRequest
 from trimtab.capture.written import SETTLE_SECONDS, WrittenBodyError, verify_bodies
 from trimtab.ids import ANY_ID_SHAPE
 from trimtab.dependabot import CiRun, HostError, PullRequestView
+from trimtab.propose import Filer
 from trimtab.upstream import Issue
 
 GH_TIMEOUT_SECONDS = 60
@@ -39,8 +41,15 @@ class SourceError(HostError):
     """gh failed, timed out, or returned something unexpected."""
 
 
-class NotFound(SourceError):
+class Refused(SourceError):
+    """gh api answered a 4xx: GitHub refused the request, so it changed nothing."""
+
+
+class NotFound(Refused):
     """gh api answered 404."""
+
+
+CLIENT_ERROR = re.compile(r"HTTP 4\d\d\b")
 
 
 # Runs one `gh` command line with optional stdin; the default is a subprocess.
@@ -83,6 +92,8 @@ class GhApi:
             message = f"gh api {method} {path} exited {done.returncode}: {done.stderr.strip()[:300]}"
             if "HTTP 404" in done.stderr or "Not Found" in done.stderr:
                 raise NotFound(message)
+            if CLIENT_ERROR.search(done.stderr):
+                raise Refused(message)
             raise SourceError(message)
         return done.stdout
 
@@ -366,7 +377,6 @@ class GhIssues:
         self.destination = repo
         self.api = GhApi(run)
         self.settle_seconds = settle_seconds
-        self._created: list[tuple[str, int, str]] = []  # (url, number, body sent), not yet read back
 
     def recent_titles(self, label: str, closed_since: str | None) -> list[str]:
         what = "gh api issues"
@@ -392,24 +402,50 @@ class GhIssues:
         rows = self.api.all_pages(f"repos/{self.repo}/issues", {"labels": label, **filters}, ISSUE_LIMIT, what)
         return _issues_only(rows, what)
 
-    def create(self, title: str, body: str, labels) -> str:
-        """File one issue and return its URL; `read_back` checks every issue filed since its last call."""
-        data = self.api.json("POST", f"repos/{self.repo}/issues", "gh api issues",
-                             body={"title": title, "body": body, "labels": list(labels)})
-        if not (isinstance(data, dict) and isinstance(data.get("html_url"), str) and _is_int(data.get("number"))):
-            raise SourceError("gh api issues returned unexpected JSON")
-        self._created.append((data["html_url"], data["number"], body))
-        return data["html_url"]
+    @contextlib.contextmanager
+    def filing(self) -> Iterator[Filer]:
+        """Issues are filed only inside this block, and every one filed is read back on leaving it, however it
+        is left (ADR 0024): a caller cannot file an issue and skip the read-back."""
+        created: list[tuple[str, int, str]] = []
 
-    def read_back(self) -> None:
-        """Every issue filed since the last call, read back after one shared wait (ADR 0024)."""
-        created, self._created = self._created, []
+        def create(title: str, body: str, labels) -> str:
+            url, number = self._file(title, body, labels)
+            created.append((url, number, body))
+            return url
+
+        try:
+            yield Filer(create)
+        finally:
+            self._read_back(created)
+
+    def _file(self, title: str, body: str, labels) -> tuple[str, int]:
+        """File one issue: its URL and number.
+
+        A refusal (4xx) changed nothing, so a re-run is safe: SourceError. Any other failure may have filed
+        the issue, which a re-run would skip and never read back: WrittenBodyError, naming its title.
+        """
+        maybe = (f"the issue titled {title!r} may have been filed and was not read back; check the open "
+                 f"issues on {self.repo} by hand before a re-run")
+        try:
+            data = self.api.json("POST", f"repos/{self.repo}/issues", "gh api issues",
+                                 body={"title": title, "body": body, "labels": list(labels)})
+        except Refused:
+            raise
+        except SourceError as err:
+            raise WrittenBodyError(f"{maybe} ({err})") from err
+        if not (isinstance(data, dict) and isinstance(data.get("html_url"), str) and _is_int(data.get("number"))):
+            raise WrittenBodyError(f"{maybe} (gh api issues returned unexpected JSON)")
+        return data["html_url"], data["number"]
+
+    def _read_back(self, created: list[tuple[str, int, str]]) -> None:
+        """The issues filed in one `filing` block, read back after one shared wait (ADR 0024)."""
         urls = {number: url for url, number, _ in created}
         try:
             verify_bodies(GhBodies(self.repo, api=self.api), [("issue", n, b) for _, n, b in created],
                           settle_seconds=self.settle_seconds, sleep=time.sleep)
         except WrittenBodyError as err:
-            raise WrittenBodyError(f"{urls[err.target[1]]}: {err}; edit its body by hand") from err
+            named = ", ".join(urls[number] for _, number in err.targets)
+            raise WrittenBodyError(f"{err}; edit each by hand: {named}", err.targets) from err
         except SourceError as err:
             # The issues exist, so a re-run skips them and never reads them back: stop here, naming them.
             raise WrittenBodyError(f"created, but not all read back ({err}); check each with `trimtab verify-body "
@@ -533,8 +569,10 @@ class FixtureIssues:
         self.path.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
         return f"fixture issue {len(rows)}"
 
-    def read_back(self) -> None:
+    @contextlib.contextmanager
+    def filing(self) -> Iterator[Filer]:
         """A file holds what was written: nothing to read back."""
+        yield Filer(self.create)
 
 
 class GhContents:

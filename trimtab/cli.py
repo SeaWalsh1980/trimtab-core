@@ -176,7 +176,7 @@ def cmd_verify_body(args) -> int:
         print(f"error: {err}", file=sys.stderr)
         return 2
     except WrittenBodyError as err:
-        print(f"verify-body: {kind} {number}: {err}. Stop and report it.", file=sys.stderr)
+        print(f"verify-body: {err}. Stop and report it.", file=sys.stderr)
         return 1
     if outcome is Readback.FOOTER:
         print(f"{kind} {number}: removed the platform's session footer; GitHub's edit history still holds it")

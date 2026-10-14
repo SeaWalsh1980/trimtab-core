@@ -40,10 +40,13 @@ The upstream retro also comments on issues.
     link, with or without its rule; a body that itself ends with a rule keeps
     it): the run writes the body it sent back, waits again, reads again, and
     requires it identical.
-  - Anything else: it fails, and repairs nothing. It never guesses which
-    part of a changed body is its own.
-  - The body sent holding a run reference fails too.
-  Errors name the PR, issue or comment, never quote the body.
+  - Anything else: it fails, and repairs nothing in that body. It never
+    guesses which part of a changed body is its own.
+  - The body sent holding a run reference fails too, before any wait, read
+    or write, and is never written back.
+  When several bodies are read back together, every one is checked and
+  every footer found is taken off before the run fails; one error then
+  names each PR, issue or comment that failed. Errors never quote a body.
 - **`trimtab verify-body`** does it for a PR (`--pull N`, the number the POST
   returned), an issue (`--issue N`) or a comment
   (`--comment ID`), against `--body-file` or `--body`. Exit 0 is the body
@@ -57,10 +60,15 @@ The upstream retro also comments on issues.
   a shipped file POSTs a PR or a comment without it.
 - **`propose --apply` reads back every issue it files**, together, after
   filing them all: one shared wait, then one more only if a footer was taken
-  off, however many issues there are. It reads back what it filed even when
-  filing stops part-way, lists the issues it opened and the IDs it did not
-  try, and exits 1 when an issue's body is wrong or could not be read back
-  (a re-run would skip it and never read it), 2 when filing itself failed.
+  off, however many issues there are. Issues are filed only inside the
+  sink's `filing()` block, which reads back everything filed in it on
+  leaving, however it is left, so no caller can file and skip the read-back.
+  It lists the issues it opened and the IDs it did not try. It exits 1 when
+  an issue's body is wrong, when one could not be read back, or when a
+  create failed in a way that may have filed it (a server error, a timeout,
+  an unexpected answer): a re-run would skip that issue and never read it.
+  It exits 2 only when GitHub refused the create (a 4xx), which filed
+  nothing, so a re-run is safe.
 - **Comparing is a value, failing is the boundary's.** `compare` returns
   SAME, FOOTER or DIFFERS; `verify_body` raises only to stop the run.
 - **The write-back is authorised**: each routine prompt and command lists

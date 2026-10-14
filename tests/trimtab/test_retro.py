@@ -5,6 +5,7 @@ already labelled `trimtab-ingested`, within the decay window; proposals are
 opened as issues behind a confirmation, and never twice.
 """
 
+import contextlib
 import json
 import subprocess
 import tempfile
@@ -16,7 +17,7 @@ from trimtab.capture.ingest import LABEL, PullRequest, rebuild
 from trimtab.items import Item, Proposal, Strength
 from trimtab.lint import structure
 from trimtab.propose import (
-    ISSUE_LABEL, Draft, OpeningStopped, StaleProposals, confirmation, open_issues, plan_issues, render,
+    ISSUE_LABEL, Draft, Filer, OpeningStopped, StaleProposals, confirmation, open_issues, plan_issues, render,
 )
 from trimtab.score import candidates, tally
 
@@ -33,8 +34,10 @@ CONFIG = {"trimtab_sha": "0" * 40, "id_prefix": "SCR",
 class FakeIssues:
     """GitHub issues: a true external system, so a fake is allowed."""
 
-    def __init__(self, titles=(), closed=(), destination="o/trimtab"):
+    def __init__(self, titles=(), closed=(), destination="o/trimtab", read_back_fails=None):
         self.destination = destination
+        self.read_backs = 0
+        self.read_back_fails = read_back_fails
         self.issues = [{"title": t, "labels": [ISSUE_LABEL]} for t in titles]
         self.issues += [{"title": t, "labels": [ISSUE_LABEL], "closed_at": at} for t, at in closed]
 
@@ -46,10 +49,14 @@ class FakeIssues:
         self.issues.append({"title": title, "body": body, "labels": list(labels)})
         return f"issue {len(self.issues)}"
 
-    def read_back(self):
-        self.read_backs = getattr(self, "read_backs", 0) + 1
-        if getattr(self, "read_back_fails", None):
-            raise self.read_back_fails
+    @contextlib.contextmanager
+    def filing(self):
+        try:
+            yield Filer(self.create)
+        finally:
+            self.read_backs += 1
+            if self.read_back_fails:
+                raise self.read_back_fails
 
 
 class FailingAt(FakeIssues):
@@ -174,8 +181,7 @@ class Issues(unittest.TestCase):
         self.assertEqual(sink.read_backs, 1)
 
     def test_a_failed_read_back_still_names_what_was_opened(self):
-        sink = FakeIssues()
-        sink.read_back_fails = RuntimeError("the body differs")
+        sink = FakeIssues(read_back_fails=RuntimeError("the body differs"))
         todo = plan_issues([draft("TST-2")], sink)
 
         with self.assertRaises(OpeningStopped) as caught:

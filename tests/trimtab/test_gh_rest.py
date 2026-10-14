@@ -67,8 +67,8 @@ def every_call(gh):
     source.body(PR)
     issues = GhIssues(REPO, run=gh, settle_seconds=0)
     issues.recent_titles(FEEDBACK, SINCE)
-    issues.create("title", "body", [FEEDBACK])
-    issues.read_back()
+    with issues.filing() as filer:
+        filer.create("title", "body", [FEEDBACK])
     bodies = GhBodies(REPO, run=gh)
     for kind in ("pull", "issue", "comment"):
         bodies.read(kind, PR)
@@ -374,7 +374,8 @@ class IssueListing(unittest.TestCase):
         gh = FakeGh(answers={("POST", f"repos/{REPO}/issues"): json.dumps({"html_url": ISSUE_URL, "number": 9})},
                     default=json.dumps({"body": "the body"}))
 
-        url = GhIssues(REPO, run=gh, settle_seconds=0).create("the title", "the body", [FEEDBACK])
+        with GhIssues(REPO, run=gh, settle_seconds=0).filing() as filer:
+            url = filer.create("the title", "the body", [FEEDBACK])
 
         argv, stdin = gh.calls[0]
         self.assertEqual((method_of(argv), path_of(argv), json.loads(stdin), url),

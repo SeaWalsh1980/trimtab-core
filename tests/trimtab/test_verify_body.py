@@ -220,7 +220,34 @@ class VerifyBodies(unittest.TestCase):
         with self.assertRaises(WrittenBodyError) as caught:
             verify_bodies(repo, self.targets(1, 2), settle_seconds=0, sleep=repo.sleep)
 
-        self.assertEqual(caught.exception.target, ("issue", 2))
+        self.assertEqual(caught.exception.targets, [("issue", 2)])
+
+    def test_a_bad_body_in_the_batch_does_not_stop_the_others_footers_coming_off(self):
+        repo = InMemoryRepository({("issue", 1): with_footer(SENT), ("issue", 2): SENT + "\nappended",
+                                   ("issue", 3): with_footer(SENT)})
+
+        with self.assertRaises(WrittenBodyError) as caught:
+            verify_bodies(repo, self.targets(1, 2, 3), settle_seconds=0, sleep=repo.sleep)
+
+        self.assertEqual((repo.writes, caught.exception.targets), ([("issue", 1), ("issue", 3)], [("issue", 2)]))
+
+    def test_a_body_with_a_run_reference_is_not_read_while_the_others_are(self):
+        with_reference = SENT + "see " + "session_" + SESSION_TAIL + "\n"
+        repo = InMemoryRepository({("issue", 1): with_footer(SENT), ("issue", 2): with_footer(with_reference)})
+        targets = [("issue", 1, SENT), ("issue", 2, with_reference)]
+
+        with self.assertRaises(WrittenBodyError) as caught:
+            verify_bodies(repo, targets, settle_seconds=0, sleep=repo.sleep)
+
+        self.assertEqual((repo.writes, caught.exception.targets), ([("issue", 1)], [("issue", 2)]))
+
+    def test_every_failure_is_named_in_one_error(self):
+        repo = InMemoryRepository({("issue", 1): SENT + "\nx", ("issue", 2): SENT + "\ny"})
+
+        with self.assertRaises(WrittenBodyError) as caught:
+            verify_bodies(repo, self.targets(1, 2), settle_seconds=0, sleep=repo.sleep)
+
+        self.assertEqual(caught.exception.targets, [("issue", 1), ("issue", 2)])
 
     def test_nothing_to_read_back_waits_for_nothing(self):
         repo = InMemoryRepository({})
@@ -276,18 +303,16 @@ class CreatedIssues(unittest.TestCase):
     def test_an_issue_that_came_back_unchanged_is_not_edited(self):
         gh = self.created(SENT)
 
-        issues = GhIssues(REPO, run=gh, settle_seconds=0)
-        url = issues.create("title", SENT, ["harness-feedback"])
-        issues.read_back()
+        with GhIssues(REPO, run=gh, settle_seconds=0).filing() as filer:
+            url = filer.create("title", SENT, ["harness-feedback"])
 
         self.assertEqual((url, [method_of(a) for a in gh.argvs()]), (ISSUE_URL, ["POST", "GET"]))
 
     def test_an_issue_that_came_back_with_the_footer_has_it_taken_off(self):
         gh = self.created(with_footer(SENT), SENT)
 
-        issues = GhIssues(REPO, run=gh, settle_seconds=0)
-        issues.create("title", SENT, ["harness-feedback"])
-        issues.read_back()
+        with GhIssues(REPO, run=gh, settle_seconds=0).filing() as filer:
+            filer.create("title", SENT, ["harness-feedback"])
 
         patch = [(path_of(a), json.loads(s)) for a, s in gh.calls if method_of(a) == "PATCH"]
         self.assertEqual(patch, [(f"repos/{REPO}/issues/{ISSUE}", {"body": SENT})])
@@ -295,21 +320,54 @@ class CreatedIssues(unittest.TestCase):
     def test_an_issue_that_came_back_otherwise_changed_fails_naming_it(self):
         gh = self.created(SENT + "\nappended")
 
-        issues = GhIssues(REPO, run=gh, settle_seconds=0)
-        issues.create("title", SENT, ["harness-feedback"])
-
         with self.assertRaises(WrittenBodyError) as caught:
-            issues.read_back()
+            with GhIssues(REPO, run=gh, settle_seconds=0).filing() as filer:
+                filer.create("title", SENT, ["harness-feedback"])
 
         self.assertIn(ISSUE_URL, str(caught.exception))
 
+    def test_a_refused_create_changed_nothing_so_it_stays_a_github_error(self):
+        gh = FakeGh(returncode=1, stderr="gh: Validation Failed (HTTP 422)")
+
+        with self.assertRaises(SourceError) as caught:
+            with GhIssues(REPO, run=gh, settle_seconds=0).filing() as filer:
+                filer.create("[TST-2] title", SENT, ["harness-feedback"])
+
+        self.assertNotIsInstance(caught.exception, WrittenBodyError)
+
+    def test_a_create_that_may_have_filed_the_issue_stops_the_run_naming_its_title(self):
+        def timed_out(argv, stdin):
+            raise subprocess.TimeoutExpired(argv, 60)
+
+        cases = {"a server error": FakeGh(returncode=1, stderr="gh: Bad Gateway (HTTP 502)"),
+                 "an unexpected answer": FakeGh(default="<html>"),
+                 "a timeout": timed_out}
+        for what, gh in cases.items():
+            with self.subTest(what=what):
+                with self.assertRaises(WrittenBodyError) as caught:
+                    with GhIssues(REPO, run=gh, settle_seconds=0).filing() as filer:
+                        filer.create("[TST-2] title", SENT, ["harness-feedback"])
+
+                self.assertIn("[TST-2] title", str(caught.exception))
+
     def test_issues_are_filed_without_waiting_and_read_back_together(self):
         gh = self.created(SENT)
-        issues = GhIssues(REPO, run=gh, settle_seconds=0)
 
-        issues.create("title", SENT, ["harness-feedback"])
+        with GhIssues(REPO, run=gh, settle_seconds=0).filing() as filer:
+            filer.create("title", SENT, ["harness-feedback"])
+            filed = [method_of(a) for a in gh.argvs()]
 
-        self.assertEqual([method_of(a) for a in gh.argvs()], ["POST"])
+        self.assertEqual((filed, [method_of(a) for a in gh.argvs()]), (["POST"], ["POST", "GET"]))
+
+    def test_an_error_inside_the_block_still_reads_back_what_was_filed(self):
+        gh = self.created(SENT)
+
+        with self.assertRaises(RuntimeError):
+            with GhIssues(REPO, run=gh, settle_seconds=0).filing() as filer:
+                filer.create("title", SENT, ["harness-feedback"])
+                raise RuntimeError("the caller failed")
+
+        self.assertEqual([method_of(a) for a in gh.argvs()], ["POST", "GET"])
 
     def test_an_issue_created_but_not_read_back_stops_the_run_naming_it(self):
         # A re-run would skip the open issue and never read it back, so this is not a "re-run" failure.
@@ -318,11 +376,9 @@ class CreatedIssues(unittest.TestCase):
             ("GET", f"repos/{REPO}/issues/{ISSUE}"): "<html>",
         }, default="{}")
 
-        issues = GhIssues(REPO, run=gh, settle_seconds=0)
-        issues.create("title", SENT, ["harness-feedback"])
-
         with self.assertRaises(WrittenBodyError) as caught:
-            issues.read_back()
+            with GhIssues(REPO, run=gh, settle_seconds=0).filing() as filer:
+                filer.create("title", SENT, ["harness-feedback"])
 
         self.assertIn(ISSUE_URL, str(caught.exception))
         self.assertIn("trimtab verify-body", str(caught.exception))
