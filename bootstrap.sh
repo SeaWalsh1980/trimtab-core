@@ -290,7 +290,7 @@ def refuse(layer, why, effect="the guards would not run"):
     print(f"REFUSED: {layer} {why}; {effect}. No link was switched and settings.json was not written.", file=sys.stderr)
     sys.exit(3)
 merged = {}
-for name, layer in layers:
+for position, (name, layer) in enumerate(layers):
     # A guard override is the operator's, exported before launching claude. In a
     # layer's env it would be written into the generated settings and lift that
     # guard for every session, with every registration still intact. Any value
@@ -304,11 +304,12 @@ for name, layer in layers:
         refuse(name, f"sets {', '.join(overrides)} in env",
                "the guards would allow everything in every session (export an override before launching claude instead)")
     # The base owns attribution: a later layer's value would replace or reshape
-    # it with no warning, and the session link would come back in what runs write
-    # (docs/adr/0026-bootstrap-refuses-an-attribution-override.md).
-    if name != layers[0][0] and "attribution" in layer:
+    # it with no warning, and what runs write could carry attribution or the
+    # session link again (docs/adr/0026-bootstrap-refuses-an-attribution-override.md).
+    # Any layer after the base (position 0), any value.
+    if position > 0 and "attribution" in layer:
         refuse(name, "sets `attribution`, which the base owns",
-               "the session link could return to commits and PR bodies")
+               "the installed attribution would differ from the base's (remove the key)")
     merged = merge(merged, layer)
     hooks = merged.get("hooks", {})
     if not isinstance(hooks, dict):

@@ -119,11 +119,13 @@ check_refuses_disable_all_hooks() {
 check_refuses_a_layer_that_sets_attribution() {
   local h inst layer value
   for layer in settings.instance.json machine.json; do
-    for value in '{"commit": "x"}' '{"sessionUrl": true}' 'false'; do
+    for value in '{"commit": "x"}' '{"sessionUrl": true}' 'false' 'null'; do
       h=$(new_home); inst=$(inst_of "$h")
       echo "{\"attribution\": $value}" > "$inst/$layer"
       boot "$h" "$live" --instance "$inst"
-      if [[ $rc -eq 1 && "$out" == *attribution* && "$out" == *"$layer"* \
+      # The refusal line itself names the layer: bootstrap prints machine.json's
+      # name on every run, so a bare match would pass whichever layer was refused.
+      if [[ $rc -eq 1 && "$out" == *"REFUSED: $layer sets \`attribution\`"* \
             && ! -e "$h/.claude/settings.json" ]] && no_links "$h"; then
         pass "refuses attribution $value in $layer before anything is written"
       else
