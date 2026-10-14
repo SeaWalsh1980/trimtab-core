@@ -140,7 +140,7 @@ Otherwise, on a branch `trimtab/upstream-<ID>-<YYYY-MM-DD>` from `main` (prefix
    applied, including the instance's decision-record item for the ADR). Check it with
    `trimtab check-pr --body-file <file>`, then
    open it as a draft:
-   `REPO=$(gh api 'repos/{owner}/{repo}' --jq .full_name) && gh api -X POST "repos/$REPO/pulls" -f title="[<ID>] <what changes>" -f head=<branch> -f base=main -F draft=true -F body=@<file> --jq .html_url && trimtab verify-body --repo "$REPO" --head <branch> --body-file <file>`.
+   `REPO=$(gh api 'repos/{owner}/{repo}' --jq .full_name) && N=$(gh api -X POST "repos/$REPO/pulls" -f title="[<ID>] <what changes>" -f head=<branch> -f base=main -F draft=true -F body=@<file> --jq .number) && trimtab verify-body --repo "$REPO" --pull "$N" --body-file <file>`.
 6. Comment on each `harness-feedback` issue it answers with the PR's link
    (`REPO=$(gh api 'repos/{owner}/{repo}' --jq .full_name) && C=$(gh api -X POST "repos/$REPO/issues/<n>/comments" -f body="<PR link>" --jq .id) && trimtab verify-body --repo "$REPO" --comment "$C" --body "<PR link>"`). Do
    not close the issue. `verify-body` reads each PR and comment back: exit 1

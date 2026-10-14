@@ -31,28 +31,35 @@ The upstream retro also comments on issues.
 
 ## Decision
 
-- **A run reads back each PR, issue and comment it creates**, and compares
-  the body GitHub holds with the body it sent, ignoring CRLF line ends and
-  trailing space.
+- **A run reads back each PR, issue and comment it creates**, after waiting
+  for it to settle (10 seconds by default, `--settle`), since the footer may
+  be added after the write returns, and compares the body GitHub holds with
+  the body it sent, ignoring CRLF line ends and trailing space.
   - Identical: done.
-  - The body sent plus exactly the platform footer at the end: the run
-    writes the body it sent back, reads again, and requires it identical.
+  - The body sent plus exactly the platform footer at the end (the session
+    link, with or without its rule; a body that itself ends with a rule keeps
+    it): the run writes the body it sent back, waits again, reads again, and
+    requires it identical.
   - Anything else: it fails, and repairs nothing. It never guesses which
     part of a changed body is its own.
   - The body sent holding a run reference fails too.
   Errors name the PR, issue or comment, never quote the body.
-- **`trimtab verify-body`** does it for a PR (`--head <branch>`, the one open
-  PR from that branch, or `--pull N`), an issue (`--issue N`) or a comment
+- **`trimtab verify-body`** does it for a PR (`--pull N`, the number the POST
+  returned), an issue (`--issue N`) or a comment
   (`--comment ID`), against `--body-file` or `--body`. Exit 0 is the body
   sent, and says when it took the footer off; 1 is any other change, or a
   footer that came back; 2 is that it could not read or write. Every call is
   repository-scoped REST (ADR 0021).
 - **The commands chain it after the POST**, on the same command line
-  (`… --jq .html_url && trimtab verify-body …`), so it runs only when the PR
-  was created and cannot be forgotten as a later step. A static test fails if
+  (`N=$(gh api -X POST … --jq .number) && trimtab verify-body … --pull "$N"`),
+  so it runs only when the PR was created and cannot be forgotten as a later
+  step. The PR-body hook still reads the POST inside the substitution. A static test fails if
   a shipped file POSTs a PR or a comment without it.
-- **`propose --apply` reads back each issue it files**, in `GhIssues.create`,
-  and exits 1 naming the issue when the body is wrong.
+- **`propose --apply` reads back each issue it files**, in `GhIssues.create`.
+  If filing stops part-way, it lists the issues it opened and the IDs it did
+  not try, and exits 1 when an issue's body is wrong, 2 when GitHub failed.
+- **Comparing is a value, failing is the boundary's.** `compare` returns
+  SAME, FOOTER or DIFFERS; `verify_body` raises only to stop the run.
 - **The write-back is authorised**: each routine prompt and command lists
   writing back the body the run sent, to take the footer off, among the
   writes the run may make.
@@ -71,6 +78,11 @@ The upstream retro also comments on issues.
   PR-body hook reads `gh api` POSTs, so the body would reach GitHub unread by
   the hook. Here the hook still checks every body, and the write-back only
   ever restores text the hook already passed.
+- **Find the PR by its head branch.** Rejected: one more call, and a listing
+  read milliseconds after the create may not show it yet; the POST already
+  returns the number.
+- **Read back at once, with no wait.** Rejected: a footer added a moment
+  after the write would be missed and the run would report clean.
 - **Take the footer off without reading back again.** Rejected: if the
   platform appends it on every write, a run would report a clean body that is
   not.
@@ -86,12 +98,14 @@ The upstream retro also comments on issues.
   the footer's session link stays there, visible to anyone who can read the
   repository, until the platform stops adding it. Removing an edit-history
   entry is the operator's job on GitHub, not the run's.
-- Accepted: between the POST and the write-back, the footer is live for a
-  second or two; a notification or a webhook sent in that window carries it.
+- Accepted: between the POST and the write-back, the footer is live for
+  about the settle time; a notification or a webhook sent in that window
+  carries it. Each PR, issue or comment costs the run up to two waits.
 - Accepted: the footer is matched by its exact form. A changed form fails
   the run (exit 1) rather than passing; the pattern is then updated.
-- Accepted: a footer the platform adds later, after the read-back, is not
-  seen. `check-pr` in a consumer's CI is the remaining check.
+- Accepted: a footer the platform adds later than the settle time is not
+  seen. `check-pr` in a consumer's CI is the remaining check, and the trial
+  records when the footer appeared.
 - The comparison ignores CRLF line ends and trailing space, which GitHub may
   change; any other difference fails.
 

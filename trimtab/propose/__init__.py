@@ -99,8 +99,25 @@ def confirmation(todo: IssuePlan) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:12]
 
 
+class OpeningStopped(Exception):
+    """Opening stopped at one draft: `opened` were filed before it, `not_opened` (item IDs) were not tried.
+
+    `cause` is the sink's error; the draft it stopped at may or may not exist, as the cause says.
+    """
+
+    def __init__(self, opened: list[str], stopped_at: str, not_opened: list[str], cause: Exception):
+        super().__init__(f"opening stopped at {stopped_at}: {cause}")
+        self.opened, self.stopped_at, self.not_opened, self.cause = opened, stopped_at, not_opened, cause
+
+
 def open_issues(todo: IssuePlan, sink: IssueSink, confirm: str) -> list[str]:
     """Open each planned issue. Returns what the sink reports for each (its URL)."""
     if confirm != confirmation(todo):
         raise StaleProposals("the proposals changed since the dry run; run --dry-run again")
-    return [sink.create(d.title, d.body, d.labels) for d in todo.to_open]
+    opened: list[str] = []
+    for i, d in enumerate(todo.to_open):
+        try:
+            opened.append(sink.create(d.title, d.body, d.labels))
+        except Exception as err:  # re-raised with what was opened, so no URL is lost
+            raise OpeningStopped(opened, d.item_id, [x.item_id for x in todo.to_open[i + 1:]], err) from err
+    return opened

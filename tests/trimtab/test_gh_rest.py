@@ -65,7 +65,7 @@ def every_call(gh):
     source.labelled_merged(LABEL, SINCE, 10)
     source.add_label(PR, LABEL)
     source.body(PR)
-    issues = GhIssues(REPO, run=gh)
+    issues = GhIssues(REPO, run=gh, settle_seconds=0)
     issues.recent_titles(FEEDBACK, SINCE)
     issues.create("title", "body", [FEEDBACK])
     bodies = GhBodies(REPO, run=gh)
@@ -373,7 +373,7 @@ class IssueListing(unittest.TestCase):
         gh = FakeGh(answers={("POST", f"repos/{REPO}/issues"): json.dumps({"html_url": ISSUE_URL, "number": 9})},
                     default=json.dumps({"body": "the body"}))
 
-        url = GhIssues(REPO, run=gh).create("the title", "the body", [FEEDBACK])
+        url = GhIssues(REPO, run=gh, settle_seconds=0).create("the title", "the body", [FEEDBACK])
 
         argv, stdin = gh.calls[0]
         self.assertEqual((method_of(argv), path_of(argv), json.loads(stdin), url),

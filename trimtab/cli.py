@@ -23,7 +23,7 @@ from trimtab.capture.sources import (
     FixtureContents, FixtureIssues, FixtureSource, GhBodies, GhContents, GhIssues, GhPullRequests, GhSource,
     SourceError, changed_files, open_feedback_issues, staged_files,
 )
-from trimtab.capture.written import Readback, WrittenBodyError, verify_body
+from trimtab.capture.written import SETTLE_SECONDS, Readback, WrittenBodyError, verify_body
 from trimtab.lint import overrides, references, structure
 from trimtab.propose import render
 from trimtab.registry import harness, rules_for
@@ -167,14 +167,10 @@ def cmd_verify_body(args) -> int:
     sent = args.body if args.body is not None else _text_of(args.body_file)
     if sent is None:
         return 2
-    bodies = GhBodies(args.repo)
+    kind, number = next((k, n) for k, n in (("pull", args.pull), ("issue", args.issue), ("comment", args.comment))
+                        if n is not None)
     try:
-        if args.head is not None:
-            kind, number = "pull", bodies.pull_for_head(args.head)
-        else:
-            kind, number = next((k, n) for k, n in (("pull", args.pull), ("issue", args.issue),
-                                                    ("comment", args.comment)) if n is not None)
-        outcome = verify_body(bodies, kind, number, sent)
+        outcome = verify_body(GhBodies(args.repo), kind, number, sent, settle_seconds=args.settle)
     except SourceError as err:
         print(f"error: {err}", file=sys.stderr)
         return 2
@@ -378,6 +374,26 @@ def _issues(args, repo: str):
     return GhIssues(repo)
 
 
+def _opening_stopped(err) -> int:
+    """Report an `open_issues` that stopped part-way: what it opened, where it stopped, what it did not try.
+
+    1 when the issue it stopped at exists with a body that is not the one sent (ADR 0024): stop and report.
+    2 when GitHub failed: a re-run skips what is open, so nothing is filed twice. Any other cause is a fault.
+    """
+    for url in err.opened:
+        print(f"  opened {url}")
+    if err.not_opened:
+        print(f"not opened: {', '.join(err.not_opened)}", file=sys.stderr)
+    if isinstance(err.cause, WrittenBodyError):
+        print(f"verify-body: {err.stopped_at}: {err.cause}. Stop and report it.", file=sys.stderr)
+        return 1
+    if isinstance(err.cause, SourceError):
+        print(f"error: {err.stopped_at}: {err.cause}. Re-run: open issues are skipped, so nothing is filed twice.",
+              file=sys.stderr)
+        return 2
+    raise err.cause
+
+
 def cmd_propose(args) -> int:
     setup = _setup(args)
     if setup is None:
@@ -425,13 +441,8 @@ def cmd_propose(args) -> int:
     except propose.StaleProposals as err:
         print(f"aborted: {err}", file=sys.stderr)
         return 3
-    except SourceError as err:
-        print(f"error: {err}. Re-run: open issues are skipped, so nothing is filed twice.", file=sys.stderr)
-        return 2
-    except WrittenBodyError as err:
-        # The issue exists, so a re-run skips it; its body is not the one sent (ADR 0024).
-        print(f"verify-body: {err}. Stop and report it.", file=sys.stderr)
-        return 1
+    except propose.OpeningStopped as err:
+        return _opening_stopped(err)
     print(f"opened {len(opened)} issue(s); skipped {len(plan.already_open)} open or recently closed")
     for url in opened:
         print(f"  {url}")
@@ -895,13 +906,14 @@ def build_parser() -> argparse.ArgumentParser:
                                             "session footer off and fail on any other change (ADR 0024)")
     vb.add_argument("--repo", required=True, help="owner/name")
     target = vb.add_mutually_exclusive_group(required=True)
-    target.add_argument("--head", metavar="BRANCH", help="the one open PR from this branch")
-    target.add_argument("--pull", type=int, metavar="N", help="PR number")
+    target.add_argument("--pull", type=int, metavar="N", help="PR number (the POST's `--jq .number`)")
     target.add_argument("--issue", type=int, metavar="N", help="issue number")
     target.add_argument("--comment", type=int, metavar="ID", help="issue or PR comment ID")
     sent = vb.add_mutually_exclusive_group(required=True)
     sent.add_argument("--body-file", help="the file the body was sent from")
     sent.add_argument("--body", help="the body as sent, inline")
+    vb.add_argument("--settle", type=float, default=SETTLE_SECONDS, metavar="SECONDS",
+                    help=f"wait before each read, for a footer added after the write (default: {SETTLE_SECONDS:g})")
     vb.set_defaults(func=cmd_verify_body)
 
     ing = sub.add_parser("ingest", parents=[common], help="record merged PRs by watermark (dry run unless --apply)")

@@ -309,7 +309,8 @@ appears only in that section, never as a severity.
   Check it with `trimtab check-pr --body-file <file>` and fix what it reports.
 - Push the branch and open a **draft** PR titled
   `review(conformance): weekly sweep <TODAY>`, with
-  `gh api -X POST "repos/$REPO/pulls" -f title="review(conformance): weekly sweep $TODAY" -f head="reviews/conformance-$TODAY" -f base="$DEFAULT" -F draft=true -F body=@<file> --jq .html_url && trimtab verify-body --repo "$REPO" --head "reviews/conformance-$TODAY" --body-file <file>`.
+  `N=$(gh api -X POST "repos/$REPO/pulls" -f title="review(conformance): weekly sweep $TODAY" -f head="reviews/conformance-$TODAY" -f base="$DEFAULT" -F draft=true -F body=@<file> --jq .number) && trimtab verify-body --repo "$REPO" --pull "$N" --body-file <file>`;
+  the PR is `https://github.com/$REPO/pull/$N`.
   `verify-body` reads the PR back: exit 0 is the body sent (it may say it took
   the platform's session footer off); exit 1 or 2: stop and report it.
 - If the PR cannot be opened, the branch is still pushed: print the compare URL

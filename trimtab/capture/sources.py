@@ -21,7 +21,7 @@ from typing import Callable, Mapping
 from urllib.parse import quote, unquote, urlencode
 
 from trimtab.capture.ingest import PullRequest
-from trimtab.capture.written import WrittenBodyError, verify_body
+from trimtab.capture.written import SETTLE_SECONDS, WrittenBodyError, verify_body
 from trimtab.ids import ANY_ID_SHAPE
 from trimtab.dependabot import CiRun, HostError, PullRequestView
 from trimtab.upstream import Issue
@@ -360,10 +360,11 @@ def _issues_only(rows: list, what: str) -> list[dict]:
 class GhIssues:
     """Issues on one repository (Trimtab, for upstream proposals). The body goes in on stdin."""
 
-    def __init__(self, repo: str, run: Run | None = None):
+    def __init__(self, repo: str, run: Run | None = None, settle_seconds: float = SETTLE_SECONDS):
         self.repo = repo
         self.destination = repo
         self.api = GhApi(run)
+        self.settle_seconds = settle_seconds
 
     def recent_titles(self, label: str, closed_since: str | None) -> list[str]:
         what = "gh api issues"
@@ -396,7 +397,8 @@ class GhIssues:
         if not (isinstance(data, dict) and isinstance(data.get("html_url"), str) and _is_int(data.get("number"))):
             raise SourceError("gh api issues returned unexpected JSON")
         try:
-            verify_body(GhBodies(self.repo, api=self.api), "issue", data["number"], body)
+            verify_body(GhBodies(self.repo, api=self.api), "issue", data["number"], body,
+                        settle_seconds=self.settle_seconds)
         except WrittenBodyError as err:
             raise WrittenBodyError(f"{data['html_url']}: {err}; edit its body by hand") from err
         return data["html_url"]
@@ -426,17 +428,6 @@ class GhBodies:
 
     def write(self, kind: str, number: int, body: str) -> None:
         self.api.call("PATCH", self._path(kind, number), body={"body": body})
-
-    def pull_for_head(self, branch: str) -> int:
-        """The one open PR whose head is `branch` in this repository; none or several is an error."""
-        owner = self.repo.split("/", 1)[0]
-        rows = self.api.json("GET", f"repos/{self.repo}/pulls", "gh api pulls",
-                             query={"state": "open", "head": f"{owner}:{branch}", "per_page": PER_PAGE})
-        if not isinstance(rows, list) or not all(isinstance(r, dict) and _is_int(r.get("number")) for r in rows):
-            raise SourceError("gh api pulls returned unexpected JSON")
-        if len(rows) != 1:
-            raise SourceError(f"{len(rows)} open PRs have the head {branch}; expected exactly one")
-        return rows[0]["number"]
 
 
 SHA = re.compile(r"[0-9a-f]{40}")

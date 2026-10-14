@@ -155,7 +155,7 @@ trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels
   kinds, one line each, no quoted PR text) and the harness block; check it with
   `trimtab check-pr --body-file <file>` and `trimtab lint overrides`
   before opening it as a draft:
-  `gh api -X POST "repos/$REPO/pulls" -f title="[<ID>] <what changes>" -f head=<branch> -f base="$DEFAULT" -F draft=true -F body=@<file> --jq .html_url && trimtab verify-body --repo "$REPO" --head <branch> --body-file <file>`.
+  `N=$(gh api -X POST "repos/$REPO/pulls" -f title="[<ID>] <what changes>" -f head=<branch> -f base="$DEFAULT" -F draft=true -F body=@<file> --jq .number) && trimtab verify-body --repo "$REPO" --pull "$N" --body-file <file>`.
   `verify-body` reads the PR back: exit 1 or 2: stop and report it. Never mark
   it ready.
 - Also consider the step 3 candidates the same way.

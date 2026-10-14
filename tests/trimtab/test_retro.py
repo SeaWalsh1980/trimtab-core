@@ -16,7 +16,7 @@ from trimtab.capture.ingest import LABEL, PullRequest, rebuild
 from trimtab.items import Item, Proposal, Strength
 from trimtab.lint import structure
 from trimtab.propose import (
-    ISSUE_LABEL, Draft, StaleProposals, confirmation, open_issues, plan_issues, render,
+    ISSUE_LABEL, Draft, OpeningStopped, StaleProposals, confirmation, open_issues, plan_issues, render,
 )
 from trimtab.score import candidates, tally
 
@@ -45,6 +45,19 @@ class FakeIssues:
     def create(self, title, body, labels):
         self.issues.append({"title": title, "body": body, "labels": list(labels)})
         return f"issue {len(self.issues)}"
+
+
+class FailingAt(FakeIssues):
+    """Files issues until one whose title starts with `prefix`, which fails."""
+
+    def __init__(self, prefix):
+        super().__init__()
+        self.prefix = prefix
+
+    def create(self, title, body, labels):
+        if title.startswith(self.prefix):
+            raise RuntimeError("the sink failed")
+        return super().create(title, body, labels)
 
 
 def draft(item_id, kind="issue"):
@@ -126,6 +139,17 @@ class Issues(unittest.TestCase):
 
         self.assertEqual(second.to_open, ())
         self.assertEqual(len(sink.issues), 1)
+
+    def test_opening_that_stops_part_way_names_what_it_opened_and_what_it_did_not_try(self):
+        sink = FailingAt("[ENG-2]")
+        todo = plan_issues([draft("TST-2"), draft("ENG-2"), draft("SEC-1")], sink)
+
+        with self.assertRaises(OpeningStopped) as caught:
+            open_issues(todo, sink, confirmation(todo))
+
+        stopped = caught.exception
+        self.assertEqual((stopped.opened, stopped.stopped_at, stopped.not_opened, type(stopped.cause)),
+                         (["issue 1"], "ENG-2", ["SEC-1"], RuntimeError))
 
     def test_the_issue_names_the_reporting_project(self):
         proposal = Proposal("TST-2", "upstream", ("ambiguous",), ("e1", "e2"), (101, 102))
