@@ -23,7 +23,8 @@ this change.
 ## Decision
 
 `settings.base.json` sets `"attribution": false`. A bootstrap test reads it
-back from the installed settings as `false`.
+back from the installed settings as `false`. The installer refuses a Claude
+Code older than 2.1.281, which would skip the settings (see Consequences).
 
 ## Options considered
 
@@ -32,6 +33,13 @@ back from the installed settings as `false`.
 - **The object form `{"commit": "", "pr": "", "sessionUrl": false}`.** No
   old-version risk, but nothing says it reaches the footer either. Rejected
   by the operator in favour of `false`.
+- **Keep `sessionUrl: false` and rely on verify-body (ADR 0024) alone.** No
+  old-version risk, and sessions keep their default attribution. Rejected:
+  verify-body takes the footer off only after the PR is published. For the
+  settle time the footer is live, and a notification or webhook sent then
+  carries it; GitHub's edit history keeps it for anyone who can read the
+  repository (ADR 0024's consequences). Stopping it at the source, if this
+  setting does, avoids both; verify-body stays as the read-back either way.
 - **Server-managed settings.** Not taken: an organisation setting outside the
   base and the instance, invisible to their review.
 
@@ -45,10 +53,17 @@ back from the installed settings as `false`.
   can no longer rely on the default to supply them; the drift test pins every
   copy. The trailer names no model: the routines run the platform's default
   (ADR 0023).
-- Accepted: Claude Code older than 2.1.281 skips the whole settings file,
-  hooks included. A cloud routine's guard probe would not be refused, so the
-  run stops. An interactive session on such a machine would run unguarded.
-  The machines in use run 2.1.299 and later.
+- Claude Code older than 2.1.281 skips the whole settings file, hooks
+  included: an interactive session on such a machine would run unguarded,
+  and a cloud routine's guard probe would not be refused, so the run stops.
+  So the installer refuses, before anything is written and under `--check`
+  too, a `claude` older than 2.1.281 or one that reports no version, as it
+  refuses a python3 older than 3.11 (ADR 0014). A bootstrap test pins each
+  case.
+- Accepted: with no `claude` on PATH the installer goes on and says the
+  version was not checked. CI and a machine that has not installed Claude Code
+  yet have nothing that loads the settings; a Claude Code installed or
+  downgraded after the install is not seen until the next run.
 - Accepted, until a follow-up change: the installer's merge lets a later
   layer's value win over a scalar, so an instance or machine layer that sets
   `attribution` would replace `false` without a warning. No layer sets it
