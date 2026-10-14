@@ -387,8 +387,8 @@ class CreatedIssues(unittest.TestCase):
 class ProposeStoppedReport(unittest.TestCase):
     """What `propose --apply` reports when opening stops part-way, and its exit code."""
 
-    def report(self, cause):
-        stopped = OpeningStopped(["https://github.com/o/t/issues/1"], "ENG-2", ["SEC-1"], cause)
+    def report(self, cause, also=None):
+        stopped = OpeningStopped(["https://github.com/o/t/issues/1"], "ENG-2", ["SEC-1"], cause, also=also)
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = _opening_stopped(stopped)
@@ -407,6 +407,20 @@ class ProposeStoppedReport(unittest.TestCase):
     def test_any_other_cause_is_raised_not_reported(self):
         with self.assertRaises(RuntimeError):
             self.report(RuntimeError("a fault"))
+
+    def test_a_create_that_may_have_filed_stays_reported_when_the_read_back_also_fails(self):
+        create = OpeningStopped([], "ENG-2", ["SEC-1"], WrittenBodyError("ENG-2 may have been filed"))
+
+        code, out, err = self.report(WrittenBodyError("issue 1: differs"), also=create)
+
+        self.assertEqual((code, "ENG-2: ENG-2 may have been filed" in err, "issue 1: differs" in err), (1, True, True))
+
+    def test_a_refused_create_then_a_failed_read_back_still_stops_the_run(self):
+        create = OpeningStopped([], "ENG-2", ["SEC-1"], SourceError("HTTP 422"))
+
+        code, _, err = self.report(WrittenBodyError("created, but not all read back"), also=create)
+
+        self.assertEqual((code, "HTTP 422" in err, "Re-run" in err), (1, True, False))
 
 
 FAKE_GH = """#!/bin/sh

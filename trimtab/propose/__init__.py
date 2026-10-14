@@ -112,12 +112,16 @@ def confirmation(todo: IssuePlan) -> str:
 class OpeningStopped(Exception):
     """Opening stopped at one draft: `opened` were filed before it, `not_opened` (item IDs) were not tried.
 
-    `cause` is the sink's error; the draft it stopped at may or may not exist, as the cause says.
+    `cause` is the sink's error; the draft it stopped at may or may not exist, as the cause says. `also` is an
+    earlier stop this one followed: a create that failed, then a read-back that failed too. Both are kept, since
+    the create's cause may say its issue may have been filed.
     """
 
-    def __init__(self, opened: list[str], stopped_at: str, not_opened: list[str], cause: Exception):
+    def __init__(self, opened: list[str], stopped_at: str, not_opened: list[str], cause: Exception,
+                 also: OpeningStopped | None = None):
         super().__init__(f"opening stopped at {stopped_at}: {cause}")
         self.opened, self.stopped_at, self.not_opened, self.cause = opened, stopped_at, not_opened, cause
+        self.also = also
 
 
 def open_issues(todo: IssuePlan, sink: IssueSink, confirm: str) -> list[str]:
@@ -135,8 +139,8 @@ def open_issues(todo: IssuePlan, sink: IssueSink, confirm: str) -> list[str]:
                     stopped = OpeningStopped(opened, d.item_id, [x.item_id for x in todo.to_open[i + 1:]], err)
                     break
     except Exception as err:
-        not_opened = [stopped.stopped_at, *stopped.not_opened] if stopped else []
-        raise OpeningStopped(opened, "the read-back", not_opened, err) from err
+        raise OpeningStopped(opened, "the read-back", stopped.not_opened if stopped else [], err,
+                             also=stopped) from err
     if stopped is not None:
         raise stopped
     return opened

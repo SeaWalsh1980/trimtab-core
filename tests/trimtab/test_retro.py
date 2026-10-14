@@ -189,6 +189,18 @@ class Issues(unittest.TestCase):
 
         self.assertEqual((caught.exception.opened, caught.exception.stopped_at), (["issue 1"], "the read-back"))
 
+    def test_a_failed_create_followed_by_a_failed_read_back_keeps_both(self):
+        sink = FailingAt("[ENG-2]")
+        sink.read_back_fails = RuntimeError("the read-back failed")
+        todo = plan_issues([draft("TST-2"), draft("ENG-2"), draft("SEC-1")], sink)
+
+        with self.assertRaises(OpeningStopped) as caught:
+            open_issues(todo, sink, confirmation(todo))
+
+        stopped = caught.exception
+        self.assertEqual((stopped.stopped_at, stopped.not_opened, stopped.also.stopped_at, str(stopped.also.cause)),
+                         ("the read-back", ["SEC-1"], "ENG-2", "the sink failed"))
+
     def test_the_issue_names_the_reporting_project(self):
         proposal = Proposal("TST-2", "upstream", ("ambiguous",), ("e1", "e2"), (101, 102))
 

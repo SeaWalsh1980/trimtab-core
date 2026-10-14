@@ -100,6 +100,17 @@ The upstream retro also comments on issues.
 - **Strip whatever follows the `🤖 Generated with` line.** Rejected: it
   would delete text it does not recognise, which may be the next thing to
   investigate.
+- **Read the HTTP status from `gh api --include`** to tell a refused create
+  (4xx, nothing filed) from one that may have filed the issue. Rejected for
+  now: gh gives the status only in its error text (`gh: Validation Failed
+  (HTTP 422)`) unless every call switches to `--include` and parses the
+  status line and headers ahead of the body, a change to all of `GhApi`.
+  The 404 check already reads the same text. The text match is a deviation
+  from the reliability rule's preference for explicit error categories,
+  taken because a misread fails safe: a status it cannot find reads as "may
+  have been filed", which stops the run (exit 1) rather than inviting a
+  re-run. Tests pin the forms read. Revisit if gh changes them, or when
+  `GhApi` needs the status for another reason.
 
 ## Consequences
 

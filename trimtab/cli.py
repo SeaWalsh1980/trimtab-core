@@ -376,23 +376,30 @@ def _issues(args, repo: str):
 
 
 def _opening_stopped(err) -> int:
-    """Report an `open_issues` that stopped part-way: what it opened, where it stopped, what it did not try.
+    """Report an `open_issues` that stopped part-way: what it opened, each failure (a failed create first, then a
+    failed read-back after it), and what it did not try (ADR 0024).
 
-    1 when the issue it stopped at exists with a body that is not the one sent (ADR 0024): stop and report.
-    2 when GitHub failed: a re-run skips what is open, so nothing is filed twice. Any other cause is a fault.
+    1 when any failure is a WrittenBodyError: a body is wrong, an issue was not read back, or a create may have
+    filed its issue; a re-run would skip such an issue and never read it, so stop and report.
+    2 only when every failure is a GitHub error that filed nothing (a 4xx refusal): a re-run is safe.
+    Any other cause is a fault, and is raised.
     """
     for url in err.opened:
         print(f"  opened {url}")
     if err.not_opened:
         print(f"not opened: {', '.join(err.not_opened)}", file=sys.stderr)
-    if isinstance(err.cause, WrittenBodyError):
-        print(f"verify-body: {err.stopped_at}: {err.cause}. Stop and report it.", file=sys.stderr)
+    stops = [s for s in (err.also, err) if s is not None]  # a failed create first, then what followed it
+    for stop in stops:
+        print(f"{stop.stopped_at}: {stop.cause}", file=sys.stderr)
+    causes = [s.cause for s in stops]
+    if any(isinstance(c, WrittenBodyError) for c in causes):
+        print("verify-body: a body is wrong, or an issue may exist unread. Stop and report it.", file=sys.stderr)
         return 1
-    if isinstance(err.cause, SourceError):
-        print(f"error: {err.stopped_at}: {err.cause}. Re-run: open issues are skipped, so nothing is filed twice.",
-              file=sys.stderr)
-        return 2
-    raise err.cause
+    unknown = next((c for c in causes if not isinstance(c, SourceError)), None)
+    if unknown is not None:
+        raise unknown
+    print("Re-run: open issues are skipped, so nothing is filed twice.", file=sys.stderr)
+    return 2
 
 
 def cmd_propose(args) -> int:

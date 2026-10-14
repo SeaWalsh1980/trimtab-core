@@ -11,7 +11,8 @@ from pathlib import Path
 
 from gh_fake import FakeGh, method_of, path_of, query_of
 from trimtab.capture.sources import (
-    ISSUE_LIMIT, SCAN_LIMIT, GhApi, GhBodies, GhContents, GhIssues, GhPullRequests, GhSource, SourceError,
+    ISSUE_LIMIT, SCAN_LIMIT, GhApi, GhBodies, GhContents, GhIssues, GhPullRequests, GhSource, NotFound, Refused,
+    SourceError,
     open_feedback_issues, staged_files,
 )
 
@@ -465,6 +466,24 @@ class Failures(unittest.TestCase):
             GhSource(REPO, run=gh).body(PR)
 
         self.assertIn(f"GET repos/{REPO}/pulls/{PR}", str(caught.exception))
+
+    def test_gh_error_text_is_read_for_its_status(self):
+        # gh gives the status only in its error text (ADR 0024): these are the forms read.
+        cases = {"gh: Not Found (HTTP 404)": NotFound, "gh: Validation Failed (HTTP 422)": Refused,
+                 "gh: API rate limit exceeded (HTTP 429)": Refused}
+        for stderr, kind in cases.items():
+            with self.subTest(stderr=stderr):
+                with self.assertRaises(kind):
+                    GhSource(REPO, run=FakeGh(returncode=1, stderr=stderr)).body(PR)
+
+    def test_a_server_error_or_an_unreadable_status_is_not_a_refusal(self):
+        # Not a refusal means "may have filed": a misread errs towards stopping, never towards a re-run.
+        for stderr in ("gh: Bad Gateway (HTTP 502)", "gh: something failed", "error: status 422"):
+            with self.subTest(stderr=stderr):
+                with self.assertRaises(SourceError) as caught:
+                    GhSource(REPO, run=FakeGh(returncode=1, stderr=stderr)).body(PR)
+
+                self.assertNotIsInstance(caught.exception, Refused)
 
     def test_output_that_is_not_json_is_refused(self):
         gh = FakeGh(default="<html>")
