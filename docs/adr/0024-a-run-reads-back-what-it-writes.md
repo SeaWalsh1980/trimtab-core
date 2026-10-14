@@ -7,6 +7,11 @@ carrying this change opens a PR, `trimtab verify-body` exits 0, and the PR's
 body, read afterwards, holds no reference to the run (see "Trial, still
 open").
 
+2026-10-14: the companion settings change named below as
+`attribution: false` landed as
+`"attribution": {"commit": "", "pr": "", "sessionUrl": false}` instead
+(`docs/adr/0025-installed-settings-turn-commit-and-pr-attribution-off.md`).
+
 ## Context
 
 ADR 0022's trial (2026-10-14) ran a per-project routine on a base whose

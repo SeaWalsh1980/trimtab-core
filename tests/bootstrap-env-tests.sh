@@ -12,13 +12,6 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work=$(mktemp -d -t bootstrap-env.XXXXXX)
 trap 'rm -rf "$work"' EXIT
 
-# Every run sees a current Claude Code unless a check puts its own first, so the
-# results do not depend on the host's version, or on whether it has one.
-default_claude=$(mktemp -d -p "$work" claude.XXXXXX)
-printf '#!/usr/bin/env bash\necho "2.1.300 (Claude Code)"\n' > "$default_claude/claude"
-chmod +x "$default_claude/claude"
-PATH="$default_claude:$PATH"
-
 fails=0
 pass() { echo "PASS  $1"; }
 fail() { echo "FAIL  $1${2:+ ($2)}"; fails=$((fails + 1)); }
@@ -93,19 +86,25 @@ PY
   fi
 }
 
-# A run's commits and PR bodies carry its session link unless the installed
-# settings turn attribution off (docs/adr/0022-no-reference-to-the-run-in-what-it-writes.md,
-# docs/adr/0025-installed-settings-turn-all-attribution-off.md). The scalar must
-# survive the merge and the pruning of empty containers, so it is read back from
-# the generated file.
-check_installed_settings_turn_all_attribution_off() {
+# A run's commits and PR bodies carry its session link and default attribution
+# unless the installed settings turn them off
+# (docs/adr/0022-no-reference-to-the-run-in-what-it-writes.md,
+# docs/adr/0025-installed-settings-turn-commit-and-pr-attribution-off.md). The
+# empty strings must survive the merge and the pruning of empty containers, so
+# the value is read back from the generated file and compared as JSON, exactly.
+check_installed_settings_turn_commit_and_pr_attribution_off() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
   boot "$h" "$live" --instance "$inst"
-  if [[ $rc -eq 0 && "$(settings_get "$h" attribution)" == False ]]; then
-    pass "the installed settings turn all attribution off"
+  if [[ $rc -eq 0 ]] && python3 - "$h/.claude/settings.json" <<'PY'
+import json, sys
+got = json.load(open(sys.argv[1])).get("attribution")
+assert got == {"commit": "", "pr": "", "sessionUrl": False} and got["sessionUrl"] is False, got
+PY
+  then
+    pass "the installed settings turn commit and PR attribution and the session link off"
   else
-    fail "the installed settings turn all attribution off" "rc=$rc"
+    fail "the installed settings turn commit and PR attribution and the session link off" "rc=$rc"
   fi
 }
 
@@ -730,86 +729,13 @@ check_refuses_python_that_reports_no_version() {
   fi
 }
 
-# fake_claude <version line>: a directory holding a `claude` that prints the
-# line for --version. Prints the directory.
-fake_claude() {
-  local dir
-  dir=$(mktemp -d -p "$work" fakeclaude.XXXXXX)
-  printf '#!/usr/bin/env bash\necho "%s"\n' "$1" > "$dir/claude"; chmod +x "$dir/claude"
-  echo "$dir"
-}
-
-check_refuses_claude_older_than_2_1_281() {
-  local h inst fake
-  h=$(new_home); inst=$(inst_of "$h"); fake=$(fake_claude "2.1.280 (Claude Code)")
-  PATH="$fake:$PATH" boot "$h" "$live" --instance "$inst"
-  if [[ $rc -eq 1 && "$out" == *"Claude Code 2.1.280 is older than 2.1.281"* ]] && nothing_written "$h" "$inst"; then
-    pass "refuses Claude Code older than 2.1.281, naming the version, before anything is written"
-  else
-    fail "refuses Claude Code older than 2.1.281, naming the version, before anything is written" "rc=$rc"; echo "$out" | tail -5
-  fi
-}
-
-check_refuses_claude_older_than_2_1_281_under_check() {
-  local h inst fake
-  h=$(new_home); inst=$(inst_of "$h"); fake=$(fake_claude "2.0.999 (Claude Code)")
-  PATH="$fake:$PATH" boot "$h" "$live" --instance "$inst" --check
-  if [[ $rc -eq 1 && "$out" == *"Claude Code 2.0.999 is older than 2.1.281"* && "$out" != *"drift detected"* ]] \
-     && nothing_written "$h" "$inst"; then
-    pass "--check refuses Claude Code older than 2.1.281 too, and writes nothing"
-  else
-    fail "--check refuses Claude Code older than 2.1.281 too, and writes nothing" "rc=$rc"; echo "$out" | tail -5
-  fi
-}
-
-check_accepts_claude_2_1_281() {
-  local h inst fake
-  h=$(new_home); inst=$(inst_of "$h"); fake=$(fake_claude "2.1.281 (Claude Code)")
-  PATH="$fake:$PATH" boot "$h" "$live" --instance "$inst"
-  if [[ $rc -eq 0 && "$out" != *"older than 2.1.281"* && -L "$h/.claude/hooks" ]]; then
-    pass "Claude Code 2.1.281 passes the floor and installs"
-  else
-    fail "Claude Code 2.1.281 passes the floor and installs" "rc=$rc"; echo "$out" | tail -5
-  fi
-}
-
-check_refuses_claude_that_reports_no_version() {
-  local h inst fake
-  h=$(new_home); inst=$(inst_of "$h"); fake=$(fake_claude "not a version")
-  PATH="$fake:$PATH" boot "$h" "$live" --instance "$inst"
-  if [[ $rc -eq 1 && "$out" == *"claude did not report a version"* ]] && nothing_written "$h" "$inst"; then
-    pass "refuses a claude that cannot report its version, before anything is written"
-  else
-    fail "refuses a claude that cannot report its version, before anything is written" "rc=$rc"; echo "$out" | tail -5
-  fi
-}
-
-# No claude on PATH (CI, a machine that has not installed it yet): nothing can
-# load the settings, so the install goes on and says the version was not checked.
-check_installs_without_claude_and_says_so() {
-  local h inst path_without d
-  h=$(new_home); inst=$(inst_of "$h")
-  path_without=$(IFS=:; for d in $PATH; do [[ -x "$d/claude" ]] || printf '%s:' "$d"; done)
-  PATH="${path_without%:}" boot "$h" "$live" --instance "$inst"
-  if [[ $rc -eq 0 && "$out" == *"claude is not on PATH"* && -L "$h/.claude/hooks" ]]; then
-    pass "installs without claude on PATH and says the version was not checked"
-  else
-    fail "installs without claude on PATH and says the version was not checked" "rc=$rc"; echo "$out" | tail -5
-  fi
-}
-
-check_refuses_claude_older_than_2_1_281
-check_refuses_claude_older_than_2_1_281_under_check
-check_accepts_claude_2_1_281
-check_refuses_claude_that_reports_no_version
-check_installs_without_claude_and_says_so
 check_refuses_python_older_than_3_11
 check_refuses_python_older_than_3_11_under_check
 check_accepts_python_3_11
 check_refuses_python_that_reports_no_version
 check_writes_instance_values
 check_base_hooks_survive
-check_installed_settings_turn_all_attribution_off
+check_installed_settings_turn_commit_and_pr_attribution_off
 check_refuses_disable_all_hooks
 check_refuses_hooks_replaced
 check_refuses_hook_allow_in_machine_env

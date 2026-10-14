@@ -18,8 +18,8 @@ bootstrap test that pins it in the installed settings.
 "Trial result" below). ADR 0024 adds reading back what a run writes.
 
 2026-10-14: the setting part is superseded by ADR 0025
-(`docs/adr/0025-installed-settings-turn-all-attribution-off.md`), which turns
-all attribution off.
+(`docs/adr/0025-installed-settings-turn-commit-and-pr-attribution-off.md`),
+which turns commit and PR attribution off as well as the session link.
 
 ## Context
 

@@ -49,7 +49,8 @@ compare it with the render before running it.
   session ID; the prompt overrides the default attribution, every run checks
   what it commits with `trimtab ids --staged` and never commits past a
   failure, and `check-pr` refuses such a PR body. The setting that turns attribution off
-  (`"attribution": false`, ADR 0025) is a control change of its own: check
+  (`"attribution": {"commit": "", "pr": "", "sessionUrl": false}`, ADR 0025)
+  is a control change of its own: check
   that the generated `~/.claude/settings.json` (what Claude Code reads, after
   the instance and machine layers merge) carries it before relying on it.
   That checks this machine only: a routine's settings are the ones its cloud

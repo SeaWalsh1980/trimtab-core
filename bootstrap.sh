@@ -142,32 +142,6 @@ py_found=$(python3 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3]); sys
 [[ $py_rc -eq 0 ]] \
   || die "python3 $py_found is older than 3.11, which the launchers need (python3 -P)"
 
-# The Claude Code floor. settings.base.json sets "attribution": false, which
-# Claude Code reads from 2.1.281; an older one skips the whole settings file,
-# hooks included, so every guard would be off with no signal. So the installer
-# refuses first, as for python3, --check included, and a claude that reports no
-# version is refused too. No claude on PATH is not refused: nothing here can
-# load the settings (CI, a machine before Claude Code is installed), and the
-# run says the version was not checked.
-# See docs/adr/0025-installed-settings-turn-all-attribution-off.md.
-CLAUDE_FLOOR=2.1.281
-if command -v claude >/dev/null 2>&1; then
-  with_timeout=()
-  command -v timeout >/dev/null 2>&1 && with_timeout=(timeout 30)
-  claude_found=$( { ${with_timeout[@]+"${with_timeout[@]}"} claude --version </dev/null 2>/dev/null || true; } \
-    | head -n 1 | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' || true)
-  [[ -n "$claude_found" ]] \
-    || die "claude did not report a version; these settings need Claude Code $CLAUDE_FLOOR or newer (an older one skips them, hooks included)"
-  python3 - "$claude_found" "$CLAUDE_FLOOR" <<'PY' \
-    || die "Claude Code $claude_found is older than $CLAUDE_FLOOR, which skips these settings, hooks included; update it, then re-run"
-import sys
-def v(s): return tuple(int(p) for p in s.split("."))
-sys.exit(0 if v(sys.argv[1]) >= v(sys.argv[2]) else 1)
-PY
-else
-  skip "claude is not on PATH: its version was not checked (these settings need Claude Code $CLAUDE_FLOOR or newer)"
-fi
-
 BASE="$REPO"   # the mechanism: this checkout, or a snapshot under the store
 # CDPATH is cleared for the cd: with it set, a relative argument makes cd print
 # the directory, and INSTANCE would be two lines.
