@@ -76,6 +76,10 @@ class IssueSink(Protocol):
 
     def create(self, title: str, body: str, labels: Sequence[str]) -> str: ...
 
+    def read_back(self) -> None:
+        """Check every issue created since the last call; raise if one is not what was sent."""
+        ...
+
 
 @dataclass(frozen=True)
 class IssuePlan:
@@ -115,9 +119,18 @@ def open_issues(todo: IssuePlan, sink: IssueSink, confirm: str) -> list[str]:
     if confirm != confirmation(todo):
         raise StaleProposals("the proposals changed since the dry run; run --dry-run again")
     opened: list[str] = []
+    stopped: OpeningStopped | None = None
     for i, d in enumerate(todo.to_open):
         try:
             opened.append(sink.create(d.title, d.body, d.labels))
-        except Exception as err:  # re-raised with what was opened, so no URL is lost
-            raise OpeningStopped(opened, d.item_id, [x.item_id for x in todo.to_open[i + 1:]], err) from err
+        except Exception as err:  # raised below with what was opened, so no URL is lost
+            stopped = OpeningStopped(opened, d.item_id, [x.item_id for x in todo.to_open[i + 1:]], err)
+            break
+    try:
+        sink.read_back()  # what was opened is read back even when opening stopped part-way
+    except Exception as err:
+        not_opened = [stopped.stopped_at, *stopped.not_opened] if stopped else []
+        raise OpeningStopped(opened, "the read-back", not_opened, err) from err
+    if stopped is not None:
+        raise stopped
     return opened

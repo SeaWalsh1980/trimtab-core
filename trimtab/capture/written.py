@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import enum
 import re
-import time
 from typing import Callable, Protocol
 
 from trimtab.capture.prblock import run_references
@@ -24,7 +23,14 @@ SETTLE_SECONDS = 10.0
 
 
 class WrittenBodyError(Exception):
-    """A body read back is not the one sent, or still holds a run reference. Never quotes the body."""
+    """A body read back is not the one sent, or still holds a run reference. Never quotes the body.
+
+    `target` is the (kind, number) it is about, when there is one.
+    """
+
+    def __init__(self, message: str, target: tuple[str, int] | None = None):
+        super().__init__(message)
+        self.target = target
 
 
 class Readback(enum.Enum):
@@ -62,24 +68,47 @@ def compare(sent: str, found: str) -> Readback:
     return Readback.DIFFERS
 
 
-def verify_body(bodies: Bodies, kind: str, number: int, sent: str,
-                settle_seconds: float = SETTLE_SECONDS, sleep: Callable[[float], None] = time.sleep) -> Readback:
-    """Read back `kind` `number` once it has settled; take the platform footer off; refuse any other change or a
-    run reference (WrittenBodyError)."""
+Target = tuple[str, int, str]  # (kind, number, body sent)
 
-    def settled() -> Readback:
+
+def verify_bodies(bodies: Bodies, targets: list[Target], *,
+                  settle_seconds: float, sleep: Callable[[float], None]) -> list[Readback]:
+    """Read back each target after one shared wait; take the platform footer off those that carry it, wait once
+    more, and require them identical; refuse any other change or a run reference (WrittenBodyError, naming its
+    target). The caller supplies the wait (`sleep`): waiting is the outer layer's."""
+
+    def wait() -> None:
         if settle_seconds > 0:
             sleep(settle_seconds)
-        return compare(sent, bodies.read(kind, number))
 
-    outcome = settled()
-    if outcome is Readback.DIFFERS:
-        raise WrittenBodyError(outcome.value)
-    if outcome is Readback.FOOTER:
+    # First: a body that holds a reference fails before any wait, and is never written back.
+    for kind, number, sent in targets:
+        references = run_references(sent)
+        if references:
+            raise WrittenBodyError(f"the body holds a run reference ({', '.join(p.where for p in references)})",
+                                   (kind, number))
+    if not targets:
+        return []
+    wait()
+    outcomes = []
+    for kind, number, sent in targets:
+        outcome = compare(sent, bodies.read(kind, number))
+        if outcome is Readback.DIFFERS:
+            raise WrittenBodyError(outcome.value, (kind, number))
+        outcomes.append(outcome)
+    footed = [t for t, outcome in zip(targets, outcomes) if outcome is Readback.FOOTER]
+    for kind, number, sent in footed:
         bodies.write(kind, number, sent)
-        if settled() is not Readback.SAME:
-            raise WrittenBodyError("the platform's footer came back after the body sent was written again")
-    references = run_references(sent)
-    if references:
-        raise WrittenBodyError(f"the body holds a run reference ({', '.join(p.where for p in references)})")
-    return outcome
+    if footed:
+        wait()
+        for kind, number, sent in footed:
+            if compare(sent, bodies.read(kind, number)) is not Readback.SAME:
+                raise WrittenBodyError("the platform's footer came back after the body sent was written again",
+                                       (kind, number))
+    return outcomes
+
+
+def verify_body(bodies: Bodies, kind: str, number: int, sent: str, *,
+                settle_seconds: float, sleep: Callable[[float], None]) -> Readback:
+    """`verify_bodies` for one body."""
+    return verify_bodies(bodies, [(kind, number, sent)], settle_seconds=settle_seconds, sleep=sleep)[0]

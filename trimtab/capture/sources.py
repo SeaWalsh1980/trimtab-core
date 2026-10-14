@@ -15,13 +15,14 @@ import json
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
 from urllib.parse import quote, unquote, urlencode
 
 from trimtab.capture.ingest import PullRequest
-from trimtab.capture.written import SETTLE_SECONDS, WrittenBodyError, verify_body
+from trimtab.capture.written import SETTLE_SECONDS, WrittenBodyError, verify_bodies
 from trimtab.ids import ANY_ID_SHAPE
 from trimtab.dependabot import CiRun, HostError, PullRequestView
 from trimtab.upstream import Issue
@@ -365,6 +366,7 @@ class GhIssues:
         self.destination = repo
         self.api = GhApi(run)
         self.settle_seconds = settle_seconds
+        self._created: list[tuple[str, int, str]] = []  # (url, number, body sent), not yet read back
 
     def recent_titles(self, label: str, closed_since: str | None) -> list[str]:
         what = "gh api issues"
@@ -391,17 +393,27 @@ class GhIssues:
         return _issues_only(rows, what)
 
     def create(self, title: str, body: str, labels) -> str:
-        """The new issue's URL, once its body reads back as the one sent (ADR 0024)."""
+        """File one issue and return its URL; `read_back` checks every issue filed since its last call."""
         data = self.api.json("POST", f"repos/{self.repo}/issues", "gh api issues",
                              body={"title": title, "body": body, "labels": list(labels)})
         if not (isinstance(data, dict) and isinstance(data.get("html_url"), str) and _is_int(data.get("number"))):
             raise SourceError("gh api issues returned unexpected JSON")
-        try:
-            verify_body(GhBodies(self.repo, api=self.api), "issue", data["number"], body,
-                        settle_seconds=self.settle_seconds)
-        except WrittenBodyError as err:
-            raise WrittenBodyError(f"{data['html_url']}: {err}; edit its body by hand") from err
+        self._created.append((data["html_url"], data["number"], body))
         return data["html_url"]
+
+    def read_back(self) -> None:
+        """Every issue filed since the last call, read back after one shared wait (ADR 0024)."""
+        created, self._created = self._created, []
+        urls = {number: url for url, number, _ in created}
+        try:
+            verify_bodies(GhBodies(self.repo, api=self.api), [("issue", n, b) for _, n, b in created],
+                          settle_seconds=self.settle_seconds, sleep=time.sleep)
+        except WrittenBodyError as err:
+            raise WrittenBodyError(f"{urls[err.target[1]]}: {err}; edit its body by hand") from err
+        except SourceError as err:
+            # The issues exist, so a re-run skips them and never reads them back: stop here, naming them.
+            raise WrittenBodyError(f"created, but not all read back ({err}); check each with `trimtab verify-body "
+                                   f"--repo {self.repo} --issue N`: {', '.join(urls.values())}") from err
 
 
 # Where each kind of body lives, under one repository.
@@ -520,6 +532,9 @@ class FixtureIssues:
         rows.append({"title": title, "body": body, "labels": list(labels), "state": "open"})
         self.path.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
         return f"fixture issue {len(rows)}"
+
+    def read_back(self) -> None:
+        """A file holds what was written: nothing to read back."""
 
 
 class GhContents:

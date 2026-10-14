@@ -68,8 +68,8 @@ trimtab ids --staged && git commit -m "chore(trimtab): move the lock to <new sho
   && REPO=$(gh api 'repos/{owner}/{repo}' --jq .full_name) \
   && N=$(gh api -X POST "repos/$REPO/pulls" -f title="chore(trimtab): move the lock to <new short SHA>" \
     -f head="$(git branch --show-current)" -f base="$DEFAULT" -F draft=true -F body=@"$BODY" --jq .number) \
-  && trimtab verify-body --repo "$REPO" --pull "$N" --body-file "$BODY" \
-  && echo "https://github.com/$REPO/pull/$N"
+  && echo "https://github.com/$REPO/pull/$N" \
+  && trimtab verify-body --repo "$REPO" --pull "$N" --body-file "$BODY"
 ```
 
 `verify-body` reads the PR back: exit 0 is the body sent (it may say it took

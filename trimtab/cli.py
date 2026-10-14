@@ -8,6 +8,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -170,7 +171,7 @@ def cmd_verify_body(args) -> int:
     kind, number = next((k, n) for k, n in (("pull", args.pull), ("issue", args.issue), ("comment", args.comment))
                         if n is not None)
     try:
-        outcome = verify_body(GhBodies(args.repo), kind, number, sent, settle_seconds=args.settle)
+        outcome = verify_body(GhBodies(args.repo), kind, number, sent, settle_seconds=args.settle, sleep=time.sleep)
     except SourceError as err:
         print(f"error: {err}", file=sys.stderr)
         return 2

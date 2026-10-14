@@ -68,6 +68,7 @@ def every_call(gh):
     issues = GhIssues(REPO, run=gh, settle_seconds=0)
     issues.recent_titles(FEEDBACK, SINCE)
     issues.create("title", "body", [FEEDBACK])
+    issues.read_back()
     bodies = GhBodies(REPO, run=gh)
     for kind in ("pull", "issue", "comment"):
         bodies.read(kind, PR)

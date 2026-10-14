@@ -18,7 +18,7 @@ from pathlib import Path
 from gh_fake import FakeGh, method_of, path_of
 from instance_fixture import env_for
 from trimtab.capture.sources import GhBodies, GhIssues, SourceError
-from trimtab.capture.written import Readback, WrittenBodyError, compare, verify_body
+from trimtab.capture.written import Readback, WrittenBodyError, compare, verify_bodies, verify_body
 from trimtab.cli import _opening_stopped
 from trimtab.propose import OpeningStopped
 
@@ -132,6 +132,13 @@ class VerifyBody(unittest.TestCase):
 
         self.assertEqual(bodies.waits, [10, 10])
 
+    def test_the_caller_must_say_how_to_wait(self):
+        # Waiting is the outer layer's side effect: no default sleep hides in the read-back.
+        bodies = InMemoryBodies(("pull", PR), SENT)
+
+        with self.assertRaises(TypeError):
+            verify_body(bodies, "pull", PR, SENT)
+
     def test_a_footer_that_comes_back_after_the_write_fails(self):
         bodies = InMemoryBodies(("pull", PR), with_footer(SENT), then=with_footer(SENT))
 
@@ -154,12 +161,71 @@ class VerifyBody(unittest.TestCase):
 
         self.assertNotIn(SESSION_TAIL, str(caught.exception))
 
+    def test_a_run_reference_in_the_body_sent_fails_before_any_wait_or_write(self):
+        sent = SENT + "see " + "session_" + SESSION_TAIL + "\n"
+        bodies = InMemoryBodies(("pull", PR), with_footer(sent))
+
+        with self.assertRaises(WrittenBodyError):
+            verify(bodies, sent, settle_seconds=10)
+
+        self.assertEqual((bodies.waits, bodies.writes), ([], []))
+
     def test_a_run_reference_in_the_body_sent_fails_even_when_it_came_back_unchanged(self):
         sent = SENT + "see " + "session_" + SESSION_TAIL + "\n"
         bodies = InMemoryBodies(("comment", COMMENT), sent)
 
         with self.assertRaises(WrittenBodyError):
             verify(bodies, sent)
+
+
+class InMemoryRepository:
+    """Several bodies, by (kind, number); records each wait and each write."""
+
+    def __init__(self, found):
+        self.found = dict(found)
+        self.waits, self.writes = [], []
+
+    def read(self, kind, number):
+        return self.found[(kind, number)]
+
+    def write(self, kind, number, body):
+        self.writes.append((kind, number))
+        self.found[(kind, number)] = body
+
+    def sleep(self, seconds):
+        self.waits.append(seconds)
+
+
+class VerifyBodies(unittest.TestCase):
+    def targets(self, *numbers):
+        return [("issue", n, SENT) for n in numbers]
+
+    def test_many_bodies_share_one_wait(self):
+        repo = InMemoryRepository({("issue", n): SENT for n in (1, 2, 3)})
+
+        outcomes = verify_bodies(repo, self.targets(1, 2, 3), settle_seconds=10, sleep=repo.sleep)
+
+        self.assertEqual((outcomes, repo.waits), ([Readback.SAME] * 3, [10]))
+
+    def test_only_the_bodies_with_the_footer_are_written_back_after_one_more_wait(self):
+        repo = InMemoryRepository({("issue", 1): SENT, ("issue", 2): with_footer(SENT), ("issue", 3): SENT})
+
+        verify_bodies(repo, self.targets(1, 2, 3), settle_seconds=10, sleep=repo.sleep)
+
+        self.assertEqual((repo.writes, repo.waits), ([("issue", 2)], [10, 10]))
+
+    def test_the_error_names_the_body_that_differs(self):
+        repo = InMemoryRepository({("issue", 1): SENT, ("issue", 2): SENT + "\nappended"})
+
+        with self.assertRaises(WrittenBodyError) as caught:
+            verify_bodies(repo, self.targets(1, 2), settle_seconds=0, sleep=repo.sleep)
+
+        self.assertEqual(caught.exception.target, ("issue", 2))
+
+    def test_nothing_to_read_back_waits_for_nothing(self):
+        repo = InMemoryRepository({})
+
+        self.assertEqual((verify_bodies(repo, [], settle_seconds=10, sleep=repo.sleep), repo.waits), ([], []))
 
 
 class GhBodiesPaths(unittest.TestCase):
@@ -210,14 +276,18 @@ class CreatedIssues(unittest.TestCase):
     def test_an_issue_that_came_back_unchanged_is_not_edited(self):
         gh = self.created(SENT)
 
-        url = GhIssues(REPO, run=gh, settle_seconds=0).create("title", SENT, ["harness-feedback"])
+        issues = GhIssues(REPO, run=gh, settle_seconds=0)
+        url = issues.create("title", SENT, ["harness-feedback"])
+        issues.read_back()
 
         self.assertEqual((url, [method_of(a) for a in gh.argvs()]), (ISSUE_URL, ["POST", "GET"]))
 
     def test_an_issue_that_came_back_with_the_footer_has_it_taken_off(self):
         gh = self.created(with_footer(SENT), SENT)
 
-        GhIssues(REPO, run=gh, settle_seconds=0).create("title", SENT, ["harness-feedback"])
+        issues = GhIssues(REPO, run=gh, settle_seconds=0)
+        issues.create("title", SENT, ["harness-feedback"])
+        issues.read_back()
 
         patch = [(path_of(a), json.loads(s)) for a, s in gh.calls if method_of(a) == "PATCH"]
         self.assertEqual(patch, [(f"repos/{REPO}/issues/{ISSUE}", {"body": SENT})])
@@ -225,10 +295,37 @@ class CreatedIssues(unittest.TestCase):
     def test_an_issue_that_came_back_otherwise_changed_fails_naming_it(self):
         gh = self.created(SENT + "\nappended")
 
+        issues = GhIssues(REPO, run=gh, settle_seconds=0)
+        issues.create("title", SENT, ["harness-feedback"])
+
         with self.assertRaises(WrittenBodyError) as caught:
-            GhIssues(REPO, run=gh, settle_seconds=0).create("title", SENT, ["harness-feedback"])
+            issues.read_back()
 
         self.assertIn(ISSUE_URL, str(caught.exception))
+
+    def test_issues_are_filed_without_waiting_and_read_back_together(self):
+        gh = self.created(SENT)
+        issues = GhIssues(REPO, run=gh, settle_seconds=0)
+
+        issues.create("title", SENT, ["harness-feedback"])
+
+        self.assertEqual([method_of(a) for a in gh.argvs()], ["POST"])
+
+    def test_an_issue_created_but_not_read_back_stops_the_run_naming_it(self):
+        # A re-run would skip the open issue and never read it back, so this is not a "re-run" failure.
+        gh = FakeGh(answers={
+            ("POST", f"repos/{REPO}/issues"): json.dumps({"html_url": ISSUE_URL, "number": ISSUE}),
+            ("GET", f"repos/{REPO}/issues/{ISSUE}"): "<html>",
+        }, default="{}")
+
+        issues = GhIssues(REPO, run=gh, settle_seconds=0)
+        issues.create("title", SENT, ["harness-feedback"])
+
+        with self.assertRaises(WrittenBodyError) as caught:
+            issues.read_back()
+
+        self.assertIn(ISSUE_URL, str(caught.exception))
+        self.assertIn("trimtab verify-body", str(caught.exception))
 
 
 class ProposeStoppedReport(unittest.TestCase):
@@ -257,8 +354,14 @@ class ProposeStoppedReport(unittest.TestCase):
 
 
 FAKE_GH = """#!/bin/sh
-# Answers every gh call with the same JSON: enough for one read, and a write that changes nothing.
-cat "$FAKE_GH_ANSWER"
+# `gh api -X <method> <path> ...`: a PATCH is recorded and answers {}; a read answers $FAKE_GH_ANSWER,
+# or $FAKE_GH_AFTER_PATCH once a PATCH was seen, when that is set.
+if [ "$3" = PATCH ]; then : > "$FAKE_GH_ANSWER.patched"; echo '{}'; exit 0; fi
+if [ -n "$FAKE_GH_AFTER_PATCH" ] && [ -e "$FAKE_GH_ANSWER.patched" ]; then
+  cat "$FAKE_GH_AFTER_PATCH"
+else
+  cat "$FAKE_GH_ANSWER"
+fi
 """
 
 
@@ -293,6 +396,19 @@ class VerifyBodyCli(unittest.TestCase):
         done = self.verify("--pull", str(PR), "--body-file", str(self.body))
 
         self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_a_footer_taken_off_exits_0_and_says_so(self):
+        # The run report records this line: ADR 0024's trial reads whether a footer was there.
+        self.answer.write_text(json.dumps({"body": with_footer(SENT)}), encoding="utf-8")
+        clean = self.dir / "clean.json"
+        clean.write_text(json.dumps({"body": SENT}), encoding="utf-8")
+        self.env["FAKE_GH_AFTER_PATCH"] = str(clean)
+
+        done = self.verify("--pull", str(PR), "--body-file", str(self.body))
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("removed the platform's session footer", done.stdout)
+        self.assertNotIn(SESSION_TAIL, done.stdout + done.stderr)
 
     def test_a_footer_that_will_not_come_off_exits_1_without_quoting_it(self):
         self.answer.write_text(json.dumps({"body": with_footer(SENT)}), encoding="utf-8")

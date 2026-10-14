@@ -55,9 +55,12 @@ The upstream retro also comments on issues.
   so it runs only when the PR was created and cannot be forgotten as a later
   step. The PR-body hook still reads the POST inside the substitution. A static test fails if
   a shipped file POSTs a PR or a comment without it.
-- **`propose --apply` reads back each issue it files**, in `GhIssues.create`.
-  If filing stops part-way, it lists the issues it opened and the IDs it did
-  not try, and exits 1 when an issue's body is wrong, 2 when GitHub failed.
+- **`propose --apply` reads back every issue it files**, together, after
+  filing them all: one shared wait, then one more only if a footer was taken
+  off, however many issues there are. It reads back what it filed even when
+  filing stops part-way, lists the issues it opened and the IDs it did not
+  try, and exits 1 when an issue's body is wrong or could not be read back
+  (a re-run would skip it and never read it), 2 when filing itself failed.
 - **Comparing is a value, failing is the boundary's.** `compare` returns
   SAME, FOOTER or DIFFERS; `verify_body` raises only to stop the run.
 - **The write-back is authorised**: each routine prompt and command lists
