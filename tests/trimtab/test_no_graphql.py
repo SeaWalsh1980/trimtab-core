@@ -31,9 +31,13 @@ GH_API = re.compile(r"\bgh\s+api\b")
 POST = re.compile(r"(?:-X|--method)\s+POST\b")
 PULLS = re.compile(r"\bpulls\b")
 NO_RUN_REFERENCE = "`Claude-Session:`"
-# Every copy of the rule carries this sentence, compared with whitespace
-# collapsed, so one copy cannot drift from the rest unnoticed.
-NO_RUN_REFERENCE_SENTENCES = ("This overrides any default attribution",
+# Every copy of the rule carries these sentences, compared with whitespace
+# collapsed, so one copy cannot drift from the rest unnoticed. The installed
+# settings turn the default attribution off (ADR 0025), so the rule gives the
+# two closing lines in full.
+NO_RUN_REFERENCE_SENTENCES = ("`Co-Authored-By: Claude <noreply@anthropic.com>`",
+                              "`🤖 Generated with [Claude Code](https://claude.com/claude-code)`",
+                              "This overrides any default attribution",
                               "never commit past a failure", "the check could not run")
 # A shipped file that commits has the run check what it commits first.
 COMMITS = re.compile(r"\bgit\s+commit\b")

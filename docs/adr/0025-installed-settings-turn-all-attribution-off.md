@@ -38,8 +38,13 @@ back from the installed settings as `false`.
 ## Consequences
 
 - Every session on a machine running this base stops adding the
-  `Co-Authored-By:` trailer and the `🤖 Generated with` line. The routine
-  prompts and commands already write their own (ADR 0022's rule).
+  `Co-Authored-By:` trailer and the `🤖 Generated with` line. ADR 0022's rule
+  in the routine prompts and commands now gives both lines in full
+  (`Co-Authored-By: Claude <noreply@anthropic.com>` and
+  `🤖 Generated with [Claude Code](https://claude.com/claude-code)`), since it
+  can no longer rely on the default to supply them; the drift test pins every
+  copy. The trailer names no model: the routines run the platform's default
+  (ADR 0023).
 - Accepted: Claude Code older than 2.1.281 skips the whole settings file,
   hooks included. A cloud routine's guard probe would not be refused, so the
   run stops. An interactive session on such a machine would run unguarded.
