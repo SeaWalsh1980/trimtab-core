@@ -87,16 +87,18 @@ PY
 }
 
 # A run's commits and PR bodies carry its session link unless the installed
-# settings turn that off (docs/adr/0022-no-reference-to-the-run-in-what-it-writes.md). The key must survive the merge and
-# the pruning of empty containers, so it is read back from the generated file.
-check_installed_settings_drop_the_session_url() {
+# settings turn attribution off (docs/adr/0022-no-reference-to-the-run-in-what-it-writes.md,
+# docs/adr/0025-installed-settings-turn-all-attribution-off.md). The scalar must
+# survive the merge and the pruning of empty containers, so it is read back from
+# the generated file.
+check_installed_settings_turn_all_attribution_off() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
   boot "$h" "$live" --instance "$inst"
-  if [[ $rc -eq 0 && "$(settings_get "$h" attribution.sessionUrl)" == False ]]; then
-    pass "the installed settings carry attribution.sessionUrl false"
+  if [[ $rc -eq 0 && "$(settings_get "$h" attribution)" == False ]]; then
+    pass "the installed settings turn all attribution off"
   else
-    fail "the installed settings carry attribution.sessionUrl false" "rc=$rc"
+    fail "the installed settings turn all attribution off" "rc=$rc"
   fi
 }
 
@@ -727,7 +729,7 @@ check_accepts_python_3_11
 check_refuses_python_that_reports_no_version
 check_writes_instance_values
 check_base_hooks_survive
-check_installed_settings_drop_the_session_url
+check_installed_settings_turn_all_attribution_off
 check_refuses_disable_all_hooks
 check_refuses_hooks_replaced
 check_refuses_hook_allow_in_machine_env

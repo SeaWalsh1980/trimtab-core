@@ -10,6 +10,11 @@ reference to the run (see "Trial, still open").
 `settings.base.json`), lands in the pull request that adds this line, with a
 bootstrap test that pins it in the installed settings.
 
+2026-10-14: the trial left the PR footer in place with `sessionUrl: false`
+installed; the setting part is superseded by ADR 0025
+(`docs/adr/0025-installed-settings-turn-all-attribution-off.md`), which turns
+all attribution off.
+
 ## Context
 
 A routine, environment or session ID is never written into a file, PR, commit
