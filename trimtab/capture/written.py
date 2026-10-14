@@ -76,7 +76,9 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
     """Read back each target after one shared wait; take the platform footer off every one that carries it, wait
     once more, and require them identical. Any other change, or a run reference, fails, but only after every
     target has been checked and every footer taken off: one WrittenBodyError names each target that failed.
-    The caller supplies the wait (`sleep`): waiting is the outer layer's."""
+    A read or write that fails (GitHub) does not stop the others either; the first such error is then raised
+    as it came, ahead of any WrittenBodyError. The caller supplies the wait (`sleep`): waiting is the outer
+    layer's."""
 
     def wait() -> None:
         if settle_seconds > 0:
@@ -89,26 +91,50 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
         if references:
             failures.append(((kind, number), f"the body holds a run reference "
                                              f"({', '.join(p.where for p in references)})"))
+    # A read or write that fails for one body is kept and re-raised at the end, so every footer the batch can
+    # reach is still taken off first.
+    errors: list[Exception] = []
+
+    def read(kind: str, number: int) -> str | None:
+        try:
+            return bodies.read(kind, number)
+        except Exception as err:  # re-raised below, after the rest of the batch
+            errors.append(err)
+            return None
+
+    def write(kind: str, number: int, sent: str) -> bool:
+        try:
+            bodies.write(kind, number, sent)
+            return True
+        except Exception as err:  # re-raised below, after the rest of the batch
+            errors.append(err)
+            return False
+
     held = {target for target, _ in failures}
     checked = [t for t in targets if (t[0], t[1]) not in held]
     outcomes: dict[tuple[str, int], Readback] = {}
     if checked:
         wait()
     for kind, number, sent in checked:
-        outcome = compare(sent, bodies.read(kind, number))
+        body = read(kind, number)
+        if body is None:
+            continue
+        outcome = compare(sent, body)
         if outcome is Readback.DIFFERS:
             failures.append(((kind, number), outcome.value))
         else:
             outcomes[(kind, number)] = outcome
     # Every footer found is taken off, whatever else in the batch failed.
     footed = [t for t in checked if outcomes.get((t[0], t[1])) is Readback.FOOTER]
-    for kind, number, sent in footed:
-        bodies.write(kind, number, sent)
-    if footed:
+    written = [t for t in footed if write(*t)]
+    if written:
         wait()
-    for kind, number, sent in footed:
-        if compare(sent, bodies.read(kind, number)) is not Readback.SAME:
+    for kind, number, sent in written:
+        body = read(kind, number)
+        if body is not None and compare(sent, body) is not Readback.SAME:
             failures.append(((kind, number), "the platform's footer came back after the body sent was written again"))
+    if errors:
+        raise errors[0]  # GitHub's error, as raised: the caller decides what an unread body means
     if failures:
         raise WrittenBodyError("; ".join(f"{kind} {number}: {why}" for (kind, number), why in failures),
                                [target for target, _ in failures])

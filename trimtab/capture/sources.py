@@ -404,8 +404,9 @@ class GhIssues:
 
     @contextlib.contextmanager
     def filing(self) -> Iterator[Filer]:
-        """Issues are filed only inside this block, and every one filed is read back on leaving it, however it
-        is left (ADR 0024): a caller cannot file an issue and skip the read-back."""
+        """Issues are filed only inside this block, and every one filed is read back on leaving it, on success
+        or error (ADR 0024): a caller cannot file an issue and skip the read-back. An interrupt (Ctrl-C) is not
+        held up by the wait: it goes on at once, with a note naming each issue left to check by hand."""
         created: list[tuple[str, int, str]] = []
 
         def create(title: str, body: str, labels) -> str:
@@ -415,8 +416,15 @@ class GhIssues:
 
         try:
             yield Filer(create)
-        finally:
+        except Exception:
             self._read_back(created)
+            raise
+        except BaseException as interrupt:
+            if created:
+                interrupt.add_note(f"interrupted before the read-back; check each with `trimtab verify-body "
+                                   f"--repo {self.repo} --issue N`: {', '.join(url for url, _, _ in created)}")
+            raise
+        self._read_back(created)
 
     def _file(self, title: str, body: str, labels) -> tuple[str, int]:
         """File one issue: its URL and number.

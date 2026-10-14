@@ -196,6 +196,24 @@ class InMemoryRepository:
         self.waits.append(seconds)
 
 
+class FailingRepository(InMemoryRepository):
+    """GitHub failing for one body: its read, or its write."""
+
+    def __init__(self, found, failing_read=None, failing_write=None):
+        super().__init__(found)
+        self.failing_read, self.failing_write = failing_read, failing_write
+
+    def read(self, kind, number):
+        if (kind, number) == self.failing_read:
+            raise SourceError("gh api GET exited 1: HTTP 502")
+        return super().read(kind, number)
+
+    def write(self, kind, number, body):
+        if (kind, number) == self.failing_write:
+            raise SourceError("gh api PATCH exited 1: HTTP 502")
+        super().write(kind, number, body)
+
+
 class VerifyBodies(unittest.TestCase):
     def targets(self, *numbers):
         return [("issue", n, SENT) for n in numbers]
@@ -248,6 +266,24 @@ class VerifyBodies(unittest.TestCase):
             verify_bodies(repo, self.targets(1, 2), settle_seconds=0, sleep=repo.sleep)
 
         self.assertEqual(caught.exception.targets, [("issue", 1), ("issue", 2)])
+
+    def test_a_github_error_on_one_body_still_lets_the_others_footers_come_off(self):
+        repo = FailingRepository({("issue", 1): with_footer(SENT), ("issue", 2): SENT, ("issue", 3): with_footer(SENT)},
+                                 failing_read=("issue", 2))
+
+        with self.assertRaises(SourceError):
+            verify_bodies(repo, self.targets(1, 2, 3), settle_seconds=0, sleep=repo.sleep)
+
+        self.assertEqual(repo.writes, [("issue", 1), ("issue", 3)])
+
+    def test_a_failed_write_back_does_not_stop_the_next(self):
+        repo = FailingRepository({("issue", 1): with_footer(SENT), ("issue", 2): with_footer(SENT)},
+                                 failing_write=("issue", 1))
+
+        with self.assertRaises(SourceError):
+            verify_bodies(repo, self.targets(1, 2), settle_seconds=0, sleep=repo.sleep)
+
+        self.assertEqual(repo.writes, [("issue", 2)])
 
     def test_nothing_to_read_back_waits_for_nothing(self):
         repo = InMemoryRepository({})
@@ -358,6 +394,17 @@ class CreatedIssues(unittest.TestCase):
             filed = [method_of(a) for a in gh.argvs()]
 
         self.assertEqual((filed, [method_of(a) for a in gh.argvs()]), (["POST"], ["POST", "GET"]))
+
+    def test_an_interrupt_is_not_held_up_and_names_what_to_check(self):
+        gh = self.created(SENT)
+
+        with self.assertRaises(KeyboardInterrupt) as caught:
+            with GhIssues(REPO, run=gh, settle_seconds=10).filing() as filer:
+                filer.create("title", SENT, ["harness-feedback"])
+                raise KeyboardInterrupt
+
+        self.assertEqual([method_of(a) for a in gh.argvs()], ["POST"])
+        self.assertIn(ISSUE_URL, " ".join(caught.exception.__notes__))
 
     def test_an_error_inside_the_block_still_reads_back_what_was_filed(self):
         gh = self.created(SENT)
