@@ -252,7 +252,8 @@ fi
 # lists concatenate without duplicates, scalars override. After every layer the
 # base's hook registrations must still be present: a layer that loses one would
 # switch a guard off silently, so the merge refuses and nothing is written. It
-# refuses, for the same reason, a layer whose env sets any HOOK_ALLOW_* key.
+# refuses, for the same reason, a layer whose env sets any HOOK_ALLOW_* key,
+# and an instance or machine layer that sets `attribution`, which the base owns.
 mkdir -p "$CLAUDE_HOME"
 generated=$(python3 - "$BASE" "$INSTANCE" "$values" <<'PY'
 import json, sys, os
@@ -302,6 +303,11 @@ for name, layer in layers:
     if overrides:
         refuse(name, f"sets {', '.join(overrides)} in env",
                "the guards would allow everything in every session (export an override before launching claude instead)")
+    # The base owns attribution: a later layer's value would replace or reshape
+    # it with no warning, and the session link would come back in what runs write.
+    if name != layers[0][0] and "attribution" in layer:
+        refuse(name, "sets `attribution`, which the base owns",
+               "the session link could return to commits and PR bodies")
     merged = merge(merged, layer)
     hooks = merged.get("hooks", {})
     if not isinstance(hooks, dict):

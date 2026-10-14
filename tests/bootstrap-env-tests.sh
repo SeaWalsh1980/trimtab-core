@@ -112,6 +112,23 @@ check_refuses_disable_all_hooks() {
   fi
 }
 
+# The base owns attribution (docs/adr/0022-no-reference-to-the-run-in-what-it-writes.md).
+# A later layer's value would replace or reshape it with no warning, and the
+# session link would come back in commits and PR bodies.
+check_refuses_a_layer_that_sets_attribution() {
+  local h inst layer
+  for layer in settings.instance.json machine.json; do
+    h=$(new_home); inst=$(inst_of "$h")
+    echo '{"attribution": {"commit": "x"}}' > "$inst/$layer"
+    boot "$h" "$live" --instance "$inst"
+    if [[ $rc -eq 1 && "$out" == *attribution* && "$out" == *"$layer"* ]] && no_links "$h"; then
+      pass "refuses attribution in $layer before any link switches"
+    else
+      fail "refuses attribution in $layer before any link switches" "rc=$rc"; echo "$out" | tail -5
+    fi
+  done
+}
+
 check_refuses_hooks_replaced() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
@@ -729,6 +746,7 @@ check_writes_instance_values
 check_base_hooks_survive
 check_installed_settings_drop_the_session_url
 check_refuses_disable_all_hooks
+check_refuses_a_layer_that_sets_attribution
 check_refuses_hooks_replaced
 check_refuses_hook_allow_in_machine_env
 check_refuses_hook_allow_in_instance_env
