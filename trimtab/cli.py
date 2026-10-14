@@ -8,6 +8,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -20,9 +21,10 @@ from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
 from trimtab.ids import ID_SHAPE
 from trimtab.items import Problem
 from trimtab.capture.sources import (
-    FixtureContents, FixtureIssues, FixtureSource, GhContents, GhIssues, GhPullRequests, GhSource, SourceError,
-    changed_files, open_feedback_issues, staged_files,
+    FixtureContents, FixtureIssues, FixtureSource, GhBodies, GhContents, GhIssues, GhPullRequests, GhSource,
+    SourceError, changed_files, open_feedback_issues, staged_files,
 )
+from trimtab.capture.written import SETTLE_SECONDS, Readback, WrittenBodyError, verify_body
 from trimtab.lint import overrides, references, structure
 from trimtab.propose import render
 from trimtab.registry import harness, rules_for
@@ -158,6 +160,28 @@ def cmd_ids(args) -> int:
     if problems:
         return 1
     print(f"no run reference in {len(targets)} file(s)")
+    return 0
+
+
+def cmd_verify_body(args) -> int:
+    """A body a run created, read back (ADR 0024): 0 as sent, 1 changed otherwise, 2 could not tell."""
+    sent = args.body if args.body is not None else _text_of(args.body_file)
+    if sent is None:
+        return 2
+    kind, number = next((k, n) for k, n in (("pull", args.pull), ("issue", args.issue), ("comment", args.comment))
+                        if n is not None)
+    try:
+        outcome = verify_body(GhBodies(args.repo), kind, number, sent, settle_seconds=args.settle, sleep=time.sleep)
+    except SourceError as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
+    except WrittenBodyError as err:
+        print(f"verify-body: {err}. Stop and report it.", file=sys.stderr)
+        return 1
+    if outcome is Readback.FOOTER:
+        print(f"{kind} {number}: removed the platform's session footer; GitHub's edit history still holds it")
+    else:
+        print(f"{kind} {number}: the body is the one sent")
     return 0
 
 
@@ -351,6 +375,33 @@ def _issues(args, repo: str):
     return GhIssues(repo)
 
 
+def _opening_stopped(err) -> int:
+    """Report an `open_issues` that stopped part-way: what it opened, each failure (a failed create first, then a
+    failed read-back after it), and what it did not try (ADR 0024).
+
+    1 when any failure is a WrittenBodyError: a body is wrong, an issue was not read back, or a create may have
+    filed its issue; a re-run would skip such an issue and never read it, so stop and report.
+    2 only when every failure is a GitHub error that filed nothing (a 4xx refusal): a re-run is safe.
+    Any other cause is a fault, and is raised.
+    """
+    for url in err.opened:
+        print(f"  opened {url}")
+    if err.not_opened:
+        print(f"not opened: {', '.join(err.not_opened)}", file=sys.stderr)
+    stops = [s for s in (err.also, err) if s is not None]  # a failed create first, then what followed it
+    for stop in stops:
+        print(f"{stop.stopped_at}: {stop.cause}", file=sys.stderr)
+    causes = [s.cause for s in stops]
+    if any(isinstance(c, WrittenBodyError) for c in causes):
+        print("verify-body: a body is wrong, or an issue may exist unread. Stop and report it.", file=sys.stderr)
+        return 1
+    unknown = next((c for c in causes if not isinstance(c, SourceError)), None)
+    if unknown is not None:
+        raise unknown
+    print("Re-run: open issues are skipped, so nothing is filed twice.", file=sys.stderr)
+    return 2
+
+
 def cmd_propose(args) -> int:
     setup = _setup(args)
     if setup is None:
@@ -398,9 +449,8 @@ def cmd_propose(args) -> int:
     except propose.StaleProposals as err:
         print(f"aborted: {err}", file=sys.stderr)
         return 3
-    except SourceError as err:
-        print(f"error: {err}. Re-run: open issues are skipped, so nothing is filed twice.", file=sys.stderr)
-        return 2
+    except propose.OpeningStopped as err:
+        return _opening_stopped(err)
     print(f"opened {len(opened)} issue(s); skipped {len(plan.already_open)} open or recently closed")
     for url in opened:
         print(f"  {url}")
@@ -859,6 +909,20 @@ def build_parser() -> argparse.ArgumentParser:
     ids.add_argument("--staged", action="store_true",
                      help="check what the git index stages instead (added, copied, modified or renamed files)")
     ids.set_defaults(func=cmd_ids)
+
+    vb = sub.add_parser("verify-body", help="read back a PR, issue or comment a run created; take the platform's "
+                                            "session footer off and fail on any other change (ADR 0024)")
+    vb.add_argument("--repo", required=True, help="owner/name")
+    target = vb.add_mutually_exclusive_group(required=True)
+    target.add_argument("--pull", type=int, metavar="N", help="PR number (the POST's `--jq .number`)")
+    target.add_argument("--issue", type=int, metavar="N", help="issue number")
+    target.add_argument("--comment", type=int, metavar="ID", help="issue or PR comment ID")
+    sent = vb.add_mutually_exclusive_group(required=True)
+    sent.add_argument("--body-file", help="the file the body was sent from")
+    sent.add_argument("--body", help="the body as sent, inline")
+    vb.add_argument("--settle", type=float, default=SETTLE_SECONDS, metavar="SECONDS",
+                    help=f"wait before each read, for a footer added after the write (default: {SETTLE_SECONDS:g})")
+    vb.set_defaults(func=cmd_verify_body)
 
     ing = sub.add_parser("ingest", parents=[common], help="record merged PRs by watermark (dry run unless --apply)")
     _ingest_options(ing)
