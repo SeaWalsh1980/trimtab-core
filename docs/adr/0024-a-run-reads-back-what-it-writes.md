@@ -93,6 +93,9 @@ The upstream retro also comments on issues.
 - **`attribution: false` in the installed settings.** Taken as well, as its
   own control change: whether it stops the footer is a trial of that change.
   This one does not depend on it, and stays useful if it does not.
+  (2026-10-14: that change landed as
+  `{"commit": "", "pr": "", "sessionUrl": false}`, not `false`; see ADR
+  0025.)
 - **Routines push branches only, and the operator opens each PR.** Rejected:
   it gives up the routines' output for a leak this change bounds. Kept as the
   fallback if a footer cannot be taken off.

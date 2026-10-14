@@ -45,6 +45,14 @@ JSON, exactly. The installer refuses an instance or machine layer that sets
   installed); it does not see a downgrade after the install; and the
   SessionStart hook that would warn of missing guards is registered in the
   file an old version skips.
+- **The wanted lines as `commit` and `pr`, with `sessionUrl: false`**
+  (`"commit": "Co-Authored-By: Claude <noreply@anthropic.com>"`,
+  `"pr": "🤖 Generated with [Claude Code](https://claude.com/claude-code)"`).
+  Interactive sessions would keep their attribution, and the text would live
+  in one place instead of in every copy of the rule. Rejected: it is close to
+  the configuration ADR 0022's trial already ran (attribution text on, session
+  link off), which still got the footer, so it cannot tell whether turning PR
+  attribution off stops it. Only empty strings answer that.
 - **`sessionUrl: false` alone (ADR 0022).** Rejected: sessions keep adding the
   default trailer and PR line, which the prompts already write, and the
   trial showed it does not stop the footer.

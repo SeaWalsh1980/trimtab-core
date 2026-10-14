@@ -96,15 +96,16 @@ check_installed_settings_turn_commit_and_pr_attribution_off() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
   boot "$h" "$live" --instance "$inst"
-  if [[ $rc -eq 0 ]] && python3 - "$h/.claude/settings.json" <<'PY'
+  local found=""
+  [[ $rc -eq 0 ]] && found=$(python3 - "$h/.claude/settings.json" <<'PY'
 import json, sys
-got = json.load(open(sys.argv[1])).get("attribution")
-assert got == {"commit": "", "pr": "", "sessionUrl": False} and got["sessionUrl"] is False, got
+print(json.dumps(json.load(open(sys.argv[1])).get("attribution"), sort_keys=True))
 PY
-  then
+)
+  if [[ $rc -eq 0 && "$found" == '{"commit": "", "pr": "", "sessionUrl": false}' ]]; then
     pass "the installed settings turn commit and PR attribution and the session link off"
   else
-    fail "the installed settings turn commit and PR attribution and the session link off" "rc=$rc"
+    fail "the installed settings turn commit and PR attribution and the session link off" "rc=$rc attribution=${found:-<unread>}"
   fi
 }
 
@@ -127,7 +128,7 @@ check_refuses_disable_all_hooks() {
 check_refuses_a_layer_that_sets_attribution() {
   local h inst layer value
   for layer in settings.instance.json machine.json; do
-    # The last value repeats the base's own on main: refused too (ADR 0026).
+    # The last value is one the base itself has set: refused too (ADR 0026).
     for value in '{"commit": "x"}' '{"sessionUrl": true}' 'false' 'null' '{"sessionUrl": false}'; do
       h=$(new_home); inst=$(inst_of "$h")
       echo "{\"attribution\": $value}" > "$inst/$layer"
