@@ -128,8 +128,10 @@ check_refuses_disable_all_hooks() {
 check_refuses_a_layer_that_sets_attribution() {
   local h inst layer value
   for layer in settings.instance.json machine.json; do
-    # The last value is one the base itself has set: refused too (ADR 0026).
-    for value in '{"commit": "x"}' '{"sessionUrl": true}' 'false' 'null' '{"sessionUrl": false}'; do
+    # The last two are values the base itself has set, the current one last: a
+    # layer repeating the base's exact value is refused too (ADR 0026).
+    for value in '{"commit": "x"}' '{"sessionUrl": true}' 'false' 'null' '{"sessionUrl": false}' \
+                 '{"commit": "", "pr": "", "sessionUrl": false}'; do
       h=$(new_home); inst=$(inst_of "$h")
       echo "{\"attribution\": $value}" > "$inst/$layer"
       boot "$h" "$live" --instance "$inst"

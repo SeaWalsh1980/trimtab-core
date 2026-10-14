@@ -52,7 +52,11 @@ JSON, exactly. The installer refuses an instance or machine layer that sets
   in one place instead of in every copy of the rule. Rejected: it is close to
   the configuration ADR 0022's trial already ran (attribution text on, session
   link off), which still got the footer, so it cannot tell whether turning PR
-  attribution off stops it. Only empty strings answer that.
+  attribution off stops it. Only empty strings answer that. Expectations are
+  low: ADR 0022 records that empty `commit` or `pr` strings do not remove the
+  session link from Claude Code's own lines, and the footer, which no setting
+  is documented to reach, may come from the platform instead (see
+  Consequences).
 - **`sessionUrl: false` alone (ADR 0022).** Rejected: sessions keep adding the
   default trailer and PR line, which the prompts already write, and the
   trial showed it does not stop the footer.
