@@ -304,7 +304,8 @@ for name, layer in layers:
         refuse(name, f"sets {', '.join(overrides)} in env",
                "the guards would allow everything in every session (export an override before launching claude instead)")
     # The base owns attribution: a later layer's value would replace or reshape
-    # it with no warning, and the session link would come back in what runs write.
+    # it with no warning, and the session link would come back in what runs write
+    # (docs/adr/0026-bootstrap-refuses-an-attribution-override.md).
     if name != layers[0][0] and "attribution" in layer:
         refuse(name, "sets `attribution`, which the base owns",
                "the session link could return to commits and PR bodies")

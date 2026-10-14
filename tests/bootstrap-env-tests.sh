@@ -112,20 +112,24 @@ check_refuses_disable_all_hooks() {
   fi
 }
 
-# The base owns attribution (docs/adr/0022-no-reference-to-the-run-in-what-it-writes.md).
+# The base owns attribution (docs/adr/0026-bootstrap-refuses-an-attribution-override.md).
 # A later layer's value would replace or reshape it with no warning, and the
-# session link would come back in commits and PR bodies.
+# session link would come back in commits and PR bodies. Any value is refused,
+# a scalar or an object, and nothing is written.
 check_refuses_a_layer_that_sets_attribution() {
-  local h inst layer
+  local h inst layer value
   for layer in settings.instance.json machine.json; do
-    h=$(new_home); inst=$(inst_of "$h")
-    echo '{"attribution": {"commit": "x"}}' > "$inst/$layer"
-    boot "$h" "$live" --instance "$inst"
-    if [[ $rc -eq 1 && "$out" == *attribution* && "$out" == *"$layer"* ]] && no_links "$h"; then
-      pass "refuses attribution in $layer before any link switches"
-    else
-      fail "refuses attribution in $layer before any link switches" "rc=$rc"; echo "$out" | tail -5
-    fi
+    for value in '{"commit": "x"}' '{"sessionUrl": true}' 'false'; do
+      h=$(new_home); inst=$(inst_of "$h")
+      echo "{\"attribution\": $value}" > "$inst/$layer"
+      boot "$h" "$live" --instance "$inst"
+      if [[ $rc -eq 1 && "$out" == *attribution* && "$out" == *"$layer"* \
+            && ! -e "$h/.claude/settings.json" ]] && no_links "$h"; then
+        pass "refuses attribution $value in $layer before anything is written"
+      else
+        fail "refuses attribution $value in $layer before anything is written" "rc=$rc"; echo "$out" | tail -5
+      fi
+    done
   done
 }
 
