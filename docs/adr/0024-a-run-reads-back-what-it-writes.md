@@ -67,7 +67,9 @@ The upstream retro also comments on issues.
   returned), an issue (`--issue N`) or a comment
   (`--comment ID`), against `--body-file` or `--body`. Exit 0 is the body
   sent, and says when it took the footer off; 1 is any other change, or a
-  footer that came back; 2 is that it could not read or write. Every call is
+  footer that came back; 2 is that it could not read or write. (Amended
+  2026-10-15: the platform's generic footer, on the first read or after the
+  write-back, is exit 0 too; see "The generic footer is accepted" below.) Every call is
   repository-scoped REST (ADR 0021).
 - **The commands chain it after the POST**, on the same command line
   (`N=$(gh api -X POST … --jq .number) && trimtab verify-body … --pull "$N"`),
@@ -175,8 +177,10 @@ The upstream retro also comments on issues.
 
 After this change is on the pinned base: one manual run of a per-project
 routine that opens a PR. Its log shows `trimtab verify-body` exit 0, and its
-PR's body, read afterwards, holds no session link or footer. Record here
-whether the footer was there to take off.
+PR's body, read afterwards, holds no session link, and nothing after the body
+sent but, at most, the platform's generic footer (amended 2026-10-15; it was
+"no session link or footer"). Record here whether the footer was there to
+take off, and which one stayed.
 
 ## First trial (2026-10-15)
 
@@ -197,4 +201,4 @@ change and ADR 0025's settings, opened a draft PR through the chained POST.
 Result: failed. The session link was taken off, but the rule as written
 required the body sent exactly. Amended as recorded under Status and
 Decision. The trial is run again on a base carrying the amendment, with the
-same check.
+check under "Trial, still open" as amended.

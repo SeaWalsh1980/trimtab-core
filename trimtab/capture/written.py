@@ -149,8 +149,10 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
         again = compare(sent, body)
         if again is Readback.GENERIC:
             outcomes[(kind, number)] = Readback.REPLACED
-        elif again is not Readback.SAME:
+        elif again is Readback.FOOTER:
             failures.append(((kind, number), "the platform's footer came back after the body sent was written again"))
+        elif again is not Readback.SAME:
+            failures.append(((kind, number), "the body differs from the one sent after it was written again"))
     if errors and not failures:
         raise errors[0][1]  # GitHub's error, as raised: the caller decides what an unread body means
     if failures:
