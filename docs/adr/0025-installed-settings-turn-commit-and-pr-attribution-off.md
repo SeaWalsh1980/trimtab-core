@@ -6,6 +6,9 @@ Accepted (2026-10-14), by the operator. Whether it stops the PR footer awaits
 a trial; see "Trial, still open" below. Supersedes the setting part of ADR
 0022.
 
+2026-10-15: it does not stop the footer; see "First trial" below. The
+decision stands for the commit and Claude Code's own lines.
+
 ## Context
 
 ADR 0022's trial (2026-10-14) ran a cloud routine on a base that installs
@@ -93,3 +96,21 @@ After a pin moves to a base carrying this change: one routine run that opens
 a PR. Its body is checked for the footer before verify-body runs; the run's
 log says whether verify-body took one off. Record the result here; if the
 footer persists, report it upstream.
+
+## First trial (2026-10-15)
+
+One manual run of a per-project conformance routine. Its installed settings
+held `"attribution": {"commit": "", "pr": "", "sessionUrl": false}`, read
+back by a run on the same base and environment the day before, which stopped
+before writing.
+
+- The commit ended at the `Co-Authored-By:` line the run wrote: no
+  `Claude-Session:` trailer, nothing added.
+- The PR body as created held the body sent, then a `---` rule and the
+  session footer. When the run wrote the body back, the platform added a
+  footer linking no session instead (ADR 0024, "First trial").
+
+Result: the setting holds for the commit; it does not reach the PR footer,
+which the platform adds on create and again on each edit. The consequence
+accepted above holds: verify-body is what takes the session link off. The
+footer persisting is for the operator to report upstream.
