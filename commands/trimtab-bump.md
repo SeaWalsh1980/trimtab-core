@@ -73,7 +73,8 @@ trimtab ids --staged && git commit -m "chore(trimtab): move the lock to <new sho
 ```
 
 `verify-body` reads the PR back: exit 0 is the body sent (it may say it took
-the platform's session footer off); exit 1 or 2: stop and report it.
+the platform's session footer off, or that the platform's generic footer,
+linking no session, follows it); exit 1 or 2: stop and report it.
 
 GitHub is reached through `gh api` on `repos/{owner}/{repo}/…` paths only:
 Claude Code cloud sessions refuse every other path (`search/…`, `user`,
