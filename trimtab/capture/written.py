@@ -87,11 +87,11 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
     """Read back each target after one shared wait; take the platform's session footer off every one that carries
     it, wait once more, and require them identical, or carrying only the generic footer (REPLACED). A generic footer
     found on the first read is left alone (GENERIC): it names nothing, and a write would only bring it back. Any
-    other change, or a run reference, fails, but only after every
-    target has been checked and every footer taken off: one WrittenBodyError names each target that failed.
-    A read or write that fails (GitHub) does not stop the others either. If that is all that failed, the first
-    such error is raised as it came; if a body also failed, the WrittenBodyError names both, each by its target.
-    The caller supplies the wait (`sleep`): waiting is the outer layer's."""
+    other change, or a run reference, fails, but only after every target has been checked and every session footer
+    taken off: one WrittenBodyError names each target that failed. A read or write that fails (GitHub) does not stop
+    the others either. If that is all that failed, the first such error is raised as it came; if a body also failed,
+    the WrittenBodyError names both, each by its target. The caller supplies the wait (`sleep`): waiting is the
+    outer layer's."""
 
     def wait() -> None:
         if settle_seconds > 0:
@@ -137,7 +137,8 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
             failures.append(((kind, number), outcome.value))
         else:
             outcomes[(kind, number)] = outcome
-    # Every footer found is taken off, whatever else in the batch failed.
+    # Every session footer found is taken off, whatever else in the batch failed; a generic footer is left, since a
+    # write only brings it back.
     footed = [t for t in checked if outcomes.get((t[0], t[1])) is Readback.FOOTER]
     written = [t for t in footed if write(*t)]
     if written:
