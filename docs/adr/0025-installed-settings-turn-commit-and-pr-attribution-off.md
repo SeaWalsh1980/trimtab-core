@@ -101,7 +101,8 @@ footer persists, report it upstream.
 
 One manual run of a per-project conformance routine. Its installed settings
 held `"attribution": {"commit": "", "pr": "", "sessionUrl": false}`, read
-back by the run.
+back by a run on the same base and environment the day before, which stopped
+before writing.
 
 - The commit ended at the `Co-Authored-By:` line the run wrote: no
   `Claude-Session:` trailer, nothing added.

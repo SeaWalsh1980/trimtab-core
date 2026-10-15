@@ -69,8 +69,8 @@ The upstream retro also comments on issues.
   sent, and says when it took the footer off; 1 is any other change, or a
   footer that came back; 2 is that it could not read or write. (Amended
   2026-10-15: the platform's generic footer, on the first read or after the
-  write-back, is exit 0 too; see "The generic footer is accepted" below.) Every call is
-  repository-scoped REST (ADR 0021).
+  write-back, is exit 0 too; see "The generic footer is accepted" below.)
+  Every call is repository-scoped REST (ADR 0021).
 - **The commands chain it after the POST**, on the same command line
   (`N=$(gh api -X POST … --jq .number) && trimtab verify-body … --pull "$N"`),
   so it runs only when the PR was created and cannot be forgotten as a later
@@ -154,7 +154,9 @@ The upstream retro also comments on issues.
 ## Consequences
 
 - A PR, issue or comment a run creates holds, once the run has finished, the
-  body it sent, or the run has failed and said which one is wrong.
+  body it sent, or the run has failed and said which one is wrong. (Amended
+  2026-10-15: or that body followed by the platform's generic footer; see
+  Decision.)
 - Accepted: GitHub keeps a body's earlier versions in its edit history, so
   the footer's session link stays there, visible to anyone who can read the
   repository, until the platform stops adding it. Removing an edit-history
