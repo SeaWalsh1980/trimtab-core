@@ -1,26 +1,42 @@
 """The own-PR list behind guard-mcp's `set_monitor` check (ADR 0028).
 
 A PostToolUse hook on `Bash` records each PR the session itself created; guard-mcp passes
-`mcp__ccd_pr__set_monitor` only for a `url` on that list, and denies otherwise. This module
-holds the pure part both sides share: what counts as a create, the canonical key a PR URL
-reduces to, the list's format and bounds, and the verdict for one call. The file I/O lives
-at the edges that call it.
+`mcp__ccd_pr__set_monitor` only for a `url` on that list, and denies otherwise.
 
-Everything here is data in, value out. Command text, stdout and the call's arguments are
-untrusted: they are reduced to a `PrKey` by fixed rules and nothing else is kept. A doubt
-anywhere yields no key, which records nothing and denies.
+The pure part both sides share comes first: what counts as a create, the canonical key a
+PR URL reduces to, the list's format and bounds, and the verdict for one call. It is data
+in, value out. Command text, stdout and the call's arguments are untrusted: they are
+reduced to a `PrKey` by fixed rules and nothing else is kept. A doubt anywhere yields no
+key, which records nothing and denies.
 
-Nothing here prints. A verdict carries a fixed code, never a URL or a session ID.
+The edge comes last, run as `python3 -m trimtab.adapters.pr_monitor record|check`:
+
+    record   PostToolUse (Bash), from hooks/pr-monitor-record.sh. Writes nothing to stdout;
+             exits 0, or 1 with one line on stderr when a create was seen and not recorded.
+    check    called by guard-mcp for set_monitor. Prints one verdict code on stdout and
+             exits 0; guard-mcp passes only on exit 0 and `pass`. Any error exits 1.
+
+The list lives at `<config dir>/guard-state/pr-monitor/<sha256 of session_id>.json`, where
+guard-paths keeps a session's own tools out. Hooks run as the same Unix user, so the
+directories and files are checked (lstat, owner, mode, O_NOFOLLOW) on every use, and any
+doubt denies. No output, at any level, carries a URL, a session ID or its hash.
 """
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import os
 import re
 import shlex
+import stat
+import sys
+import tempfile
+import time
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from urllib.parse import urlsplit
 
 LIST_VERSION = 1
@@ -339,3 +355,234 @@ def decide(tool_input: object, entries: tuple[Entry, ...], now: int) -> Verdict:
     if key is not None and any(e.key == key for e in live(entries, now)):
         return Verdict.PASS
     return Verdict.NOT_RECORDED
+
+
+# --- the edge: the list on disk ------------------------------------------------------------
+
+SET_MONITOR = "mcp__ccd_pr__set_monitor"
+STATE_PARTS = ("guard-state", "pr-monitor")
+LOCK_NAME = ".lock"
+TEMP_PREFIX = ".tmp-"
+MAX_LIST_BYTES = 64 * 1024
+MAX_PRUNE_FILES = 1000
+LOCK_TIMEOUT_SECONDS = 5.0
+LOCK_POLL_SECONDS = 0.05
+# O_NONBLOCK: a FIFO planted where a list should be must not hang the hook.
+READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+
+
+class StateDirError(PrMonitorError):
+    """The list's directory is missing, or not one this user alone controls."""
+
+
+class LockTimeoutError(PrMonitorError):
+    """Another writer held the list's lock past the bound."""
+
+
+def config_dir() -> Path:
+    """The Claude config directory: CLAUDE_CONFIG_DIR, else ~/.claude."""
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude"))
+
+
+def _private(st: os.stat_result) -> bool:
+    return st.st_uid == os.geteuid() and not st.st_mode & 0o077
+
+
+def state_dir(config: Path, create: bool) -> Path:
+    """`<config>/guard-state/pr-monitor`, each level a real directory private to this user.
+
+    With `create`, missing levels are made 0700. Raises StateDirError otherwise, or OSError
+    when a level cannot be made.
+    """
+    path = config
+    for part in STATE_PARTS:
+        path = path / part
+        if create:
+            try:
+                os.mkdir(path, 0o700)
+            except FileExistsError:
+                pass  # checked below like any existing level
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError as err:
+            raise StateDirError("the list directory is missing") from err
+        if not stat.S_ISDIR(st.st_mode) or not _private(st):
+            raise StateDirError("the list directory is not private to this user")
+    return path
+
+
+def read_list(path: Path) -> tuple[Entry, ...]:
+    """The stored entries, or () when there is no list.
+
+    Raises ListFormatError for a list this version did not write or a file that is not a
+    private regular file, and OSError for a symlink (O_NOFOLLOW) or an unreadable file.
+    """
+    try:
+        fd = os.open(path, READ_FLAGS)
+    except FileNotFoundError:
+        return ()
+    with os.fdopen(fd, "rb") as fh:
+        st = os.fstat(fh.fileno())
+        if not stat.S_ISREG(st.st_mode) or not _private(st):
+            raise ListFormatError("the list file is not a private regular file")
+        data = fh.read(MAX_LIST_BYTES + 1)
+    if len(data) > MAX_LIST_BYTES:
+        raise ListFormatError("the list is larger than any this version writes")
+    try:
+        return decode(data.decode("utf-8"))
+    except UnicodeDecodeError as err:
+        raise ListFormatError("the list is not UTF-8") from err
+
+
+def _write_list(directory: Path, name: str, entries: tuple[Entry, ...]) -> None:
+    """Replace the list atomically: a private temporary file, then a rename over the name."""
+    fd, temp = tempfile.mkstemp(prefix=TEMP_PREFIX, dir=directory)  # 0600, O_EXCL
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(encode(entries))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(temp, directory / name)  # replaces a planted symlink itself, never its target
+    except BaseException:
+        try:
+            os.unlink(temp)
+        except FileNotFoundError:
+            pass  # the rename happened or the file never existed; the original error is re-raised
+        raise
+
+
+class _Lock:
+    """An exclusive flock on the directory's lock file, waited for at most LOCK_TIMEOUT_SECONDS."""
+
+    def __init__(self, directory: Path):
+        self.path = directory / LOCK_NAME
+        self.fd: int | None = None
+
+    def __enter__(self) -> _Lock:
+        self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    os.close(self.fd)
+                    self.fd = None
+                    raise LockTimeoutError("the list is locked by another writer") from None
+                time.sleep(LOCK_POLL_SECONDS)
+
+    def __exit__(self, *exc: object) -> None:
+        if self.fd is not None:
+            os.close(self.fd)  # closing releases the flock
+            self.fd = None
+
+
+def _prune(directory: Path, own: str, now: int) -> int:
+    """Delete other sessions' expired or unreadable lists, planted symlinks, and stale temporary
+    files. Returns how many could not be handled; each is left in place."""
+    failed = 0
+    with os.scandir(directory) as it:
+        for i, item in enumerate(it):
+            if i >= MAX_PRUNE_FILES:
+                break
+            if item.name in (own, LOCK_NAME):
+                continue
+            try:
+                if item.is_symlink():
+                    stale = True
+                elif not item.is_file(follow_symlinks=False):
+                    continue
+                elif item.name.startswith(TEMP_PREFIX):
+                    stale = now - int(item.stat(follow_symlinks=False).st_mtime) >= TTL_SECONDS
+                elif item.name.endswith(".json"):
+                    try:
+                        stale = is_expired_list(read_list(Path(item.path)), now)
+                    except ListFormatError:
+                        stale = True
+                else:
+                    continue
+                if stale:
+                    os.unlink(item.path)
+            except FileNotFoundError:
+                continue  # gone already
+            except OSError:
+                failed += 1
+    return failed
+
+
+def record(payload: object, config: Path, now: int) -> tuple[int, str]:
+    """Record the PR a Bash call created, if it created one. Returns (exit code, stderr line)."""
+    key = created_pr(payload)
+    if key is None:
+        return 0, ""
+    session_id = payload.get("session_id") if isinstance(payload, dict) else None
+    try:
+        name = list_name(session_id)
+        directory = state_dir(config, create=True)
+        with _Lock(directory):
+            try:
+                entries = read_list(directory / name)
+            except (ListFormatError, OSError):
+                # An unreadable or planted list grants nothing; it is replaced by one that
+                # holds only what this session has now been seen to create.
+                entries = ()
+            _write_list(directory, name, add(entries, key, now))
+            unpruned = _prune(directory, name, now)
+    except SessionIdError:
+        return 1, "pr-monitor: a PR was created, but the session ID is missing or malformed; not recorded"
+    except StateDirError:
+        return 1, "pr-monitor: a PR was created, but the list directory is not private to this user; not recorded"
+    except (LockTimeoutError, OSError) as err:
+        return 1, f"pr-monitor: a PR was created, but the list could not be written ({type(err).__name__}); not recorded"
+    if unpruned:
+        return 1, f"pr-monitor: recorded; {unpruned} expired list(s) could not be removed"
+    return 0, ""
+
+
+def check(payload: object, config: Path, now: int) -> Verdict:
+    """The verdict for a PreToolUse payload of set_monitor, reading the session's list."""
+    if not isinstance(payload, dict) or payload.get("tool_name") != SET_MONITOR:
+        return Verdict.BAD_ARGUMENTS
+    tool_input = payload.get("tool_input")
+    first = decide(tool_input, (), now)
+    if first is not Verdict.NOT_RECORDED:
+        return first  # settled without the list: the auto-archive pass, or a call that cannot pass
+    try:
+        name = list_name(payload.get("session_id"))
+        entries = read_list(state_dir(config, create=False) / name)
+    except (PrMonitorError, OSError):
+        return Verdict.NOT_RECORDED  # no list this session could have written: deny
+    return decide(tool_input, entries, now)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if args not in (["record"], ["check"]):
+        print("usage: python3 -m trimtab.adapters.pr_monitor record|check", file=sys.stderr)
+        return 1
+    now = int(time.time())
+    try:
+        payload = json.loads(sys.stdin.read())
+    except ValueError:
+        payload = None  # judged below like any payload that is not a create or a set_monitor call
+    if args == ["check"]:
+        try:
+            verdict = check(payload, config_dir(), now)
+        except Exception as err:  # fail closed: guard-mcp denies on anything but exit 0 and `pass`
+            print(f"pr-monitor: internal error ({type(err).__name__})", file=sys.stderr)
+            return 1
+        print(verdict.value)
+        return 0
+    try:
+        code, message = record(payload, config_dir(), now)
+    except Exception as err:  # never 2: a PostToolUse hook has nothing to block
+        print(f"pr-monitor: internal error ({type(err).__name__}); nothing recorded", file=sys.stderr)
+        return 1
+    if message:
+        print(message, file=sys.stderr)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

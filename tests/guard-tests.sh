@@ -990,6 +990,168 @@ export HOOK_ALLOW_MCP=yes
 tm ask  "an override other than 1 is ignored" "$MCP_WRITE"
 unset HOOK_ALLOW_MCP
 
+echo "== pr-monitor recorder (ADR 0028) =="
+# The PostToolUse recorder keeps the list of PRs a session created, and
+# guard-mcp's set_monitor check reads it. Observed through the module's own
+# `check`, the entry guard-mcp calls, against a config directory of its own, so
+# nothing here touches the live-control-plane fixture. Lists are made by the
+# real recorder; only the corrupt, expired, symlinked and badly permissioned
+# ones are written by hand. See
+# docs/adr/0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md.
+PM_CFG="$CPTMP/pm-config"
+PM_DIR="$PM_CFG/guard-state/pr-monitor"
+mkdir -p "$PM_CFG"
+PM_A="pm-session-a"
+PM_B="pm-session-b"
+PR="https://github.com/owner/repo/pull"
+
+pm_py() { # pm_py <code> <args>...  — python3 with the checkout's package, as the hooks run it
+  PYTHONPATH="$HOOKS/.." python3 -P -B -c "$@"
+}
+pm_post() { # pm_post <session> <command> <stdout>  — a PostToolUse payload for Bash
+  python3 -c 'import json,sys; print(json.dumps({"hook_event_name":"PostToolUse","session_id":sys.argv[1],"tool_name":"Bash","tool_input":{"command":sys.argv[2]},"tool_response":{"stdout":sys.argv[3],"stderr":"","interrupted":False}}))' "$@"
+}
+pm_call() { # pm_call <session> <tool_input JSON>  — a PreToolUse payload for set_monitor
+  python3 -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","session_id":sys.argv[1],"tool_name":"mcp__ccd_pr__set_monitor","tool_input":json.loads(sys.argv[2])}))' "$@"
+}
+pm_fix() { # pm_fix <session> <n>  — set_monitor switching Auto-fix on for PR <n>
+  pm_call "$1" "{\"auto_fix\":true,\"url\":\"$PR/$2\"}"
+}
+pm_file() { # pm_file <session>  — the session's list path
+  printf '%s/%s' "$PM_DIR" "$(pm_py 'import sys; from trimtab.adapters import pr_monitor as pm; print(pm.list_name(sys.argv[1]))' "$1")"
+}
+pm_write() { # pm_write <session> <JSON>  — a hand-written list, 0600
+  local f; f=$(pm_file "$1"); rm -f "$f"; printf '%s' "$2" > "$f"; chmod 600 "$f"
+}
+pm_rec() { # pm_rec <payload> [config dir]  — run the recorder; sets PM_RC, PM_OUT, PM_ERR
+  local o e
+  o=$(mktemp); e=$(mktemp)
+  printf '%s' "$1" | CLAUDE_CONFIG_DIR="${2:-$PM_CFG}" bash "$HOOKS/pr-monitor-record.sh" >"$o" 2>"$e"
+  PM_RC=$?; PM_OUT=$(cat "$o"); PM_ERR=$(cat "$e"); rm -f "$o" "$e"
+}
+pm_check() { # pm_check <payload> [config dir]  — the verdict guard-mcp reads
+  printf '%s' "$1" | CLAUDE_CONFIG_DIR="${2:-$PM_CFG}" PYTHONPATH="$HOOKS/.." \
+    python3 -P -B -m trimtab.adapters.pr_monitor check 2>/dev/null
+}
+pm_report() { # pm_report <ok: 0|1> <tag> <label> [detail]
+  if [[ "$1" == 0 ]]; then
+    printf 'PASS  %-14s %-12s  %s\n' pr-monitor "$2" "$3"
+  else
+    printf 'FAIL  %-14s %-12s  %s  -- %s\n' pr-monitor "$2" "$3" "${4:-}"
+    fails=$((fails+1))
+  fi
+}
+pmv() { # pmv <want verdict> <label> <payload> [config dir]
+  local got; got=$(pm_check "$3" "${4:-$PM_CFG}")
+  [[ "$got" == "$1" ]]; pm_report $? "$1" "$2" "got '$got'"
+}
+pmr() { # pmr <want exit> <label> <payload> [config dir]  — stdout must stay empty
+  pm_rec "$3" "${4:-$PM_CFG}"
+  [[ "$PM_RC" == "$1" && -z "$PM_OUT" ]]; pm_report $? "exit=$1" "$2" "exit=$PM_RC stdout=${#PM_OUT}B"
+}
+pmt() { # pmt <label> <command>...  — any other state check
+  local label="$1"; shift
+  "$@"; pm_report $? state "$label"
+}
+
+pmv not-recorded "before any create, a PR url is denied"    "$(pm_fix $PM_A 7)"
+pmr 0 "a non-create Bash call is ignored"                   "$(pm_post $PM_A 'ls -la' "$PR/7")"
+pmt "a non-create call makes no list directory"             test ! -e "$PM_CFG/guard-state"
+pmr 0 "a lone gh pr create is recorded"                     "$(pm_post $PM_A 'gh pr create --draft --title t --body-file b.md' "$PR/7"$'\n')"
+pmv pass "set_monitor on the PR the session created"        "$(pm_fix $PM_A 7)"
+pmv pass "the same PR, upper case and a trailing slash"     "$(pm_call $PM_A '{"auto_fix":true,"url":"https://github.com/OWNER/repo/pull/7/"}')"
+pmv pass "turning Auto-fix off on the session's PR"         "$(pm_call $PM_A "{\"auto_fix\":false,\"url\":\"$PR/7\"}")"
+pmv not-recorded "another PR number is denied"              "$(pm_fix $PM_A 8)"
+pmv not-recorded "another repository is denied"             "$(pm_call $PM_A '{"auto_fix":true,"url":"https://github.com/owner/other/pull/7"}')"
+pmv not-recorded "another host is denied"                   "$(pm_call $PM_A '{"auto_fix":true,"url":"https://ghe.example.com/owner/repo/pull/7"}')"
+pmv not-recorded "the same PR from another session"         "$(pm_fix $PM_B 7)"
+pmr 0 "git push && gh pr create is recorded"                "$(pm_post $PM_A 'git push -u origin feature && gh pr create --fill' "$PR/9")"
+pmv pass "a PR created after git push"                      "$(pm_fix $PM_A 9)"
+pmr 0 "cd && gh pr create is recorded"                      "$(pm_post $PM_A 'cd /work/repo && gh pr create --fill' "$PR/10")"
+pmv pass "a PR created after cd"                            "$(pm_fix $PM_A 10)"
+pmr 0 "a REST create is recorded"                           "$(pm_post $PM_A 'gh api -X POST repos/owner/repo/pulls --input b.json' "{\"html_url\":\"$PR/11\",\"number\":11,\"base\":{\"repo\":{\"full_name\":\"owner/repo\"}}}")"
+pmv pass "a PR created through REST"                        "$(pm_fix $PM_A 11)"
+pmr 0 "an echoed URL is not recorded"                       "$(pm_post $PM_A "echo $PR/50" "$PR/50")"
+pmv not-recorded "an echoed URL is denied"                  "$(pm_fix $PM_A 50)"
+pmr 0 "a create then an echo is not recorded"               "$(pm_post $PM_A "gh pr create --fill; echo $PR/51" "$PR/51")"
+pmv not-recorded "a URL echoed after a create is denied"    "$(pm_fix $PM_A 51)"
+pmr 0 "a heredoc body create is not recorded"               "$(pm_post $PM_A 'gh pr create --body "$(cat b.md)"' "$PR/52")"
+pmv not-recorded "a heredoc-body PR is denied"              "$(pm_fix $PM_A 52)"
+pmr 0 "a URL only on stderr is not recorded"                "$(python3 -c 'import json,sys; print(json.dumps({"session_id":sys.argv[1],"tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"","stderr":sys.argv[2]}}))' $PM_A "$PR/53")"
+pmv not-recorded "a URL seen only on stderr is denied"      "$(pm_fix $PM_A 53)"
+pmr 0 "a cd that prints its directory is not recorded"      "$(pm_post $PM_A 'cd /work/repo && gh pr create --fill' "/work/repo"$'\n'"$PR/54")"
+pmv not-recorded "a create whose stdout has two lines"      "$(pm_fix $PM_A 54)"
+pmr 0 "a garbage payload naming gh pr create exits 0"       'NOT JSON gh pr create'
+pmr 0 "a replayed create is recorded again"                 "$(pm_post $PM_A 'gh pr create --fill' "$PR/7")"
+pmt "a replayed create leaves one entry per PR"             test "$(pm_py 'import sys; from pathlib import Path; from trimtab.adapters import pr_monitor as pm; print(len(pm.read_list(Path(sys.argv[1]))))' "$(pm_file $PM_A)")" = 4
+pmt "the list directories are 0700"                         test "$(pm_py 'import os,sys; print(" ".join(oct(os.stat(p).st_mode & 0o777) for p in sys.argv[1:]))' "$PM_CFG/guard-state" "$PM_DIR")" = "0o700 0o700"
+pmt "the list file is 0600"                                 test "$(pm_py 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$(pm_file $PM_A)")" = 0o600
+pmt "the list file is named by a hash, not the session"     test -z "$(find "$PM_DIR" -name '*.json' | grep -v -E '/[0-9a-f]{64}\.json$')"
+
+pmv pass "auto-archive alone passes, with no list"          "$(pm_call pm-session-none '{"auto_archive_on_close":true}')"
+pmv no-url "auto_fix without url"                           "$(pm_call $PM_A '{"auto_fix":true}')"
+pmv bad-arguments "an argument this version does not read"  "$(pm_call $PM_A "{\"auto_fix\":true,\"url\":\"$PR/7\",\"pr\":8}")"
+pmv bad-arguments "another tool name"                       "$(python3 -c 'import json; print(json.dumps({"session_id":"pm-session-a","tool_name":"mcp__ccd_pr__set_auto_merge","tool_input":{"enabled":True,"url":"https://github.com/owner/repo/pull/7"}}))')"
+pmv not-recorded "a missing session ID"                     "$(j mcp__ccd_pr__set_monitor "{\"auto_fix\":true,\"url\":\"$PR/7\"}")"
+pmv not-recorded "a malformed session ID"                   "$(pm_fix '../pm-session-a' 7)"
+
+pmr 1 "a create with a malformed session ID: exit 1"        "$(pm_post 'bad session' 'gh pr create --fill' "$PR/60")"
+
+# Fail closed on the list itself.
+pm_write pm-session-c '{"v":1,"entries":[{"host":"github.com","owner":"owner","repo":"repo","number":70,"at":0}]}'
+pmv not-recorded "an entry older than two days"             "$(pm_fix pm-session-c 70)"
+pm_write pm-session-d 'NOT JSON'
+pmv not-recorded "a corrupt list"                           "$(pm_fix pm-session-d 7)"
+pmr 0 "a corrupt list is replaced on the next create"       "$(pm_post pm-session-d 'gh pr create --fill' "$PR/71")"
+pmv pass "a PR recorded over a corrupt list"                "$(pm_fix pm-session-d 71)"
+pm_write pm-session-e "{\"v\":2,\"entries\":[{\"host\":\"github.com\",\"owner\":\"owner\",\"repo\":\"repo\",\"number\":72,\"at\":$(date +%s)}]}"
+pmv not-recorded "a list of an unknown version"             "$(pm_fix pm-session-e 72)"
+pm_write pm-session-f "{\"v\":1,\"entries\":[{\"host\":\"github.com\",\"owner\":\"owner\",\"repo\":\"repo\",\"number\":73,\"at\":$(date +%s)}]}"
+chmod 644 "$(pm_file pm-session-f)"
+pmv not-recorded "a list file other users can read"         "$(pm_fix pm-session-f 73)"
+PM_TARGET="$CPTMP/pm-target.json"
+printf '{"v":1,"entries":[{"host":"github.com","owner":"owner","repo":"repo","number":74,"at":%s}]}' "$(date +%s)" > "$PM_TARGET"
+chmod 600 "$PM_TARGET"
+ln -s "$PM_TARGET" "$(pm_file pm-session-g)"
+pmv not-recorded "a symlinked list file"                    "$(pm_fix pm-session-g 74)"
+pmr 0 "a create replaces a symlinked list, not its target"  "$(pm_post pm-session-g 'gh pr create --fill' "$PR/75")"
+pmt "the symlink is gone and its target unchanged"          test ! -L "$(pm_file pm-session-g)" -a "$(grep -c '"number":74' "$PM_TARGET")" = 1
+pmr 0 "any create prunes another session's expired list"    "$(pm_post $PM_A 'gh pr create --fill' "$PR/12")"
+pmt "the expired list is gone"                              test ! -e "$(pm_file pm-session-c)"
+pmt "the live lists stay"                                   test -e "$(pm_file pm-session-d)" -a -e "$(pm_file $PM_A)"
+chmod 770 "$PM_DIR"
+pmv not-recorded "a group-writable list directory"          "$(pm_fix $PM_A 7)"
+pmr 1 "a create into a group-writable directory: exit 1"   "$(pm_post $PM_A 'gh pr create --fill' "$PR/13")"
+chmod 700 "$PM_DIR"
+pmv not-recorded "nothing was written there"                "$(pm_fix $PM_A 13)"
+PM_LINKED="$CPTMP/pm-linked"
+mkdir -p "$PM_LINKED/guard-state" "$CPTMP/pm-elsewhere"
+chmod 700 "$PM_LINKED/guard-state" "$CPTMP/pm-elsewhere"
+ln -s "$CPTMP/pm-elsewhere" "$PM_LINKED/guard-state/pr-monitor"
+pmr 1 "a symlinked list directory: exit 1"                  "$(pm_post $PM_A 'gh pr create --fill' "$PR/14")" "$PM_LINKED"
+pmt "nothing is written through the symlink"                test -z "$(ls -A "$CPTMP/pm-elsewhere")"
+pmv not-recorded "a symlinked list directory is denied"     "$(pm_fix $PM_A 7)" "$PM_LINKED"
+
+# No output names a URL, a session or its hash: not the recorder's on an
+# error, and not the check's.
+PM_MARK="pm-mark-$$"
+PM_HASH=$(pm_py 'import sys; from trimtab.adapters import pr_monitor as pm; print(pm.list_name(sys.argv[1])[:64])' "$PM_MARK")
+chmod 770 "$PM_DIR"
+pm_rec "$(pm_post "$PM_MARK" 'gh pr create --fill' "$PR/919191")"
+chmod 700 "$PM_DIR"
+pm_leak="$PM_OUT$PM_ERR$(pm_check "$(pm_fix "$PM_MARK" 919191)")"
+[[ -n "$PM_ERR" && "$pm_leak" != *"$PM_MARK"* && "$pm_leak" != *919191* && "$pm_leak" != *"$PM_HASH"* ]]
+pm_report $? state "no output names the URL, the session or its hash"
+
+# With python3 unavailable the recorder records nothing and says so; the check
+# then denies, which is the fail-closed answer.
+PM_STUB="$CPTMP/pm-stub"
+mkdir -p "$PM_STUB"
+for c in bash cat readlink dirname; do ln -sf "$(command -v "$c")" "$PM_STUB/$c"; done
+pm_o=$(printf '%s' "$(pm_post $PM_A 'gh pr create --fill' "$PR/15")" | PATH="$PM_STUB" CLAUDE_CONFIG_DIR="$PM_CFG" "$BASH" "$HOOKS/pr-monitor-record.sh" 2>&1 >/dev/null); pm_rc=$?
+[[ $pm_rc == 1 && "$pm_o" == *python3* ]]; pm_report $? exit=1 "no python3: exit 1 and says so"
+pmv not-recorded "a create made without python3 is denied"  "$(pm_fix $PM_A 15)"
+
 echo "== fail-closed on an unrunnable dependency =="
 # A guard that cannot run its own scanner must BLOCK. It could not: with `grep`
 # off PATH, guard-secrets printed "grep: command not found" and exited 0, which
