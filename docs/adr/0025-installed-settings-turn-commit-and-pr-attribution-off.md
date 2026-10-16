@@ -95,6 +95,8 @@ JSON, exactly. The installer refuses an instance or machine layer that sets
 
 ## Trial, still open
 
+Closed 2026-10-16: see "First trial" and "Second trial" below.
+
 After a pin moves to a base carrying this change: one routine run that opens
 a PR. Its body is checked for the footer before verify-body runs; the run's
 log says whether verify-body took one off. Record the result here; if the
@@ -121,13 +123,14 @@ footer persisting is for the operator to report upstream.
 ## Second trial (2026-10-15 and 2026-10-16)
 
 A retro run (2026-10-15) and a conformance run (2026-10-16) of per-project
-routines, on the same base and settings, with ADR 0024's amended read-back.
+routines, with the same settings, on the base carrying ADR 0024's amended
+read-back.
 
 - Each commit ended at the `Co-Authored-By:` line the run wrote: no
   `Claude-Session:` trailer, nothing added.
 - Each PR, created with `gh api` from the session, held the session footer
-  after the body sent, as in the first trial. The write-back drew the generic
-  footer, which `verify-body` passed (ADR 0024, "Second trial").
+  after the body sent, as in the first trial; the write-back that took it
+  off is recorded in ADR 0024, "Second trial".
 - The retro's issue, created by `propose --apply`, held only the generic
   footer from its creation: no session footer.
 

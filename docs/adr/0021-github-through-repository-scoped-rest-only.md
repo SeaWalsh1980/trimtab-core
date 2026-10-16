@@ -125,6 +125,8 @@ no new dependency.
 
 ## Trial, still open
 
+Closed 2026-10-16: see "Trial result" below.
+
 The first guarded cloud routine run on this base: `ingest --dry-run
 --ledger-from-labels` and the conformance command complete with no 403, and
 the run log shows no `gh api` call outside `repos/`. The result is recorded

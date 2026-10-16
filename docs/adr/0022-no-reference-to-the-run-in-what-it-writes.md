@@ -189,6 +189,8 @@ step 4's PR listing. A static test fails on search syntax in shipped files.
 
 ## Trial, still open
 
+Closed 2026-10-16: see "Trial result" and "Second trial result" below.
+
 After the setting and this change are both on the pinned base: one manual
 run of a per-project routine that opens a PR. Its commit has no
 `Claude-Session:` trailer, and its body, read back after publication, holds no
@@ -216,17 +218,15 @@ footer off. This record stays proposed until ADR 0024's trial passes.
 
 ## Second trial result (2026-10-16)
 
-ADR 0024's trial passed on a retro run (2026-10-15) and a conformance run
-(2026-10-16) of per-project routines, on a base carrying this record's check
-and rule, ADR 0024's read-back and ADR 0025's settings (ADR 0024, "Second
-trial").
+ADR 0024's trial passed on two runs, on a base carrying this record's check
+and rule; the runs, the footers and the read-back are recorded there (ADR
+0024, "Second trial"). For this record's own parts:
 
 - Each commit ended at `Co-Authored-By:`, with no `Claude-Session:` trailer;
   `trimtab ids --staged` exited 0 before each.
-- `trimtab check-pr` passed each PR body before it was sent. No bare session
-  URL line was added.
-- Each PR body, after the write-back, held no session link: only the
-  platform's generic footer, which names no session, after the body sent.
+- `trimtab check-pr` passed each PR body before it was sent, and no bare
+  session URL line was added.
 
-The rule and the check hold. What remains is the session footer in each PR
-body's edit history, accepted in ADR 0024.
+The rule and the check hold. After the write-back no PR body holds a session
+link; the session footer stays in each body's edit history, accepted in ADR
+0024.

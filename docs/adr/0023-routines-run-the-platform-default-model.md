@@ -58,6 +58,8 @@ that it follows what the platform ships, not a hand-kept ID.
 
 ## Trial, still open
 
+Closed 2026-10-16: see "Trial result" below.
+
 The routines API updates partially: an empty connector list in an update has
 been seen to leave the connectors in place. An update whose `session_context`
 has no `model` may likewise leave a model set by an earlier update. After

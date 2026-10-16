@@ -181,6 +181,8 @@ The upstream retro also comments on issues.
 
 ## Trial, still open
 
+Closed 2026-10-16: see "First trial" and "Second trial" below.
+
 After this change is on the pinned base: one manual run of a per-project
 routine that opens a PR. Its log shows `trimtab verify-body` exit 0, and its
 PR's body, read afterwards, holds no session link, and nothing after the body
@@ -224,8 +226,8 @@ opened a draft PR.
   that edit. `verify-body` exited 0 on both, reporting the session footer
   removed, the generic footer in its place, and GitHub's edit history still
   holding the session footer (`REPLACED`).
-- Each PR's body, read afterwards, held the body sent and
-  then only the generic footer: no session link. Each commit ended at the
+- Each PR's body, read afterwards, held the body sent and then only the
+  generic footer: no session link. Each commit ended at the
   `Co-Authored-By:` line the run wrote.
 - The issue, created by `propose --apply`, held the generic footer from its
   creation, with no session footer to take off; it was left alone.
