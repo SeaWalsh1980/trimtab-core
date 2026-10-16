@@ -394,17 +394,19 @@ check_silent_guard_mcp_fails_the_install() {
 }
 
 # pr-body-check fails open by design, so a broken one is silent: every PR would
-# open without the harness block. The install must refuse it, not report done.
-check_silent_pr_body_check_fails_the_install() {
+# open without the harness block. It is policy with CI as the gate, so the run
+# installs but ends NOT GREEN and deletes nothing, as for the observer.
+check_silent_pr_body_check_ends_not_green() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
   make_store "$h/share/trimtab/core"
   printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n' > "$snap_new/hooks/pr-body-check.sh"
   boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
-  if [[ $rc -ne 0 && "$out" == *"pr-body-check returned 0, expected 2"* ]]; then
-    pass "a pr-body-check that never blocks fails the install"
+  if [[ $rc -eq 0 && -d "$snap_mid" && "$out" == *"pr-body-check returned 0, expected 2"* \
+        && "$(printf '%s\n' "$out" | sed '/^$/d' | tail -1)" == "NOT GREEN: pr-body-check"* ]]; then
+    pass "a pr-body-check that never blocks installs but ends NOT GREEN and withholds retention"
   else
-    fail "a pr-body-check that never blocks fails the install" "rc=$rc"; echo "$out" | tail -6
+    fail "a pr-body-check that never blocks installs but ends NOT GREEN and withholds retention" "rc=$rc"; echo "$out" | tail -6
   fi
 }
 
@@ -468,6 +470,52 @@ check_broken_doctrine_drift_ends_not_green() {
     pass "a broken doctrine-drift installs but ends NOT GREEN and withholds retention"
   else
     fail "a broken doctrine-drift installs but ends NOT GREEN and withholds retention" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# --check is what a cloud setup script runs after the install, and it must fail
+# the session on the same faults. Each case installs clean, breaks one hook in
+# the snapshot the live links point into, and expects --check to exit 1 naming it.
+check_check_reports_a_silent_pr_body_check() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n' > "$snap_new/hooks/pr-body-check.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst" --check
+  if [[ $rc -eq 1 && "$out" == *"pr-body-check returned 0, expected 2"* ]]; then
+    pass "--check reports a pr-body-check that never blocks"
+  else
+    fail "--check reports a pr-body-check that never blocks" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+check_check_reports_a_broken_doctrine_drift() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\necho "Traceback (most recent call last):" >&2\nexit 0\n' \
+    > "$snap_new/hooks/doctrine-drift.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst" --check
+  if [[ $rc -eq 1 && "$out" == *"doctrine-drift exited 0 with output on a quiet payload"* ]]; then
+    pass "--check reports a broken doctrine-drift"
+  else
+    fail "--check reports a broken doctrine-drift" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# The probe payloads carry the temp directory's path; a quote or a backslash in
+# it must not make them unparseable (pr-body-check would then fail open).
+check_probes_accept_a_tmpdir_with_json_metacharacters() {
+  local h inst t
+  h=$(new_home); inst=$(inst_of "$h"); t="$h/tmp\"q\\b"
+  mkdir -p "$t"
+  TMPDIR="$t" boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"pr-body-check blocks a PR body"* && "$out" != *"NOT GREEN"* ]]; then
+    pass "the hook probes accept a TMPDIR holding a quote and a backslash"
+  else
+    fail "the hook probes accept a TMPDIR holding a quote and a backslash" "rc=$rc"; echo "$out" | tail -6
   fi
 }
 
@@ -893,10 +941,13 @@ check_rerun_from_same_base_keeps_predecessor
 check_sandbox_without_own_store_leaves_store_alone
 check_observer_failure_records_but_withholds_retention
 check_silent_guard_mcp_fails_the_install
-check_silent_pr_body_check_fails_the_install
+check_silent_pr_body_check_ends_not_green
 check_silent_liveness_check_fails_the_install
 check_liveness_check_that_always_fires_fails_the_install
 check_broken_doctrine_drift_ends_not_green
+check_check_reports_a_silent_pr_body_check
+check_check_reports_a_broken_doctrine_drift
+check_probes_accept_a_tmpdir_with_json_metacharacters
 check_install_probes_the_unprobed_hooks
 check_cli_reaches_sessions_by_name
 check_cli_probe_accepts_a_config_dir_with_a_trailing_slash

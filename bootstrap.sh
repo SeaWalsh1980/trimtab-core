@@ -14,7 +14,7 @@
 #
 # Exit codes: 0 done or in sync; 1 drift (--check) or a refused install;
 # 64 a usage error, including a run without --instance. An install whose
-# observer or doctrine-drift step was red still exits 0, but ends
+# observer, pr-body-check or doctrine-drift step was red still exits 0, but ends
 # "NOT GREEN: <steps>" instead of "done.": read that closing line as a failed
 # install.
 #
@@ -60,7 +60,8 @@ if [[ -z "$INSTANCE_ARG" ]]; then
 fi
 
 drift=0
-# Set by a step that failed without dying (the observer probe). Retention
+# Set by a step that failed without dying (the observer, pr-body-check and
+# doctrine-drift probes: telemetry and policy, not guards). Retention
 # deletes nothing after one, and the run ends NOT GREEN; ordinary drift, such
 # as a first install's changes, is not red. red_what names the steps.
 red=0
@@ -582,21 +583,40 @@ sys.exit(0 if isinstance(h, dict) and h.get("hookEventName") == "PreToolUse"
 probe_ask guard-mcp.sh "an MCP write" \
   '{"tool_name":"mcp__probe__create_item","tool_input":{}}'
 
+# The probes below run a hook on a payload whose cwd is a fresh empty directory.
+# Both hooks resolve the git toplevel of that cwd, so git is fenced at the
+# directory's parent: a TMPDIR inside an adopted project must not lend the probe
+# that project's lock. The payload is built by json.dumps, so a TMPDIR holding a
+# quote or a backslash cannot make it unparseable.
+#   with_cwd <payload json> <dir>: the payload with "cwd" set to <dir>
+with_cwd() {
+  python3 -c 'import json, sys; d = json.loads(sys.argv[1]); d["cwd"] = sys.argv[2]; print(json.dumps(d))' "$1" "$2"
+}
+#   run_in <dir> <hook> <payload>: the hook run from <dir>, git fenced above it
+run_in() {
+  printf '%s' "$3" | (cd "$1" && GIT_CEILING_DIRECTORIES="$(dirname "$1")" "$2")
+}
+
 # pr-body-check is policy, not a guard (ADR 0005): it fails OPEN on its own
-# errors and on garbage by design, so only its blocking is probed. A hook that
-# never blocks lets every PR open without the harness block, the same silence
-# as a guard failing open, so it is held to probe_guard's standard. The
-# payload's cwd is an empty directory: no project lock, no git.
+# errors and on garbage by design, and CI is the gate, so only its blocking is
+# probed, and a failure is red like the observer rather than a refused install.
+# --check still reports it as drift, so a cloud setup script that runs --check
+# fails the session either way.
 if [[ -x "$CLAUDE_HOME/hooks/pr-body-check.sh" ]]; then
   probe_dir=$(mktemp -d -t pr-body-probe.XXXXXX)
   set +e
-  printf '%s' '{"tool_name":"Bash","cwd":"'"$probe_dir"'","tool_input":{"command":"gh pr create --draft --title t --body x"}}' \
-    | (cd "$probe_dir" && "$CLAUDE_HOME/hooks/pr-body-check.sh") >/dev/null 2>&1
+  run_in "$probe_dir" "$CLAUDE_HOME/hooks/pr-body-check.sh" \
+    "$(with_cwd '{"tool_name":"Bash","tool_input":{"command":"gh pr create --draft --title t --body x"}}' "$probe_dir")" \
+    >/dev/null 2>&1
   rc_pr=$?
   set -e
   rm -rf "$probe_dir"
-  [[ $rc_pr -eq 2 ]] && ok "pr-body-check blocks a PR body without the harness block through the symlink" \
-    || die "pr-body-check returned $rc_pr, expected 2 — PRs would open without the harness block"
+  if [[ $rc_pr -eq 2 ]]; then
+    ok "pr-body-check blocks a PR body without the harness block through the symlink"
+  else
+    note "pr-body-check returned $rc_pr, expected 2 — PRs would open without the harness block"
+    red=1; red_what="${red_what:+$red_what, }pr-body-check"
+  fi
 elif [[ $CHECK_ONLY -eq 1 ]]; then
   note "pr-body-check.sh not linked into $CLAUDE_HOME — probe skipped"
 else
@@ -664,8 +684,8 @@ fi
 if [[ -x "$CLAUDE_HOME/hooks/doctrine-drift.sh" ]]; then
   probe_dir=$(mktemp -d -t drift-probe.XXXXXX)
   set +e
-  drift_out=$(printf '%s' '{"hook_event_name":"SessionStart","cwd":"'"$probe_dir"'"}' \
-    | (cd "$probe_dir" && "$CLAUDE_HOME/hooks/doctrine-drift.sh") 2>&1)
+  drift_out=$(run_in "$probe_dir" "$CLAUDE_HOME/hooks/doctrine-drift.sh" \
+    "$(with_cwd '{"hook_event_name":"SessionStart"}' "$probe_dir")" 2>&1)
   rc_drift=$?
   set -e
   rm -rf "$probe_dir"
@@ -907,9 +927,11 @@ echo
 if [[ $CHECK_ONLY -eq 1 ]]; then
   [[ $drift -eq 1 ]] && { echo "drift detected"; exit 1; } || { echo "in sync"; exit 0; }
 fi
-# A red observer step is not a failed guard, so the exit stays 0: the observer is
-# telemetry, and a scripted install (the cloud setup script among them) must not
-# fail over a usage log. The closing line is what says the run was not green.
+# A red step is not a failed guard, so the exit stays 0: the observer is
+# telemetry, and pr-body-check and doctrine-drift are policy with CI as the
+# gate, so a scripted install must not fail over them. --check, which a cloud
+# setup script runs next, still exits 1 on their drift. The closing line is
+# what says the run was not green.
 if [[ $red -eq 1 ]]; then
   echo "NOT GREEN: $red_what — retention withheld; see the note above"
 else
