@@ -519,6 +519,21 @@ check_probes_accept_a_tmpdir_with_json_metacharacters() {
   fi
 }
 
+# GIT_CEILING_DIRECTORIES is colon-separated, so a TMPDIR holding a colon cannot
+# fence git; the probes then run under /tmp, and the install stays green.
+check_probes_accept_a_tmpdir_with_a_colon() {
+  local h inst t
+  h=$(new_home); inst=$(inst_of "$h"); t="$h/tmp:x"
+  mkdir -p "$t"
+  TMPDIR="$t" boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"pr-body-check blocks a PR body"* \
+        && "$out" == *"doctrine-drift runs cleanly"* && "$out" != *"NOT GREEN"* ]]; then
+    pass "the hook probes accept a TMPDIR holding a colon"
+  else
+    fail "the hook probes accept a TMPDIR holding a colon" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
 # A complete install proves all three end to end.
 check_install_probes_the_unprobed_hooks() {
   local h inst
@@ -948,6 +963,7 @@ check_broken_doctrine_drift_ends_not_green
 check_check_reports_a_silent_pr_body_check
 check_check_reports_a_broken_doctrine_drift
 check_probes_accept_a_tmpdir_with_json_metacharacters
+check_probes_accept_a_tmpdir_with_a_colon
 check_install_probes_the_unprobed_hooks
 check_cli_reaches_sessions_by_name
 check_cli_probe_accepts_a_config_dir_with_a_trailing_slash

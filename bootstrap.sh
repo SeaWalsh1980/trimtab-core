@@ -596,6 +596,18 @@ with_cwd() {
 run_in() {
   printf '%s' "$3" | (cd "$1" && GIT_CEILING_DIRECTORIES="$(dirname "$1")" "$2")
 }
+#   probe_tmpdir <name>: a fresh directory for one probe. GIT_CEILING_DIRECTORIES
+# is colon-separated, so a TMPDIR holding a colon cannot be fenced; such a run
+# probes under /tmp instead.
+probe_tmpdir() {
+  local d
+  d=$(mktemp -d -t "$1.XXXXXX")
+  if [[ "$(dirname "$d")" == *:* ]]; then
+    rmdir "$d"
+    d=$(mktemp -d "/tmp/$1.XXXXXX")
+  fi
+  printf '%s\n' "$d"
+}
 
 # pr-body-check is policy, not a guard (ADR 0005): it fails OPEN on its own
 # errors and on garbage by design, and CI is the gate, so only its blocking is
@@ -603,7 +615,7 @@ run_in() {
 # --check still reports it as drift, so a cloud setup script that runs --check
 # fails the session either way.
 if [[ -x "$CLAUDE_HOME/hooks/pr-body-check.sh" ]]; then
-  probe_dir=$(mktemp -d -t pr-body-probe.XXXXXX)
+  probe_dir=$(probe_tmpdir pr-body-probe)
   set +e
   run_in "$probe_dir" "$CLAUDE_HOME/hooks/pr-body-check.sh" \
     "$(with_cwd '{"tool_name":"Bash","tool_input":{"command":"gh pr create --draft --title t --body x"}}' "$probe_dir")" \
@@ -682,7 +694,7 @@ fi
 # exit means it no longer runs. Informational, so a failure is red, like the
 # observer, not a refused install.
 if [[ -x "$CLAUDE_HOME/hooks/doctrine-drift.sh" ]]; then
-  probe_dir=$(mktemp -d -t drift-probe.XXXXXX)
+  probe_dir=$(probe_tmpdir drift-probe)
   set +e
   drift_out=$(run_in "$probe_dir" "$CLAUDE_HOME/hooks/doctrine-drift.sh" \
     "$(with_cwd '{"hook_event_name":"SessionStart"}' "$probe_dir")" 2>&1)
