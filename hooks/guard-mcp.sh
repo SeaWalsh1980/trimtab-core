@@ -80,7 +80,7 @@ fi
 # also merge, escalate and destroy. A name not listed falls through to the
 # classification below, so a new app tool asks unless its name is a read.
 CCD_ALLOW=(
-  mcp__ccd_turn__wrap_up
+  mcp__ccd_turn__wrap_up mcp__ccd_turn__update_plan
   mcp__ccd_view__show_pane mcp__ccd_view__close_pane
   mcp__ccd_view__get_layout mcp__ccd_view__set_transcript_view
   mcp__ccd_window__get_window_layout mcp__ccd_window__open_session_in

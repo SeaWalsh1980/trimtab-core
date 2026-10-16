@@ -913,7 +913,7 @@ tm pass "a secret word in the server part"    "$(j mcp__keystore__get_item '{}')
 # Every other app tool falls through to the classification above, and the
 # negative controls below would pass if the list were widened to a prefix.
 CCD_PASS=(
-  mcp__ccd_turn__wrap_up
+  mcp__ccd_turn__wrap_up mcp__ccd_turn__update_plan
   mcp__ccd_view__show_pane mcp__ccd_view__close_pane
   mcp__ccd_view__get_layout mcp__ccd_view__set_transcript_view
   mcp__ccd_window__get_window_layout mcp__ccd_window__open_session_in
@@ -947,7 +947,6 @@ fi
 for n in \
   mcp__ccd_pr__set_auto_merge \
   mcp__ccd_pr__bind_pr \
-  mcp__ccd_turn__update_plan \
   mcp__ccd_session_mgmt__set_session_title \
   mcp__ccd_session_mgmt__set_session_permission_mode \
   mcp__ccd_host__sync_with_base_branch \

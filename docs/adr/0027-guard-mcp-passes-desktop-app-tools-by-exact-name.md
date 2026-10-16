@@ -4,7 +4,8 @@
 
 Accepted (2026-10-16), by the operator. Amends ADR 0013; the rest of 0013
 stands. Departs from ADR 0020 for desktop sessions only; see "PR
-monitoring, and ADR 0020".
+monitoring, and ADR 0020". Amended 2026-10-16: `mcp__ccd_turn__update_plan`
+joins the list. See [Amendment (2026-10-16)](#amendment-2026-10-16).
 
 ## Context
 
@@ -189,3 +190,45 @@ suffix cases still ask on the shipped list.
   the base's matrix expects any listed name to ask. Those steps are meant to
   go red on a legitimate change to the base's expectations, for a person to
   merge over.
+
+## Amendment (2026-10-16)
+
+Accepted, by the operator. `mcp__ccd_turn__update_plan` joins the list. The
+Decision text above, which kept it off, is left as the record of the first
+choice.
+
+**Context.** The app calls `update_plan` as it works through a plan, so with
+the tool off the list a prompt came on most turns. That is the case the record
+put `wrap_up` on the list for, and the outcome its Context rejects: an approved
+plan that cannot run unattended, and a prompt that trains approval without
+reading.
+
+**Decision.** `mcp__ccd_turn__update_plan` passes by exact full name, like
+every other listed tool. The tool updates the plan the app shows the operator.
+It does not approve a plan, change a permission mode or touch the repository,
+and approving the plan in the first place stays with the operator, outside
+this guard.
+
+**Options considered.**
+
+- **Keep it off the list.** Rejected by the operator. A prompt per plan step
+  costs more than it guards: the plan it edits is one the operator already
+  approved and can read in the app.
+- **A permission rule in an instance's settings.** Rejected. guard-mcp's ask
+  stands whatever a settings `allow` rule says, so the prompt stays. A
+  per-instance pass is also the widening by data that "A data file of allowed
+  names" rejected above.
+
+**Consequences.**
+
+- `update_plan` runs without a prompt from guard-mcp in every mode. A session
+  can change the visible plan's steps unprompted, so the operator sees the
+  plan's progress as the session reports it. What the session does stays
+  under the other guards.
+- The tests move it from the off-list cases to the pass list. The exact-match
+  cases (a suffix, a run-on suffix, a server prefix) stay on `wrap_up`.
+  `mcp__ccd_turn__evil` still asks, so a pass for the whole `ccd_turn` server
+  would still fail the matrix.
+- The Trial above names `update_plan_x`, `update_planX` and
+  `mcp__xccd_turn__update_plan`. Those cases moved to `wrap_up` in the
+  post-review change, so this amendment does not affect them.
