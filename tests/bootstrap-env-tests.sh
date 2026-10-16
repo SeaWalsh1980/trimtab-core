@@ -393,6 +393,100 @@ check_silent_guard_mcp_fails_the_install() {
   fi
 }
 
+# pr-body-check fails open by design, so a broken one is silent: every PR would
+# open without the harness block. The install must refuse it, not report done.
+check_silent_pr_body_check_fails_the_install() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n' > "$snap_new/hooks/pr-body-check.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"pr-body-check returned 0, expected 2"* ]]; then
+    pass "a pr-body-check that never blocks fails the install"
+  else
+    fail "a pr-body-check that never blocks fails the install" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# The GUARDS OFF liveness check is the only warning a session gets that its
+# guards are missing (ADR 0004). A base whose check never fires must not install.
+check_silent_liveness_check_fails_the_install() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  python3 - "$snap_new/settings.base.json" <<'PY2'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+for e in d["hooks"]["SessionStart"]:
+    for h in e["hooks"]:
+        if "GUARDS OFF" in h["command"]:
+            h["command"] = "m=''; [ -z \"$m\" ] || echo 'GUARDS OFF'; exit 0"
+json.dump(d, open(p, "w"), indent=2)
+PY2
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"the liveness check stayed silent with no guards installed"* ]]; then
+    pass "a liveness check that never reports GUARDS OFF fails the install"
+  else
+    fail "a liveness check that never reports GUARDS OFF fails the install" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# The other half: a check that always fires would warn GUARDS OFF in every
+# session, and an operator learns to ignore it.
+check_liveness_check_that_always_fires_fails_the_install() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  python3 - "$snap_new/settings.base.json" <<'PY2'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+for e in d["hooks"]["SessionStart"]:
+    for h in e["hooks"]:
+        if "GUARDS OFF" in h["command"]:
+            h["command"] = "echo 'GUARDS OFF: missing hooks/guard-paths.sh'; exit 0"
+json.dump(d, open(p, "w"), indent=2)
+PY2
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"the liveness check names an installed hook as missing"* ]]; then
+    pass "a liveness check that fires on a complete install fails the install"
+  else
+    fail "a liveness check that fires on a complete install fails the install" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# doctrine-drift cannot block and exits 0, so a broken one is silent. It is
+# informational: the run still installs, but ends NOT GREEN and deletes nothing.
+check_broken_doctrine_drift_ends_not_green() {
+  local h inst store
+  h=$(new_home); inst=$(inst_of "$h"); store="$h/share/trimtab/core"
+  make_store "$store"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\necho "Traceback (most recent call last):" >&2\nexit 0\n' \
+    > "$snap_new/hooks/doctrine-drift.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -eq 0 && -d "$snap_mid" && "$out" == *"retention withheld"* \
+        && "$(printf '%s\n' "$out" | sed '/^$/d' | tail -1)" == "NOT GREEN: doctrine-drift"* ]]; then
+    pass "a broken doctrine-drift installs but ends NOT GREEN and withholds retention"
+  else
+    fail "a broken doctrine-drift installs but ends NOT GREEN and withholds retention" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# A complete install proves all three end to end.
+check_install_probes_the_unprobed_hooks() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 \
+     && "$out" == *"pr-body-check blocks a PR body without the harness block through the symlink"* \
+     && "$out" == *"the liveness check reports GUARDS OFF when the guards are missing"* \
+     && "$out" == *"the liveness check names no hook as missing on this install"* \
+     && "$out" == *"doctrine-drift runs cleanly through the symlink"* ]]; then
+    pass "an install probes pr-body-check, the liveness check and doctrine-drift"
+  else
+    fail "an install probes pr-body-check, the liveness check and doctrine-drift" "rc=$rc"; echo "$out" | tail -8
+  fi
+}
+
 # Sessions reach the CLI by name only through session-path.sh (ADR 0018). An
 # install whose hook writes nothing usable would start sessions, routines among
 # them, that fail every method's first call: the install must refuse, and say so.
@@ -799,6 +893,11 @@ check_rerun_from_same_base_keeps_predecessor
 check_sandbox_without_own_store_leaves_store_alone
 check_observer_failure_records_but_withholds_retention
 check_silent_guard_mcp_fails_the_install
+check_silent_pr_body_check_fails_the_install
+check_silent_liveness_check_fails_the_install
+check_liveness_check_that_always_fires_fails_the_install
+check_broken_doctrine_drift_ends_not_green
+check_install_probes_the_unprobed_hooks
 check_cli_reaches_sessions_by_name
 check_cli_probe_accepts_a_config_dir_with_a_trailing_slash
 check_silent_session_path_fails_the_install

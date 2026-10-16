@@ -14,8 +14,9 @@
 #
 # Exit codes: 0 done or in sync; 1 drift (--check) or a refused install;
 # 64 a usage error, including a run without --instance. An install whose
-# observer step was red still exits 0, but ends "NOT GREEN: observer" instead
-# of "done.": read that closing line as a failed install.
+# observer or doctrine-drift step was red still exits 0, but ends
+# "NOT GREEN: <steps>" instead of "done.": read that closing line as a failed
+# install.
 #
 # Idempotent: safe to re-run after every git pull.
 #
@@ -61,8 +62,9 @@ fi
 drift=0
 # Set by a step that failed without dying (the observer probe). Retention
 # deletes nothing after one, and the run ends NOT GREEN; ordinary drift, such
-# as a first install's changes, is not red.
+# as a first install's changes, is not red. red_what names the steps.
 red=0
+red_what=""
 # Set once the live settings.json is found unreadable: the probes that depend on
 # it are then skipped, not run against a guess.
 settings_bad=0
@@ -579,6 +581,105 @@ sys.exit(0 if isinstance(h, dict) and h.get("hookEventName") == "PreToolUse"
 }
 probe_ask guard-mcp.sh "an MCP write" \
   '{"tool_name":"mcp__probe__create_item","tool_input":{}}'
+
+# pr-body-check is policy, not a guard (ADR 0005): it fails OPEN on its own
+# errors and on garbage by design, so only its blocking is probed. A hook that
+# never blocks lets every PR open without the harness block, the same silence
+# as a guard failing open, so it is held to probe_guard's standard. The
+# payload's cwd is an empty directory: no project lock, no git.
+if [[ -x "$CLAUDE_HOME/hooks/pr-body-check.sh" ]]; then
+  probe_dir=$(mktemp -d -t pr-body-probe.XXXXXX)
+  set +e
+  printf '%s' '{"tool_name":"Bash","cwd":"'"$probe_dir"'","tool_input":{"command":"gh pr create --draft --title t --body x"}}' \
+    | (cd "$probe_dir" && "$CLAUDE_HOME/hooks/pr-body-check.sh") >/dev/null 2>&1
+  rc_pr=$?
+  set -e
+  rm -rf "$probe_dir"
+  [[ $rc_pr -eq 2 ]] && ok "pr-body-check blocks a PR body without the harness block through the symlink" \
+    || die "pr-body-check returned $rc_pr, expected 2 — PRs would open without the harness block"
+elif [[ $CHECK_ONLY -eq 1 ]]; then
+  note "pr-body-check.sh not linked into $CLAUDE_HOME — probe skipped"
+else
+  die "pr-body-check.sh not linked into $CLAUDE_HOME after section 3 — refusing to report a successful install with an unverified hook"
+fi
+
+# The SessionStart liveness check (ADR 0004) is the only thing that tells a
+# session its guards are missing. It is inline in settings.base.json, so it is
+# run as registered: read out of the live settings, under a fake HOME. With an
+# empty HOME it must report GUARDS OFF; with HOME's .claude pointing at this
+# install it must name no hook. (It also checks rules, bin and CLAUDE.md, and an
+# instance without a CLAUDE.md makes it name that, so only hooks are judged.)
+if [[ $settings_bad -eq 1 ]]; then
+  skip "liveness-check probe skipped: settings.json cannot be read (reported above)"
+else
+  live_cmd=$(python3 - "$CLAUDE_HOME/settings.json" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        entries = json.load(f)["hooks"]["SessionStart"]
+except (OSError, ValueError, KeyError, TypeError):
+    sys.exit(3)
+for entry in entries if isinstance(entries, list) else []:
+    for h in entry.get("hooks", []) if isinstance(entry, dict) else []:
+        if isinstance(h, dict) and "GUARDS OFF" in str(h.get("command", "")):
+            print(h["command"])
+            sys.exit(0)
+sys.exit(1)
+PY
+  ) || live_cmd=""
+  if [[ -z "$live_cmd" ]]; then
+    if [[ $CHECK_ONLY -eq 1 ]]; then note "no GUARDS OFF liveness check registered in settings.json"
+    else die "no GUARDS OFF liveness check registered in settings.json — sessions would not be told their guards are off"; fi
+  else
+    fake_empty=$(mktemp -d -t liveness-empty.XXXXXX)
+    fake_live=$(mktemp -d -t liveness-live.XXXXXX)
+    ln -s "$CLAUDE_HOME" "$fake_live/.claude"
+    set +e
+    out_off=$(HOME="$fake_empty" sh -c "$live_cmd" </dev/null 2>/dev/null)
+    out_on=$(HOME="$fake_live" sh -c "$live_cmd" </dev/null 2>/dev/null)
+    set -e
+    rm -rf "$fake_empty" "$fake_live"
+    if [[ "$out_off" == *"GUARDS OFF"* && "$out_off" == *"hooks/guard-paths.sh"* ]]; then
+      ok "the liveness check reports GUARDS OFF when the guards are missing"
+    elif [[ $CHECK_ONLY -eq 1 ]]; then
+      note "the liveness check stayed silent with no guards installed — sessions would not be warned"
+    else
+      die "the liveness check stayed silent with no guards installed — sessions would not be warned"
+    fi
+    if [[ "$out_on" != *"hooks/"* ]]; then
+      ok "the liveness check names no hook as missing on this install"
+    elif [[ $CHECK_ONLY -eq 1 ]]; then
+      note "the liveness check names an installed hook as missing — every session would warn GUARDS OFF"
+    else
+      die "the liveness check names an installed hook as missing — every session would warn GUARDS OFF"
+    fi
+  fi
+fi
+
+# doctrine-drift.sh cannot block (SessionStart) and exits 0 on everything, so a
+# broken one is silent. It runs on a payload whose cwd adopted nothing, where a
+# working hook prints nothing: any output (a Python traceback) or a non-zero
+# exit means it no longer runs. Informational, so a failure is red, like the
+# observer, not a refused install.
+if [[ -x "$CLAUDE_HOME/hooks/doctrine-drift.sh" ]]; then
+  probe_dir=$(mktemp -d -t drift-probe.XXXXXX)
+  set +e
+  drift_out=$(printf '%s' '{"hook_event_name":"SessionStart","cwd":"'"$probe_dir"'"}' \
+    | (cd "$probe_dir" && "$CLAUDE_HOME/hooks/doctrine-drift.sh") 2>&1)
+  rc_drift=$?
+  set -e
+  rm -rf "$probe_dir"
+  if [[ $rc_drift -eq 0 && -z "$drift_out" ]]; then
+    ok "doctrine-drift runs cleanly through the symlink"
+  else
+    note "doctrine-drift exited $rc_drift with output on a quiet payload — sessions would not be told of drift"
+    red=1; red_what="${red_what:+$red_what, }doctrine-drift"
+  fi
+elif [[ $CHECK_ONLY -eq 1 ]]; then
+  note "doctrine-drift.sh not linked into $CLAUDE_HOME — probe skipped"
+else
+  die "doctrine-drift.sh not linked into $CLAUDE_HOME after section 3 — refusing to report a successful install with an unverified hook"
+fi
 # The declared private pattern file must parse with guard-secrets' own parser:
 # a benign write has to pass with it. The guard refuses a relative path or an
 # unreadable file, so a bad declaration fails here and not on the first edit.
@@ -651,7 +752,7 @@ if [[ -x "$CLAUDE_HOME/hooks/rule-usage.sh" ]]; then
     ok "rule-usage observer records a load through the symlink"
   else
     note "rule-usage observer wrote no usable record (exit $rc_obs) — the weekly report would read as a quiet week"
-    red=1
+    red=1; red_what="${red_what:+$red_what, }observer"
   fi
   rm -f "$probe_log"
 else
@@ -810,7 +911,7 @@ fi
 # telemetry, and a scripted install (the cloud setup script among them) must not
 # fail over a usage log. The closing line is what says the run was not green.
 if [[ $red -eq 1 ]]; then
-  echo "NOT GREEN: observer — retention withheld; see the note above"
+  echo "NOT GREEN: $red_what — retention withheld; see the note above"
 else
   echo "done. Run 'claude' and check /hooks to confirm registration."
 fi
