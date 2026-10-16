@@ -283,6 +283,27 @@ t guard-paths.sh 2 "write an output style"                    "$(j Write "{\"fil
 t guard-paths.sh 2 "write plugin code (plugins execute)"      "$(j Write "{\"file_path\":\"$CP_HOME/plugins/somplugin/index.js\",\"content\":\"x\"}")"
 t guard-paths.sh 2 "write settings.local.json"                "$(j Write "{\"file_path\":\"$CP_HOME/settings.local.json\",\"content\":\"{}\"}")"
 
+# -- guard state: written by hooks only (ADR 0028) ------------------------
+# The list of PRs a session created decides what guard-mcp passes for
+# set_monitor, so a session's own tools must not write it, by any spelling.
+# Hooks write it outside those tools. Read stays open, as for the rest.
+PM_LIST="$CP_HOME/guard-state/pr-monitor/$(printf 'a%.0s' $(seq 64)).json"
+t guard-paths.sh 2 "write a guard-state list"                 "$(j Write "{\"file_path\":\"$PM_LIST\",\"content\":\"{}\"}")"
+t guard-paths.sh 2 "edit a guard-state list"                  "$(j Edit "{\"file_path\":\"$PM_LIST\"}")"
+t guard-paths.sh 2 "MultiEdit a guard-state list"             "$(j MultiEdit "{\"file_path\":\"$PM_LIST\"}")"
+t guard-paths.sh 2 "NotebookEdit into guard-state"            "$(j NotebookEdit "{\"file_path\":\"$CP_HOME/guard-state/x.ipynb\"}")"
+t guard-paths.sh 2 "write a new file directly in guard-state" "$(j Write "{\"file_path\":\"$CP_HOME/guard-state/other\",\"content\":\"x\"}")"
+t guard-paths.sh 2 "dotdot into guard-state"                  "$(j Write "{\"file_path\":\"$CP_HOME/plans/../guard-state/pr-monitor/x.json\",\"content\":\"x\"}")"
+t guard-paths.sh 2 "bash redirect into a guard-state list"    "$(j Bash "{\"command\":\"echo x > $PM_LIST\"}")"
+t guard-paths.sh 2 "bash literal \$CLAUDE_CONFIG_DIR/guard-state" "$(j Bash '{"command":"rm $CLAUDE_CONFIG_DIR/guard-state/pr-monitor/x.json"}')"
+t guard-paths.sh 2 "bash python3 -c writing a guard-state list" "$(j Bash "{\"command\":\"python3 -c open('$PM_LIST','w')\"}")"
+t guard-paths.sh 2 "bash replacing guard-state with a link"   "$(j Bash "{\"command\":\"ln -sfn /tmp/x $CP_HOME/guard-state\"}")"
+pushd "$CP_HOME" >/dev/null
+t guard-paths.sh 2 "RELATIVE redirect into guard-state"       "$(j Bash '{"command":"echo x >guard-state/pr-monitor/x.json"}')"
+popd >/dev/null
+t guard-paths.sh 0 "Read of a guard-state list still allowed" "$(j Read "{\"file_path\":\"$PM_LIST\"}")"
+t guard-paths.sh 0 "a sibling name is not guard-state"        "$(j Write "{\"file_path\":\"$CP_HOME/guard-statement.md\",\"content\":\"x\"}")"
+
 # -- the agent's own state under CLAUDE_HOME must stay WRITABLE -----------
 # These assert an allow, against the general rule that new cases assert a
 # block, and deliberately so: they are the regression that shipped. A blanket

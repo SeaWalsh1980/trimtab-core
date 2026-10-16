@@ -165,8 +165,11 @@ cp_exact=( "$cp_home" )
 # Config locations under $cp_home. bootstrap.sh symlinks the first seven out of
 # the checkout (their realpaths are resolved below); plugins/ is Claude Code's
 # own, listed by name whether or not it exists on this host, because plugin
-# code executes.
-for cp_d in hooks rules bin commands agents skills output-styles plugins; do
+# code executes. guard-state/ is written by hooks only, never by a session's
+# tools: it holds the list of PRs a session created, which decides what
+# guard-mcp passes (docs/adr/0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md).
+# A session that could write it could pass set_monitor for any PR.
+for cp_d in hooks rules bin commands agents skills output-styles plugins guard-state; do
   cp_roots+=( "$cp_home/$cp_d" )
 done
 cp_files+=( "$cp_home/settings.json" "$cp_home/settings.local.json" \
