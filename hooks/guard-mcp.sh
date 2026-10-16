@@ -14,7 +14,9 @@
 # denial (measured, ADR 0013).
 #
 # Classifies by tool name only, never by the call's arguments:
-#   <tool> starting gtm_                            -> ask: its verb is in an
+#   a full name on the desktop app's exact-name list
+#   (CCD_ALLOW below, ADR 0027)                     -> pass
+#   <tool> starting gtm_                           -> ask: its verb is in an
 #                                                      argument, not its name
 #   mcp__<server>__<tool> whose <tool>, after at most one namespace from
 #   ZohoBooks_, ZohoInventory_ or ZohoWorkdrive_ (exact case, stripped once),
@@ -72,6 +74,31 @@ fi
 # This check is also what makes $name safe to print inside the JSON reason.
 [[ "$name" =~ ^mcp__[A-Za-z0-9_-]+$ ]] \
   || ask "the call is not named as an MCP tool (mcp__<server>__<tool>), so it cannot be classified. Approve it only if you intended it."
+
+# The desktop app's own tools that only drive its UI or read its state pass, by
+# exact full name (ADR 0027). Never a prefix or a glob: the same app servers
+# also merge, escalate and destroy. A name not listed falls through to the
+# classification below, so a new app tool asks unless its name is a read.
+CCD_ALLOW=(
+  mcp__ccd_turn__wrap_up
+  mcp__ccd_view__show_pane mcp__ccd_view__close_pane
+  mcp__ccd_view__get_layout mcp__ccd_view__set_transcript_view
+  mcp__ccd_window__get_window_layout mcp__ccd_window__open_session_in
+  mcp__ccd_window__close_split mcp__ccd_window__set_sidebar_collapsed
+  mcp__ccd_pr__get_status
+  mcp__ccd_pr__unbind_pr mcp__ccd_pr__set_monitor
+  mcp__ccd_session_mgmt__get_session mcp__ccd_session_mgmt__list_sessions
+  mcp__ccd_session_mgmt__list_events mcp__ccd_session_mgmt__get_usage
+  mcp__ccd_session_mgmt__search_session_transcripts
+  mcp__ccd_host__get_storage_usage mcp__ccd_host__open_in_editor
+  mcp__ccd_host__reveal_path mcp__ccd_host__request_keep_awake
+  mcp__ccd_session__list_start_targets mcp__ccd_session__dismiss_task
+  mcp__ccd_connectors__session_connectors_status
+)
+for allowed in "${CCD_ALLOW[@]}"; do
+  # Quoted right-hand side: a literal string comparison, never a pattern.
+  [[ "$name" == "$allowed" ]] && exit 0
+done
 
 rest="${name#mcp__}"
 server="${rest%%__*}"

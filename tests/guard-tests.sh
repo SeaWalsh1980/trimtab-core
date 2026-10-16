@@ -908,6 +908,60 @@ tm ask  "a secret word in another case"       "$(j mcp__srv__Get_API_Token '{}')
 tm ask  "a secret word inside a longer word"  "$(j mcp__srv__get_keyword_report '{}')"
 tm pass "a secret word in the server part"    "$(j mcp__keystore__get_item '{}')"
 
+# The desktop app's UI, read-only and PR-monitoring tools pass by exact full
+# name (ADR 0027).
+# Every other app tool falls through to the classification above, and the
+# negative controls below would pass if the list were widened to a prefix.
+CCD_PASS=(
+  mcp__ccd_turn__wrap_up
+  mcp__ccd_view__show_pane mcp__ccd_view__close_pane
+  mcp__ccd_view__get_layout mcp__ccd_view__set_transcript_view
+  mcp__ccd_window__get_window_layout mcp__ccd_window__open_session_in
+  mcp__ccd_window__close_split mcp__ccd_window__set_sidebar_collapsed
+  mcp__ccd_pr__get_status
+  mcp__ccd_pr__unbind_pr mcp__ccd_pr__set_monitor
+  mcp__ccd_session_mgmt__get_session mcp__ccd_session_mgmt__list_sessions
+  mcp__ccd_session_mgmt__list_events mcp__ccd_session_mgmt__get_usage
+  mcp__ccd_session_mgmt__search_session_transcripts
+  mcp__ccd_host__get_storage_usage mcp__ccd_host__open_in_editor
+  mcp__ccd_host__reveal_path mcp__ccd_host__request_keep_awake
+  mcp__ccd_session__list_start_targets mcp__ccd_session__dismiss_task
+  mcp__ccd_connectors__session_connectors_status
+)
+for n in "${CCD_PASS[@]}"; do
+  tm pass "app allowlist: ${n#mcp__}"         "$(j "$n" '{}')"
+done
+# The guard's CCD_ALLOW must hold exactly the names tested above: a name added
+# to the guard alone would pass untested, and one dropped from it alone would
+# still be listed here as passing. Read from the shipped guard, not a copy.
+ccd_guard=$(awk '/^CCD_ALLOW=\($/{f=1; next} f && /^\)$/{exit} f' \
+  "$HOOKS/guard-mcp.sh" | tr -s ' \t' '\n' | sed '/^$/d' | sort)
+ccd_tests=$(printf '%s\n' "${CCD_PASS[@]}" | sort)
+if [[ -n "$ccd_guard" && "$ccd_guard" == "$ccd_tests" ]]; then
+  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_ALLOW holds exactly the tested names"
+else
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_ALLOW differs from the tested names (or could not be read)"
+  diff <(printf '%s\n' "$ccd_guard") <(printf '%s\n' "$ccd_tests") | sed 's/^/      /'
+  fails=$((fails+1))
+fi
+for n in \
+  mcp__ccd_pr__set_auto_merge \
+  mcp__ccd_pr__bind_pr \
+  mcp__ccd_turn__update_plan \
+  mcp__ccd_session_mgmt__set_session_title \
+  mcp__ccd_session_mgmt__set_session_permission_mode \
+  mcp__ccd_host__sync_with_base_branch \
+  mcp__ccd_session_mgmt__send_message \
+  mcp__ccd_session_mgmt__set_session_model \
+  mcp__ccd_session_mgmt__set_session_effort \
+  mcp__ccd_session_mgmt__set_session_fast_mode \
+  mcp__ccd_turn__evil; do
+  tm ask  "app tool off the list: ${n#mcp__}" "$(j "$n" '{}')"
+done
+tm ask  "app list is exact: a suffix"         "$(j mcp__ccd_turn__wrap_up_x '{}')"
+tm ask  "app list is exact: a run-on suffix"  "$(j mcp__ccd_turn__wrap_upX '{}')"
+tm ask  "app list is exact: a server prefix"  "$(j mcp__xccd_turn__wrap_up '{}')"
+
 tm ask  "FAIL-CLOSED: garbage payload"        'NOT JSON AT ALL'
 tm ask  "FAIL-CLOSED: empty payload"          ''
 tm ask  "FAIL-CLOSED: a JSON array"           '[1,2]'

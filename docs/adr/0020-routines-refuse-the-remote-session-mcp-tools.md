@@ -7,6 +7,11 @@ read back with the tools listed, and its run made no call to them. The
 consequence that no PR event reaches a run after its work did not hold; see
 "Trial result" below, where what follows from that is left open.
 
+2026-10-16: for desktop sessions, ADR 0027
+(`docs/adr/0027-guard-mcp-passes-desktop-app-tools-by-exact-name.md`) lets
+guard-mcp pass the app's `mcp__ccd_pr__set_monitor`, so PR events can reach
+a desktop session after its work. This record still governs cloud routines.
+
 Was: proposed. Becomes accepted once a routine updated from these templates
 reads back with the tools listed in its session config, and one of its runs
 shows no call to them (see "Trial, still open" below).
