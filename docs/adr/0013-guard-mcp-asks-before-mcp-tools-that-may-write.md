@@ -7,7 +7,10 @@ product namespace is stripped before the verb check. See
 [Amendment (2026-10-05)](#amendment-2026-10-05). Amended 2026-10-16 by
 [ADR 0027](0027-guard-mcp-passes-desktop-app-tools-by-exact-name.md): the
 desktop app's UI, read-only and PR-monitoring tools pass by exact full
-name.
+name. Amended 2026-10-17 by
+[ADR 0028](0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md)
+(proposed): for `mcp__ccd_pr__set_monitor` only, guard-mcp reads the call's
+arguments and denies rather than asks.
 
 ## Context
 
