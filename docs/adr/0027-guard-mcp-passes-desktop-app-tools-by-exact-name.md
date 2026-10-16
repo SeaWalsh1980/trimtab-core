@@ -83,10 +83,19 @@ guard-mcp stays never-deny. Nothing in this change exits 2.
 
 ## Trial
 
-Each negative control was checked against a prefix-widened list: the exact
-comparison was replaced locally with a match on `mcp__ccd_*`, the guard matrix
-was run, and the change was reverted. The result is recorded in the pull
-request that introduces this record.
+Each negative control was checked against a prefix-widened list, on
+2026-10-16: the exact comparison was replaced locally with a match on
+`mcp__ccd_*`, the guard matrix was run, and the change was reverted.
+
+- With the exact list: 456 pass, 0 fail.
+- Widened to the prefix: 10 cases failed. They were every off-list app tool
+  (`set_auto_merge`, `set_session_permission_mode`, `sync_with_base_branch`,
+  `send_message`, the three self-tuning tools, and a made-up
+  `mcp__ccd_turn__evil`) and both suffix cases (`update_plan_x`,
+  `update_planX`).
+- `mcp__xccd_turn__update_plan` still asked, because the `mcp__ccd_` prefix
+  does not match it. That case guards against a looser widening, a substring
+  or `*ccd_*` match, not against this one.
 
 ## Consequences
 
