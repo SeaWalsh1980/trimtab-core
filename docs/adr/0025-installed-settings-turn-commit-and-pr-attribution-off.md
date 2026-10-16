@@ -9,6 +9,9 @@ a trial; see "Trial, still open" below. Supersedes the setting part of ADR
 2026-10-15: it does not stop the footer; see "First trial" below. The
 decision stands for the commit and Claude Code's own lines.
 
+2026-10-16: a second trial, on two more runs, found the same; see "Second
+trial" below.
+
 ## Context
 
 ADR 0022's trial (2026-10-14) ran a cloud routine on a base that installs
@@ -92,6 +95,9 @@ JSON, exactly. The installer refuses an instance or machine layer that sets
 
 ## Trial, still open
 
+Closed 2026-10-16, except the upstream report: see "First trial" and "Second
+trial" below.
+
 After a pin moves to a base carrying this change: one routine run that opens
 a PR. Its body is checked for the footer before verify-body runs; the run's
 log says whether verify-body took one off. Record the result here; if the
@@ -114,3 +120,25 @@ Result: the setting holds for the commit; it does not reach the PR footer,
 which the platform adds on create and again on each edit. The consequence
 accepted above holds: verify-body is what takes the session link off. The
 footer persisting is for the operator to report upstream.
+
+## Second trial (2026-10-15 and 2026-10-16)
+
+A retro run (2026-10-15) and a conformance run (2026-10-16) of per-project
+routines, with the same settings, on the base carrying ADR 0024's amended
+read-back.
+
+- Each commit ended at the `Co-Authored-By:` line the run wrote: no
+  `Claude-Session:` trailer, nothing added.
+- Each PR, created with `gh api` from the session, held the session footer
+  after the body sent, as in the first trial; the write-back that took it
+  off is recorded in ADR 0024, "Second trial".
+- The retro's issue, created by `propose --apply`, held only the generic
+  footer from its creation: no session footer.
+
+Result: the same as the first trial. The setting holds for the commit and
+does not reach the PR footer; verify-body takes the session link off. That
+the issue was created with only the generic footer is recorded, not
+explained: it may follow from how `propose` creates it, or from the issue
+endpoint. The operator reported the footer upstream after ADR 0022's trial;
+a further report, with this evidence that no attribution setting reaches it,
+is the operator's.
