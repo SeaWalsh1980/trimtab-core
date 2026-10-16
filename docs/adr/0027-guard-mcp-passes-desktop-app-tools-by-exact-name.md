@@ -1,9 +1,10 @@
-# 0027. guard-mcp passes the desktop app's UI and read-only tools by exact name
+# 0027. guard-mcp passes the desktop app's UI, read-only and PR-monitoring tools by exact name
 
 ## Status
 
-Accepted (2026-10-16). Amends ADR 0013; the rest of 0013 stands. Departs
-from ADR 0020 for desktop sessions only; see "PR monitoring, and ADR 0020".
+Accepted (2026-10-16), by the operator. Amends ADR 0013; the rest of 0013
+stands. Departs from ADR 0020 for desktop sessions only; see "PR
+monitoring, and ADR 0020".
 
 ## Context
 
@@ -11,8 +12,8 @@ The Claude desktop app injects its own MCP tools into a session, on servers
 whose names it fixes: `ccd_turn`, `ccd_view`, `ccd_window`, `ccd_pr`,
 `ccd_session_mgmt`, `ccd_host`, `ccd_session`, `ccd_connectors`, `ccd_settings`,
 `ccd_directory`, `ccd_sidebar`. Several of these tools carry no read verb in
-their names (`mcp__ccd_turn__update_plan`, `mcp__ccd_turn__wrap_up`,
-`mcp__ccd_view__show_pane`), so guard-mcp asks on them, and the app calls some
+their names (`mcp__ccd_turn__wrap_up`, `mcp__ccd_view__show_pane`), so
+guard-mcp asks on them, and the app calls some
 of them on every turn. An operator-approved plan cannot run unattended, and a
 prompt that appears every turn trains the operator to approve without reading,
 the outcome ADR 0013 rejected "ask on every MCP call" for.
@@ -86,6 +87,13 @@ present ends as a denial, so the tool has to pass for that to work. guard-mcp
 reads names, not arguments (ADR 0013), so it cannot pass "off" and ask on
 "on"; the tool passes whole.
 
+guard-mcp's pass is necessary, not sufficient. The app asks the user to
+approve each `set_monitor` call itself, except in auto mode, where it may
+approve without asking, and in bypass-permissions mode, where it does not
+ask. An unattended session that is to watch its own PRs therefore also has
+to run in one of those modes; in the default mode the app's prompt waits,
+and Auto-fix does not turn on.
+
 This departs from ADR 0020 for desktop sessions. ADR 0020 rejected letting
 guard-mcp pass a cloud routine's PR-activity subscription, because the events
 it delivers are untrusted text arriving in a session that can still write.
@@ -97,8 +105,8 @@ ADR 0020 still governs cloud routines, which do not carry the app's tools.
 to a PR of its choosing without a prompt. That does not confine
 `set_monitor` to PRs the session created: the app binds some PRs to a
 session by itself, from links and calls in the session. The accepted risk is
-therefore Auto-fix on any PR the app has bound to the session. A follow-up is
-planned to narrow it to PRs the session opened.
+therefore Auto-fix on any PR the app has bound to the session. Narrowing it
+to PRs the session opened is tracked in issue #69.
 
 ## Options considered
 
@@ -141,10 +149,20 @@ Each negative control was checked against a prefix-widened list, on
   does not match it. That case guards against a looser widening, a substring
   or `*ccd_*` match, not against this one.
 
+2026-10-16, after review: the list lost `bind_pr`, `set_session_title` and
+`update_plan`, and the tests changed with it. The pass names live in one
+array, and a new case fails when the guard's `CCD_ALLOW` and that array
+differ; the exact-match cases (a suffix, a run-on suffix, a server prefix)
+moved to `wrap_up`. On the shipped list the matrix passes, 457 cases, 0
+failures. The prefix-widening trial above was not re-run; its off-list and
+suffix cases still ask on the shipped list.
+
 ## Consequences
 
-- The listed app tools run without a prompt, in every mode, unattended runs
-  included.
+- The listed app tools run without a prompt from guard-mcp, in every mode,
+  unattended runs included. Where the app asks for a tool itself
+  (`set_monitor`), that prompt still applies outside auto and
+  bypass-permissions modes.
 - Every other app tool keeps asking, and so does any app tool added later,
   unless its name is a read verb by ADR 0013's rule.
 - Accepted: a session can switch Auto-fix on, with no prompt, for any PR the

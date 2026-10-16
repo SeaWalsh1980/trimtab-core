@@ -6,7 +6,8 @@ Accepted. Amended 2026-10-05: read verbs match in any case, and one Zoho
 product namespace is stripped before the verb check. See
 [Amendment (2026-10-05)](#amendment-2026-10-05). Amended 2026-10-16 by
 [ADR 0027](0027-guard-mcp-passes-desktop-app-tools-by-exact-name.md): the
-desktop app's UI and read-only tools pass by exact full name.
+desktop app's UI, read-only and PR-monitoring tools pass by exact full
+name.
 
 ## Context
 

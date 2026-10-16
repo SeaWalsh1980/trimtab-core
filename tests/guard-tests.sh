@@ -908,7 +908,8 @@ tm ask  "a secret word in another case"       "$(j mcp__srv__Get_API_Token '{}')
 tm ask  "a secret word inside a longer word"  "$(j mcp__srv__get_keyword_report '{}')"
 tm pass "a secret word in the server part"    "$(j mcp__keystore__get_item '{}')"
 
-# The desktop app's UI and read-only tools pass by exact full name (ADR 0027).
+# The desktop app's UI, read-only and PR-monitoring tools pass by exact full
+# name (ADR 0027).
 # Every other app tool falls through to the classification above, and the
 # negative controls below would pass if the list were widened to a prefix.
 CCD_PASS=(
