@@ -77,8 +77,10 @@ it before enabling the routine, and record here which way it went.
   differently.
 - A second per-project routine, which never had a model, read back the same
   after its update.
-- Every manual run of either routine since ran `claude-sonnet-5-5`, the
-  platform's default at the time, as each run log's `init` line shows.
+- Every manual run of either routine since ran the platform's default
+  model; each run log's `init` line showed `claude-sonnet-5-5` at the time.
+  That is an observation, not a setting: no template or routine names a
+  model.
 
 Result: the update clears the model. The read-back stays the check, as core's
 `routines/README.md` asks, since connectors show that not every field is

@@ -95,7 +95,8 @@ JSON, exactly. The installer refuses an instance or machine layer that sets
 
 ## Trial, still open
 
-Closed 2026-10-16: see "First trial" and "Second trial" below.
+Closed 2026-10-16, except the upstream report: see "First trial" and "Second
+trial" below.
 
 After a pin moves to a base carrying this change: one routine run that opens
 a PR. Its body is checked for the footer before verify-body runs; the run's
@@ -138,4 +139,6 @@ Result: the same as the first trial. The setting holds for the commit and
 does not reach the PR footer; verify-body takes the session link off. That
 the issue was created with only the generic footer is recorded, not
 explained: it may follow from how `propose` creates it, or from the issue
-endpoint. The upstream report remains the operator's.
+endpoint. The operator reported the footer upstream after ADR 0022's trial;
+a further report, with this evidence that no attribution setting reaches it,
+is the operator's.

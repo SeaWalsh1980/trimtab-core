@@ -218,8 +218,6 @@ ADR 0025's settings, each with its guards live: a retro (2026-10-15), which
 opened a draft PR and an issue, and a conformance review (2026-10-16), which
 opened a draft PR.
 
-- `trimtab check-pr` passed each PR body before it was sent, and `trimtab ids
-  --staged` passed each commit.
 - Each PR as created held the body sent, then a `---` rule and the session
   footer.
 - Each run wrote back the body sent; the platform added its generic footer to
@@ -227,8 +225,8 @@ opened a draft PR.
   removed, the generic footer in its place, and GitHub's edit history still
   holding the session footer (`REPLACED`).
 - Each PR's body, read afterwards, held the body sent and then only the
-  generic footer: no session link. Each commit ended at the
-  `Co-Authored-By:` line the run wrote.
+  generic footer: no session link. The commits and the bodies' checks before
+  sending are recorded in ADR 0022, "Second trial result".
 - The issue, created by `propose --apply`, held the generic footer from its
   creation, with no session footer to take off; it was left alone.
 
