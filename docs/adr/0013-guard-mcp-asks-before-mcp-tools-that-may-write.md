@@ -288,7 +288,8 @@ The list: `pull_request_read`, `issue_read`, `actions_get`, `actions_list`.
   that added a writing method to one of them would pass. A renamed tool falls
   back to the classification and asks, which fails closed.
 - The secret-word check does not apply to these names, and none of them
-  carries a secret word.
+  carries a secret word. A test reads the list from the guard and fails on a
+  name that does, so a later addition cannot skip that check unnoticed.
 - The tests pin the list against the guard, as for `CCD_ALLOW`. Two negative
   controls were run on a copy of the hooks on 2026-10-16:
   - adding `mark_all_notifications_read` to the list failed the

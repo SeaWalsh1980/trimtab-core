@@ -114,6 +114,8 @@ fi
 # Read-only tools whose verb comes last pass by exact <tool> part, on any
 # server, since a server's name is set per deployment (ADR 0013, amendment
 # 2026-10-16). Never a suffix match: mark_all_notifications_read writes.
+# This pass skips the secret-word check below, so a name carrying key, token,
+# secret, password or credential must not be listed; the tests refuse one.
 TOOL_READ_ALLOW=(
   pull_request_read issue_read actions_get actions_list
 )

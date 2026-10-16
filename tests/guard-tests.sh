@@ -981,6 +981,16 @@ else
   diff <(printf '%s\n' "$read_guard") <(printf '%s\n' "$read_tests") | sed 's/^/      /'
   fails=$((fails+1))
 fi
+# The list passes before the secret-word check, so no listed name may carry
+# one of its words. Read from the shipped guard, so an addition is caught.
+read_secret=$(grep -iE 'key|token|secret|password|credential' <<<"$read_guard" || true)
+if [[ -n "$read_guard" && -z "$read_secret" ]]; then
+  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "TOOL_READ_ALLOW names carry no secret word"
+else
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "TOOL_READ_ALLOW lists a name with a secret word (or could not be read)"
+  printf '      %s\n' $read_secret
+  fails=$((fails+1))
+fi
 tm ask  "verb-last write still asks"          "$(j mcp__github__actions_run_trigger '{}')"
 tm ask  "verb-last list is not a suffix rule" "$(j mcp__github__mark_all_notifications_read '{}')"
 tm ask  "verb-last list is exact: a suffix"   "$(j mcp__github__issue_read_x '{}')"
