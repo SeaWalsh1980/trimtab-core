@@ -5,6 +5,9 @@
 Accepted (2026-10-14), by the operator. One consequence awaits a trial; see
 "Trial, still open" below.
 
+2026-10-16: the trial is recorded; see "Trial result" below. No clearing step
+is needed.
+
 ## Context
 
 Each routine template named a versioned model ID in
@@ -60,3 +63,21 @@ been seen to leave the connectors in place. An update whose `session_context`
 has no `model` may likewise leave a model set by an earlier update. After
 updating a routine from a render, read it back: if a model is still set, clear
 it before enabling the routine, and record here which way it went.
+
+## Trial result (2026-10-14 to 2026-10-16)
+
+- A per-project routine held the alias `opus`, set by the trial update
+  recorded under Options. It was then updated from a render on a base
+  carrying this decision: the update's `job_config` had no `model` key
+  anywhere. The read-back showed no model, in `session_context` or in the
+  derived state. So an update that omits the model clears one set earlier;
+  connectors, a separate top-level field, have been seen to behave
+  differently.
+- A second per-project routine, which never had a model, read back the same
+  after its update.
+- Every manual run of either routine since ran `claude-sonnet-5-5`, the
+  platform's default at the time, as each run log's `init` line shows.
+
+Result: the update clears the model. The read-back stays the check, as core's
+`routines/README.md` asks, since connectors show that not every field is
+replaced.

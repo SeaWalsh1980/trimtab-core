@@ -2,6 +2,10 @@
 
 ## Status
 
+Accepted (2026-10-16), by the operator: the trial, run again on a base
+carrying the 2026-10-15 amendment, passed on two routines (see "Second
+trial"). The notes below are kept as they were written.
+
 Proposed (2026-10-14). Becomes accepted once a guarded cloud routine on a base
 carrying this change opens a PR, `trimtab verify-body` exits 0, and the PR's
 body, read afterwards, holds no reference to the run (see "Trial, still
@@ -204,3 +208,28 @@ Result: failed. The session link was taken off, but the rule as written
 required the body sent exactly. Amended as recorded under Status and
 Decision. The trial is run again on a base carrying the amendment, with the
 check under "Trial, still open" as amended.
+
+## Second trial (2026-10-15 and 2026-10-16)
+
+Two manual runs of per-project routines on a base carrying the amendment and
+ADR 0025's settings, each with its guards live: a retro (2026-10-15), which
+opened a draft PR and an issue, and a conformance review (2026-10-16), which
+opened a draft PR.
+
+- `trimtab check-pr` passed each PR body before it was sent, and `trimtab ids
+  --staged` passed each commit.
+- Each PR as created held the body sent, then a `---` rule and the session
+  footer.
+- Each run wrote back the body sent; the platform added its generic footer to
+  that edit. `verify-body` exited 0 on both, reporting the session footer
+  removed, the generic footer in its place, and GitHub's edit history still
+  holding the session footer (`REPLACED`).
+- Each PR's body, read afterwards, held the body sent and
+  then only the generic footer: no session link. Each commit ended at the
+  `Co-Authored-By:` line the run wrote.
+- The issue, created by `propose --apply`, held the generic footer from its
+  creation, with no session footer to take off; it was left alone.
+
+Result: passed. The footer there to take off was the session footer, on both
+PRs; the generic footer stayed. The edit history of both PRs keeps the
+session footer, as the Consequences accept.

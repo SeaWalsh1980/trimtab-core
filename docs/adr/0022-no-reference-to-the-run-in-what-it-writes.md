@@ -2,6 +2,11 @@
 
 ## Status
 
+Accepted (2026-10-16), by the operator, the setting part excepted (superseded
+by ADR 0025): ADR 0024's trial passed, and the PRs those runs opened hold no
+reference to the run (see "Second trial result"). The notes below are kept as
+they were written.
+
 Superseded in part by ADR 0025 (2026-10-14): the setting. The check and the
 rule stand; when this record is accepted is stated at the end of "Trial
 result" below.
@@ -208,3 +213,20 @@ held `"attribution": {"sessionUrl": false}`.
 The setting covers the commit and the URL line; nothing documented covers the
 footer. ADR 0024 makes the run read back each body it creates and take that
 footer off. This record stays proposed until ADR 0024's trial passes.
+
+## Second trial result (2026-10-16)
+
+ADR 0024's trial passed on a retro run (2026-10-15) and a conformance run
+(2026-10-16) of per-project routines, on a base carrying this record's check
+and rule, ADR 0024's read-back and ADR 0025's settings (ADR 0024, "Second
+trial").
+
+- Each commit ended at `Co-Authored-By:`, with no `Claude-Session:` trailer;
+  `trimtab ids --staged` exited 0 before each.
+- `trimtab check-pr` passed each PR body before it was sent. No bare session
+  URL line was added.
+- Each PR body, after the write-back, held no session link: only the
+  platform's generic footer, which names no session, after the body sent.
+
+The rule and the check hold. What remains is the session footer in each PR
+body's edit history, accepted in ADR 0024.
