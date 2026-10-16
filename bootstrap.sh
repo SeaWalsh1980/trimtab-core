@@ -579,6 +579,24 @@ sys.exit(0 if isinstance(h, dict) and h.get("hookEventName") == "PreToolUse"
 }
 probe_ask guard-mcp.sh "an MCP write" \
   '{"tool_name":"mcp__probe__create_item","tool_input":{}}'
+# The desktop app's exact-name list (ADR 0027) must not have widened: an app
+# tool that merges is off the list and must still be asked about.
+probe_ask guard-mcp.sh "a desktop-app tool off its exact-name list" \
+  '{"tool_name":"mcp__ccd_pr__set_auto_merge","tool_input":{}}'
+# And a tool on the list passes. A miss only costs a prompt, so it is a note,
+# not a refusal: the guard still fails closed.
+if [[ -x "$CLAUDE_HOME/hooks/guard-mcp.sh" ]]; then
+  set +e
+  out_allow=$(printf '%s' '{"tool_name":"mcp__ccd_turn__update_plan","tool_input":{}}' \
+    | "$CLAUDE_HOME/hooks/guard-mcp.sh" 2>/dev/null)
+  rc_allow=$?
+  set -e
+  if [[ $rc_allow -eq 0 && -z "$out_allow" ]]; then
+    ok "guard-mcp passes a desktop-app tool on its exact-name list"
+  else
+    note "guard-mcp did not pass mcp__ccd_turn__update_plan (exit $rc_allow) — the app's UI tools will prompt every turn"
+  fi
+fi
 # The declared private pattern file must parse with guard-secrets' own parser:
 # a benign write has to pass with it. The guard refuses a relative path or an
 # unreadable file, so a bad declaration fails here and not on the first edit.
