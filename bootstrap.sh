@@ -587,14 +587,14 @@ probe_ask guard-mcp.sh "a desktop-app tool off its exact-name list" \
 # not a refusal: the guard still fails closed.
 if [[ -x "$CLAUDE_HOME/hooks/guard-mcp.sh" ]]; then
   set +e
-  out_allow=$(printf '%s' '{"tool_name":"mcp__ccd_turn__update_plan","tool_input":{}}' \
+  out_allow=$(printf '%s' '{"tool_name":"mcp__ccd_turn__wrap_up","tool_input":{}}' \
     | "$CLAUDE_HOME/hooks/guard-mcp.sh" 2>/dev/null)
   rc_allow=$?
   set -e
   if [[ $rc_allow -eq 0 && -z "$out_allow" ]]; then
     ok "guard-mcp passes a desktop-app tool on its exact-name list"
   else
-    note "guard-mcp did not pass mcp__ccd_turn__update_plan (exit $rc_allow) — the app's UI tools will prompt every turn"
+    note "guard-mcp did not pass mcp__ccd_turn__wrap_up (exit $rc_allow) — the app's UI tools will prompt every turn"
   fi
 fi
 # The declared private pattern file must parse with guard-secrets' own parser:

@@ -80,17 +80,16 @@ fi
 # also merge, escalate and destroy. A name not listed falls through to the
 # classification below, so a new app tool asks unless its name is a read.
 CCD_ALLOW=(
-  mcp__ccd_turn__update_plan mcp__ccd_turn__wrap_up
+  mcp__ccd_turn__wrap_up
   mcp__ccd_view__show_pane mcp__ccd_view__close_pane
   mcp__ccd_view__get_layout mcp__ccd_view__set_transcript_view
   mcp__ccd_window__get_window_layout mcp__ccd_window__open_session_in
   mcp__ccd_window__close_split mcp__ccd_window__set_sidebar_collapsed
-  mcp__ccd_pr__get_status mcp__ccd_pr__bind_pr
+  mcp__ccd_pr__get_status
   mcp__ccd_pr__unbind_pr mcp__ccd_pr__set_monitor
   mcp__ccd_session_mgmt__get_session mcp__ccd_session_mgmt__list_sessions
   mcp__ccd_session_mgmt__list_events mcp__ccd_session_mgmt__get_usage
   mcp__ccd_session_mgmt__search_session_transcripts
-  mcp__ccd_session_mgmt__set_session_title
   mcp__ccd_host__get_storage_usage mcp__ccd_host__open_in_editor
   mcp__ccd_host__reveal_path mcp__ccd_host__request_keep_awake
   mcp__ccd_session__list_start_targets mcp__ccd_session__dismiss_task
