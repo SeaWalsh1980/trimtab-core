@@ -14,7 +14,9 @@ ADR 0028
 (`docs/adr/0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md`),
 and closes a gap ADR 0029
 (`docs/adr/0029-guard-paths-protects-the-config-dir-by-its-physical-path.md`)
-lists (#81). The rest of all three stands.
+lists (#81). The rest of all three stands. The guard-secrets gap listed under
+Consequences is closed by
+[ADR 0031](0031-guard-secrets-is-registered-for-and-reads-notebookedit.md).
 
 ## Context
 

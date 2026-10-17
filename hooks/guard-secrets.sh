@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse hook, matcher: Write|Edit|MultiEdit
+# PreToolUse hook, matcher: Write|Edit|MultiEdit|NotebookEdit
 #
 # Blocks writes to credential files, and writes whose *content* looks like a
 # live secret. Exit 2 = blocked, stderr is fed back to Claude.
@@ -56,14 +56,31 @@ if ! command -v grep >/dev/null 2>&1; then
   exit 2
 fi
 
-# Write -> .content, Edit -> .new_string, MultiEdit -> every edit's new_string.
-# Emits the path on line 1, then the concatenated new content.
+# Write -> .content, Edit -> .new_string, MultiEdit -> every edit's new_string,
+# NotebookEdit -> .new_source. The path is the one of file_path, NotebookEdit's
+# notebook_path and path that is present, if it is a non-empty string, in both
+# branches: jq's `//` alone kept "", 0 and [], which python3's `or` skips, and
+# the path decides both the path rules and the test-path relaxation. Emits the
+# path on line 1, then the concatenated new content. The parse fails, so the
+# call blocks, when more than one of the three keys is present (any value but
+# null), since the rules would judge one path while the tool writes another
+# (docs/adr/0033-guards-refuse-a-payload-that-names-more-than-one-path.md),
+# and when the path holds a newline or carriage return: only line 1 is the
+# path, and "/p/a\n/.env" would be judged as "/p/a".
+# A tool whose keys are left out here passes every rule on empty input, and
+# one left out of the matcher never reaches this at all: see
+# docs/adr/0031-guard-secrets-is-registered-for-and-reads-notebookedit.md.
 extract() {
   if command -v jq >/dev/null 2>&1; then
     jq -r '
-      (.tool_input.file_path // ""),
+      (([.tool_input.file_path, .tool_input.notebook_path, .tool_input.path]
+         | map(select(. != null))
+         | if length > 1 then error("more than one path key") else . end
+         | map(select(type == "string" and . != "")) | .[0] // "")
+        | if test("[\n\r]") then error("line break in the path") else . end),
       ([ .tool_input.content?,
          .tool_input.new_string?,
+         .tool_input.new_source?,
          (.tool_input.edits? // [] | .[].new_string?)
        ] | map(select(. != null)) | join("\n"))
     '
@@ -73,9 +90,15 @@ extract() {
     python3 -I -c '
 import json, sys
 ti = json.load(sys.stdin).get("tool_input", {}) or {}
-parts = [ti.get("content"), ti.get("new_string")]
+parts = [ti.get("content"), ti.get("new_string"), ti.get("new_source")]
 parts += [e.get("new_string") for e in (ti.get("edits") or [])]
-print(ti.get("file_path", "") or "")
+keys = [k for k in (ti.get("file_path"), ti.get("notebook_path"), ti.get("path")) if k is not None]
+if len(keys) > 1:
+    sys.exit("more than one path key")
+path = next((k for k in keys if isinstance(k, str) and k), "")
+if "\n" in path or "\r" in path:
+    sys.exit("line break in the path")
+print(path)
 print("\n".join(p for p in parts if p))
 '
   else
@@ -85,7 +108,7 @@ print("\n".join(p for p in parts if p))
 }
 
 if ! extracted=$(printf '%s' "$payload" | extract 2>/dev/null); then
-  echo "guard-secrets: cannot parse hook payload. Blocking (fail closed)." >&2
+  echo "guard-secrets: cannot parse hook payload, or it names more than one path, or its path holds a line break. Blocking (fail closed)." >&2
   exit 2
 fi
 # Split the extractor's two lines with bash expansions rather than head/tail:
