@@ -444,11 +444,18 @@ def cmd_propose(args) -> int:
     try:
         plan = (propose.plan_issues(drafts, _issues(args, issues_repo), closed_since=_since(args))
                 if (args.apply or args.check_open) else None)
-        held = (propose.plan_project_prs(drafts, source, closed_since=_since(args), threshold=args.threshold)
-                if args.check_open and not args.apply else {})
     except SourceError as err:
         print(f"error: {err}", file=sys.stderr)
         return 2
+    # The project's PRs are read apart from the issues: a PR listing that cannot be read marks the project drafts
+    # unchecked and ends the run 2, but never hides the issue plan or its token.
+    unreadable = None
+    try:
+        held = (propose.plan_project_prs(drafts, source, closed_since=_since(args), threshold=args.threshold)
+                if args.check_open and not args.apply else {})
+    except SourceError as err:
+        held = {d.item_id: f"NOT CHECKED: the PR listing could not be read ({err})" for d in drafts if d.kind == "pr"}
+        unreadable = err
     if not args.apply:
         for d in drafts:
             where = f"issue on {issues_repo}" if d.kind == "issue" else "draft PR in this project (session step)"
@@ -465,6 +472,9 @@ def cmd_propose(args) -> int:
                   f" --threshold {args.threshold}"
                   + (f" --issues-fixture {args.issues_fixture}" if args.issues_fixture else "")
                   + (f" --issues-repo {args.issues_repo}" if args.issues_repo else ""))
+        if unreadable is not None:
+            print(f"error: {unreadable}", file=sys.stderr)
+            return 2
         return 0
     try:
         opened = propose.open_issues(plan, _issues(args, issues_repo), confirm=args.confirm)

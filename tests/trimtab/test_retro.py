@@ -349,18 +349,18 @@ class RunsTheCli(unittest.TestCase):
     def write_pulls(self, rows):
         self.pulls.write_text(json.dumps(rows))
 
-    def run_cli(self, *args, as_of):
+    def run_cli(self, *args, as_of, code=0):
         done = subprocess.run([str(TRIMTAB), *args, "--fixture", str(self.pulls), "--ledger-from-labels",
                                "--as-of", as_of], capture_output=True, text=True, cwd=self.project, env=self.env)
-        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.returncode, code, done.stderr)
         return done.stdout
 
     def ingest(self, as_of):
         token = self.run_cli("ingest", "--dry-run", as_of=as_of).split("confirm: ")[1].split()[0]
         self.run_cli("ingest", "--apply", "--confirm", token, as_of=as_of)
 
-    def propose(self, *args, as_of):
-        return self.run_cli("propose", "--issues-fixture", str(self.issues), *args, as_of=as_of)
+    def propose(self, *args, as_of, code=0):
+        return self.run_cli("propose", "--issues-fixture", str(self.issues), *args, as_of=as_of, code=code)
 
 
 class TwoWeeklyRuns(RunsTheCli):
@@ -402,6 +402,28 @@ class AProjectDraftAlreadyFixed(RunsTheCli):
         dry = self.propose("--check-open", as_of="2026-09-20")
 
         self.assertIn("draft PR in this project (session step), RESOLVED: #103 merged after the evidence", dry)
+
+
+class APullListingThatCannotBeRead(RunsTheCli):
+    """The PR check failing marks the project drafts unchecked, but never hides the issue plan or its token."""
+
+    def test_the_issue_token_is_still_printed_and_the_run_ends_2(self):
+        both = AMBIGUOUS.replace('''  evidence: "in-memory fake vs mock is undecided for our own HTTP client"
+```''', '''  evidence: "in-memory fake vs mock is undecided for our own HTTP client"
+- id: TST-2
+  kind: gap
+  scope: project
+  evidence: "the project's rule is silent on it"
+```''')
+        self.write_pulls([{"number": n, "title": f"change {n}", "body": both, "merged_at": at, "labels": []}
+                          for n, at in ((101, "2026-09-10T00:00:00Z"), (102, "2026-09-18T00:00:00Z"))]
+                         + [{"number": 104, "state": "open", "body": "", "labels": []}])  # no title: unreadable
+        self.ingest(as_of="2026-09-20")
+
+        dry = self.propose("--check-open", as_of="2026-09-20", code=2)
+
+        self.assertIn("confirm: ", dry)
+        self.assertIn("draft PR in this project (session step), NOT CHECKED: the PR listing could not be read", dry)
 
 
 class TheIngestFloor(unittest.TestCase):
