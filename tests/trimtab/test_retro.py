@@ -384,6 +384,25 @@ class RunsTheCli(unittest.TestCase):
         return self.run_cli("propose", "--issues-fixture", str(self.issues), *args, as_of=as_of, code=code)
 
 
+class TheConfirmationToken(unittest.TestCase):
+    """The token covers where the issues go and what they say, nothing else."""
+
+    def plan(self, merged_at, body="body"):
+        d = Draft("issue", "TST-2", "[TST-2] reported ambiguous in 2 PRs", body, (ISSUE_LABEL,), (101, 102), merged_at)
+        return plan_issues([d], FakeIssues())
+
+    def test_evidence_merge_times_do_not_change_it(self):
+        first = confirmation(self.plan(("2026-09-10T00:00:00Z", "2026-09-18T00:00:00Z")))
+        second = confirmation(self.plan(("2026-09-10T00:00:00.000Z", "2026-09-18T00:00:00.000Z")))
+
+        self.assertEqual(first, second)
+
+    def test_what_the_issue_says_does_change_it(self):
+        merged = ("2026-09-10T00:00:00Z", "2026-09-18T00:00:00Z")
+
+        self.assertNotEqual(confirmation(self.plan(merged)), confirmation(self.plan(merged, body="other")))
+
+
 class TwoWeeklyRuns(RunsTheCli):
     """End to end: one PR per week, no ledger file, and the second week proposes."""
 

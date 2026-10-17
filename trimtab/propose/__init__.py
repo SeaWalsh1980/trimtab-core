@@ -28,7 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Callable, ContextManager, Mapping, Protocol, Sequence
 
 from trimtab.items import Item, Proposal
@@ -190,7 +190,9 @@ def plan_project_prs(drafts: Sequence[Draft], sink: PullSink, closed_since: str 
 def confirmation(todo: IssuePlan) -> str:
     """Covers where the issues go as well as what they say: a dry run against one
     repository cannot confirm an apply against another."""
-    payload = json.dumps([todo.destination, [asdict(d) for d in todo.to_open]], sort_keys=True)
+    said = [{"kind": d.kind, "item_id": d.item_id, "title": d.title, "body": d.body, "labels": list(d.labels)}
+            for d in todo.to_open]  # the evidence numbers and merge times are not what an issue says
+    payload = json.dumps([todo.destination, said], sort_keys=True)
     return hashlib.sha256(payload.encode()).hexdigest()[:12]
 
 
