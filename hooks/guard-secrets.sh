@@ -58,18 +58,21 @@ fi
 
 # Write -> .content, Edit -> .new_string, MultiEdit -> every edit's new_string,
 # NotebookEdit -> .new_source. The path is file_path, or NotebookEdit's
-# notebook_path; an empty one is skipped in both branches, since jq's `//`
-# alone keeps "" where python3's `or` skips it, and the path decides both the
-# path rules and the test-path relaxation. Emits the path on line 1, then the
-# concatenated new content.
+# notebook_path, whichever is first a non-empty string, in both branches:
+# jq's `//` alone kept "", 0 and [], which python3's `or` skips, and the path
+# decides both the path rules and the test-path relaxation. Emits the path on
+# line 1, then the concatenated new content. A path holding a newline or
+# carriage return fails the parse, so the call blocks: only line 1 is the
+# path, and "/p/a\n/.env" would be judged as "/p/a".
 # A tool whose keys are left out here passes every rule on empty input, and
 # one left out of the matcher never reaches this at all: see
 # docs/adr/0031-guard-secrets-is-registered-for-and-reads-notebookedit.md.
 extract() {
   if command -v jq >/dev/null 2>&1; then
     jq -r '
-      ([.tool_input.file_path, .tool_input.notebook_path]
-        | map(select(. != null and . != false and . != "")) | .[0] // ""),
+      (([.tool_input.file_path, .tool_input.notebook_path]
+         | map(select(type == "string" and . != "")) | .[0] // "")
+        | if test("[\n\r]") then error("line break in the path") else . end),
       ([ .tool_input.content?,
          .tool_input.new_string?,
          .tool_input.new_source?,
@@ -82,7 +85,11 @@ import json, sys
 ti = json.load(sys.stdin).get("tool_input", {}) or {}
 parts = [ti.get("content"), ti.get("new_string"), ti.get("new_source")]
 parts += [e.get("new_string") for e in (ti.get("edits") or [])]
-print(ti.get("file_path") or ti.get("notebook_path") or "")
+keys = [ti.get("file_path"), ti.get("notebook_path")]
+path = next((k for k in keys if isinstance(k, str) and k), "")
+if "\n" in path or "\r" in path:
+    sys.exit("line break in the path")
+print(path)
 print("\n".join(p for p in parts if p))
 '
   else
@@ -92,7 +99,7 @@ print("\n".join(p for p in parts if p))
 }
 
 if ! extracted=$(printf '%s' "$payload" | extract 2>/dev/null); then
-  echo "guard-secrets: cannot parse hook payload. Blocking (fail closed)." >&2
+  echo "guard-secrets: cannot parse hook payload, or its path holds a line break. Blocking (fail closed)." >&2
   exit 2
 fi
 # Split the extractor's two lines with bash expansions rather than head/tail:

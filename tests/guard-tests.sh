@@ -826,6 +826,16 @@ t guard-secrets.sh 0 "NotebookEdit deleting a cell in an ordinary notebook" "$(j
 # path rules must see notebook_path, and so must the test-path relaxation.
 t guard-secrets.sh 2 "empty file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":"","notebook_path":"/p/.env","new_source":"A=1"}')"
 t guard-secrets.sh 0 "empty file_path does not hide a test notebook_path (relaxed)" "$(j NotebookEdit '{"file_path":"","notebook_path":"/p/tests/test_nb.ipynb","new_source":"password = \"correct-horse-battery-staple-1234\""}')"
+# Only a non-empty string is the path: jq took 0 or [] where python3 skips them.
+t guard-secrets.sh 2 "an empty-list file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":[],"notebook_path":"/p/.env","new_source":"A=1"}')"
+t guard-secrets.sh 2 "a zero file_path does not hide notebook_path"       "$(j NotebookEdit '{"file_path":0,"notebook_path":"/p/.env","new_source":"A=1"}')"
+# The path is line 1 of the parse and the content follows it, so a line break
+# in the path left only its first line to the path rules: a Write of
+# "/p/a\n/.env" was judged as "/p/a". A path holding a newline or carriage
+# return fails closed instead (ADR 0031).
+t guard-secrets.sh 2 "a newline in file_path fails closed"         "$(j Write '{"file_path":"/p/a\n/.env","content":"A=1"}')"
+t guard-secrets.sh 2 "a newline in notebook_path fails closed"     "$(j NotebookEdit '{"notebook_path":"/p/a\n/secrets/k.ipynb","new_source":"x = 1"}')"
+t guard-secrets.sh 2 "a carriage return in the path fails closed"  "$(j Write '{"file_path":"/p/app/a\rb.py","content":"print(42)"}')"
 
 echo "== guard-secrets: signature packs =="
 # A session launched after Task 2 inherits these from its settings; the cases

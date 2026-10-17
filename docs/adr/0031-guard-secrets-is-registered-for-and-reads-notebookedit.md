@@ -38,10 +38,16 @@ NotebookEdit alone.
 - The guard-secrets matcher becomes `Write|Edit|MultiEdit|NotebookEdit`.
 - `extract()` reads the path as `file_path`, then `notebook_path`, and adds
   `new_source` to the scanned content, in both the jq and the python3
-  branch. An empty `file_path` is skipped in both, as ADR 0030 does for
-  guard-paths: with jq's `//` alone, `file_path: ""` hid `notebook_path`
-  from the jq branch, so a `.env` notebook was allowed with jq and blocked
-  without it, and a test notebook lost its relaxation with jq only.
+  branch. Only a non-empty string counts, in both, as ADR 0030 does for
+  guard-paths: with jq's `//` alone, `file_path: ""` (or `0`, or `[]`) hid
+  `notebook_path` from the jq branch, so a `.env` notebook was allowed with
+  jq and blocked without it, and a test notebook lost its relaxation with jq
+  only.
+- A path that holds a newline or carriage return fails the parse, so the
+  call blocks, as ADR 0030 decides for guard-paths and for the same reason
+  it gives against collapsing the break. The path is line 1 of the parse and
+  the content follows, so a Write of `/p/a\n/.env` was judged as `/p/a` and
+  allowed in both branches. Found in review; older than this record.
 - The matrix pins the registration as it ships: guard-secrets is registered
   once under PreToolUse with the 10 s timeout, its matcher matches Write,
   Edit, MultiEdit and NotebookEdit in full, and it matches neither Read nor
