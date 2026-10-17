@@ -322,8 +322,10 @@ class FixtureSource:
         def recent(r):
             return state(r) == "open" or (closed_since is not None
                                           and (r.get("updated_at") or r.get("merged_at") or "")[:10] >= closed_since)
-        return [PullTitle(r["number"], r.get("title", ""), state(r), r["merged_at"] if self._merged(r) else "")
-                for r in self._rows() if recent(r)]
+        rows = [r for r in self._rows() if recent(r)]
+        if not all(isinstance(r.get("title"), str) for r in rows):
+            raise SourceError("fixture pulls: a PR row has no title")  # GitHub's rows always carry one
+        return [PullTitle(r["number"], r["title"], state(r), r["merged_at"] if self._merged(r) else "") for r in rows]
 
     def add_label(self, number: int, label: str) -> None:
         rows = self._rows()

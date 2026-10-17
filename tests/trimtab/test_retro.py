@@ -321,6 +321,16 @@ class AFixtureRow(unittest.TestCase):
         self.assertEqual((evidence, states), ([], [(7, "open", "")]))
 
 
+class AFixtureRowWithNoTitle(unittest.TestCase):
+    def test_is_refused_as_github_would_refuse_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pulls.json"
+            path.write_text(json.dumps([{"number": 7, "state": "open", "labels": []}]))
+
+            with self.assertRaises(SourceError):
+                FixtureSource(path).recent_pulls(None)
+
+
 class RunsTheCli(unittest.TestCase):
     """A scratch project, its PRs and issues as fixture files, and the CLI run against them."""
 
@@ -383,7 +393,7 @@ class AProjectDraftAlreadyFixed(RunsTheCli):
 
     def test_check_open_marks_the_draft_resolved_by_the_merged_fix(self):
         body = AMBIGUOUS.replace("scope: upstream", "scope: project")
-        self.write_pulls([{"number": n, "body": body, "merged_at": at, "labels": []}
+        self.write_pulls([{"number": n, "title": f"change {n}", "body": body, "merged_at": at, "labels": []}
                           for n, at in ((101, "2026-09-10T00:00:00Z"), (102, "2026-09-18T00:00:00Z"))]
                          + [{"number": 103, "title": "[TST-2] settle fake vs mock", "body": "",
                              "merged_at": "2026-09-19T00:00:00Z", "labels": []}])
