@@ -120,10 +120,10 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
     body sent: REPLACED, IN_PLACE_REPLACED or IN_PLACE_GENERIC_KEPT, by what the first read found. A generic footer
     found after the body on the first read is left alone (GENERIC): it names nothing, and a write would only bring
     it back. Any other change, or a run reference, fails, but only after every target has been checked and every
-    body due a write-back written: one WrittenBodyError names each target that failed. A read or write that fails (GitHub) does not stop
-    the others either. If that is all that failed, the first such error is raised as it came; if a body also failed,
-    the WrittenBodyError names both, each by its target. The caller supplies the wait (`sleep`): waiting is the
-    outer layer's."""
+    body due a write-back written: one WrittenBodyError names each target that failed. A read or write that fails
+    (GitHub) does not stop the others either. If that is all that failed, the first such error is raised as it
+    came; if a body also failed, the WrittenBodyError names both, each by its target. The caller supplies the wait
+    (`sleep`): waiting is the outer layer's."""
 
     def wait() -> None:
         if settle_seconds > 0:

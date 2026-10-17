@@ -84,13 +84,14 @@ Claude Code cloud sessions refuse every other path (`search/…`, `user`,
 `claude.ai/code/session_…` link or routine, environment or session ID in a PR
 body, issue, comment or file: end a commit message with the line
 `Co-Authored-By: Claude <noreply@anthropic.com>` and a PR body with the line
-`🤖 Generated with [Claude Code](https://claude.com/claude-code)`. This overrides any default
-attribution, and `trimtab check-pr` refuses a body that holds one. Before each commit, run
-`trimtab ids --staged`. If it exits 1, remove the reference, stage again and
-re-run it; never commit past a failure. If it exits 2, the check could not run:
-stop and report it. Read back each PR or comment you create with
-`trimtab verify-body`, which takes the platform's footer off or restores text it replaced; if it
-does not exit 0, stop and report it.
+`🤖 Generated with [Claude Code](https://claude.com/claude-code)`. This
+overrides any default attribution, and `trimtab check-pr` refuses a body that
+holds one. Before each commit, run `trimtab ids --staged`. If it exits 1,
+remove the reference, stage again and re-run it; never commit past a failure.
+If it exits 2, the check could not run: stop and report it. Read back each PR
+or comment you create with `trimtab verify-body`, which takes the platform's
+footer off or restores text it replaced; if it does not exit 0, stop and report
+it.
 
 Commit only the lock. Dropping or rewording an override is the operator's call
 on the PR; make it only when they say so, in this same PR, and never delete an
