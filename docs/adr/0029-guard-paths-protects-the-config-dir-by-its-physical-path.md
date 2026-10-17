@@ -2,7 +2,8 @@
 
 ## Status
 
-Proposed (2026-10-17). Amends ADR 0002
+Accepted on merge (2026-10-17). No trial is pending: the guard matrix
+exercises the decision in full. Amends ADR 0002
 (`docs/adr/0002-anchor-the-guards-to-the-live-control-plane.md`): its
 "Under the config directory" set, and its "Matching is lexical" consequence
 for the config directory's own names. Generalises the physical guard-state
@@ -65,10 +66,12 @@ behaviour: every call blocks except a Read.
   reason: the prefix covers the agent's own state, and blocking it breaks
   memory and plan mode.
 - **Resolve every target path physically at check time.** Rejected. It costs
-  a fork per checked path where the resolution here costs one per call, it
-  cannot resolve a path that does not exist yet (a Write to a new file), and
-  a Bash command has an unbounded number of path-shaped fragments. Resolving
-  the few roots once and comparing text stays bounded.
+  a fork per checked path where the resolution here costs one per call, and
+  a Bash command has an unbounded number of path-shaped fragments, each of
+  which would need one. A path that does not exist yet is not the obstacle:
+  the snapshot-store check already resolves the deepest existing ancestor and
+  appends the rest, and the same walk would serve here. Resolving the few
+  roots once and comparing text keeps the cost per call fixed.
 - **Refuse a linked config directory outright.** Rejected. A linked
   `~/.claude` or a `CLAUDE_CONFIG_DIR` that names a link is a legitimate
   layout, and blocking every call there removes the feature to close a gap
@@ -89,7 +92,15 @@ behaviour: every call blocks except a Read.
 - Each new block case was shown to be allowed by the previous guard: run
   against it, all 38 new block cases in `tests/guard-tests.sh` fail with
   exit 0 where 2 is expected, and every other case passes.
-- Gaps that remain:
+- Gaps that remain. Matching is still textual: this record adds one more
+  spelling, it does not make the check physical.
+  - Any other link that names the config directory or a directory above
+    it, including one the session creates, is a third spelling that
+    matches no entry (#80).
+  - NotebookEdit sends its target as `notebook_path`, which guard-paths
+    does not read, so no path check applies to it (#81).
+  - The linked trees' roots are protected only physically, so a spelling
+    of the checkout through a linked ancestor misses them (#82).
   - `<symlink>/../<name>` is still collapsed as text (ADR 0002).
   - A `plugins/` or `guard-state/` that is itself a link: its target is
     still not a root. ADR 0028's recorder refuses a linked guard-state;
