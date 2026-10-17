@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted.
+Accepted. Amended 2026-10-17 by ADR 0031
+(`docs/adr/0031-project-drafts-dedup-by-merge-and-close-time.md`): project
+draft PRs are no longer checked by the session under "the same rule" below,
+but by the tool, by merge and close time. The issue rule here stands.
 
 ## Context
 

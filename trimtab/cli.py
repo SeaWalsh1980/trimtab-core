@@ -19,10 +19,10 @@ from trimtab import instance, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
 from trimtab.ids import ID_SHAPE
-from trimtab.items import Problem
+from trimtab.items import ITEM_ID, Problem
 from trimtab.capture.sources import (
     FixtureContents, FixtureIssues, FixtureSource, GhBodies, GhContents, GhIssues, GhPullRequests, GhSource,
-    SourceError, changed_files, open_feedback_issues, staged_files,
+    SourceError, changed_files, open_feedback_issues, real_day, staged_files,
 )
 from trimtab.capture.written import SETTLE_SECONDS, Readback, WrittenBodyError, verify_body
 from trimtab.lint import overrides, references, structure
@@ -420,7 +420,30 @@ def _opening_stopped(err) -> int:
     return 2
 
 
+def _check_ids(text: str) -> dict[str, tuple[str, ...]]:
+    """`ID=YYYY-MM-DD+YYYY-MM-DD,...` -> {ID: report days}; ValueError naming the first entry that is not of that
+    form: an ID not shaped like an item ID, a day that is not a real date, or an ID given twice."""
+    found: dict[str, tuple[str, ...]] = {}
+    for entry in filter(None, (e.strip() for e in text.split(","))):
+        item_id, _, days = (part.strip() for part in entry.partition("="))
+        parts = tuple(day.strip() for day in days.split("+"))
+        if not ITEM_ID.fullmatch(item_id) or not all(real_day(day) for day in parts):
+            raise ValueError(f"--check-ids: {entry!r} is not ID=YYYY-MM-DD[+YYYY-MM-DD...]")
+        if item_id in found:
+            raise ValueError(f"--check-ids: {item_id} is given twice; list all its report days in one entry")
+        found[item_id] = parts
+    return found
+
+
 def cmd_propose(args) -> int:
+    try:
+        check_ids = _check_ids(args.check_ids)
+    except ValueError as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 1  # the command is wrong, not a listing: 2 means one could not be read
+    if check_ids and (args.apply or not args.check_open):
+        print("error: --check-ids goes with a --check-open dry run", file=sys.stderr)
+        return 1
     setup = _setup(args)
     if setup is None:
         return 1
@@ -441,19 +464,50 @@ def cmd_propose(args) -> int:
     drafts = [render(p, registry, project=project) for p in proposals]
     if not args.apply:
         print(f"propose --dry-run: {len(drafts)} proposal(s) at threshold {args.threshold}; nothing opened")
+    # The issues and the project's PRs are read apart: a listing that cannot be read marks its own drafts NOT
+    # CHECKED and ends the run 2, but never hides what the other listing found. Every mark is keyed by the draft's
+    # kind as well as its ID: one ID can reach the threshold in both scopes, and each draft takes only its own marks.
+    marks: dict[tuple[str, str], str] = {}
+    unreadable: list[SourceError] = []
     try:
         plan = (propose.plan_issues(drafts, _issues(args, issues_repo), closed_since=_since(args))
                 if (args.apply or args.check_open) else None)
     except SourceError as err:
-        print(f"error: {err}", file=sys.stderr)
-        return 2
+        if args.apply:
+            print(f"error: {err}", file=sys.stderr)
+            return 2
+        plan = None
+        unreadable.append(err)
+        marks.update({("issue", d.item_id): f"NOT CHECKED: the issue listing could not be read ({err})"
+                      for d in drafts if d.kind == "issue"})
+    if plan is not None:
+        marks.update({("issue", i): "SKIPPED: an issue for this ID is open or was closed within the window"
+                      for i in plan.already_open})
+    pr_error = None
+    try:
+        held = (propose.plan_project_prs(drafts, source, closed_since=_since(args), threshold=args.threshold,
+                                         check_ids=check_ids)
+                if args.check_open and not args.apply else {})
+    except SourceError as err:
+        pr_error = err
+        unreadable.append(err)
+        unchecked = f"NOT CHECKED: the PR listing could not be read ({err})"
+        held = {d.item_id: unchecked for d in drafts if d.kind == "pr"} | {i: unchecked for i in check_ids}
+    drafted = {d.item_id for d in drafts if d.kind == "pr"}
+    marks.update({("pr", i): mark for i, mark in held.items() if i in drafted})
     if not args.apply:
+        if (args.check_open and _since(args) is None and pr_error is None
+                and (any(d.kind == "pr" for d in drafts) or check_ids)):
+            print("no window: merged and closed [<ID>] PRs were not checked; only open ones")
         for d in drafts:
             where = f"issue on {issues_repo}" if d.kind == "issue" else "draft PR in this project (session step)"
-            if plan is not None and d.item_id in plan.already_open:
-                where += ", SKIPPED: an issue for this ID is open or was closed within the window"
+            if (d.kind, d.item_id) in marks:
+                where += f", {marks[(d.kind, d.item_id)]}"
             labels = f" [labels: {', '.join(d.labels)}]" if d.labels else ""
             print(f"\n--- would open: {where}{labels}\n# {d.title}\n\n{d.body}")
+        for item_id in check_ids:
+            if item_id not in drafted:
+                print(f"\n--- also checked: {item_id}" + (f", {held[item_id]}" if item_id in held else ", no mark"))
         if plan is not None and plan.to_open:
             token = propose.confirmation(plan)
             print(f"\nconfirm: {token}")
@@ -461,6 +515,10 @@ def cmd_propose(args) -> int:
                   f" --threshold {args.threshold}"
                   + (f" --issues-fixture {args.issues_fixture}" if args.issues_fixture else "")
                   + (f" --issues-repo {args.issues_repo}" if args.issues_repo else ""))
+        for err in unreadable:
+            print(f"error: {err}", file=sys.stderr)
+        if unreadable:
+            return 2
         return 0
     try:
         opened = propose.open_issues(plan, _issues(args, issues_repo), confirm=args.confirm)
@@ -957,8 +1015,12 @@ def build_parser() -> argparse.ArgumentParser:
     pmode.add_argument("--dry-run", action="store_true", help="print only (the default)")
     pmode.add_argument("--apply", action="store_true", help="open the upstream issues; needs --confirm")
     pro.add_argument("--confirm", help="the token a dry run printed")
+    pro.add_argument("--check-ids", default="",
+                     help="with --check-open: also mark IDs with no draft, as ID=YYYY-MM-DD+YYYY-MM-DD,... giving "
+                          "the day of every conformance report naming the ID")
     pro.add_argument("--check-open", action="store_true",
-                     help="in a dry run, also read existing issues to show what --apply would skip, and print a token")
+                     help="in a dry run, also read existing issues and this project's PRs to show what would be "
+                          "skipped or is already resolved, and print a token")
     iss = pro.add_mutually_exclusive_group()
     iss.add_argument("--issues-repo", help="where upstream issues go (default: the instance's repository)")
     iss.add_argument("--issues-fixture", help="JSON file of issues, for scratch runs and tests")
