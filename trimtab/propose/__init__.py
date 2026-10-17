@@ -147,7 +147,9 @@ def _reports_since(fix: PullTitle, draft: Draft) -> list[int] | None:
     if not fix.merged_at or not draft.prs or len(draft.merged_at) != len(draft.prs):
         return None
     others = [(n, m) for n, m in zip(draft.prs, draft.merged_at) if n != fix.number]
-    if not others or not all(m for _, m in others):
+    if not others:
+        return [] if fix.number in draft.prs else None  # the fix is the only evidence: it saw all of it
+    if not all(m for _, m in others):
         return None
     return [n for n, m in others if m > fix.merged_at]
 

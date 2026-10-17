@@ -299,6 +299,14 @@ class ProjectDrafts(unittest.TestCase):
 
         self.assertEqual(found, {"SCR-X-2": "SKIPPED: #30 for this ID was closed unmerged within the window"})
 
+    def test_a_fix_that_is_the_only_evidence_resolves_the_id(self):
+        fix = PullTitle(50, "[SCR-X-2] fix", "merged", "2026-09-10T00:00:00Z")
+
+        found = plan_project_prs([draft("SCR-X-2", kind="pr", prs=(50,), merged_at=("2026-09-10T00:00:00Z",))],
+                                 FakePulls(fix), threshold=1)
+
+        self.assertEqual(found, {"SCR-X-2": "RESOLVED: #50 merged after the evidence"})
+
     def test_a_draft_with_no_evidence_or_no_merge_times_is_never_resolved(self):
         fix = PullTitle(946, "[SCR-X-2] fix", "merged", self.AFTER_ALL)
 
