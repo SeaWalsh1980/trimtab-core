@@ -5,8 +5,8 @@
 Accepted on merge (2026-10-17). No trial is pending: the guard matrix
 exercises the decision in full. Amends ADR 0030
 (`docs/adr/0030-guard-paths-is-registered-for-and-reads-notebookedit.md`)
-for guard-paths. guard-secrets and guard-security take the same rule in the
-records of their own NotebookEdit and path-parse changes (ADRs 0031 and 0032).
+for guard-paths. guard-secrets and guard-security take the same rule in their
+own parse changes, each recorded with that change.
 
 ## Context
 
@@ -53,6 +53,11 @@ registered for sends at most one of them.
   ambiguous rather than being judged on the `notebook_path`. Both keys are
   named; no tool sends that.
 - A `null` second key is not a second path, and is allowed.
-- Shown on the previous guard: the 3 decoy block cases fail with exit 0,
-  with and without jq, and pass after; the null case passes on both.
+- The matrix pins the count itself, not only the decoys: two harmless keys,
+  and an empty `file_path` beside a harmless `notebook_path`, block. Checking
+  every path or keying on the tool name would pass the decoy cases and allow
+  these.
+- Shown on the previous guard: the 3 decoy and 3 harmless-pair block cases
+  fail with exit 0, with and without jq, and pass after; the null case
+  passes on both.
 - No new fork or exec: one count in each parse branch.

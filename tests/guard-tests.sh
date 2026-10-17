@@ -220,6 +220,12 @@ t guard-paths.sh 2 "a list file_path does not hide the command"         "$(j Bas
 t guard-paths.sh 2 "a decoy file_path beside a protected notebook_path" "$(j NotebookEdit '{"file_path":"/p/app/x.py","notebook_path":"/home/x/dev/ct/.env","new_source":"x"}')"
 t guard-paths.sh 2 "a decoy file_path beside a protected path"          "$(j Write '{"file_path":"/p/app/x.py","path":"/home/x/dev/ct/.env","content":"x"}')"
 t guard-paths.sh 0 "a null second key is not a second path"            "$(j NotebookEdit '{"file_path":null,"notebook_path":"/p/app/analysis.ipynb","new_source":"x"}')"
+# The rule is the count, not what the keys hold: two harmless paths block too,
+# and so does an empty file_path beside one. Checking every path, or keying on
+# the tool name, would pass the decoy cases above but allow these.
+t guard-paths.sh 2 "two harmless path keys still block"               "$(j NotebookEdit '{"file_path":"/p/app/x.py","notebook_path":"/p/app/analysis.ipynb","new_source":"x"}')"
+t guard-paths.sh 2 "an empty file_path beside a harmless notebook_path blocks" "$(j NotebookEdit '{"file_path":"","notebook_path":"/p/app/analysis.ipynb","new_source":"x"}')"
+t guard-paths.sh 2 "a harmless file_path and path still block"       "$(j Write '{"file_path":"/p/app/x.py","path":"/p/app/y.py","content":"x"}')"
 
 echo "== guard-paths: live control plane =="
 # The guards are enforced by files the guards did not protect: every case in
