@@ -149,5 +149,18 @@ cannot be left out of it silently.
 - The guard matrix stubs every name the shipped command lists, so it follows
   the longer list unchanged.
 
+**Measured.** In the guard matrix, against a throwaway install, on top of the
+six cases above: each of the four soft hooks missing reads `HOOKS MISSING`,
+names the hook in both fields, and never says unguarded or to stop work; a
+guard and a soft hook missing together read `GUARDS OFF` and name both, in
+both fields; the install is silent again once restored; a hook added to the
+list without the `guard-` prefix is silent when present and reads `GUARDS OFF`
+when missing; and every hook script `settings.base.json` registers is in the
+list. The guard and soft lists are read from the shipped command, not
+repeated in the test. Each new assertion was checked to fail on its
+regression: classifying by the `guard-` prefix, printing only the guards in
+the model's text, narrowing the soft list, adding "unguarded" to the note,
+and dropping a registered hook from the list.
+
 **Status.** Accepted. Amends the Decision's "each of the four guard scripts"
 and the `GUARDS OFF`-only description of the two fields.

@@ -1326,14 +1326,33 @@ mv "$LV/moved" "$LV_REPO"
 lv "no install at all warns"                 "$LV/nowhere"    "hooks/guard-paths.sh"
 lv "restored install is silent again"        "$LV_HOME"       silent
 
+# The soft hooks, those a HOOKS MISSING names, read from the shipped command's
+# `case` for the same reason as the guard list above: CI runs the base
+# branch's copy of this file against a pull request's settings, so a fixed
+# list here would fail every PR that changes it. A check with no HOOKS MISSING
+# has no soft list, and those cases are skipped; one that has the message but
+# whose list cannot be read is a failure, said by name.
+LV_SOFT=$(printf '%s' "$LIVENESS" | sed -n 's/.*case \$g in \([A-Za-z0-9_|-]*\)) o=.*/\1/p' | tr '|' ' ')
+LV_SOFT_ONE=${LV_SOFT%% *}
+if [[ "$LIVENESS" != *"HOOKS MISSING"* ]]; then
+  printf 'PASS  %-14s %s\n' "liveness" "the check has no HOOKS MISSING message: soft-hook cases skipped"
+elif [[ -z "$LV_SOFT" ]]; then
+  printf 'FAIL  %-14s %s\n' "liveness" "could not read the soft-hook list from the shipped check"
+  fails=$((fails+1))
+fi
+
 # A missing guard still reads GUARDS OFF when a non-guard hook is missing too,
 # and the warning names both (ADR 0004, amendment 2026-10-17).
-rm "$LV_REPO/hooks/guard-mcp.sh" "$LV_REPO/hooks/rule-usage.sh"
-lv "guard and non-guard missing: guard named"     "$LV_HOME"  "hooks/guard-mcp.sh"
-lv "guard and non-guard missing: non-guard named" "$LV_HOME"  "hooks/rule-usage.sh"
-printf '#!/bin/sh\n' > "$LV_REPO/hooks/guard-mcp.sh"; chmod +x "$LV_REPO/hooks/guard-mcp.sh"
-
-printf '#!/bin/sh\n' > "$LV_REPO/hooks/rule-usage.sh"; chmod +x "$LV_REPO/hooks/rule-usage.sh"
+if [[ -n "$LV_SOFT_ONE" && -x "$LV_REPO/hooks/$LV_SOFT_ONE.sh" ]]; then
+  rm "$LV_REPO/hooks/guard-mcp.sh" "$LV_REPO/hooks/$LV_SOFT_ONE.sh"
+  lv "guard and non-guard missing: guard named"     "$LV_HOME"  "hooks/guard-mcp.sh"
+  lv "guard and non-guard missing: non-guard named" "$LV_HOME"  "hooks/$LV_SOFT_ONE.sh"
+  printf '#!/bin/sh\n' > "$LV_REPO/hooks/guard-mcp.sh"; chmod +x "$LV_REPO/hooks/guard-mcp.sh"
+  printf '#!/bin/sh\n' > "$LV_REPO/hooks/$LV_SOFT_ONE.sh"; chmod +x "$LV_REPO/hooks/$LV_SOFT_ONE.sh"
+elif [[ -n "$LV_SOFT_ONE" ]]; then
+  printf 'FAIL  %-14s %s\n' "liveness" "soft hook $LV_SOFT_ONE is not in the check's list, so the fixture has no stub"
+  fails=$((fails+1))
+fi
 
 # hm <label> <command> <hook>: with every guard present, <hook> missing reads
 # HOOKS MISSING. The session stays guarded, so telling it it is unguarded, or
@@ -1376,12 +1395,12 @@ print("ok" if ok else "warning incomplete: %r" % out[:120])
     fails=$((fails+1))
   fi
 }
-for g in pr-body-check doctrine-drift session-path rule-usage; do
+for g in $LV_SOFT; do
   hm "a missing $g reads HOOKS MISSING, not GUARDS OFF" "$LIVENESS" "$g"
 done
 lv "restored again after HOOKS MISSING"           "$LV_HOME"  silent
 
-# Only the four hooks named above are soft. Any other name in the list, such
+# Only the hooks in the soft list are soft. Any other name in the list, such
 # as a blocking hook added later without the guard- prefix, must fall through
 # to GUARDS OFF: an unknown hook missing fails closed.
 LV_EXTRA=$(printf '%s' "$LIVENESS" | sed 's/\(for g in [A-Za-z0-9_ -]*\); do /\1 new-blocker; do /')
