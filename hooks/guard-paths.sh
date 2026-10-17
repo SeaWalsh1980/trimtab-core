@@ -47,6 +47,12 @@ fi
 # under the live tree. Collapsing it, as the command's are below, would check
 # a different path from the one the tool writes.
 #
+# A payload naming more than one of the three keys (any value but null) also
+# fails the parse. The guard checks one path and the tool may write another,
+# so a decoy file_path beside a protected notebook_path was judged on the
+# decoy. Every tool sends one of them, so this costs no real call. See
+# docs/adr/0033-guards-refuse-a-payload-that-names-more-than-one-path.md.
+#
 # The command has newlines collapsed to spaces in BOTH branches — jq's raw
 # output would otherwise spread a multi-line command over several lines and
 # only the first would survive the line-2 extraction below.
@@ -59,6 +65,8 @@ fi
 parse() {
   if command -v jq >/dev/null 2>&1; then
     jq -r '(([.tool_input.file_path, .tool_input.notebook_path, .tool_input.path]
+              | map(select(. != null))
+              | if length > 1 then error("more than one path key") else . end
               | map(select(type == "string" and . != "")) | .[0] // "")
              | if test("[\n\r]") then error("line break in the target path") else . end),
            ((.tool_input.command // "") | gsub("\n"; " ")),
@@ -70,7 +78,9 @@ parse() {
 import json, sys
 d = json.load(sys.stdin)
 ti = d.get("tool_input", {}) or {}
-keys = [ti.get("file_path"), ti.get("notebook_path"), ti.get("path")]
+keys = [k for k in (ti.get("file_path"), ti.get("notebook_path"), ti.get("path")) if k is not None]
+if len(keys) > 1:
+    sys.exit("more than one path key")
 target = next((k for k in keys if isinstance(k, str) and k), "")
 if "\n" in target or "\r" in target:
     sys.exit("line break in the target path")
@@ -84,7 +94,7 @@ print((d.get("tool_name") or "").replace("\n", " "))
 }
 
 if ! parsed=$(printf '%s' "$payload" | parse 2>/dev/null); then
-  echo "guard-paths: cannot parse payload (needs jq or python3, and a target path with no line break). Blocking." >&2
+  echo "guard-paths: cannot parse payload (needs jq or python3, one target path at most, and no line break in it). Blocking." >&2
   exit 2
 fi
 

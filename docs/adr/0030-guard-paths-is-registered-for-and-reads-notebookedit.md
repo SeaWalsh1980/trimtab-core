@@ -2,6 +2,10 @@
 
 ## Status
 
+Amended 2026-10-17 by
+[ADR 0033](0033-guards-refuse-a-payload-that-names-more-than-one-path.md):
+a payload that names more than one path key now fails the parse.
+
 Accepted on merge (2026-10-17). No trial is pending: the guard matrix
 exercises the parse and the registration as the file ships. Corrects a claim
 in ADR 0002
@@ -10,7 +14,9 @@ ADR 0028
 (`docs/adr/0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md`),
 and closes a gap ADR 0029
 (`docs/adr/0029-guard-paths-protects-the-config-dir-by-its-physical-path.md`)
-lists (#81). The rest of all three stands.
+lists (#81). The rest of all three stands. The guard-secrets gap listed under
+Consequences is closed by
+[ADR 0031](0031-guard-secrets-is-registered-for-and-reads-notebookedit.md).
 
 ## Context
 

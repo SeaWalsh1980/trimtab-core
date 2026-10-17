@@ -85,6 +85,7 @@ class Proposal:
     kinds: tuple[str, ...]
     evidence: tuple[str, ...]
     prs: tuple[int, ...]
+    merged_at: tuple[str, ...] = ()  # when each of `prs` merged, in the same order
 
 
 class ItemType(Protocol):

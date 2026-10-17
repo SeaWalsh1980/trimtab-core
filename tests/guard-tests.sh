@@ -213,6 +213,19 @@ t guard-paths.sh 2 "empty file_path does not hide path"          "$(j Write '{"f
 t guard-paths.sh 2 "an empty-list file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":[],"notebook_path":"/home/x/dev/ct/.env","new_source":"x"}')"
 t guard-paths.sh 2 "a zero file_path does not hide notebook_path"       "$(j NotebookEdit '{"file_path":0,"notebook_path":"/home/x/dev/ct/.env","new_source":"x"}')"
 t guard-paths.sh 2 "a list file_path does not hide the command"         "$(j Bash '{"file_path":["x","y"],"command":"cat /x/.env"}')"
+# A payload that names more than one of file_path, notebook_path and path is
+# ambiguous: the guard can check one, and the tool may write the other. It
+# fails closed. A decoy file_path beside a protected notebook_path or path
+# used to be judged on the decoy (ADR 0033).
+t guard-paths.sh 2 "a decoy file_path beside a protected notebook_path" "$(j NotebookEdit '{"file_path":"/p/app/x.py","notebook_path":"/home/x/dev/ct/.env","new_source":"x"}')"
+t guard-paths.sh 2 "a decoy file_path beside a protected path"          "$(j Write '{"file_path":"/p/app/x.py","path":"/home/x/dev/ct/.env","content":"x"}')"
+t guard-paths.sh 0 "a null second key is not a second path"            "$(j NotebookEdit '{"file_path":null,"notebook_path":"/p/app/analysis.ipynb","new_source":"x"}')"
+# The rule is the count, not what the keys hold: two harmless paths block too,
+# and so does an empty file_path beside one. Checking every path, or keying on
+# the tool name, would pass the decoy cases above but allow these.
+t guard-paths.sh 2 "two harmless path keys still block"               "$(j NotebookEdit '{"file_path":"/p/app/x.py","notebook_path":"/p/app/analysis.ipynb","new_source":"x"}')"
+t guard-paths.sh 2 "an empty file_path beside a harmless notebook_path blocks" "$(j NotebookEdit '{"file_path":"","notebook_path":"/p/app/analysis.ipynb","new_source":"x"}')"
+t guard-paths.sh 2 "a harmless file_path and path still block"       "$(j Write '{"file_path":"/p/app/x.py","path":"/p/app/y.py","content":"x"}')"
 
 echo "== guard-paths: live control plane =="
 # The guards are enforced by files the guards did not protect: every case in
@@ -244,6 +257,7 @@ t guard-paths.sh 2 "edit repo-root CLAUDE.md"                 "$(j Edit "{\"file
 t guard-paths.sh 2 "edit the live inspector in bin/"          "$(j Edit "{\"file_path\":\"$CP_REPO/bin/env-names.sh\"}")"
 t guard-paths.sh 2 "MultiEdit a live hook (not just Edit)"    "$(j MultiEdit "{\"file_path\":\"$CP_HOME/hooks/guard-bash.sh\"}")"
 t guard-paths.sh 2 "NotebookEdit into the live hooks dir"     "$(j NotebookEdit "{\"notebook_path\":\"$CP_HOME/hooks/x.ipynb\",\"new_source\":\"x\"}")"
+t guard-paths.sh 2 "a decoy file_path beside a live-hooks notebook_path" "$(j NotebookEdit "{\"file_path\":\"/p/app/x.py\",\"notebook_path\":\"$CP_HOME/hooks/x.ipynb\",\"new_source\":\"x\"}")"
 
 # -- path shapes that must still resolve into the live tree --------------
 CP_REAL_HOME="$HOME"; HOME="$CPTMP/home"   # one case only; see the fixture note
@@ -808,6 +822,39 @@ t guard-secrets.sh 2 "secret-name long literal outside tests" "$(j Write '{"file
 t guard-secrets.sh 0 "hook:allow-secret marker"  "$(j Write '{"file_path":"/p/app/cfg.py","content":"client_secret = \"9f8e7d6c5b4a39281706f5e4d3c2b1a0\"  # hook:allow-secret"}')"
 t guard-secrets.sh 0 "benign code"               "$(j Write '{"file_path":"/p/app/x.py","content":"print(42)"}')"
 t guard-secrets.sh 2 "FAIL-CLOSED: garbage payload" 'NOT JSON AT ALL'
+# NotebookEdit names its target notebook_path and its text new_source. A guard
+# that read only file_path and content/new_string saw neither, so no path or
+# content rule applied to a notebook cell (ADR 0031).
+t guard-secrets.sh 2 "NotebookEdit with a PEM block in new_source" "$(j NotebookEdit "{\"notebook_path\":\"/p/app/nb.ipynb\",\"new_source\":\"KEY = \\\"$PEM\\\"\"}")"
+t guard-secrets.sh 2 "NotebookEdit with a PEM block IN TESTS (tier1 never relaxes)" "$(j NotebookEdit "{\"notebook_path\":\"/p/tests/nb.ipynb\",\"new_source\":\"KEY = \\\"$PEM\\\"\"}")"
+t guard-secrets.sh 2 "NotebookEdit with a GitHub token in new_source" "$(j NotebookEdit "{\"notebook_path\":\"/p/app/nb.ipynb\",\"new_source\":\"$GH\"}")"
+t guard-secrets.sh 2 "NotebookEdit with a prod DSN in new_source" "$(j NotebookEdit "{\"notebook_path\":\"/p/app/nb.ipynb\",\"new_source\":\"DSN = \\\"$DSN_PROD\\\"\"}")"
+t guard-secrets.sh 2 "NotebookEdit onto a dotenv path" "$(j NotebookEdit '{"notebook_path":"/p/.env","new_source":"A=1"}')"
+t guard-secrets.sh 2 "NotebookEdit into a secrets dir" "$(j NotebookEdit '{"notebook_path":"/p/secrets/a.ipynb","new_source":"x = 1"}')"
+t guard-secrets.sh 2 "NotebookEdit deleting a cell in a secrets dir (path rules still apply)" "$(j NotebookEdit '{"notebook_path":"/p/secrets/a.ipynb","cell_id":"c1","edit_mode":"delete"}')"
+t guard-secrets.sh 0 "NotebookEdit with benign source" "$(j NotebookEdit '{"notebook_path":"/p/app/analysis.ipynb","new_source":"print(42)"}')"
+t guard-secrets.sh 0 "NotebookEdit test password fixture (relaxed)" "$(j NotebookEdit '{"notebook_path":"/p/tests/test_nb.ipynb","new_source":"password = \"correct-horse-battery-staple-1234\""}')"
+t guard-secrets.sh 0 "NotebookEdit deleting a cell in an ordinary notebook" "$(j NotebookEdit '{"notebook_path":"/p/app/analysis.ipynb","cell_id":"c1","edit_mode":"delete"}')"
+# A payload naming more than one of file_path, notebook_path and path (any
+# value but null) fails closed: the guard judges one path and the tool may
+# write the other. A decoy file_path, empty, 0, [] or a benign string, used
+# to hide a protected notebook_path or path, and a tests/ decoy lent its
+# relaxation to the real target (ADRs 0031, 0033).
+t guard-secrets.sh 2 "empty file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":"","notebook_path":"/p/.env","new_source":"A=1"}')"
+t guard-secrets.sh 2 "an empty file_path beside a test notebook_path is two paths" "$(j NotebookEdit '{"file_path":"","notebook_path":"/p/tests/test_nb.ipynb","new_source":"password = \"correct-horse-battery-staple-1234\""}')"
+t guard-secrets.sh 2 "an empty-list file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":[],"notebook_path":"/p/.env","new_source":"A=1"}')"
+t guard-secrets.sh 2 "a zero file_path does not hide notebook_path"       "$(j NotebookEdit '{"file_path":0,"notebook_path":"/p/.env","new_source":"A=1"}')"
+t guard-secrets.sh 2 "a decoy file_path beside a .env notebook_path"     "$(j NotebookEdit '{"file_path":"/p/app/x.py","notebook_path":"/p/.env","new_source":"A=1"}')"
+t guard-secrets.sh 2 "a tests/ decoy beside a secrets/ notebook_path"    "$(j NotebookEdit '{"file_path":"/p/tests/t.py","notebook_path":"/p/secrets/k.ipynb","new_source":"x = 1"}')"
+t guard-secrets.sh 2 "a decoy file_path beside a .env path"              "$(j Write '{"file_path":"/p/app/x.py","path":"/p/.env","content":"A=1"}')"
+t guard-secrets.sh 0 "a null second key is not a second path"           "$(j NotebookEdit '{"file_path":null,"notebook_path":"/p/app/analysis.ipynb","new_source":"print(42)"}')"
+# The path is line 1 of the parse and the content follows it, so a line break
+# in the path left only its first line to the path rules: a Write of
+# "/p/a\n/.env" was judged as "/p/a". A path holding a newline or carriage
+# return fails closed instead (ADR 0031).
+t guard-secrets.sh 2 "a newline in file_path fails closed"         "$(j Write '{"file_path":"/p/a\n/.env","content":"A=1"}')"
+t guard-secrets.sh 2 "a newline in notebook_path fails closed"     "$(j NotebookEdit '{"notebook_path":"/p/a\n/secrets/k.ipynb","new_source":"x = 1"}')"
+t guard-secrets.sh 2 "a carriage return in the path fails closed"  "$(j Write '{"file_path":"/p/app/a\rb.py","content":"print(42)"}')"
 
 echo "== guard-secrets: signature packs =="
 # A session launched after Task 2 inherits these from its settings; the cases
@@ -824,6 +871,7 @@ t guard-secrets.sh 2 "Zoho token with the switch unset (every shipped pack)" "$(
 t guard-secrets.sh 2 "Google API key with the switch unset" "$(j Write "{\"file_path\":\"/p/app/x.py\",\"content\":\"k = \\\"$GKEY\\\"\"}")"
 t guard-secrets.sh 2 "Google API key ending in a hyphen" "$(j Write "{\"file_path\":\"/p/app/x.py\",\"content\":\"k = \\\"$GKEY_DASH\\\"\"}")"
 t guard-secrets.sh 2 "Google OAuth client secret ending in a hyphen" "$(j Write "{\"file_path\":\"/p/app/x.py\",\"content\":\"k = \\\"$GSEC_DASH\\\"\"}")"
+t guard-secrets.sh 2 "NotebookEdit with a Zoho token (every shipped pack)" "$(j NotebookEdit "{\"notebook_path\":\"/p/app/nb.ipynb\",\"new_source\":\"tok = \\\"$ZOHO\\\"\"}")"
 tp "" 2 "Zoho token with the switch empty (treated as unset)" "$(j Write "{\"file_path\":\"/p/app/x.py\",\"content\":\"tok = \\\"$ZOHO\\\"\"}")"
 tp "none" 0 "Zoho token with packs switched off (built-ins only)" "$(j Write "{\"file_path\":\"/p/app/x.py\",\"content\":\"tok = \\\"$ZOHO\\\"\"}")"
 tp "zoho" 0 "Google API key when the list names only zoho" "$(j Write "{\"file_path\":\"/p/app/x.py\",\"content\":\"k = \\\"$GKEY\\\"\"}")"
@@ -884,6 +932,27 @@ t $SG 2 "edit .gitleaks.toml"                       "$(j Edit '{"file_path":"/p/
 t $SG 2 "write .trivyignore"                        "$(j Write '{"file_path":"/p/ct/.trivyignore","content":"CVE-1"}')"
 t $SG 2 "edit .bandit-allowlist.yml"                "$(j Edit '{"file_path":"/p/ct/.bandit-allowlist.yml"}')"
 t $SG 2 "FAIL-CLOSED: no tool_name, workflow path"  '{"tool_input":{"file_path":"/p/ct/.github/workflows/ci.yml"}}'
+
+# -- the target path: a non-empty string, with no line break --------------
+# The parse emits the path, command and tool_name one per line. A newline in
+# the path pushed its tail onto the later lines, so a path ending
+# "\n\nRead\n.yml" was read as tool_name Read and skipped the file check,
+# while the tool wrote a .yml into the workflows directory. A line break in
+# the path fails closed. jq also took "", 0 or [] as the path where
+# python3's `or` skips them, hiding notebook_path. See
+# docs/adr/0032-guard-security-takes-a-string-path-with-no-line-break.md.
+t $SG 2 "a newline in file_path cannot pose as a Read" "$(j Write '{"file_path":"/p/ct/.github/workflows/x\n\nRead\n.yml","content":"x"}')"
+t $SG 2 "a newline in notebook_path fails closed"      "$(j NotebookEdit '{"notebook_path":"/p/ct/.claude/hooks/a\n\nRead\n.sh","new_source":"x"}')"
+t $SG 2 "a carriage return in the path fails closed"   "$(j Write '{"file_path":"/p/ct/app/a\rb.py","content":"x"}')"
+t $SG 2 "empty file_path does not hide notebook_path"  "$(j NotebookEdit '{"file_path":"","notebook_path":"/p/ct/.github/workflows/x.yml","new_source":"x"}')"
+t $SG 2 "an empty-list file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":[],"notebook_path":"/p/ct/.github/workflows/x.yml","new_source":"x"}')"
+t $SG 2 "a zero file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":0,"notebook_path":"/p/ct/.github/workflows/x.yml","new_source":"x"}')"
+# More than one of file_path, notebook_path and path (any value but null)
+# fails closed: a benign decoy file_path hid a workflow notebook_path or path
+# (ADR 0033).
+t $SG 2 "a decoy file_path beside a workflow notebook_path" "$(j NotebookEdit '{"file_path":"/p/ct/app/x.py","notebook_path":"/p/ct/.github/workflows/x.yml","new_source":"x"}')"
+t $SG 2 "a decoy file_path beside a hooks path"             "$(j Write '{"file_path":"/p/ct/app/x.py","path":"/p/ct/.claude/hooks/pre.sh","content":"x"}')"
+t $SG 0 "a null second key is not a second path"           "$(j NotebookEdit '{"file_path":null,"notebook_path":"/p/ct/app/analysis.ipynb","new_source":"x"}')"
 
 # -- bash writes ----------------------------------------------------------
 t $SG 2 "redirect into a workflow"                  "$(j Bash '{"command":"echo x > .github/workflows/a.yml"}')"
@@ -1832,6 +1901,34 @@ if len(found) == 1:
     m = re.compile(matcher or "")
     for tool in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"):
         fails += case(bool(m.fullmatch(tool)), "its matcher catches %s" % tool)
+sys.exit(fails)
+PY
+fails=$((fails + $?))
+
+echo "== guard-secrets registration (settings.base.json) =="
+# The same gap as guard-paths', in the guard that scans what is written:
+# NotebookEdit was missing from its matcher, so no cell's text was ever
+# scanned (ADR 0031). Checked as the file ships: registered once under
+# PreToolUse, on a matcher that catches every built-in tool that writes file
+# content, and neither Read nor Bash, whose payloads carry no content to scan
+# and whose path would be judged by the write rules.
+python3 - "$REPO/settings.base.json" <<'PY'
+import json, re, sys
+groups = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
+want = '"$HOME/.claude/hooks/guard-secrets.sh"'
+found = [(g.get("matcher"), h) for g in groups for h in g["hooks"] if h.get("command") == want]
+def case(ok, label):
+    print("%s  %-14s %s" % ("PASS" if ok else "FAIL", "registration", label))
+    return 0 if ok else 1
+fails = case(len(found) == 1, "guard-secrets is registered exactly once")
+if len(found) == 1:
+    matcher, hook = found[0]
+    fails += case(hook.get("timeout") == 10, "guard-secrets has the 10 s timeout")
+    m = re.compile(matcher or "")
+    for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+        fails += case(bool(m.fullmatch(tool)), "its matcher catches %s" % tool)
+    fails += case(not any(m.fullmatch(t) for t in ("Read", "Bash")),
+                  "its matcher leaves Read and Bash alone")
 sys.exit(fails)
 PY
 fails=$((fails + $?))
