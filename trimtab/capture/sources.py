@@ -152,7 +152,7 @@ def _closed_pull(r) -> _ClosedPull:
     try:
         row = _ClosedPull(number=r["number"], body=r.get("body") or "", merged_at=r["merged_at"] or "",
                           updated_at=r["updated_at"], labels=frozenset(label["name"] for label in r["labels"]),
-                          title=r.get("title") or "")
+                          title=r["title"])
     except (KeyError, TypeError, AttributeError) as err:
         raise SourceError(f"{what} returned unexpected JSON") from err
     if not (_is_int(row.number) and isinstance(row.body, str) and isinstance(row.merged_at, str)

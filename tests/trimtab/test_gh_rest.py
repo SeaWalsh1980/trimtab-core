@@ -184,6 +184,14 @@ class RecentPulls(unittest.TestCase):
 
         self.assertEqual(GhSource(REPO, run=gh).recent_pulls(SINCE), [])
 
+    def test_a_closed_pr_with_no_title_is_refused_not_silently_unmatched(self):
+        for broken in ({k: v for k, v in pull(1).items() if k != "title"}, {**pull(1), "title": None}):
+            with self.subTest(title="title" in broken):
+                gh = FakeGh(answers={("GET", PULLS): [page(), page(broken)]})
+
+                with self.assertRaises(SourceError):
+                    GhSource(REPO, run=gh).recent_pulls(SINCE)
+
     def test_with_no_window_only_open_prs_are_read(self):
         gh = FakeGh(answers={("GET", PULLS): [page({"number": 3, "title": "[X-1] open"})]})
 
