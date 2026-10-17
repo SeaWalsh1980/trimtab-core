@@ -132,11 +132,12 @@ trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels
 - **Project** proposals are drafts you write, one draft PR per ID. The dry
   run reads this project's PRs and marks each project draft it holds back:
   `SKIPPED` when a PR titled `[<ID>]` is open, or was closed unmerged within
-  the window; `RESOLVED` when one merged after every evidence PR, so the fix
-  already saw that evidence. A fix older than some evidence did not, and the
-  ID is proposed again. Open a draft only for an unmarked ID, and report each
-  marked one as the dry run words it. If the dry run exits 2, the PR listing
-  could not be read whole: say so and open no project draft this run.
+  the window; `RESOLVED` when one merged after every evidence PR merged, so
+  the fix already saw that evidence. A fix merged before some of the evidence
+  did not, and the ID is proposed again. Open a draft only for an unmarked
+  ID, and report each marked one as the dry run words it. If the dry run
+  exits 2, a GitHub listing (the ledger, the issues or the PRs) could not be
+  read whole: say which, from its error, and open no project draft this run.
   Otherwise, on a branch `trimtab/retro-<ID>-<YYYY-MM-DD>` from the default
   branch (prefix it `claude/` if the environment only lets you push those):
   - a project rule's item: edit that section to resolve what the evidence says
