@@ -4,7 +4,7 @@
 
 Accepted. Amended 2026-10-17: the check also names the four non-guard hooks
 the base registers, a missing one of those reads `HOOKS MISSING` rather than
-`GUARDS OFF`, and bootstrap probes the check (the probe lands with #67); see
+`GUARDS OFF`; see
 [Amendment (2026-10-17)](#amendment-2026-10-17).
 
 ## Context
@@ -104,9 +104,7 @@ be valid JSON with both fields.
 written; `guard-mcp` came with ADR 0013). `pr-body-check`, `doctrine-drift`,
 `session-path` and `rule-usage` are registered too, and a missing one fails
 the same silent way: Claude Code treats a hook that cannot run (exit 127) as
-a non-blocking error. A review of the bootstrap self-probe also found that
-nothing proved this check itself fires: it was tested in the guard matrix,
-but never on the installed settings.
+a non-blocking error.
 
 **Decision.** The check's list names all nine hook scripts, in one `for g in`
 loop, so the guard matrix still reads the list from it. Guards and the other
@@ -121,10 +119,9 @@ hooks get different messages:
 
 Those four are named in the check; any other name in its list, one added
 later included, counts as a guard. The check stays one inline POSIX command
-ending `exit 0`. Bootstrap runs the installed check under an empty `HOME` (it
-must name `hooks/guard-paths.sh`) and under a `HOME` whose `.claude` is the
-install (it must name no guard). That self-probe is in `bootstrap.sh` from #67
-on, not in the change that amends this check.
+ending `exit 0`. A guard-matrix case checks that every hook script
+`settings.base.json` registers is in the list, so a hook registered later
+cannot be left out of it silently.
 
 **Options considered.**
 - *One `GUARDS OFF` message for all nine hooks.* Drafted first, in #67, and

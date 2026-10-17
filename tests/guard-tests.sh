@@ -1257,6 +1257,23 @@ else
       fails=$((fails+1))
     fi
   done
+  # Every hook script settings.base.json registers must be in the list: one
+  # left out fails silently when missing (exit 127 is a non-blocking error),
+  # and the fixture stubs only what the list names, so nothing else notices.
+  LV_REGISTERED=$(grep -o '\.claude/hooks/[A-Za-z0-9_-]*\.sh' "$REPO/settings.base.json" \
+    | sed 's|.*/||; s|\.sh$||' | sort -u)
+  if [[ -z "$LV_REGISTERED" ]]; then
+    printf 'FAIL  %-14s %s\n' "liveness" "could not read the registered hooks from settings.base.json"
+    fails=$((fails+1))
+  fi
+  for g in $LV_REGISTERED; do
+    if [[ " $LV_GUARDS " == *" $g "* ]]; then
+      printf 'PASS  %-14s %s\n' "liveness" "the check names registered hook $g"
+    else
+      printf 'FAIL  %-14s %s\n' "liveness" "registered hook $g is not in the check's list"
+      fails=$((fails+1))
+    fi
+  done
 fi
 for g in $LV_GUARDS; do
   printf '#!/bin/sh\n' > "$LV_REPO/hooks/$g.sh"; chmod +x "$LV_REPO/hooks/$g.sh"
