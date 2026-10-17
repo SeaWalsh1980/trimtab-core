@@ -1257,6 +1257,23 @@ else
       fails=$((fails+1))
     fi
   done
+  # Every hook script settings.base.json registers must be in the list: one
+  # left out fails silently when missing (exit 127 is a non-blocking error),
+  # and the fixture stubs only what the list names, so nothing else notices.
+  LV_REGISTERED=$(grep -o '\.claude/hooks/[A-Za-z0-9_-]*\.sh' "$REPO/settings.base.json" \
+    | sed 's|.*/||; s|\.sh$||' | sort -u)
+  if [[ -z "$LV_REGISTERED" ]]; then
+    printf 'FAIL  %-14s %s\n' "liveness" "could not read the registered hooks from settings.base.json"
+    fails=$((fails+1))
+  fi
+  for g in $LV_REGISTERED; do
+    if [[ " $LV_GUARDS " == *" $g "* ]]; then
+      printf 'PASS  %-14s %s\n' "liveness" "the check names registered hook $g"
+    else
+      printf 'FAIL  %-14s %s\n' "liveness" "registered hook $g is not in the check's list"
+      fails=$((fails+1))
+    fi
+  done
 fi
 for g in $LV_GUARDS; do
   printf '#!/bin/sh\n' > "$LV_REPO/hooks/$g.sh"; chmod +x "$LV_REPO/hooks/$g.sh"
@@ -1283,7 +1300,8 @@ else:
     ctx = d.get("hookSpecificOutput", {})
     ok = ("GUARDS OFF" in d.get("systemMessage", "") and want in d["systemMessage"]
           and ctx.get("hookEventName") == "SessionStart"
-          and "unguarded" in ctx.get("additionalContext", ""))
+          and "unguarded" in ctx.get("additionalContext", "")
+          and want in ctx["additionalContext"])
     print("ok" if ok else "warning incomplete: %r" % out[:120])
 ' "$want" "$rc")
   if [[ "$verdict" == ok ]]; then
@@ -1307,6 +1325,96 @@ lv "moved checkout: dangling rules named"    "$LV_HOME"       " rules"
 mv "$LV/moved" "$LV_REPO"
 lv "no install at all warns"                 "$LV/nowhere"    "hooks/guard-paths.sh"
 lv "restored install is silent again"        "$LV_HOME"       silent
+
+# The soft hooks, those a HOOKS MISSING names, read from the shipped command's
+# `case` for the same reason as the guard list above: CI runs the base
+# branch's copy of this file against a pull request's settings, so a fixed
+# list here would fail every PR that changes it. A check with no HOOKS MISSING
+# has no soft list, and those cases are skipped; one that has the message but
+# whose list cannot be read is a failure, said by name.
+LV_SOFT=$(printf '%s' "$LIVENESS" | sed -n 's/.*case \$g in \([A-Za-z0-9_|-]*\)) o=.*/\1/p' | tr '|' ' ')
+LV_SOFT_ONE=${LV_SOFT%% *}
+if [[ "$LIVENESS" != *"HOOKS MISSING"* ]]; then
+  printf 'PASS  %-14s %s\n' "liveness" "the check has no HOOKS MISSING message: soft-hook cases skipped"
+elif [[ -z "$LV_SOFT" ]]; then
+  printf 'FAIL  %-14s %s\n' "liveness" "could not read the soft-hook list from the shipped check"
+  fails=$((fails+1))
+fi
+
+# A missing guard still reads GUARDS OFF when a non-guard hook is missing too,
+# and the warning names both (ADR 0004, amendment 2026-10-17).
+if [[ -n "$LV_SOFT_ONE" && -x "$LV_REPO/hooks/$LV_SOFT_ONE.sh" ]]; then
+  rm "$LV_REPO/hooks/guard-mcp.sh" "$LV_REPO/hooks/$LV_SOFT_ONE.sh"
+  lv "guard and non-guard missing: guard named"     "$LV_HOME"  "hooks/guard-mcp.sh"
+  lv "guard and non-guard missing: non-guard named" "$LV_HOME"  "hooks/$LV_SOFT_ONE.sh"
+  printf '#!/bin/sh\n' > "$LV_REPO/hooks/guard-mcp.sh"; chmod +x "$LV_REPO/hooks/guard-mcp.sh"
+  printf '#!/bin/sh\n' > "$LV_REPO/hooks/$LV_SOFT_ONE.sh"; chmod +x "$LV_REPO/hooks/$LV_SOFT_ONE.sh"
+elif [[ -n "$LV_SOFT_ONE" ]]; then
+  printf 'FAIL  %-14s %s\n' "liveness" "soft hook $LV_SOFT_ONE is not in the check's list, so the fixture has no stub"
+  fails=$((fails+1))
+fi
+
+# hm <label> <command> <hook>: with every guard present, <hook> missing reads
+# HOOKS MISSING. The session stays guarded, so telling it it is unguarded, or
+# to stop work, would overstate it.
+hm() {
+  local label="$1" cmd="$2" hook="$3" out rc verdict
+  # Said by name: a hook the fixture never stubbed would otherwise run the
+  # check on a healthy install and show up only as unparseable output.
+  if [[ ! -x "$LV_REPO/hooks/$hook.sh" ]]; then
+    printf 'FAIL  %-14s %s  -- %s\n' "liveness" "$label" "the fixture has no stub for hooks/$hook.sh"
+    fails=$((fails+1))
+    return
+  fi
+  rm "$LV_REPO/hooks/$hook.sh"
+  out=$(HOME="$LV_HOME" sh -c "$cmd" 2>&1); rc=$?
+  printf '#!/bin/sh\n' > "$LV_REPO/hooks/$hook.sh"; chmod +x "$LV_REPO/hooks/$hook.sh"
+  verdict=$(printf '%s' "$out" | python3 -c '
+import json, sys
+want, rc, out = sys.argv[1], int(sys.argv[2]), sys.stdin.read()
+if rc != 0:
+    sys.exit(print("exit %d: a SessionStart hook must never fail" % rc))
+try:
+    d = json.loads(out)
+except ValueError:
+    sys.exit(print("not valid JSON: %r" % out[:80]))
+msg = d.get("systemMessage", "")
+ctx = d.get("hookSpecificOutput", {})
+note = ctx.get("additionalContext", "")
+ok = (msg.startswith("HOOKS MISSING") and want in msg
+      and "GUARDS OFF" not in out
+      and ctx.get("hookEventName") == "SessionStart"
+      and want in note
+      and "unguarded" not in note and "Do not run" not in note)
+print("ok" if ok else "warning incomplete: %r" % out[:120])
+' "hooks/$hook.sh" "$rc")
+  if [[ "$verdict" == ok ]]; then
+    printf 'PASS  %-14s %s\n' "liveness" "$label"
+  else
+    printf 'FAIL  %-14s %s  -- %s\n' "liveness" "$label" "$verdict"
+    fails=$((fails+1))
+  fi
+}
+for g in $LV_SOFT; do
+  hm "a missing $g reads HOOKS MISSING, not GUARDS OFF" "$LIVENESS" "$g"
+done
+lv "restored again after HOOKS MISSING"           "$LV_HOME"  silent
+
+# Only the hooks in the soft list are soft. Any other name in the list, such
+# as a blocking hook added later without the guard- prefix, must fall through
+# to GUARDS OFF: an unknown hook missing fails closed.
+LV_EXTRA=$(printf '%s' "$LIVENESS" | sed 's/\(for g in [A-Za-z0-9_ -]*\); do /\1 new-blocker; do /')
+if [[ "$LV_EXTRA" == "$LIVENESS" ]]; then
+  printf 'FAIL  %-14s %s\n' "liveness" "could not add a hook to the shipped list"
+  fails=$((fails+1))
+else
+  printf '#!/bin/sh\n' > "$LV_REPO/hooks/new-blocker.sh"; chmod +x "$LV_REPO/hooks/new-blocker.sh"
+  LIVENESS_SHIPPED="$LIVENESS"; LIVENESS="$LV_EXTRA"
+  lv "an added hook without the guard- prefix is silent when present" "$LV_HOME" silent
+  rm "$LV_REPO/hooks/new-blocker.sh"
+  lv "an added hook without the guard- prefix reads GUARDS OFF" "$LV_HOME" "hooks/new-blocker.sh"
+  LIVENESS="$LIVENESS_SHIPPED"
+fi
 
 echo
 if [[ $fails -eq 0 ]]; then echo "ALL PASS"; exit 0; else echo "$fails FAILURE(S)"; exit 1; fi

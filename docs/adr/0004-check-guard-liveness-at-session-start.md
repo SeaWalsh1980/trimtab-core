@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted.
+Accepted. Amended 2026-10-17: the check also names the four non-guard hooks
+the base registers, and a missing one of those reads `HOOKS MISSING` rather
+than `GUARDS OFF`; see
+[Amendment (2026-10-17)](#amendment-2026-10-17).
 
 ## Context
 
@@ -94,3 +97,70 @@ stays silent; a guard that is not executable is named; a moved checkout
 names the dangling guards and rules; a machine with no install at all gets a
 warning; and a restored install is silent again. Every warning is checked to
 be valid JSON with both fields.
+
+## Amendment (2026-10-17)
+
+**Context.** The check named the five guards only (four when this record was
+written; `guard-mcp` came with ADR 0013). `pr-body-check`, `doctrine-drift`,
+`session-path` and `rule-usage` are registered too, and a missing one fails
+the same silent way: Claude Code treats a hook that cannot run (exit 127) as
+a non-blocking error.
+
+**Decision.** The check's list names all nine hook scripts, in one `for g in`
+loop, so the guard matrix still reads the list from it. Guards and the other
+hooks get different messages:
+
+- A missing guard, or missing `rules`, `bin` or `CLAUDE.md`, reads
+  `GUARDS OFF` and names every missing path.
+- When every guard is present and only `pr-body-check`, `doctrine-drift`,
+  `session-path` or `rule-usage` is missing, the check reads `HOOKS MISSING`,
+  names those, and asks for bootstrap to be re-run without telling the
+  session to stop work.
+
+Those four are named in the check; any other name in its list, one added
+later included, counts as a guard. The check stays one inline POSIX command
+ending `exit 0`. A guard-matrix case checks that every hook script
+`settings.base.json` registers is in the list, so a hook registered later
+cannot be left out of it silently.
+
+**Options considered.**
+- *One `GUARDS OFF` message for all nine hooks.* Drafted first, in #67, and
+  rejected before it shipped: it tells a guarded session that every tool call
+  is unguarded and not to run state-changing commands. A missing usage log
+  leaves every guard in place, and an operator who sees `GUARDS OFF` for one
+  learns to ignore it on the day the guards really are gone.
+- *Count a hook as a guard by its `guard-` prefix.* Rejected: it fails open.
+  A blocking guard added later under another name would, when missing, tell
+  an unguarded session that its guards are installed.
+- *Keep the list to the guards and add a second check for the rest.*
+  Rejected: two inline commands to keep in step, and the guard matrix reads
+  its list from one `for g in` loop.
+- *Derive the list from the registered commands at session start.* Rejected:
+  it needs a JSON parser, and this check deliberately uses only POSIX `sh` and
+  `test` (Decision above).
+
+**Consequences.**
+- Two messages to keep correct instead of one; the guard matrix tests both,
+  for each of the four soft hooks.
+- A new non-guard hook must be added to the soft list too, or when missing it
+  reads `GUARDS OFF`: the check can overstate a fault, never understate it.
+- When `GUARDS OFF` fires for another reason, it lists any missing non-guard
+  hooks with the guards, and the model's text calls them all guard hooks.
+- The guard matrix stubs every name the shipped command lists, so it follows
+  the longer list unchanged.
+
+**Measured.** In the guard matrix, against a throwaway install, on top of the
+cases above: each of the four soft hooks missing reads `HOOKS MISSING`,
+names the hook in both fields, and never says unguarded or to stop work; a
+guard and a soft hook missing together read `GUARDS OFF` and name both, in
+both fields; the install is silent again once restored; a hook added to the
+list without the `guard-` prefix is silent when present and reads `GUARDS OFF`
+when missing; and every hook script `settings.base.json` registers is in the
+list. The guard and soft lists are read from the shipped command, not
+repeated in the test. Each new assertion was checked to fail on its
+regression: classifying by the `guard-` prefix, printing only the guards in
+the model's text, narrowing the soft list, adding "unguarded" to the note,
+and dropping a registered hook from the list.
+
+**Status.** Accepted. Amends the Decision's "each of the four guard scripts"
+and the `GUARDS OFF`-only description of the two fields.
