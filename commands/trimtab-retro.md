@@ -45,6 +45,13 @@ or comment you create with `trimtab verify-body`, which takes the platform's
 footer off or restores the attribution line it replaced; if it does not exit 0,
 stop and report it.
 
+**Read before writing.** Steps 2 and 3, and step 5's measurement
+(`trimtab lint structure`), only read: run them all before step 4 opens
+anything, then open step 4's proposals, then step 5's structure PR. A stop at
+a write, such as a `verify-body` exit 1, then loses only the writes after it,
+and the report still carries every count. Step 1's ingest apply is the one
+write ahead of them, because step 2 reads the PRs it records.
+
 ## 0. Setup
 
 ```bash
