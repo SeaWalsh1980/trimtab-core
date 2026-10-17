@@ -18,6 +18,7 @@ import re
 import subprocess
 import time
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Callable, Iterator, Mapping
 from urllib.parse import quote, unquote, urlencode
@@ -26,7 +27,7 @@ from trimtab.capture.ingest import PullRequest
 from trimtab.capture.written import SETTLE_SECONDS, WrittenBodyError, verify_bodies
 from trimtab.ids import ANY_ID_SHAPE
 from trimtab.dependabot import CiRun, HostError, PullRequestView
-from trimtab.propose import Filer
+from trimtab.propose import Filer, PullTitle
 from trimtab.upstream import Issue
 
 GH_TIMEOUT_SECONDS = 60
@@ -133,28 +134,33 @@ class GhApi:
 
 
 @dataclass(frozen=True)
-class _ClosedPull:
-    """One row of a repository's closed pulls: merged_at is "" for a PR closed without merging."""
+class _PullRow:
+    """One row of a repository's pulls, open or closed: merged_at is "" unless it merged."""
 
     number: int
     body: str
     merged_at: str
     updated_at: str
     labels: frozenset[str]
+    title: str
+    closed_at: str
 
     def pull(self) -> PullRequest:
         return PullRequest(self.number, self.body, self.merged_at)
 
 
-def _closed_pull(r) -> _ClosedPull:
+def _pull_row(r) -> _PullRow:
+    """The one parser for a `pulls` row, open or closed: a row that does not have the expected shape is refused."""
     what = "gh api pulls"
     try:
-        row = _ClosedPull(number=r["number"], body=r.get("body") or "", merged_at=r["merged_at"] or "",
-                          updated_at=r["updated_at"], labels=frozenset(label["name"] for label in r["labels"]))
+        row = _PullRow(number=r["number"], body=r.get("body") or "", merged_at=r["merged_at"] or "",
+                          updated_at=r["updated_at"], labels=frozenset(label["name"] for label in r["labels"]),
+                          title=r["title"], closed_at=r.get("closed_at") or "")
     except (KeyError, TypeError, AttributeError) as err:
         raise SourceError(f"{what} returned unexpected JSON") from err
     if not (_is_int(row.number) and isinstance(row.body, str) and isinstance(row.merged_at, str)
-            and isinstance(row.updated_at, str) and all(isinstance(n, str) for n in row.labels)):
+            and isinstance(row.updated_at, str) and all(isinstance(n, str) for n in row.labels)
+            and isinstance(row.title, str) and isinstance(row.closed_at, str)):
         raise SourceError(f"{what} returned unexpected JSON")
     return row
 
@@ -162,6 +168,24 @@ def _closed_pull(r) -> _ClosedPull:
 def _within_scan(limit: int) -> None:
     if limit > SCAN_LIMIT:
         raise SourceError(f"a scan of closed PRs reads at most {SCAN_LIMIT}; lower the limit")
+
+
+def _window_day(merged_at: str, closed_at: str, updated_at: str) -> str:
+    """The day that puts a closed PR in the window: a merged one by when it merged, one closed unmerged by when it
+    closed (else its last update). A later comment or label brings neither back."""
+    return (merged_at or closed_at or updated_at)[:10]
+
+
+def _require_day(closed_since: str | None) -> None:
+    """The window is compared as a day against updated_at, closed_at and the scan's floor."""
+    if closed_since is not None and not real_day(closed_since):
+        raise SourceError("closed_since must be a YYYY-MM-DD date")
+
+
+def _require_titles(rows: list, what: str) -> None:
+    """Every row read carries a title, as GitHub's do: one without is refused, never matched as ''."""
+    if not all(isinstance(r, dict) and isinstance(r.get("title"), str) for r in rows):
+        raise SourceError(f"{what}: a row has no title")
 
 
 class GhSource:
@@ -177,9 +201,12 @@ class GhSource:
     def __init__(self, repo: str, run: Run | None = None):
         self.repo = repo
         self.api = GhApi(run)
-        # Floor -> closed PRs updated since it. The ledger rebuild and the
-        # ingest in one run read the same listing; it is fetched once (ENG-6.2).
-        self._scans: dict[str, list[_ClosedPull]] = {}
+        # The closed PRs' pages read so far, most recently updated first. The
+        # ledger rebuild, the ingest and the PR check in one run read the same
+        # listing: an earlier date continues from the last page read rather
+        # than starting again, so each page is fetched once (ENG-6.2).
+        self._pages: list[list[_PullRow]] = []
+        self._exhausted = False
 
     def unlabelled_merged(self, label: str, merged_since: str | None, limit: int) -> list[PullRequest]:
         # Oldest merged first (ADR 0005), so a bounded run makes progress rather
@@ -202,42 +229,55 @@ class GhSource:
                 if r.merged_at and r.merged_at[:10] >= merged_since and label in r.labels]
         return [r.pull() for r in sorted(rows, key=lambda r: (r.merged_at, r.number), reverse=True)[:limit]]
 
-    def _page(self, order: Mapping[str, str], page: int) -> list[_ClosedPull]:
+    def recent_pulls(self, closed_since: str | None) -> list[PullTitle]:
+        """Open PRs, and closed ones in the window, from the closed-PR pages ingest reads: a page already read is not
+        fetched again. A closed PR counts by when it merged or closed, not when it was last touched: a comment on an
+        old fix or decline does not bring it back into the window."""
+        what = "gh api pulls"
+        _require_day(closed_since)
+        rows = self.api.all_pages(f"repos/{self.repo}/pulls", {"state": "open"}, SCAN_LIMIT, what)
+        found = [PullTitle(r.number, r.title, "open") for r in map(_pull_row, rows)]
+        if closed_since:
+            found += [PullTitle(r.number, r.title, "merged" if r.merged_at else "closed", r.merged_at, r.closed_at)
+                      for r in self._closed_since(closed_since)
+                      if _window_day(r.merged_at, r.closed_at, r.updated_at) >= closed_since]
+        return found
+
+    def _page(self, order: Mapping[str, str], page: int) -> list[_PullRow]:
         data = self.api.json("GET", f"repos/{self.repo}/pulls", "gh api pulls",
                              query={"state": "closed", **order, "per_page": PER_PAGE, "page": page})
         if not isinstance(data, list):
             raise SourceError("gh api pulls returned unexpected JSON")
-        return [_closed_pull(r) for r in data]
+        return [_pull_row(r) for r in data]
 
     def _too_many(self, since: str) -> SourceError:
         return SourceError(f"more than {SCAN_LIMIT} closed PRs on {self.repo} {since}; "
                            "refusing to work from a partial list")
 
-    def _closed_since(self, floor: str) -> list[_ClosedPull]:
-        # A wider scan already read serves a narrower floor, so the rows can
-        # reach back before `floor`, unmerged ones included: every caller
-        # filters by merged_at itself.
-        for scanned, rows in self._scans.items():
-            if scanned <= floor:
-                return rows
-        found: dict[int, _ClosedPull] = {}
-        page = 1
-        while True:
-            batch = self._page({"sort": "updated", "direction": "desc"}, page)
+    def _closed_since(self, floor: str) -> list[_PullRow]:
+        # The rows can reach back before `floor`, unmerged ones included:
+        # every caller filters by merged_at or updated_at itself.
+        def reached() -> bool:
+            return self._exhausted or bool(self._pages and self._pages[-1]
+                                           and self._pages[-1][-1].updated_at[:10] < floor)
+
+        while not reached():
+            if len(self._pages) * PER_PAGE >= SCAN_LIMIT:
+                raise self._too_many(f"were updated since {floor}")
+            batch = self._page({"sort": "updated", "direction": "desc"}, len(self._pages) + 1)
+            self._pages.append(batch)
+            if len(batch) < PER_PAGE:
+                self._exhausted = True
+        found: dict[int, _PullRow] = {}
+        for batch in self._pages:
             for r in batch:
                 # A PR updated during the scan shifts the pages and can be seen twice.
                 found.setdefault(r.number, r)
-            if len(batch) < PER_PAGE or batch[-1].updated_at[:10] < floor:
-                break
-            if page * PER_PAGE >= SCAN_LIMIT:
-                raise self._too_many(f"were updated since {floor}")
-            page += 1
-        self._scans[floor] = list(found.values())
-        return self._scans[floor]
+        return list(found.values())
 
-    def _oldest_unlabelled(self, label: str, limit: int) -> list[_ClosedPull]:
+    def _oldest_unlabelled(self, label: str, limit: int) -> list[_PullRow]:
         """With no date, the oldest created first, until `limit` unlabelled merged PRs are found."""
-        found: dict[int, _ClosedPull] = {}
+        found: dict[int, _PullRow] = {}
         page = 1
         while True:
             batch = self._page({"sort": "created", "direction": "asc"}, page)
@@ -264,7 +304,8 @@ class GhSource:
 
 
 class FixtureSource:
-    """PRs from a JSON file: `[{"number", "body", "merged_at", "labels"}]`.
+    """PRs from a JSON file: `[{"number", "title", "body", "merged_at", "labels"}]`, plus `state`, `closed_at` and
+    `updated_at` for the PR check (`recent_pulls`), which refuses a row with no title.
 
     Labels are written back to the file, so a scratch run behaves like a repo.
     """
@@ -275,16 +316,43 @@ class FixtureSource:
     def _rows(self) -> list[dict]:
         return json.loads(self.path.read_text(encoding="utf-8"))
 
+    @staticmethod
+    def _merged(r: dict) -> bool:
+        """A row marked open is open, whatever else it carries: never merged evidence."""
+        return bool(r.get("merged_at")) and r.get("state") != "open"
+
     def unlabelled_merged(self, label: str, merged_since: str | None, limit: int) -> list[PullRequest]:
         rows = sorted(self._rows(), key=lambda r: r["number"])
-        todo = [r for r in rows if label not in r.get("labels", [])
+        todo = [r for r in rows if self._merged(r) and label not in r.get("labels", [])
                 and (merged_since is None or r["merged_at"][:10] >= merged_since)]
         return [PullRequest(r["number"], r.get("body", ""), r["merged_at"]) for r in todo[:limit]]
 
     def labelled_merged(self, label: str, merged_since: str, limit: int) -> list[PullRequest]:
         rows = sorted(self._rows(), key=lambda r: r["number"], reverse=True)
-        done = [r for r in rows if label in r.get("labels", []) and r["merged_at"][:10] >= merged_since]
+        done = [r for r in rows if self._merged(r) and label in r.get("labels", [])
+                and r["merged_at"][:10] >= merged_since]
         return [PullRequest(r["number"], r.get("body", ""), r["merged_at"]) for r in done[:limit]]
+
+    def recent_pulls(self, closed_since: str | None) -> list[PullTitle]:
+        """Rows `{"number", "title", "state", "merged_at", "closed_at", "updated_at"}`: `"state": "open"` is open, the
+        rest closed, merged when `merged_at` is set; dated into the window as `GhSource` dates them."""
+        def state(r):
+            return "open" if r.get("state") == "open" else "merged" if self._merged(r) else "closed"
+
+        def recent(r):
+            s = state(r)
+            if s == "open":
+                return True
+            when = _window_day((r.get("merged_at") or "") if s == "merged" else "", r.get("closed_at") or "",
+                               r.get("updated_at") or "")
+            return closed_since is not None and when >= closed_since
+
+        _require_day(closed_since)
+        everything = self._rows()
+        _require_titles(everything, "fixture pulls")
+        rows = [r for r in everything if recent(r)]
+        return [PullTitle(r["number"], r["title"], state(r), r["merged_at"] if self._merged(r) else "",
+                          r.get("closed_at") or "") for r in rows]
 
     def add_label(self, number: int, label: str) -> None:
         rows = self._rows()
@@ -362,6 +430,17 @@ ISSUE_LIMIT = 500  # bounded: issues one label listing reads; more is an error, 
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
+def real_day(text: str) -> bool:
+    """A YYYY-MM-DD day that exists: the shape alone lets `2026-02-30` through."""
+    if not DATE.fullmatch(text):
+        return False
+    try:
+        date.fromisoformat(text)
+    except ValueError:
+        return False
+    return True
+
+
 def _issues_only(rows: list, what: str) -> list[dict]:
     """The issues endpoint lists pull requests too; they carry a `pull_request` key."""
     if not all(isinstance(r, dict) for r in rows):
@@ -380,9 +459,7 @@ class GhIssues:
 
     def recent_titles(self, label: str, closed_since: str | None) -> list[str]:
         what = "gh api issues"
-        if closed_since is not None and not DATE.fullmatch(closed_since):
-            # Both the `since` query and the closed_at comparison read it as a day.
-            raise SourceError("closed_since must be a YYYY-MM-DD date")
+        _require_day(closed_since)  # both the `since` query and the closed_at comparison read it as a day
         rows = self._issues(label, {"state": "open"})
         if closed_since:
             # `since` bounds by update time, and an issue is updated when it closes,
@@ -565,11 +642,15 @@ class FixtureIssues:
         return json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else []
 
     def recent_titles(self, label: str, closed_since: str | None) -> list[str]:
+        _require_day(closed_since)
+
         def recent(r):
             if r.get("state", "open") == "open":
                 return True
             return closed_since is not None and (r.get("closed_at") or "")[:10] >= closed_since
-        return [r["title"] for r in self._rows() if label in r.get("labels", []) and recent(r)]
+        everything = self._rows()
+        _require_titles(everything, "fixture issues")
+        return [r["title"] for r in everything if label in r.get("labels", []) and recent(r)]
 
     def create(self, title: str, body: str, labels) -> str:
         rows = self._rows()

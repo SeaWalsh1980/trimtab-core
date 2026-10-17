@@ -25,6 +25,7 @@ class Tally:
     valid: int = 0
     feedback: dict = field(default_factory=lambda: defaultdict(dict))  # (id, scope) -> {pr: (kind, evidence)}
     applied: Counter = field(default_factory=Counter)
+    merged_at: dict = field(default_factory=dict)  # pr -> when it merged
 
     @property
     def coverage(self) -> tuple[int, int]:
@@ -42,6 +43,7 @@ def tally(records: Iterable, since: str | None = None) -> Tally:
             continue
         t.total += 1
         t.valid += 1 if r.valid else 0
+        t.merged_at[r.number] = r.merged_at
         t.applied.update(set(r.applied) - {"none"})
         for f in r.feedback:
             t.feedback[(f.id, f.scope)].setdefault(r.number, (f.kind, f.evidence))
@@ -59,5 +61,6 @@ def candidates(t: Tally, threshold: int = THRESHOLD) -> list[Proposal]:
             kinds=tuple(sorted({prs[n][0] for n in numbers})),
             evidence=tuple(prs[n][1] for n in numbers),
             prs=numbers,
+            merged_at=tuple(t.merged_at.get(n, "") for n in numbers),
         ))
     return out
