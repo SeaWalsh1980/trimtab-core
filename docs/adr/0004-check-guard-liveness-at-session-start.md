@@ -9,6 +9,10 @@ than `GUARDS OFF`; see
 bootstrap runs the installed check and refuses an install where it stays
 silent or names an installed guard as missing; see
 [Amendment (2026-10-17, bootstrap self-probe)](#amendment-2026-10-17-bootstrap-self-probe).
+Also 2026-10-17:
+[ADR 0028](0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md)
+(proposed) adds a fifth non-guard hook, `pr-monitor-record`, to the soft
+list; a missing recorder only denies Auto-fix, so it reads `HOOKS MISSING`.
 
 ## Context
 

@@ -9,6 +9,10 @@ product namespace is stripped before the verb check. See
 desktop app's UI, read-only and PR-monitoring tools pass by exact full
 name. Amended 2026-10-16: four verb-last GitHub reads pass by exact tool
 name. See [Amendment (2026-10-16): verb-last reads](#amendment-2026-10-16-verb-last-reads).
+Amended 2026-10-17 by
+[ADR 0028](0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md)
+(proposed): for `mcp__ccd_pr__set_monitor` only, guard-mcp reads the call's
+arguments and denies rather than asks.
 
 ## Context
 

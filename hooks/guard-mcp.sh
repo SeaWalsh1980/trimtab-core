@@ -9,11 +9,20 @@
 # Answers, always with exit 0:
 #   no output                      no decision; the session's permission rules apply
 #   permissionDecision "ask"       the operator is prompted for this call
+#   permissionDecision "deny"      refused, with a reason the model reads; for
+#                                  mcp__ccd_pr__set_monitor only (ADR 0028)
 # Unlike the other guards this one never exits 2: the operator wants to approve
 # a write, not lose the tool. Outside an interactive session an ask ends as a
 # denial (measured, ADR 0013).
 #
-# Classifies by tool name only, never by the call's arguments:
+# Classifies by tool name only, never by the call's arguments, with one
+# exception:
+#   mcp__ccd_pr__set_monitor (CCD_OWN_PR below)     -> pass when its url is a PR
+#                                                      this session created, or
+#                                                      it is the auto-archive
+#                                                      switch alone; deny
+#                                                      otherwise, never ask
+#                                                      (ADR 0028)
 #   a full name on the desktop app's exact-name list
 #   (CCD_ALLOW below, ADR 0027)                     -> pass
 #   a <tool> part on the verb-last read list, on any
@@ -48,6 +57,11 @@ ask() { # ask <reason>
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"guard-mcp: %s"}}\n' "$1"
   exit 0
 }
+# The same contract for a deny: fixed text, never the arguments.
+deny() { # deny <reason>
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"guard-mcp: %s"}}\n' "$1"
+  exit 0
+}
 
 payload=$(cat)
 
@@ -77,6 +91,44 @@ fi
 [[ "$name" =~ ^mcp__[A-Za-z0-9_-]+$ ]] \
   || ask "the call is not named as an MCP tool (mcp__<server>__<tool>), so it cannot be classified. Approve it only if you intended it."
 
+# Auto-fix on a PR, by exact full name (ADR 0028). It passes only for a PR this
+# session created, as recorded by hooks/pr-monitor-record.sh, and is otherwise
+# denied rather than asked: an ask waits for a person, and the point of passing
+# it is a session that runs unattended. The arguments are read by the shared
+# module, never here, and never reach the reason.
+CCD_OWN_PR=(
+  mcp__ccd_pr__set_monitor
+)
+own_pr_denied="Auto-fix passes only for a PR this session created with a lone gh pr create or a gh api POST to pulls (optionally after cd <path> && and git push ... &&), and only with its url. This url is not on the session's list. Do not retry with another PR's url; carry on without Auto-fix and report it to the operator (ADR 0028)."
+for owned in "${CCD_OWN_PR[@]}"; do
+  [[ "$name" == "$owned" ]] || continue
+  # Builtins only, so the hooks link resolves to the checkout that holds the
+  # package even on a PATH with nothing but python3.
+  here=$(cd -P "${BASH_SOURCE[0]%/*}" 2>/dev/null && pwd -P) \
+    || deny "the set_monitor check could not locate itself, so it is denied (fail closed, ADR 0028). Carry on without Auto-fix and report it to the operator."
+  if ! command -v python3 >/dev/null 2>&1 || ! python3 -P -c '' >/dev/null 2>&1; then
+    deny "the set_monitor check needs python3 3.11 or later, which is not available, so it is denied (fail closed, ADR 0028). Carry on without Auto-fix and report it to the operator."
+  fi
+  verdict=$(printf '%s' "$payload" | PYTHONPATH="$here/.." python3 -P -B -m trimtab.adapters.pr_monitor check 2>/dev/null)
+  rc=$?
+  # A verdict counts only from a check that ran to the end. A crash, an empty
+  # answer or one this guard does not know says nothing about the url, so its
+  # reason must not blame the url. $rc is an integer, safe in the JSON reason.
+  [[ $rc -eq 0 ]] || verdict="(failed)"
+  case "$verdict" in
+    pass)
+      exit 0 ;;
+    not-recorded)
+      deny "$own_pr_denied" ;;
+    no-url)
+      deny "set_monitor with auto_fix or address_comments needs the url of a PR this session created; call it again with url (ADR 0028)." ;;
+    bad-arguments)
+      deny "set_monitor was called with arguments this guard does not read, so it cannot be checked (fail closed, ADR 0028)." ;;
+    *)
+      deny "the set_monitor check could not run to a verdict (exit $rc), so it is denied (fail closed, ADR 0028). This says nothing about the url. Carry on without Auto-fix and report it to the operator." ;;
+  esac
+done
+
 # The desktop app's own tools that only drive its UI or read its state pass, by
 # exact full name (ADR 0027). Never a prefix or a glob: the same app servers
 # also merge, escalate and destroy. A name not listed falls through to the
@@ -88,7 +140,7 @@ CCD_ALLOW=(
   mcp__ccd_window__get_window_layout mcp__ccd_window__open_session_in
   mcp__ccd_window__close_split mcp__ccd_window__set_sidebar_collapsed
   mcp__ccd_pr__get_status
-  mcp__ccd_pr__unbind_pr mcp__ccd_pr__set_monitor
+  mcp__ccd_pr__unbind_pr
   mcp__ccd_session_mgmt__get_session mcp__ccd_session_mgmt__list_sessions
   mcp__ccd_session_mgmt__list_events mcp__ccd_session_mgmt__get_usage
   mcp__ccd_session_mgmt__search_session_transcripts

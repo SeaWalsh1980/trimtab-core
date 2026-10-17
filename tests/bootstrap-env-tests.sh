@@ -396,6 +396,43 @@ check_silent_guard_mcp_fails_the_install() {
   fi
 }
 
+# guard-mcp must deny set_monitor for a PR the session did not create
+# (ADR 0028). A guard that passes it by name, as before that record, lets
+# Auto-fix reach any PR the app binds: the install must refuse it. The stub
+# passes set_monitor whole and hands every other call to the real guard, so the
+# earlier guard-mcp probes still see a guard that asks.
+check_set_monitor_by_name_fails_the_install() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  mv "$snap_new/hooks/guard-mcp.sh" "$snap_new/hooks/guard-mcp-real.sh"
+  printf '#!/usr/bin/env bash\np=$(cat)\ncase "$p" in *mcp__ccd_pr__set_monitor*) exit 0 ;; esac\nprintf "%%s" "$p" | "${BASH_SOURCE[0]%%/*}/guard-mcp-real.sh"\n' \
+    > "$snap_new/hooks/guard-mcp.sh"
+  chmod +x "$snap_new/hooks/guard-mcp.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"guard-mcp asks about an MCP write"* \
+     && "$out" == *"guard-mcp did not deny set_monitor for another PR"* ]]; then
+    pass "a guard-mcp that passes set_monitor by name fails the install"
+  else
+    fail "a guard-mcp that passes set_monitor by name fails the install" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# ...and a correct install proves the pair end to end: the recorder's create
+# passes, another PR and another session are denied.
+check_set_monitor_probe_reports_green() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"guard-mcp denies set_monitor for a PR the session did not create"* \
+     && "$out" == *"guard-mcp denies set_monitor for a PR another session created"* \
+     && "$out" == *"guard-mcp passes set_monitor for a PR the recorder saw the session create"* ]]; then
+    pass "an install proves set_monitor passes only for the session's own PR"
+  else
+    fail "an install proves set_monitor passes only for the session's own PR" "rc=$rc"; echo "$out" | grep -i set_monitor | tail -6
+  fi
+}
+
 # pr-body-check fails open by design, so a broken one is silent: every PR would
 # open without the harness block. It is policy with CI as the gate, so the run
 # installs but ends NOT GREEN and deletes nothing, as for the observer.
@@ -1097,6 +1134,8 @@ check_rerun_from_same_base_keeps_predecessor
 check_sandbox_without_own_store_leaves_store_alone
 check_observer_failure_records_but_withholds_retention
 check_silent_guard_mcp_fails_the_install
+check_set_monitor_by_name_fails_the_install
+check_set_monitor_probe_reports_green
 check_silent_pr_body_check_ends_not_green
 check_silent_liveness_check_fails_the_install
 check_liveness_check_that_always_fires_fails_the_install
