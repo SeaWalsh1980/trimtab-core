@@ -44,11 +44,18 @@ check failed on NotebookEdit alone.
 
 - The guard-paths matcher becomes `Read|Edit|Write|MultiEdit|NotebookEdit|Bash`.
 - `parse()` reads the target as `file_path`, then `notebook_path`, then
-  `path`, in both branches: the order guard-security uses. An empty key is
-  skipped in both. jq's `//` alone keeps an empty string where python3's `or`
-  skips it, so a payload with `file_path: ""` and a protected later key was
-  allowed with jq and blocked without it; found in review, and pinned by two
-  matrix cases.
+  `path`, in both branches: the order guard-security uses. Only a non-empty
+  string counts, in both. jq's `//` alone keeps an empty string, `0`, `[]`
+  and `{}`, which python3's `or` skips, so a payload with `file_path: ""` and
+  a protected later key was allowed with jq and blocked without it, and jq
+  printed an array path over several lines; found in review.
+- A target path that holds a newline or carriage return fails the parse, so
+  the call blocks, whatever the tool. Found in review, and older than this
+  record: the parse emits path, command and tool name one per line, so a
+  newline in the path pushed its tail onto the later lines. A Write to
+  `<config>/skills/a\n\nRead\n/SKILL.md` was split with tool name `Read`,
+  skipped the control-plane check, and was allowed in both branches, while
+  the tool would create a skill directory under the live tree.
 - The matrix pins the registration as it ships: guard-paths is registered
   once under PreToolUse with the 10 s timeout, and its matcher matches each
   of Read, Edit, Write, MultiEdit, NotebookEdit and Bash in full.
@@ -68,6 +75,15 @@ check failed on NotebookEdit alone.
   than this gap needs, and its own decision.
 - **A separate hook for notebooks.** Rejected. It would be a second copy of
   the path policy that must stay in step with the first.
+- **Collapse a path's line breaks to spaces, as the command's are.**
+  Rejected. The guard would then check a path that is not the one the tool
+  writes. It blocks the cases above only because the roots are prefixes; an
+  exact-file root or a deny-listed name would be compared against the wrong
+  string.
+- **Emit the fields NUL-separated, or tool name first.** Rejected for now.
+  It removes the class, but changes the split in both branches and every
+  guard that copies it; a path with a line break has no legitimate use, so
+  refusing it closes the hole with a one-line test per branch.
 
 ## Consequences
 
@@ -85,7 +101,13 @@ check failed on NotebookEdit alone.
   is expected, and the registration check on NotebookEdit), with and without
   jq, and every other case passes, the NotebookEdit allow case included. The
   previous matrix still passes against this change, with and without jq.
-- No new fork or exec: one more key in each parse branch.
+- The review fixes were each shown the same way: against the guard before
+  them, the cases fail with exit 0 and pass after: the 2 empty-string cases
+  with jq only, and the 3 non-string and 5 line-break cases, 8 with jq and 5
+  without (the python3 branch already skipped false-y keys).
+- A Read of a path with a line break now blocks too. Such a name has no
+  legitimate use, and the check runs before the tool is known.
+- No new fork or exec: one more key, and one test, in each parse branch.
 - Gaps that remain:
   - guard-secrets is registered on `Write|Edit|MultiEdit` and reads only
     `file_path`, so a NotebookEdit's `new_source` is never scanned for

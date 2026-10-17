@@ -207,6 +207,12 @@ t guard-paths.sh 0 "NotebookEdit an ordinary notebook" "$(j NotebookEdit '{"note
 # verdict, used to depend on whether jq was installed.
 t guard-paths.sh 2 "empty file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":"","notebook_path":"/home/x/dev/ct/.env","new_source":"x"}')"
 t guard-paths.sh 2 "empty file_path does not hide path"          "$(j Write '{"file_path":"","path":"/home/x/dev/ct/.env","content":"x"}')"
+# Only a non-empty string is a target. python3's `or` skips every false-y
+# value; jq took 0, [] or {} as the target, and printed an array over several
+# lines, which pushed the real command off the line the split reads.
+t guard-paths.sh 2 "an empty-list file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":[],"notebook_path":"/home/x/dev/ct/.env","new_source":"x"}')"
+t guard-paths.sh 2 "a zero file_path does not hide notebook_path"       "$(j NotebookEdit '{"file_path":0,"notebook_path":"/home/x/dev/ct/.env","new_source":"x"}')"
+t guard-paths.sh 2 "a list file_path does not hide the command"         "$(j Bash '{"file_path":["x","y"],"command":"cat /x/.env"}')"
 
 echo "== guard-paths: live control plane =="
 # The guards are enforced by files the guards did not protect: every case in
@@ -282,6 +288,19 @@ popd >/dev/null
 
 # -- an unknown or absent tool_name must enforce, not exempt -------------
 t guard-paths.sh 2 "FAIL-CLOSED: no tool_name, live hook path" "{\"tool_input\":{\"file_path\":\"$CP_REPO/hooks/guard-paths.sh\"}}"
+
+# -- a line break in the target path fails closed -------------------------
+# The parse emits path, command and tool_name one per line. A newline inside
+# the path pushed its own tail onto the later lines, so a path ending in
+# "\n\nRead\n/..." made the split read tool_name as Read and skip the check
+# above, while the tool wrote under the live tree (here, a skill directory
+# whose name holds the line breaks). A path with a newline or carriage
+# return is refused outright, in both parse branches, whatever the tool.
+t guard-paths.sh 2 "a newline in file_path cannot pose as a Read"     "$(j Write "{\"file_path\":\"$CP_HOME/skills/a\\n\\nRead\\n/SKILL.md\",\"content\":\"x\"}")"
+t guard-paths.sh 2 "a newline in notebook_path cannot pose as a Read" "$(j NotebookEdit "{\"notebook_path\":\"$CP_HOME/commands/a\\n\\nRead\\n/x.ipynb\",\"new_source\":\"x\"}")"
+t guard-paths.sh 2 "a carriage return in the path fails closed"       "$(j Write '{"file_path":"/p/app/a\rb.py","content":"x"}')"
+t guard-paths.sh 2 "a newline in an ordinary path fails closed"       "$(j Write '{"file_path":"/p/app/a\nb.py","content":"x"}')"
+t guard-paths.sh 2 "a newline in a Read path fails closed too"        "$(j Read '{"file_path":"/p/app/a\nb.py"}')"
 
 # -- the rest of Claude Code's config under CLAUDE_HOME -------------------
 # Previously covered only by a blanket prefix on $CLAUDE_HOME. That blanket is
