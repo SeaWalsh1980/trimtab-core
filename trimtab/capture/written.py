@@ -191,9 +191,14 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
                 failures.append(((kind, number), "the platform's session footer came back when the body sent was "
                                                  "written back"))
         elif again in IN_PLACE_OUTCOMES:
-            repeat = " again" if outcomes[(kind, number)] in IN_PLACE_OUTCOMES else ""
-            failures.append(((kind, number), f"the platform's footer replaced the attribution line{repeat} when the "
-                                             "body sent was written back"))
+            first = outcomes[(kind, number)]
+            repeat = " again" if first in IN_PLACE_OUTCOMES else ""
+            # A session link the first read did not carry is new, and the report says so.
+            published = (again is Readback.IN_PLACE and first not in (Readback.FOOTER, Readback.IN_PLACE))
+            footer = "session footer" if again is Readback.IN_PLACE else "footer"
+            failures.append(((kind, number), f"the platform's {footer} replaced the attribution line{repeat} when the "
+                                             "body sent was written back"
+                                             + ("; a session link is now published" if published else "")))
         elif again is not Readback.SAME:
             failures.append(((kind, number), "the body differs from the one sent after it was written again"))
     if errors and not failures:

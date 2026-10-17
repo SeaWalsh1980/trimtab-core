@@ -233,6 +233,26 @@ class VerifyBody(unittest.TestCase):
         self.assertIn("session footer appeared after the body sent", str(raised.exception))
         self.assertNotIn("came back", str(raised.exception))
 
+    def test_a_session_footer_in_place_after_a_generic_one_says_a_session_link_is_now_published(self):
+        bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, GENERIC),
+                                then=in_place_of_attribution(SENT, FOOTER))
+
+        with self.assertRaises(WrittenBodyError) as raised:
+            verify(bodies, SENT)
+
+        self.assertIn("a session link is now published", str(raised.exception))
+
+    def test_a_footer_in_place_names_no_new_session_link_unless_one_appeared(self):
+        for first, second in ((FOOTER, FOOTER), (FOOTER, GENERIC), (GENERIC, GENERIC)):
+            with self.subTest(first_generic=first is GENERIC, second_generic=second is GENERIC):
+                bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, first),
+                                        then=in_place_of_attribution(SENT, second))
+
+                with self.assertRaises(WrittenBodyError) as raised:
+                    verify(bodies, SENT)
+
+                self.assertNotIn("now published", str(raised.exception))
+
     def test_a_repeat_says_again_once(self):
         bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, FOOTER),
                                 then=in_place_of_attribution(SENT, FOOTER))
