@@ -18,6 +18,7 @@ import re
 import subprocess
 import time
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Callable, Iterator, Mapping
 from urllib.parse import quote, unquote, urlencode
@@ -177,7 +178,7 @@ def _window_day(merged_at: str, closed_at: str, updated_at: str) -> str:
 
 def _require_day(closed_since: str | None) -> None:
     """The window is compared as a day against updated_at, closed_at and the scan's floor."""
-    if closed_since is not None and not DATE.fullmatch(closed_since):
+    if closed_since is not None and not real_day(closed_since):
         raise SourceError("closed_since must be a YYYY-MM-DD date")
 
 
@@ -339,9 +340,10 @@ class FixtureSource:
             return "open" if r.get("state") == "open" else "merged" if self._merged(r) else "closed"
 
         def recent(r):
-            if state(r) == "open":
+            s = state(r)
+            if s == "open":
                 return True
-            when = _window_day(r.get("merged_at") or "" if state(r) == "merged" else "", r.get("closed_at") or "",
+            when = _window_day((r.get("merged_at") or "") if s == "merged" else "", r.get("closed_at") or "",
                                r.get("updated_at") or "")
             return closed_since is not None and when >= closed_since
 
@@ -426,6 +428,17 @@ def staged_files(cwd: Path) -> list[tuple[int, str, bytes]]:
 
 ISSUE_LIMIT = 500  # bounded: issues one label listing reads; more is an error, not a cut-off
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def real_day(text: str) -> bool:
+    """A YYYY-MM-DD day that exists: the shape alone lets `2026-02-30` through."""
+    if not DATE.fullmatch(text):
+        return False
+    try:
+        date.fromisoformat(text)
+    except ValueError:
+        return False
+    return True
 
 
 def _issues_only(rows: list, what: str) -> list[dict]:

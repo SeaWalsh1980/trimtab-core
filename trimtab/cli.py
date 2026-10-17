@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shlex
 import subprocess
 import sys
@@ -23,7 +22,7 @@ from trimtab.ids import ID_SHAPE
 from trimtab.items import ITEM_ID, Problem
 from trimtab.capture.sources import (
     FixtureContents, FixtureIssues, FixtureSource, GhBodies, GhContents, GhIssues, GhPullRequests, GhSource,
-    SourceError, changed_files, open_feedback_issues, staged_files,
+    SourceError, changed_files, open_feedback_issues, real_day, staged_files,
 )
 from trimtab.capture.written import SETTLE_SECONDS, Readback, WrittenBodyError, verify_body
 from trimtab.lint import overrides, references, structure
@@ -428,7 +427,7 @@ def _check_ids(text: str) -> dict[str, tuple[str, ...]]:
     for entry in filter(None, (e.strip() for e in text.split(","))):
         item_id, _, days = (part.strip() for part in entry.partition("="))
         parts = tuple(day.strip() for day in days.split("+"))
-        if not ITEM_ID.fullmatch(item_id) or not all(_real_day(day) for day in parts):
+        if not ITEM_ID.fullmatch(item_id) or not all(real_day(day) for day in parts):
             raise ValueError(f"--check-ids: {entry!r} is not ID=YYYY-MM-DD[+YYYY-MM-DD...]")
         if item_id in found:
             raise ValueError(f"--check-ids: {item_id} is given twice; list all its report days in one entry")
@@ -436,25 +435,15 @@ def _check_ids(text: str) -> dict[str, tuple[str, ...]]:
     return found
 
 
-def _real_day(text: str) -> bool:
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
-        return False
-    try:
-        date.fromisoformat(text)
-    except ValueError:
-        return False
-    return True
-
-
 def cmd_propose(args) -> int:
     try:
         check_ids = _check_ids(args.check_ids)
     except ValueError as err:
         print(f"error: {err}", file=sys.stderr)
-        return 2
+        return 1  # the command is wrong, not a listing: 2 means one could not be read
     if check_ids and (args.apply or not args.check_open):
         print("error: --check-ids goes with a --check-open dry run", file=sys.stderr)
-        return 2
+        return 1
     setup = _setup(args)
     if setup is None:
         return 1

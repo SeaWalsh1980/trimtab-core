@@ -396,6 +396,14 @@ class AFixtureRead(unittest.TestCase):
             with self.assertRaises(SourceError):
                 FixtureSource(path).recent_pulls("2026-9-1")
 
+    def test_a_window_that_is_not_a_real_date_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pulls.json"
+            path.write_text(json.dumps([]))
+
+            with self.assertRaises(SourceError):
+                FixtureSource(path).recent_pulls("2026-02-30")
+
     def test_an_issue_listing_with_a_window_that_is_not_a_day_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "issues.json"
@@ -633,7 +641,7 @@ class ConformanceCandidates(RunsTheCli):
                       "since, below the threshold of 2", dry)
 
     def test_a_fix_after_every_report_resolves_it(self):
-        dry = self.dry_run([self.fix("2026-10-15T00:00:00Z")])
+        dry = self.dry_run([self.fix("2026-10-16T00:00:00Z")])
 
         self.assertIn("--- also checked: CT-X-1, RESOLVED: #105 merged after the evidence", dry)
 
@@ -648,6 +656,12 @@ class ConformanceCandidates(RunsTheCli):
 
         self.assertIn("1 report(s) since, below the threshold of 2", dry)
 
+    def test_a_report_dated_the_day_before_the_fixs_utc_day_counts_as_after_it(self):
+        dry = self.dry_run([self.fix("2026-10-15T05:00:00Z")], "CT-X-1=2026-10-14+2026-10-16")
+
+        self.assertIn("--- also checked: CT-X-1, REOPENED: #105 merged; 2 report(s) since: 2026-10-14, 2026-10-16",
+                      dry)
+
     def test_a_report_day_given_twice_counts_once(self):
         dry = self.dry_run([self.fix("2026-10-15T00:00:00Z")], "CT-X-1=2026-10-16+2026-10-16")
 
@@ -661,13 +675,16 @@ class ConformanceCandidates(RunsTheCli):
         for bad in ("CT-X-1=14/10/2026", "CT-X-1=2026-13-45", "not an id=2026-10-14",
                     "CT-X-1=2026-10-03,CT-X-1=2026-10-14"):
             with self.subTest(bad=bad):
-                self.propose("--check-open", "--check-ids", bad, as_of="2026-10-20", code=2)
+                self.propose("--check-open", "--check-ids", bad, as_of="2026-10-20", code=1)
 
     def test_spaces_around_the_parts_are_ignored(self):
         self.assertIn("--- also checked: CT-X-1, no mark", self.dry_run([], "CT-X-1 = 2026-10-03 + 2026-10-14"))
 
     def test_it_is_refused_with_apply(self):
-        self.propose("--apply", "--confirm", "x", "--check-ids", "CT-X-1=2026-10-14", as_of="2026-10-20", code=2)
+        self.propose("--apply", "--confirm", "x", "--check-ids", "CT-X-1=2026-10-14", as_of="2026-10-20", code=1)
+
+    def test_it_is_refused_without_check_open(self):
+        self.propose("--check-ids", "CT-X-1=2026-10-14", as_of="2026-10-20", code=1)
 
 
 class NoIssueDraft(RunsTheCli):

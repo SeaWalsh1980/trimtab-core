@@ -29,6 +29,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Callable, ContextManager, Mapping, Protocol, Sequence
 
 from trimtab.items import Item, Proposal
@@ -190,7 +191,8 @@ def plan_project_prs(drafts: Sequence[Draft], sink: PullSink, closed_since: str 
 
     `check_ids` maps an ID to the days of its conformance reports (step 3's candidates: their evidence is reports,
     not PRs), each day counted once. They are counted the same way against CONFORMANCE_THRESHOLD; a report on the day
-    the fix merged counts as after it, since a report has no time of day. An ID with a draft as well is counted on
+    the fix merged, or the day before, counts as after it: a report has no time of day or zone, and the fix's day is
+    UTC. An ID with a draft as well is counted on
     both: RESOLVED only while both counts stay below their thresholds, REOPENED once either reaches its own."""
     check_ids = {i: tuple(sorted(set(days))) for i, days in (check_ids or {}).items()}
     if not any(d.kind == "pr" for d in drafts) and not check_ids:
@@ -212,12 +214,21 @@ def plan_project_prs(drafts: Sequence[Draft], sink: PullSink, closed_since: str 
             since = _reports_since(st.fixes[-1], d) if st.fixes else None
             counts.append(_Since(None if since is None else [f"#{n}" for n in since], threshold, "report(s)"))
         if item_id in check_ids:
-            days = [day for day in check_ids[item_id] if st.fixes and day >= st.fixes[-1].merged_at[:10]]
+            days = [day for day in check_ids[item_id] if st.fixes and day >= _day_before(st.fixes[-1].merged_at)]
             counts.append(_Since(days if st.fixes else None, CONFORMANCE_THRESHOLD,
                                  "conformance report(s)" if d is not None else "report(s)"))
         if mark := _mark(st, counts):
             why[item_id] = mark
     return why
+
+
+def _day_before(merged_at: str) -> str:
+    """The day before a fix's UTC merge day, the first a report may be dated and still come after it; "" (every
+    report counts as after) when the merge time is not a date, which errs towards proposing."""
+    try:
+        return (date.fromisoformat(merged_at[:10]) - timedelta(days=1)).isoformat()
+    except ValueError:
+        return ""
 
 
 @dataclass(frozen=True)

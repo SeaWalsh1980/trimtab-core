@@ -44,12 +44,14 @@ one bounded REST listing of the project's PRs, and prints a mark beside each:
   window, judged by when it closed, unless it closed before the latest merged
   fix, which supersedes it.
 - **Unreadable.** `NOT CHECKED` when the listing could not be read; the run
-  ends 2, and the issue plan is still printed.
+  ends 2, and the issue plan is still printed. A malformed `--check-ids` ends
+  it 1, before anything is read, so 2 keeps meaning a listing failed.
 - **Conformance candidates.** `--check-ids ID=<day>+<day>…`, every report
   day, gives an ID with no ledger draft the same marks, its reports counted
   against the latest fix with the conformance threshold of 2, each day once. A
-  report on the day the fix merged counts as after it: a report has no time of
-  day, so the check errs towards proposing. An ID with a ledger draft as well
+  report dated the day the fix merged, or the day before, counts as after it:
+  a report has no time of day or zone and the fix's day is UTC, so the check
+  errs towards proposing. An ID with a ledger draft as well
   is counted on both: `RESOLVED` only while both counts stay below their
   thresholds, `REOPENED` once either reaches its own.
 

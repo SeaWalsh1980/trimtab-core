@@ -144,9 +144,11 @@ trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels \
   step 3 candidate is counted on both: `RESOLVED` only while both counts stay
   below their thresholds, `REOPENED` once either reaches its own; its mark is
   on the draft, with no `--- also checked:` line. Open a draft only for an
-  unmarked or `REOPENED` ID, and report each other marked one as the dry run words it. If
-  the dry run exits 2, a GitHub listing (the ledger, the issues or the PRs)
-  could not be read whole: say which, from its error. A failed ledger read
+  unmarked or `REOPENED` ID, and report each other marked one as the dry run
+  words it. If the dry run exits 1, the command or the project's setup is
+  wrong (a malformed `--check-ids`, say): fix what its error names and run it
+  again. If it exits 2 with no `usage:` line, a GitHub listing (the ledger,
+  the issues or the PRs) could not be read whole: say which, from its error. A failed ledger read
   prints no drafts at all. A failed issue or PR listing marks only its own
   drafts `NOT CHECKED`: open none of those, and follow the other drafts' marks
   as usual. When only the PR listing failed, the issue plan and its token are
