@@ -848,7 +848,7 @@ echo "== guard-mcp =="
 # `t` cannot see it and `tm` checks the answer itself. A model's own account
 # of whether a call ran is not evidence (ADR 0013); the guard's output is. See
 # docs/adr/0013-guard-mcp-asks-before-mcp-tools-that-may-write.md.
-tm() { # tm <want: pass|ask> <label> <payload> [PATH for the guard]
+tm() { # tm <want: pass|ask|deny> <label> <payload> [PATH for the guard]
   local want="$1" label="$2" payload="$3" p="${4:-$PATH}" out rc verdict
   out=$(printf '%s' "$payload" | PATH="$p" "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null); rc=$?
   verdict=$(printf '%s' "$out" | python3 -c '
@@ -864,9 +864,9 @@ else:
     except ValueError:
         sys.exit(print("not valid JSON: %r" % out[:80]))
     h = d.get("hookSpecificOutput", {}) if isinstance(d, dict) else {}
-    ok = (h.get("hookEventName") == "PreToolUse" and h.get("permissionDecision") == "ask"
+    ok = (h.get("hookEventName") == "PreToolUse" and h.get("permissionDecision") == want
           and str(h.get("permissionDecisionReason", "")).startswith("guard-mcp: "))
-    print("ok" if ok else "not an ask: %r" % out[:120])
+    print("ok" if ok else "not a %s: %r" % (want, out[:120]))
 ' "$want" "$rc")
   if [[ "$verdict" == ok ]]; then
     printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh "$want" "$label"
@@ -940,7 +940,7 @@ CCD_PASS=(
   mcp__ccd_window__get_window_layout mcp__ccd_window__open_session_in
   mcp__ccd_window__close_split mcp__ccd_window__set_sidebar_collapsed
   mcp__ccd_pr__get_status
-  mcp__ccd_pr__unbind_pr mcp__ccd_pr__set_monitor
+  mcp__ccd_pr__unbind_pr
   mcp__ccd_session_mgmt__get_session mcp__ccd_session_mgmt__list_sessions
   mcp__ccd_session_mgmt__list_events mcp__ccd_session_mgmt__get_usage
   mcp__ccd_session_mgmt__search_session_transcripts
@@ -949,6 +949,9 @@ CCD_PASS=(
   mcp__ccd_session__list_start_targets mcp__ccd_session__dismiss_task
   mcp__ccd_connectors__session_connectors_status
 )
+# set_monitor passes only for a PR the session created (ADR 0028); its cases
+# are in the set_monitor section below, after the recorder's.
+CCD_OWN=( mcp__ccd_pr__set_monitor )
 for n in "${CCD_PASS[@]}"; do
   tm pass "app allowlist: ${n#mcp__}"         "$(j "$n" '{}')"
 done
@@ -963,6 +966,23 @@ if [[ -n "$ccd_guard" && "$ccd_guard" == "$ccd_tests" ]]; then
 else
   printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_ALLOW differs from the tested names (or could not be read)"
   diff <(printf '%s\n' "$ccd_guard") <(printf '%s\n' "$ccd_tests") | sed 's/^/      /'
+  fails=$((fails+1))
+fi
+# The same for CCD_OWN_PR, and the two lists never share a name: one on both
+# would pass by name before its arguments were ever checked.
+own_guard=$(awk '/^CCD_OWN_PR=\($/{f=1; next} f && /^\)$/{exit} f' \
+  "$HOOKS/guard-mcp.sh" | tr -s ' \t' '\n' | sed '/^$/d' | sort)
+own_tests=$(printf '%s\n' "${CCD_OWN[@]}" | sort)
+if [[ -n "$own_guard" && "$own_guard" == "$own_tests" ]]; then
+  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_OWN_PR holds exactly the tested names"
+else
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_OWN_PR differs from the tested names (or could not be read)"
+  fails=$((fails+1))
+fi
+if [[ -n "$own_guard" && -z "$(comm -12 <(printf '%s\n' "$own_guard") <(printf '%s\n' "$ccd_guard"))" ]]; then
+  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_OWN_PR and CCD_ALLOW share no name"
+else
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_OWN_PR and CCD_ALLOW share a name"
   fails=$((fails+1))
 fi
 for n in \
@@ -1172,6 +1192,92 @@ for c in bash cat readlink dirname; do ln -sf "$(command -v "$c")" "$PM_STUB/$c"
 pm_o=$(printf '%s' "$(pm_post $PM_A 'gh pr create --fill' "$PR/15")" | PATH="$PM_STUB" CLAUDE_CONFIG_DIR="$PM_CFG" "$BASH" "$HOOKS/pr-monitor-record.sh" 2>&1 >/dev/null); pm_rc=$?
 [[ $pm_rc == 1 && "$pm_o" == *python3* ]]; pm_report $? exit=1 "no python3: exit 1 and says so"
 pmv not-recorded "a create made without python3 is denied"  "$(pm_fix $PM_A 15)"
+
+echo "== guard-mcp: set_monitor (ADR 0028) =="
+# set_monitor passes only for a PR the session created, recorded by the real
+# recorder above, or as the auto-archive switch alone. Everything else is a
+# deny, never an ask: an ask waits for a person, and this tool is passed so a
+# session can run unattended. Its own config directory, exported for this
+# section only, so the guard reads these lists and no others.
+GM_CFG="$CPTMP/gm-config"
+mkdir -p "$GM_CFG"
+GM_SAVED_CFG="$CLAUDE_CONFIG_DIR"
+export CLAUDE_CONFIG_DIR="$GM_CFG"
+pm_rec "$(pm_post gm-a 'git push -u origin feature && gh pr create --fill' "$PR/7")" "$GM_CFG"
+pm_report "$PM_RC" state "fixture: the recorder records PR 7 for one session"
+
+tm pass "a PR the session created"                    "$(pm_fix gm-a 7)"
+tm pass "the same PR, spelled differently"            "$(pm_call gm-a '{"auto_fix":true,"url":"https://github.com/Owner/Repo/pull/7/"}')"
+tm pass "turning Auto-fix off on it"                  "$(pm_call gm-a "{\"auto_fix\":false,\"address_comments\":false,\"url\":\"$PR/7\"}")"
+tm pass "the auto-archive switch alone, no list"      "$(pm_call gm-none '{"auto_archive_on_close":true}')"
+tm deny "another PR number"                           "$(pm_fix gm-a 8)"
+tm deny "another repository"                          "$(pm_call gm-a '{"auto_fix":true,"url":"https://github.com/owner/other/pull/7"}')"
+tm deny "another host"                                "$(pm_call gm-a '{"auto_fix":true,"url":"https://ghe.example.com/owner/repo/pull/7"}')"
+tm deny "the same PR from another session"            "$(pm_fix gm-b 7)"
+tm deny "a session with no list"                      "$(pm_fix gm-none 7)"
+tm deny "auto_fix without url"                        "$(pm_call gm-a '{"auto_fix":true}')"
+tm deny "address_comments without url"               "$(pm_call gm-a '{"address_comments":true}')"
+tm deny "auto-archive with a foreign url"             "$(pm_call gm-a "{\"auto_archive_on_close\":true,\"url\":\"$PR/8\"}")"
+tm deny "an argument the guard does not read"         "$(pm_call gm-a "{\"auto_fix\":true,\"url\":\"$PR/7\",\"pr\":8}")"
+tm deny "a non-string url"                            "$(pm_call gm-a '{"auto_fix":true,"url":7}')"
+tm deny "a PR page sub-path"                          "$(pm_call gm-a "{\"auto_fix\":true,\"url\":\"$PR/7/files\"}")"
+tm deny "an http url"                                 "$(pm_call gm-a '{"auto_fix":true,"url":"http://github.com/owner/repo/pull/7"}')"
+tm deny "no session_id"                               "$(j mcp__ccd_pr__set_monitor "{\"auto_fix\":true,\"url\":\"$PR/7\"}")"
+tm deny "a malformed session_id"                      "$(pm_fix '../gm-a' 7)"
+tm deny "no tool_input"                               '{"tool_name":"mcp__ccd_pr__set_monitor","session_id":"gm-a"}'
+pm_write gm-c 'NOT JSON'
+tm deny "a corrupt list"                              "$(pm_fix gm-c 7)"
+pm_write gm-d "{\"v\":1,\"entries\":[{\"host\":\"github.com\",\"owner\":\"owner\",\"repo\":\"repo\",\"number\":7,\"at\":0}]}"
+tm deny "an expired entry"                            "$(pm_fix gm-d 7)"
+chmod 770 "$GM_CFG/guard-state/pr-monitor"
+tm deny "a group-writable list directory"             "$(pm_fix gm-a 7)"
+chmod 700 "$GM_CFG/guard-state/pr-monitor"
+
+# The reasons say what to do next: a url-less call is told to pass its url.
+gm_reason() { printf '%s' "$1" | "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null; }
+[[ "$(gm_reason "$(pm_call gm-a '{"auto_fix":true}')")" == *"call it again with url"* ]]
+pm_report $? deny "a url-less call is told to pass its url"
+[[ "$(gm_reason "$(pm_fix gm-a 8)")" == *"Do not retry with another PR"* ]]
+pm_report $? deny "a foreign url is told not to retry"
+
+# No answer names the url, the session or the session's hash.
+GM_MARK="gm-mark-$$"
+GM_HASH=$(pm_py 'import sys; from trimtab.adapters import pr_monitor as pm; print(pm.list_name(sys.argv[1])[:64])' "$GM_MARK")
+gm_out="$(gm_reason "$(pm_fix "$GM_MARK" 828282)" 2>&1)$(gm_reason "$(pm_call "$GM_MARK" '{"auto_fix":true,"pr":828282}')" 2>&1)"
+[[ "$gm_out" == *deny* && "$gm_out" != *"$GM_MARK"* && "$gm_out" != *828282* && "$gm_out" != *"$GM_HASH"* ]]
+pm_report $? deny "no answer names the url, the session or its hash"
+
+# Installed, hooks/ is a link into the base snapshot: the guard must resolve it
+# to find the package beside it.
+ln -s "$HOOKS" "$CPTMP/gm-hooks-link"
+HOOKS="$CPTMP/gm-hooks-link" tm pass "through a linked hooks directory" "$(pm_fix gm-a 7)"
+
+# Parsers: the name needs jq or python3; the check itself needs python3.
+GM_STUB="$CPTMP/gm-stub"
+mkdir -p "$GM_STUB"
+ln -sf "$(command -v cat)" "$GM_STUB/cat"
+ln -sf "$(command -v python3)" "$GM_STUB/python3"
+tm pass "python3 only: a recorded PR passes"          "$(pm_fix gm-a 7)" "$GM_STUB"
+tm deny "python3 only: a foreign PR is denied"        "$(pm_fix gm-a 8)" "$GM_STUB"
+# A pass needs both exit 0 and `pass`: a check that prints pass and then
+# fails is denied. The stub runs the real python3 for everything but the check.
+GM_FAKE="$CPTMP/gm-fake"
+mkdir -p "$GM_FAKE"
+ln -sf "$(command -v cat)" "$GM_FAKE/cat"
+printf '#!/bin/sh\ncase "$*" in *pr_monitor*) echo pass; exit 1 ;; esac\nexec %s "$@"\n' "$(command -v python3)" > "$GM_FAKE/python3"
+chmod +x "$GM_FAKE/python3"
+tm deny "a check that prints pass but exits 1"        "$(pm_fix gm-a 7)" "$GM_FAKE"
+if command -v jq >/dev/null 2>&1; then
+  rm -f "$GM_STUB/python3"; ln -sf "$(command -v jq)" "$GM_STUB/jq"
+  tm deny "jq only: no python3 for the check, denied" "$(pm_fix gm-a 7)" "$GM_STUB"
+else
+  echo "SKIP  guard-mcp.sh   jq only: jq is not installed in this run"
+fi
+
+export HOOK_ALLOW_MCP=1
+tm pass "the exported override passes set_monitor"    "$(pm_fix gm-a 8)"
+unset HOOK_ALLOW_MCP
+export CLAUDE_CONFIG_DIR="$GM_SAVED_CFG"
 
 echo "== fail-closed on an unrunnable dependency =="
 # A guard that cannot run its own scanner must BLOCK. It could not: with `grep`
