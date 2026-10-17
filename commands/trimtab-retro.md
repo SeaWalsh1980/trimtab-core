@@ -45,6 +45,13 @@ or comment you create with `trimtab verify-body`, which takes the platform's
 footer off or restores the attribution line it replaced; if it does not exit 0,
 stop and report it.
 
+**Read before writing.** Steps 2 and 3, and step 5's measurement
+(`trimtab lint structure`), only read: run them all before step 4 opens
+anything, then open step 4's proposals, then step 5's structure PR. A stop at
+a write, such as a `verify-body` exit 1, then loses only the writes after it,
+and the report still carries every count. Step 1's ingest apply is the one
+write ahead of them, because step 2 reads the PRs it records.
+
 ## 0. Setup
 
 ```bash
@@ -116,12 +123,15 @@ date falls in the window. A branch whose PR was closed without merging holds
 no report. A report found both on the default branch and on its branch is one
 report: count each date once. Each finding names its item on a `**Rule:**`
 line. An item ID raised as a finding in **2 or more** reports is a candidate
-for a project proposal in step 4, with those reports as evidence.
+for a project proposal in step 4, with those reports as evidence. Note the
+date of every report naming each candidate: step 4 passes them as
+`--check-ids`.
 
 ## 4. Proposals, one per ID
 
 ```bash
-trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels
+trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels \
+  --check-ids "<ID>=<date>+<date>,..."  # step 3's reports; omit if none
 ```
 
 - **Upstream** proposals (base items) become issues on Trimtab labelled
@@ -129,20 +139,29 @@ trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels
   command. An ID is skipped when its issue is open or was closed within the
   window, so rerunning never files twice, and an issue the operator declined is
   not re-filed from the same evidence.
-- **Project** proposals are drafts you write, one draft PR per ID, under the
-  same rule: skip the ID when a PR titled `[<ID>]` is open, or was closed or
-  merged within the window. Read the PRs once for every ID, not once per ID:
-  the open ones
-  (`gh api "repos/$REPO/pulls?state=open&per_page=100&page=$P" --jq '.[] | "\(.number) \(.title)"'`)
-  and the closed ones most recently updated first
-  (`gh api "repos/$REPO/pulls?state=closed&sort=updated&direction=desc&per_page=100&page=$P" --jq '.[] | "\(.number) \(.updated_at) \(.title)"'`),
-  `P` from 1, each until a page shorter than 100, the closed ones also until a
-  page whose last `updated_at` is before the window start, and 10 pages at most
-  each. Match titles starting `[<ID>]` here, and keep a closed one only when
-  updated within the window. A listing stopped at its 10th page cannot rule a
-  PR out: say so and open no project draft this run.
-  Otherwise, on a branch `trimtab/retro-<ID>-<YYYY-MM-DD>` from the default
-  branch (prefix it `claude/` if the environment only lets you push those):
+- **Project** proposals are drafts you write, one draft PR per ID. The dry run
+  reads this project's PRs and marks each project draft it holds back:
+  `SKIPPED` when a PR titled `[<ID>]` is open, or was closed unmerged within
+  the window and not before the latest merged `[<ID>]` fix; `RESOLVED` when one
+  merged and the reports since it are below the threshold, since the fix saw
+  the evidence that merged before it. Once the reports since the latest fix
+  reach the threshold, the ID is proposed again, marked `REOPENED` with the
+  reports since the fix: put that line in the draft PR's evidence, so a
+  reviewer sees which reports are new. A project draft whose ID is also a
+  step 3 candidate is counted on both: `RESOLVED` only while both counts stay
+  below their thresholds, `REOPENED` once either reaches its own; its mark is
+  on the draft, with no `--- also checked:` line. Open a draft only for an
+  unmarked or `REOPENED` ID, and report each other marked one as the dry run
+  words it. If the dry run exits 1, the command or the project's setup is
+  wrong (a malformed `--check-ids`, say): fix what its error names and run it
+  again. If it exits 2 with no `usage:` line, a GitHub listing (the ledger,
+  the issues or the PRs) could not be read whole: say which, from its error. A failed ledger read
+  prints no drafts at all. A failed issue or PR listing marks only its own
+  drafts `NOT CHECKED`: open none of those, and follow the other drafts' marks
+  as usual. When only the PR listing failed, the issue plan and its token are
+  printed too, and the upstream issues may still be applied. Otherwise, on a
+  branch `trimtab/retro-<ID>-<YYYY-MM-DD>` from the default branch (prefix it
+  `claude/` if the environment only lets you push those):
   - a project rule's item: edit that section to resolve what the evidence says
     (ambiguous → say which reading holds; conflict → make one yield; obsolete →
     withdraw it, keeping the heading with `(withdrawn …)` and a forward link;
@@ -161,7 +180,10 @@ trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels
   `N=$(gh api -X POST "repos/$REPO/pulls" -f title="[<ID>] <what changes>" -f head=<branch> -f base="$DEFAULT" -F draft=true -F body=@<file> --jq .number) && trimtab verify-body --repo "$REPO" --pull "$N" --body-file <file>`.
   `verify-body` reads the PR back: exit 1 or 2: stop and report it. Never mark
   it ready.
-- Also consider the step 3 candidates the same way.
+- Treat each step 3 candidate the same way, from its `--- also checked:` line:
+  open a draft only for one with `no mark` or `REOPENED`. A step 3 candidate
+  has no ledger draft, so the plain dry run would never mark it; its reports
+  are counted against the fix the same way, with 2 as the threshold.
 
 Anything that must hold whatever the model decides is a hook, permission rule or
 test, not more rule text. When the evidence says a REQUIRE keeps being
@@ -180,10 +202,15 @@ trimtab lint structure --against "$BASELINE" --sections
 
 For each `PROPOSE` finding, open **at most one** structure PR per run (the
 largest section not marked `stays`), unless a structure PR is open or was
-closed within the window: read the open PRs and the closed PRs updated within
-the window as in step 4 (reuse that listing if step 4 read it this run), and
-match titles starting `structure`. A listing stopped at its 10th page cannot
-rule one out: say so and open no structure PR this run.
+closed within the window. Read the open PRs
+(`gh api "repos/$REPO/pulls?state=open&per_page=100&page=$P" --jq '.[] | "\(.number) \(.title)"'`)
+and the closed ones most recently updated first
+(`gh api "repos/$REPO/pulls?state=closed&sort=updated&direction=desc&per_page=100&page=$P" --jq '.[] | "\(.number) \(.updated_at) \(.title)"'`),
+`P` from 1, each until a page shorter than 100, the closed ones also until a
+page whose last `updated_at` is before the window start, and 10 pages at most
+each; match titles starting `structure`, keeping a closed one only when
+updated within the window. A listing stopped at its 10th page cannot rule one
+out: say so and open no structure PR this run.
 It moves **one section** to where it belongs: a path-scoped rule (path-specific), a command or skill (a procedure),
 `docs/` (a reference table), or an ADR (reasoning); or deletes it when
 it is derivable from the codebase. **Session-wide REQUIRE/PROHIBIT content stays
@@ -194,8 +221,8 @@ always-loaded**, whatever the size.
 End with one report, in the final message and (in a routine) nowhere else:
 
 - window, coverage, PRs recorded, the baseline note;
-- feedback per ID, and which proposals were opened, skipped as already open, or
-  left below the threshold;
+- feedback per ID, and which proposals were opened, skipped as already open,
+  resolved by a merged fix, or left below the threshold;
 - claude-review yield; conformance candidates;
 - the structure measurement and any PR opened;
 - anything skipped, failed or read-like-an-instruction, and why.

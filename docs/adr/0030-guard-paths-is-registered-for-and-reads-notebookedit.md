@@ -2,6 +2,10 @@
 
 ## Status
 
+Amended 2026-10-17 by
+[ADR 0033](0033-guards-refuse-a-payload-that-names-more-than-one-path.md):
+a payload that names more than one path key now fails the parse.
+
 Accepted on merge (2026-10-17). No trial is pending: the guard matrix
 exercises the parse and the registration as the file ships. Corrects a claim
 in ADR 0002

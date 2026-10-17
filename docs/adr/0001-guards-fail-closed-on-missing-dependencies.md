@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted.
+Accepted. Amended 2026-10-17: the python3 fallback runs isolated. See
+[Amendment (2026-10-17)](#amendment-2026-10-17).
 
 ## Context
 
@@ -121,3 +122,50 @@ all block. guard-paths runs `readlink` to resolve the instruction-file link
 - Not addressed: the bash version. One guard uses an expansion that needs
   bash 4. Stock macOS ships bash 3.2, where that line errors and the guard
   can fail open. Linux is the only tested platform, and the README says so.
+
+## Amendment (2026-10-17)
+
+Accepted, by the operator.
+
+**Context.** When jq is missing, each guard parses the payload with
+`python3 -c`. Python puts the working directory first on `sys.path` for
+`-c`, and a hook runs in the session's working directory, the repository
+under work, which the session can write to. A `json.py` there shadowed the
+standard library. A plant whose `load()` returns an empty Read made
+guard-bash pass `kubectl delete`, guard-paths pass a read of an env file,
+guard-secrets pass a PEM write and guard-security pass an edit to a CI
+workflow, each with exit 0. A review of trimtab-core#83 found the flaw in
+guard-mcp's fallback first; these four had the same one.
+
+**Decision.** The four guards run their python3 fallback with `-I`
+(isolated mode): no working directory or script directory on `sys.path`,
+no user site-packages, and every `PYTHON*` variable ignored. The snippets
+use only the standard library, so nothing else changes. guard-mcp gets the
+same flag in trimtab-core#83, kept there to avoid a conflict.
+
+**Options considered.**
+
+- **`-P`, as the adapter-backed hooks use.** Rejected for these snippets.
+  It drops only the path entry; a `PYTHONPATH` or `PYTHONSTARTUP` set in the
+  session's environment would still reach them. It also needs Python 3.11,
+  and `-I` has been there since 3.4.
+- **Require jq and drop the fallback.** Rejected. The fallback exists so a
+  machine without jq still guards, and CI runs the matrix without jq on
+  purpose.
+- **Run the fallback from a fixed directory (`cd /`).** Rejected. It covers
+  the working directory but not the environment variables, and it adds a
+  directory change to every call.
+
+**Trial.** On 2026-10-17 a case per guard was added that plants the
+`json.py` above in a fresh directory and runs the guard python3-only from
+it, plus the same payload from an ordinary directory as a control. Against
+the unpatched guards all four plant cases failed (exit 0) while the four
+controls blocked (exit 2). With `-I` all eight pass. The matrix passes with
+jq, without it, and under both mawk and gawk.
+
+**Consequences.**
+
+- A module in the repository under work, or a `PYTHON*` variable, no longer
+  reaches a guard's parser.
+- A `PYTHONPATH` an operator set deliberately for these snippets no longer
+  applies. Nothing in the base sets one.
