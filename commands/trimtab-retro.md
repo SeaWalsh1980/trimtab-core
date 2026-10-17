@@ -123,7 +123,7 @@ candidate's latest report date: step 4 passes it as `--check-ids`.
 
 ```bash
 trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels \
-  --check-ids "<ID>=<latest report date>,..."   # step 3's candidates; omit if none
+  --check-ids "<ID>=<latest report date>,..."  # step 3; omit if none
 ```
 
 - **Upstream** proposals (base items) become issues on Trimtab labelled
@@ -131,24 +131,24 @@ trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels \
   command. An ID is skipped when its issue is open or was closed within the
   window, so rerunning never files twice, and an issue the operator declined is
   not re-filed from the same evidence.
-- **Project** proposals are drafts you write, one draft PR per ID. The dry
-  run reads this project's PRs and marks each project draft it holds back:
+- **Project** proposals are drafts you write, one draft PR per ID. The dry run
+  reads this project's PRs and marks each project draft it holds back:
   `SKIPPED` when a PR titled `[<ID>]` is open, or was closed unmerged within
-  the window and not before the latest merged `[<ID>]` fix; `RESOLVED` when one merged and the reports since it are below
-  the threshold, since the fix saw the evidence that merged before it. Once
-  the reports since the latest fix reach the threshold, the ID is proposed
-  again, marked `REOPENED` with the reports since the fix: put that line in
-  the draft PR's evidence, so a reviewer sees which reports are new. Open a
-  draft only for an unmarked or `REOPENED` ID, and report each other marked
-  one as the dry run words it. If the dry run
-  exits 2, a GitHub listing (the ledger, the issues or the PRs) could not be
-  read whole: say which, from its error. A failed ledger read prints no
-  drafts at all. A failed issue or PR listing marks only its own drafts
-  `NOT CHECKED`: open none of those, and follow the other drafts' marks as
-  usual. When only the PR listing failed, the issue plan and its token are
-  printed too, and the upstream issues may still be applied.
-  Otherwise, on a branch `trimtab/retro-<ID>-<YYYY-MM-DD>` from the default
-  branch (prefix it `claude/` if the environment only lets you push those):
+  the window and not before the latest merged `[<ID>]` fix; `RESOLVED` when one
+  merged and the reports since it are below the threshold, since the fix saw
+  the evidence that merged before it. Once the reports since the latest fix
+  reach the threshold, the ID is proposed again, marked `REOPENED` with the
+  reports since the fix: put that line in the draft PR's evidence, so a
+  reviewer sees which reports are new. Open a draft only for an unmarked or
+  `REOPENED` ID, and report each other marked one as the dry run words it. If
+  the dry run exits 2, a GitHub listing (the ledger, the issues or the PRs)
+  could not be read whole: say which, from its error. A failed ledger read
+  prints no drafts at all. A failed issue or PR listing marks only its own
+  drafts `NOT CHECKED`: open none of those, and follow the other drafts' marks
+  as usual. When only the PR listing failed, the issue plan and its token are
+  printed too, and the upstream issues may still be applied. Otherwise, on a
+  branch `trimtab/retro-<ID>-<YYYY-MM-DD>` from the default branch (prefix it
+  `claude/` if the environment only lets you push those):
   - a project rule's item: edit that section to resolve what the evidence says
     (ambiguous → say which reading holds; conflict → make one yield; obsolete →
     withdraw it, keeping the heading with `(withdrawn …)` and a forward link;

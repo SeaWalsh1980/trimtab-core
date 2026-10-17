@@ -378,6 +378,14 @@ class AFixtureRead(unittest.TestCase):
             with self.assertRaises(SourceError):
                 FixtureSource(path).recent_pulls("2026-9-1")
 
+    def test_an_issue_listing_with_a_window_that_is_not_a_day_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "issues.json"
+            path.write_text(json.dumps([]))
+
+            with self.assertRaises(SourceError):
+                FixtureIssues(path).recent_titles(ISSUE_LABEL, "2026-9-1")
+
     def test_a_pr_row_outside_the_window_with_no_title_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "pulls.json"

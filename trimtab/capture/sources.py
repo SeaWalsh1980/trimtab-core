@@ -141,8 +141,8 @@ class _PullRow:
     merged_at: str
     updated_at: str
     labels: frozenset[str]
-    title: str = ""
-    closed_at: str = ""
+    title: str
+    closed_at: str
 
     def pull(self) -> PullRequest:
         return PullRequest(self.number, self.body, self.merged_at)
@@ -303,7 +303,8 @@ class GhSource:
 
 
 class FixtureSource:
-    """PRs from a JSON file: `[{"number", "body", "merged_at", "labels"}]`.
+    """PRs from a JSON file: `[{"number", "title", "body", "merged_at", "labels"}]`, plus `state`, `closed_at` and
+    `updated_at` for the PR check (`recent_pulls`), which refuses a row with no title.
 
     Labels are written back to the file, so a scratch run behaves like a repo.
     """
@@ -445,9 +446,7 @@ class GhIssues:
 
     def recent_titles(self, label: str, closed_since: str | None) -> list[str]:
         what = "gh api issues"
-        if closed_since is not None and not DATE.fullmatch(closed_since):
-            # Both the `since` query and the closed_at comparison read it as a day.
-            raise SourceError("closed_since must be a YYYY-MM-DD date")
+        _require_day(closed_since)  # both the `since` query and the closed_at comparison read it as a day
         rows = self._issues(label, {"state": "open"})
         if closed_since:
             # `since` bounds by update time, and an issue is updated when it closes,
@@ -630,6 +629,8 @@ class FixtureIssues:
         return json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else []
 
     def recent_titles(self, label: str, closed_since: str | None) -> list[str]:
+        _require_day(closed_since)
+
         def recent(r):
             if r.get("state", "open") == "open":
                 return True
