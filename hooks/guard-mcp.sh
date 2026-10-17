@@ -25,6 +25,8 @@
 #                                                      (ADR 0028)
 #   a full name on the desktop app's exact-name list
 #   (CCD_ALLOW below, ADR 0027)                     -> pass
+#   a <tool> part on the verb-last read list, on any
+#   server (TOOL_READ_ALLOW below, ADR 0013)        -> pass
 #   <tool> starting gtm_                           -> ask: its verb is in an
 #                                                      argument, not its name
 #   mcp__<server>__<tool> whose <tool>, after at most one namespace from
@@ -125,7 +127,7 @@ done
 # also merge, escalate and destroy. A name not listed falls through to the
 # classification below, so a new app tool asks unless its name is a read.
 CCD_ALLOW=(
-  mcp__ccd_turn__wrap_up
+  mcp__ccd_turn__wrap_up mcp__ccd_turn__update_plan
   mcp__ccd_view__show_pane mcp__ccd_view__close_pane
   mcp__ccd_view__get_layout mcp__ccd_view__set_transcript_view
   mcp__ccd_window__get_window_layout mcp__ccd_window__open_session_in
@@ -153,6 +155,19 @@ tool="${rest#*__}"
 if [[ "$rest" != *__* || -z "$server" || -z "$tool" || "$tool" == *__* ]]; then
   ask "$name does not split into one server and one tool, so it cannot be classified. Approve it only if you intended it."
 fi
+
+# Read-only tools whose verb comes last pass by exact <tool> part, on any
+# server, since a server's name is set per deployment (ADR 0013, amendment
+# 2026-10-16). Never a suffix match: mark_all_notifications_read writes.
+# This pass skips the secret-word check below, so a name carrying key, token,
+# secret, password or credential must not be listed; the tests refuse one.
+TOOL_READ_ALLOW=(
+  pull_request_read issue_read actions_get actions_list
+)
+for allowed in "${TOOL_READ_ALLOW[@]}"; do
+  # Quoted right-hand side: a literal string comparison, never a pattern.
+  [[ "$tool" == "$allowed" ]] && exit 0
+done
 
 case "$tool" in
   gtm_*)

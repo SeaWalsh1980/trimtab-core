@@ -258,8 +258,11 @@ tools, only `set_monitor` has its arguments read, and only it can be denied.
 - The bootstrap self-probe records a synthetic create in a scratch config
   directory and checks that the same URL passes, while another PR number and
   another session are denied; a pass on either fails the install. The
-  session-start liveness check does not cover the recorder: without it the
-  guard denies, which fails closed.
+  session-start liveness check (ADR 0004, as amended 2026-10-17) lists the
+  recorder as a non-guard hook: a missing recorder reads `HOOKS MISSING`,
+  not `GUARDS OFF`, because without it the guard denies, which fails closed.
+  This was first written as "not covered"; it changed when that amendment
+  began requiring every registered hook to be in the check's list.
 - Both CI steps that run the base branch's guard matrix against the pull
   request's hooks go red on the pull request that makes this change, because
   the base's matrix expects `set_monitor` to pass by name. Those steps are
