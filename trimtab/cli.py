@@ -181,8 +181,18 @@ def cmd_verify_body(args) -> int:
     if outcome is Readback.FOOTER:
         print(f"{kind} {number}: removed the platform's session footer; GitHub's edit history still holds it")
     elif outcome is Readback.IN_PLACE:
-        print(f"{kind} {number}: restored the attribution line the platform's footer had replaced; GitHub's edit "
-              "history still holds the footer")
+        print(f"{kind} {number}: restored the attribution line the platform's session footer had replaced; "
+              "GitHub's edit history still holds the session footer")
+    elif outcome is Readback.IN_PLACE_GENERIC:
+        print(f"{kind} {number}: restored the attribution line the platform's generic footer, linking no session, "
+              "had replaced")
+    elif outcome is Readback.IN_PLACE_REPLACED:
+        print(f"{kind} {number}: restored the attribution line the platform's session footer had replaced; the "
+              "platform added its generic footer, linking no session, after it; GitHub's edit history still holds "
+              "the session footer")
+    elif outcome is Readback.IN_PLACE_GENERIC_KEPT:
+        print(f"{kind} {number}: restored the attribution line the platform's generic footer, linking no session, "
+              "had replaced; that footer follows it")
     elif outcome is Readback.REPLACED:
         print(f"{kind} {number}: removed the platform's session footer; the platform added its generic footer, "
               "linking no session, in its place; GitHub's edit history still holds the session footer")

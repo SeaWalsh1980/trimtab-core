@@ -109,7 +109,7 @@ class Compare(unittest.TestCase):
         self.assertIs(compare(SENT, in_place_of_attribution(SENT, FOOTER)), Readback.IN_PLACE)
 
     def test_the_generic_footer_in_place_of_the_attribution_line_is_told_apart(self):
-        self.assertIs(compare(SENT, in_place_of_attribution(SENT, GENERIC)), Readback.IN_PLACE)
+        self.assertIs(compare(SENT, in_place_of_attribution(SENT, GENERIC)), Readback.IN_PLACE_GENERIC)
 
     def test_a_body_without_the_attribution_line_never_counts_as_in_place(self):
         sent = SENT[:-len(ATTRIBUTION)]
@@ -189,7 +189,7 @@ class VerifyBody(unittest.TestCase):
 
         outcome = verify(bodies, SENT)
 
-        self.assertEqual((outcome, bodies.writes, bodies.found), (Readback.IN_PLACE, [SENT], SENT))
+        self.assertEqual((outcome, bodies.writes, bodies.found), (Readback.IN_PLACE_GENERIC, [SENT], SENT))
 
     def test_a_footer_in_place_again_after_the_write_back_fails(self):
         for footer in (FOOTER, GENERIC):
@@ -200,12 +200,14 @@ class VerifyBody(unittest.TestCase):
                 with self.assertRaisesRegex(WrittenBodyError, "replaced the attribution line again"):
                     verify(bodies, SENT)
 
-    def test_the_generic_footer_after_the_restored_line_passes_as_replaced(self):
-        bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, FOOTER), then=with_generic(SENT))
+    def test_the_generic_footer_after_the_restored_line_passes_naming_the_footer_that_stood_in_its_place(self):
+        for footer, expected in ((FOOTER, Readback.IN_PLACE_REPLACED), (GENERIC, Readback.IN_PLACE_GENERIC_KEPT)):
+            with self.subTest(generic=footer is GENERIC):
+                bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, footer), then=with_generic(SENT))
 
-        outcome = verify(bodies, SENT)
+                outcome = verify(bodies, SENT)
 
-        self.assertEqual((outcome, bodies.writes), (Readback.REPLACED, [SENT]))
+                self.assertEqual((outcome, bodies.writes), (expected, [SENT]))
 
     def test_a_footer_added_while_the_run_waits_is_still_taken_off(self):
         bodies = InMemoryBodies(("pull", PR), SENT, arrives=with_footer(SENT))
@@ -710,16 +712,39 @@ class VerifyBodyCli(unittest.TestCase):
         self.assertIn("removed the platform's session footer", done.stdout)
         self.assertNotIn(SESSION_TAIL, done.stdout + done.stderr)
 
-    def test_a_footer_in_place_of_the_attribution_line_exits_0_and_says_the_line_was_restored(self):
-        self.answer.write_text(json.dumps({"body": in_place_of_attribution(SENT, GENERIC)}), encoding="utf-8")
-        clean = self.dir / "clean.json"
-        clean.write_text(json.dumps({"body": SENT}), encoding="utf-8")
-        self.env["FAKE_GH_AFTER_PATCH"] = str(clean)
+    def run_in_place(self, footer, after):
+        self.answer.write_text(json.dumps({"body": in_place_of_attribution(SENT, footer)}), encoding="utf-8")
+        second = self.dir / "second.json"
+        second.write_text(json.dumps({"body": after}), encoding="utf-8")
+        self.env["FAKE_GH_AFTER_PATCH"] = str(second)
+        return self.verify("--pull", str(PR), "--body-file", str(self.body))
 
-        done = self.verify("--pull", str(PR), "--body-file", str(self.body))
+    def test_a_session_footer_in_place_says_the_line_was_restored_and_a_session_link_was_there(self):
+        done = self.run_in_place(FOOTER, SENT)
 
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("restored the attribution line", done.stdout)
+        self.assertIn("restored the attribution line the platform's session footer had replaced", done.stdout)
+
+    def test_a_generic_footer_in_place_never_speaks_of_a_session_footer(self):
+        done = self.run_in_place(GENERIC, SENT)
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("restored the attribution line the platform's generic footer", done.stdout)
+        self.assertNotIn("session footer", done.stdout)
+
+    def test_a_generic_footer_in_place_then_after_the_line_never_speaks_of_a_session_footer(self):
+        done = self.run_in_place(GENERIC, with_generic(SENT))
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("generic footer, linking no session, had replaced; that footer follows it", done.stdout)
+        self.assertNotIn("session footer", done.stdout)
+
+    def test_a_session_footer_in_place_then_the_generic_one_says_both(self):
+        done = self.run_in_place(FOOTER, with_generic(SENT))
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("session footer had replaced", done.stdout)
+        self.assertIn("generic footer, linking no session, after it", done.stdout)
 
     def test_a_session_footer_replaced_by_the_generic_one_exits_0_and_says_so(self):
         # ADR 0024's first trial: the run report records which footer was there and which one stayed.

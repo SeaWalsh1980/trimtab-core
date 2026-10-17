@@ -50,9 +50,15 @@ class WrittenBodyError(Exception):
 class Readback(enum.Enum):
     SAME = "the body is the one sent"
     FOOTER = "the platform's session footer was after the body sent"
-    IN_PLACE = "the platform's footer stood in place of the body's attribution line"
+    IN_PLACE = "the platform's session footer stood in place of the body's attribution line, now restored"
+    IN_PLACE_GENERIC = ("the platform's generic footer, linking no session, stood in place of the body's attribution "
+                        "line, now restored")
     GENERIC = "the platform's generic footer, linking no session, is after the body sent"
     REPLACED = "the platform's session footer was taken off, and the platform put its generic footer in its place"
+    IN_PLACE_REPLACED = ("the platform's session footer stood in place of the body's attribution line; the line is "
+                         "restored, and the platform's generic footer follows it")
+    IN_PLACE_GENERIC_KEPT = ("the platform's generic footer, linking no session, stood in place of the body's "
+                             "attribution line; the line is restored, and that footer follows it")
     DIFFERS = "the body differs from the one sent, other than by the platform's footer"
 
 
@@ -71,8 +77,8 @@ def _plain(text: str) -> str:
 
 def compare(sent: str, found: str) -> Readback:
     """SAME; FOOTER when `found` is `sent` plus the platform's session link, GENERIC when it is `sent` plus the
-    platform's line linking no session, each with or without its rule; IN_PLACE when either footer stands where
-    `sent`'s last line, the run's attribution line, was; else DIFFERS.
+    platform's line linking no session, each with or without its rule; IN_PLACE (session link) or IN_PLACE_GENERIC
+    when that footer stands where `sent`'s last line, the run's attribution line, was; else DIFFERS.
 
     The rule is tried both ways, so a body that itself ends with a `---` rule keeps it. Never REPLACED: that is
     what a write-back came to, which only `verify_bodies` knows.
@@ -80,20 +86,25 @@ def compare(sent: str, found: str) -> Readback:
     sent, found = _plain(sent), _plain(found)
     if found == sent:
         return Readback.SAME
-    for footer, outcome in ((FOOTER_LINK, Readback.FOOTER), (FOOTER_GENERIC, Readback.GENERIC)):
+    for footer, after, in_place in ((FOOTER_LINK, Readback.FOOTER, Readback.IN_PLACE),
+                                    (FOOTER_GENERIC, Readback.GENERIC, Readback.IN_PLACE_GENERIC)):
         match = footer.search(found)
         if match:
             head = _plain(found[:match.start()])
             heads = {head, _plain(FOOTER_RULE.sub("", head))}
             if sent in heads:
-                return outcome
+                return after
             stripped = _plain(ATTRIBUTION.sub("", sent))
             if stripped != sent and stripped in heads:
-                return Readback.IN_PLACE
+                return in_place
     return Readback.DIFFERS
 
 
 Target = tuple[str, int, str]  # (kind, number, body sent)
+
+# What a first read is written back for, and what it becomes when the generic footer follows the body sent after.
+WRITTEN_BACK = {Readback.FOOTER: Readback.REPLACED, Readback.IN_PLACE: Readback.IN_PLACE_REPLACED,
+                Readback.IN_PLACE_GENERIC: Readback.IN_PLACE_GENERIC_KEPT}
 
 
 def verify_bodies(bodies: Bodies, targets: list[Target], *,
@@ -154,7 +165,7 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
             outcomes[(kind, number)] = outcome
     # Every session footer and every footer in place of the attribution line is written over, whatever else in the
     # batch failed; a generic footer after the body sent is left, since a write only brings it back.
-    footed = [t for t in checked if outcomes.get((t[0], t[1])) in (Readback.FOOTER, Readback.IN_PLACE)]
+    footed = [t for t in checked if outcomes.get((t[0], t[1])) in WRITTEN_BACK]
     written = [t for t in footed if write(*t)]
     if written:
         wait()
@@ -164,10 +175,10 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
             continue
         again = compare(sent, body)
         if again is Readback.GENERIC:
-            outcomes[(kind, number)] = Readback.REPLACED
+            outcomes[(kind, number)] = WRITTEN_BACK[outcomes[(kind, number)]]
         elif again is Readback.FOOTER:
             failures.append(((kind, number), "the platform's footer came back after the body sent was written again"))
-        elif again is Readback.IN_PLACE:
+        elif again in (Readback.IN_PLACE, Readback.IN_PLACE_GENERIC):
             failures.append(((kind, number), "the platform's footer replaced the attribution line again after the "
                                              "body sent was written again"))
         elif again is not Readback.SAME:
