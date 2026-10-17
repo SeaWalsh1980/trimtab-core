@@ -192,6 +192,18 @@ class RecentPulls(unittest.TestCase):
                 with self.assertRaises(SourceError):
                     GhSource(REPO, run=gh).recent_pulls(SINCE)
 
+    def test_an_earlier_date_after_a_later_one_continues_the_scan_instead_of_starting_again(self):
+        # Page 1 reaches the later date; page 2 reaches the earlier one.
+        first = page(*[pull(n) for n in range(0, 99)], pull(99, AFTER_SINCE, updated_at="2026-09-05T00:00:00Z"))
+        second = page(pull(100, BEFORE_SINCE))
+        gh = FakeGh(answers={("GET", PULLS): [first, second]})
+        source = GhSource(REPO, run=gh)
+
+        source.unlabelled_merged(LABEL, "2026-09-08", 50)
+        source.labelled_merged(LABEL, SINCE, 50)
+
+        self.assertEqual([query_of(a)["page"] for a in gh.argvs()], ["1", "2"])
+
     def test_with_no_window_only_open_prs_are_read(self):
         gh = FakeGh(answers={("GET", PULLS): [page({"number": 3, "title": "[X-1] open"})]})
 

@@ -180,9 +180,12 @@ class GhSource:
     def __init__(self, repo: str, run: Run | None = None):
         self.repo = repo
         self.api = GhApi(run)
-        # Floor -> closed PRs updated since it. The ledger rebuild and the
-        # ingest in one run read the same listing; it is fetched once (ENG-6.2).
-        self._scans: dict[str, list[_ClosedPull]] = {}
+        # The closed PRs' pages read so far, most recently updated first. The
+        # ledger rebuild, the ingest and the PR check in one run read the same
+        # listing: an earlier date continues from the last page read rather
+        # than starting again, so each page is fetched once (ENG-6.2).
+        self._pages: list[list[_ClosedPull]] = []
+        self._exhausted = False
 
     def unlabelled_merged(self, label: str, merged_since: str | None, limit: int) -> list[PullRequest]:
         # Oldest merged first (ADR 0005), so a bounded run makes progress rather
@@ -206,7 +209,8 @@ class GhSource:
         return [r.pull() for r in sorted(rows, key=lambda r: (r.merged_at, r.number), reverse=True)[:limit]]
 
     def recent_pulls(self, closed_since: str | None) -> list[PullTitle]:
-        """Open PRs, and closed ones updated since `closed_since`: the scan ingest reads, so a run fetches it once."""
+        """Open PRs, and closed ones updated since `closed_since`, from the closed-PR pages ingest reads: a page
+        already read is not fetched again."""
         what = "gh api pulls"
         rows = self.api.all_pages(f"repos/{self.repo}/pulls", {"state": "open"}, SCAN_LIMIT, what)
         try:
@@ -232,26 +236,25 @@ class GhSource:
                            "refusing to work from a partial list")
 
     def _closed_since(self, floor: str) -> list[_ClosedPull]:
-        # A wider scan already read serves a narrower floor, so the rows can
-        # reach back before `floor`, unmerged ones included: every caller
-        # filters by merged_at itself.
-        for scanned, rows in self._scans.items():
-            if scanned <= floor:
-                return rows
+        # The rows can reach back before `floor`, unmerged ones included:
+        # every caller filters by merged_at or updated_at itself.
+        def reached() -> bool:
+            return self._exhausted or bool(self._pages and self._pages[-1]
+                                           and self._pages[-1][-1].updated_at[:10] < floor)
+
+        while not reached():
+            if len(self._pages) * PER_PAGE >= SCAN_LIMIT:
+                raise self._too_many(f"were updated since {floor}")
+            batch = self._page({"sort": "updated", "direction": "desc"}, len(self._pages) + 1)
+            self._pages.append(batch)
+            if len(batch) < PER_PAGE:
+                self._exhausted = True
         found: dict[int, _ClosedPull] = {}
-        page = 1
-        while True:
-            batch = self._page({"sort": "updated", "direction": "desc"}, page)
+        for batch in self._pages:
             for r in batch:
                 # A PR updated during the scan shifts the pages and can be seen twice.
                 found.setdefault(r.number, r)
-            if len(batch) < PER_PAGE or batch[-1].updated_at[:10] < floor:
-                break
-            if page * PER_PAGE >= SCAN_LIMIT:
-                raise self._too_many(f"were updated since {floor}")
-            page += 1
-        self._scans[floor] = list(found.values())
-        return self._scans[floor]
+        return list(found.values())
 
     def _oldest_unlabelled(self, label: str, limit: int) -> list[_ClosedPull]:
         """With no date, the oldest created first, until `limit` unlabelled merged PRs are found."""
