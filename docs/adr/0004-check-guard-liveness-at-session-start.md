@@ -3,8 +3,8 @@
 ## Status
 
 Accepted. Amended 2026-10-17: the check also names the four non-guard hooks
-the base registers, a missing one of those reads `HOOKS MISSING` rather than
-`GUARDS OFF`; see
+the base registers, and a missing one of those reads `HOOKS MISSING` rather
+than `GUARDS OFF`; see
 [Amendment (2026-10-17)](#amendment-2026-10-17).
 
 ## Context
@@ -150,7 +150,7 @@ cannot be left out of it silently.
   the longer list unchanged.
 
 **Measured.** In the guard matrix, against a throwaway install, on top of the
-six cases above: each of the four soft hooks missing reads `HOOKS MISSING`,
+cases above: each of the four soft hooks missing reads `HOOKS MISSING`,
 names the hook in both fields, and never says unguarded or to stop work; a
 guard and a soft hook missing together read `GUARDS OFF` and name both, in
 both fields; the install is silent again once restored; a hook added to the
