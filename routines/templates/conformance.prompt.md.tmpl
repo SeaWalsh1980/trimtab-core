@@ -18,7 +18,7 @@ The operator authorises exactly these writes, and no others:
 
 - one branch on $project_repo, holding one commit with only the conformance report;
 - one DRAFT pull request on $project_repo from that branch;
-- writing back the body this run sent to that PR, through `trimtab verify-body`, to take the platform's session footer off.
+- writing back the body this run sent to that PR, through `trimtab verify-body`, to take the platform's footer off or restore text it replaced.
 
 Never merge, never mark a PR ready, never approve, never push to the default branch, never force-push, never close an issue, never create a label, never write to any repository but $project_repo (not $instance_repo either). Never change a security control (workflows, CODEOWNERS, Claude Code settings and hooks, scanner exemption lists): name the control and the change for the operator instead.
 

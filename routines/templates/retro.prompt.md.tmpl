@@ -19,7 +19,7 @@ The operator authorises exactly these writes, and no others, each through the me
 - the `trimtab-ingested` label added to merged pull requests of $project_repo, through `trimtab ingest --apply`;
 - `harness-feedback` issues on $instance_repo, through `trimtab propose --apply`;
 - branches and DRAFT pull requests on $project_repo, one per item ID, as the method describes;
-- writing back the body this run sent to an issue or PR it created, through `trimtab propose --apply` or `trimtab verify-body`, to take the platform's session footer off.
+- writing back the body this run sent to an issue or PR it created, through `trimtab propose --apply` or `trimtab verify-body`, to take the platform's footer off or restore text it replaced.
 
 Never merge, never mark a PR ready, never approve, never push to the default branch, never force-push, never close an issue, never create a label (a missing one is reported, and the run stops), never write to any repository not named here. Never change a security control (workflows, CODEOWNERS, Claude Code settings and hooks, scanner exemption lists): name the control and the change for the operator instead.
 

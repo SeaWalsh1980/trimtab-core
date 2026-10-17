@@ -18,7 +18,7 @@ The operator authorises exactly these writes, and no others:
 
 - branches and DRAFT pull requests on $instance_repo, one per base item ID, as the method describes;
 - comments on open `harness-feedback` issues linking the PR that answers them;
-- writing back the body this run sent to a PR or comment it created, through `trimtab verify-body`, to take the platform's session footer off.
+- writing back the body this run sent to a PR or comment it created, through `trimtab verify-body`, to take the platform's footer off or restore text it replaced.
 
 Never merge, never mark a PR ready, never approve, never push to `main`, never force-push, never close an issue, never create a label, never write to any consumer repository. Never change a security control (workflows, CODEOWNERS, settings.base.json, the hooks, scanner exemption lists): name the control and the change for the operator instead.
 

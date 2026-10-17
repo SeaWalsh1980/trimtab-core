@@ -95,7 +95,8 @@ The upstream retro also comments on issues.
   SAME, FOOTER or DIFFERS (and, by the amendments below, GENERIC and
   IN_PLACE); `verify_body` raises only to stop the run.
 - **The write-back is authorised**: each routine prompt and command lists
-  writing back the body the run sent, to take the footer off, among the
+  writing back the body the run sent, to take the footer off or restore text
+  it replaced (amendment, 2026-10-17), among the
   writes the run may make.
 - **The generic footer is accepted** (amendment, 2026-10-15). The same line
   linking `https://claude.ai/code` with no session, with or without its rule,
