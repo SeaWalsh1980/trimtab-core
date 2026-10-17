@@ -15,8 +15,8 @@
 # a write, not lose the tool. Outside an interactive session an ask ends as a
 # denial (measured, ADR 0013).
 #
-# Classifies by tool name only, never by the call's arguments, with one
-# exception:
+# Classifies by tool name only, never by the call's arguments, with two
+# exceptions:
 #   mcp__ccd_pr__set_monitor (CCD_OWN_PR below)     -> pass when its url is a PR
 #                                                      this session created, or
 #                                                      it is the auto-archive
@@ -25,8 +25,11 @@
 #                                                      (ADR 0028)
 #   a full name on the desktop app's exact-name list
 #   (CCD_ALLOW below, ADR 0027)                     -> pass
+#   mcp__github__update_pull_request (PR_EDIT below) -> pass when it sets only
+#                                                      title, body or reviewers;
+#                                                      ask otherwise (ADR 0030)
 #   a full name on the PR-workflow exact-name list
-#   (PR_WORKFLOW_ALLOW below, ADR 0029)             -> pass
+#   (PR_WORKFLOW_ALLOW below, ADR 0030)             -> pass
 #   a <tool> part on the verb-last read list, on any
 #   server (TOOL_READ_ALLOW below, ADR 0013)        -> pass
 #   <tool> starting gtm_                           -> ask: its verb is in an
@@ -157,11 +160,36 @@ for allowed in "${CCD_ALLOW[@]}"; do
   [[ "$name" == "$allowed" ]] && exit 0
 done
 
-# Writes a session makes to drive its own PR pass by exact full name, server
-# part included (ADR 0029). Never by <tool> part alone: a server's name is set
+# A PR edit passes, by exact full name, only when it changes nothing but the
+# title, body or reviewers (ADR 0030). Any other argument, draft, state, base
+# or one this guard does not know, asks: marking a draft ready starts review,
+# so it stays the operator's. The check runs inside the parser, so a key is
+# never split or printed here, and nothing from the arguments reaches a reason.
+PR_EDIT=(
+  mcp__github__update_pull_request
+)
+pr_edit_args='["owner","repo","pullNumber","title","body","reviewers"]'
+for edit in "${PR_EDIT[@]}"; do
+  [[ "$name" == "$edit" ]] || continue
+  if command -v jq >/dev/null 2>&1; then
+    verdict=$(printf '%s' "$payload" | jq -r --argjson ok "$pr_edit_args" \
+      'if (.tool_input | type) == "object" and ((.tool_input | keys) - $ok | length) == 0 then "pass" else "ask" end' 2>/dev/null)
+  else
+    verdict=$(printf '%s' "$payload" | python3 -c '
+import json, sys
+ok = set(json.loads(sys.argv[1]))
+a = json.load(sys.stdin).get("tool_input")
+sys.stdout.write("pass" if isinstance(a, dict) and set(a) <= ok else "ask")
+' "$pr_edit_args" 2>/dev/null)
+  fi
+  [[ "$verdict" == "pass" ]] && exit 0
+  ask "$name changes more than the title, body or reviewers (draft, state, base or another argument), so it asks (ADR 0030). Approve it only if you intended this change."
+done
+
+# A session's own PR-activity subscription passes by exact full name, server
+# part included (ADR 0030). Never by <tool> part alone: a server's name is set
 # per deployment, and the same name on another server is another tool.
 PR_WORKFLOW_ALLOW=(
-  mcp__github__update_pull_request
   mcp__claude-code-remote__subscribe_pr_activity
 )
 for allowed in "${PR_WORKFLOW_ALLOW[@]}"; do

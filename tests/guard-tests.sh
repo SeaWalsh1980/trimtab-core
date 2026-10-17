@@ -1083,10 +1083,9 @@ tm ask  "app list is exact: a suffix"         "$(j mcp__ccd_turn__wrap_up_x '{}'
 tm ask  "app list is exact: a run-on suffix"  "$(j mcp__ccd_turn__wrap_upX '{}')"
 tm ask  "app list is exact: a server prefix"  "$(j mcp__xccd_turn__wrap_up '{}')"
 
-# Writes a session makes to drive its own PR pass by exact full name, server
-# part included (ADR 0029).
+# A session's own PR-activity subscription passes by exact full name, server
+# part included (ADR 0030).
 PR_WORKFLOW_PASS=(
-  mcp__github__update_pull_request
   mcp__claude-code-remote__subscribe_pr_activity
 )
 for n in "${PR_WORKFLOW_PASS[@]}"; do
@@ -1113,6 +1112,37 @@ tm ask  "PR-workflow: a merge still asks"     "$(j mcp__github__merge_pull_reque
 tm ask  "PR-workflow: an unsubscribe still asks" "$(j mcp__claude-code-remote__unsubscribe_pr_activity '{}')"
 tm ask  "PR-workflow: a remote send_message still asks" "$(j mcp__claude-code-remote__send_message '{}')"
 tm ask  "PR-workflow: a remote create_session still asks" "$(j mcp__claude-code-remote__create_session '{}')"
+
+# A PR edit passes by exact full name only when it sets nothing but the title,
+# body or reviewers; anything else asks (ADR 0030). The tool name is not on any
+# pass list, so these also fail if the arguments stop being read.
+PR_EDIT_NAME=mcp__github__update_pull_request
+PR_REF='"owner":"o","repo":"r","pullNumber":7'
+tm pass "PR edit: the title"                  "$(j $PR_EDIT_NAME "{$PR_REF,\"title\":\"t\"}")"
+tm pass "PR edit: the body"                   "$(j $PR_EDIT_NAME "{$PR_REF,\"body\":\"b\"}")"
+tm pass "PR edit: the reviewers"              "$(j $PR_EDIT_NAME "{$PR_REF,\"reviewers\":[\"u\"]}")"
+tm pass "PR edit: title, body and reviewers"  "$(j $PR_EDIT_NAME "{$PR_REF,\"title\":\"t\",\"body\":\"b\",\"reviewers\":[]}")"
+tm pass "PR edit: no change at all"           "$(j $PR_EDIT_NAME "{$PR_REF}")"
+tm ask  "PR edit: marking ready"              "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")"
+tm ask  "PR edit: marking draft"              "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":true}")"
+tm ask  "PR edit: closing"                    "$(j $PR_EDIT_NAME "{$PR_REF,\"state\":\"closed\"}")"
+tm ask  "PR edit: a new base"                 "$(j $PR_EDIT_NAME "{$PR_REF,\"base\":\"dev\"}")"
+tm ask  "PR edit: maintainer_can_modify"      "$(j $PR_EDIT_NAME "{$PR_REF,\"maintainer_can_modify\":true}")"
+tm ask  "PR edit: a body with draft as well"  "$(j $PR_EDIT_NAME "{$PR_REF,\"body\":\"b\",\"draft\":false}")"
+tm ask  "PR edit: an argument it does not know" "$(j $PR_EDIT_NAME "{$PR_REF,\"labels\":[\"x\"]}")"
+tm ask  "PR edit: a key that spells two allowed ones" "$(j $PR_EDIT_NAME "{$PR_REF,\"title\\nbody\":\"x\"}")"
+tm ask  "PR edit: arguments that are not an object" '{"tool_name":"mcp__github__update_pull_request","tool_input":["title"]}'
+tm ask  "PR edit: no arguments at all"        '{"tool_name":"mcp__github__update_pull_request"}'
+tm ask  "PR edit: on another server"          "$(j mcp__plugin_github_github__update_pull_request "{$PR_REF,\"title\":\"t\"}")"
+# The guard's PR_EDIT names exactly this one tool.
+edit_guard=$(awk '/^PR_EDIT=\($/{f=1; next} f && /^\)$/{exit} f' \
+  "$HOOKS/guard-mcp.sh" | tr -s ' \t' '\n' | sed '/^$/d')
+if [[ "$edit_guard" == "$PR_EDIT_NAME" ]]; then
+  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "PR_EDIT holds exactly the tested name"
+else
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "PR_EDIT differs from the tested name (or could not be read)"
+  fails=$((fails+1))
+fi
 
 # Read-only tools whose verb comes last pass by exact <tool> part, on any
 # server (ADR 0013, amendment 2026-10-16).
@@ -1553,6 +1583,8 @@ if command -v jq >/dev/null 2>&1; then
   stub_bin cat jq
   tm pass "jq only: a read still passes"        "$MCP_READ"  "$STUB"
   tm ask  "jq only: a write asks"               "$MCP_WRITE" "$STUB"
+  tm pass "jq only: a PR title edit passes"     "$(j mcp__github__update_pull_request '{"owner":"o","repo":"r","pullNumber":7,"title":"t"}')" "$STUB"
+  tm ask  "jq only: marking a PR ready asks"     "$(j mcp__github__update_pull_request '{"owner":"o","repo":"r","pullNumber":7,"draft":false}')" "$STUB"
 else
   echo "SKIP  guard-mcp.sh   jq only: jq is not installed in this run"
 fi
@@ -1560,6 +1592,8 @@ stub_bin cat python3
 tm pass "python3 only: a read still passes"   "$MCP_READ"  "$STUB"
 tm ask  "python3 only: a write asks"          "$MCP_WRITE" "$STUB"
 tm ask  "python3 only: garbage payload asks"  'NOT JSON AT ALL' "$STUB"
+tm pass "python3 only: a PR title edit passes" "$(j mcp__github__update_pull_request '{"owner":"o","repo":"r","pullNumber":7,"title":"t"}')" "$STUB"
+tm ask  "python3 only: marking a PR ready asks" "$(j mcp__github__update_pull_request '{"owner":"o","repo":"r","pullNumber":7,"draft":false}')" "$STUB"
 
 echo "== rules frontmatter =="
 # Regression guard: every rules/*.md must open with a YAML frontmatter block that
