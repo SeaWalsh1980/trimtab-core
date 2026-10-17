@@ -197,6 +197,22 @@ t guard-paths.sh 2 "mention w/ protected path still blocked" "$(j Bash '{"comman
 t guard-paths.sh 0 "bash git status"             "$(j Bash '{"command":"git status --short"}')"
 t guard-paths.sh 2 "bash touch .git internals"   "$(j Bash '{"command":"cat .git/config"}')"
 t guard-paths.sh 2 "FAIL-CLOSED: garbage payload" 'NOT JSON AT ALL'
+# NotebookEdit names its target notebook_path, not file_path. A guard that read
+# only file_path saw an empty path and passed every deny list (ADR 0030).
+t guard-paths.sh 2 "NotebookEdit a dotenv"       "$(j NotebookEdit '{"notebook_path":"/home/x/dev/ct/.env","new_source":"x"}')"
+t guard-paths.sh 2 "NotebookEdit a notebook under secrets/" "$(j NotebookEdit '{"notebook_path":"/home/x/dev/ct/secrets/a.ipynb","new_source":"x"}')"
+t guard-paths.sh 0 "NotebookEdit an ordinary notebook" "$(j NotebookEdit '{"notebook_path":"/p/app/analysis.ipynb","new_source":"x"}')"
+# An empty key is skipped, not taken as the target, in BOTH parse branches.
+# jq's `//` keeps "" where python3's `or` skips it, so the target, and the
+# verdict, used to depend on whether jq was installed.
+t guard-paths.sh 2 "empty file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":"","notebook_path":"/home/x/dev/ct/.env","new_source":"x"}')"
+t guard-paths.sh 2 "empty file_path does not hide path"          "$(j Write '{"file_path":"","path":"/home/x/dev/ct/.env","content":"x"}')"
+# Only a non-empty string is a target. python3's `or` skips every false-y
+# value; jq took 0, [] or {} as the target, and printed an array over several
+# lines, which pushed the real command off the line the split reads.
+t guard-paths.sh 2 "an empty-list file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":[],"notebook_path":"/home/x/dev/ct/.env","new_source":"x"}')"
+t guard-paths.sh 2 "a zero file_path does not hide notebook_path"       "$(j NotebookEdit '{"file_path":0,"notebook_path":"/home/x/dev/ct/.env","new_source":"x"}')"
+t guard-paths.sh 2 "a list file_path does not hide the command"         "$(j Bash '{"file_path":["x","y"],"command":"cat /x/.env"}')"
 
 echo "== guard-paths: live control plane =="
 # The guards are enforced by files the guards did not protect: every case in
@@ -227,6 +243,7 @@ t guard-paths.sh 2 "write machine.json (blocks though absent)" "$(j Write "{\"fi
 t guard-paths.sh 2 "edit repo-root CLAUDE.md"                 "$(j Edit "{\"file_path\":\"$CP_REPO/CLAUDE.md\"}")"
 t guard-paths.sh 2 "edit the live inspector in bin/"          "$(j Edit "{\"file_path\":\"$CP_REPO/bin/env-names.sh\"}")"
 t guard-paths.sh 2 "MultiEdit a live hook (not just Edit)"    "$(j MultiEdit "{\"file_path\":\"$CP_HOME/hooks/guard-bash.sh\"}")"
+t guard-paths.sh 2 "NotebookEdit into the live hooks dir"     "$(j NotebookEdit "{\"notebook_path\":\"$CP_HOME/hooks/x.ipynb\",\"new_source\":\"x\"}")"
 
 # -- path shapes that must still resolve into the live tree --------------
 CP_REAL_HOME="$HOME"; HOME="$CPTMP/home"   # one case only; see the fixture note
@@ -272,6 +289,19 @@ popd >/dev/null
 # -- an unknown or absent tool_name must enforce, not exempt -------------
 t guard-paths.sh 2 "FAIL-CLOSED: no tool_name, live hook path" "{\"tool_input\":{\"file_path\":\"$CP_REPO/hooks/guard-paths.sh\"}}"
 
+# -- a line break in the target path fails closed -------------------------
+# The parse emits path, command and tool_name one per line. A newline inside
+# the path pushed its own tail onto the later lines, so a path ending in
+# "\n\nRead\n/..." made the split read tool_name as Read and skip the check
+# above, while the tool wrote under the live tree (here, a skill directory
+# whose name holds the line breaks). A path with a newline or carriage
+# return is refused outright, in both parse branches, whatever the tool.
+t guard-paths.sh 2 "a newline in file_path cannot pose as a Read"     "$(j Write "{\"file_path\":\"$CP_HOME/skills/a\\n\\nRead\\n/SKILL.md\",\"content\":\"x\"}")"
+t guard-paths.sh 2 "a newline in notebook_path cannot pose as a Read" "$(j NotebookEdit "{\"notebook_path\":\"$CP_HOME/commands/a\\n\\nRead\\n/x.ipynb\",\"new_source\":\"x\"}")"
+t guard-paths.sh 2 "a carriage return in the path fails closed"       "$(j Write '{"file_path":"/p/app/a\rb.py","content":"x"}')"
+t guard-paths.sh 2 "a newline in an ordinary path fails closed"       "$(j Write '{"file_path":"/p/app/a\nb.py","content":"x"}')"
+t guard-paths.sh 2 "a newline in a Read path fails closed too"        "$(j Read '{"file_path":"/p/app/a\nb.py"}')"
+
 # -- the rest of Claude Code's config under CLAUDE_HOME -------------------
 # Previously covered only by a blanket prefix on $CLAUDE_HOME. That blanket is
 # gone, so each one now needs naming, or narrowing the scope would have dropped
@@ -291,7 +321,7 @@ PM_LIST="$CP_HOME/guard-state/pr-monitor/$(printf 'a%.0s' $(seq 64)).json"
 t guard-paths.sh 2 "write a guard-state list"                 "$(j Write "{\"file_path\":\"$PM_LIST\",\"content\":\"{}\"}")"
 t guard-paths.sh 2 "edit a guard-state list"                  "$(j Edit "{\"file_path\":\"$PM_LIST\"}")"
 t guard-paths.sh 2 "MultiEdit a guard-state list"             "$(j MultiEdit "{\"file_path\":\"$PM_LIST\"}")"
-t guard-paths.sh 2 "NotebookEdit into guard-state"            "$(j NotebookEdit "{\"file_path\":\"$CP_HOME/guard-state/x.ipynb\"}")"
+t guard-paths.sh 2 "NotebookEdit into guard-state"            "$(j NotebookEdit "{\"notebook_path\":\"$CP_HOME/guard-state/x.ipynb\",\"new_source\":\"x\"}")"
 t guard-paths.sh 2 "write a new file directly in guard-state" "$(j Write "{\"file_path\":\"$CP_HOME/guard-state/other\",\"content\":\"x\"}")"
 t guard-paths.sh 2 "dotdot into guard-state"                  "$(j Write "{\"file_path\":\"$CP_HOME/plans/../guard-state/pr-monitor/x.json\",\"content\":\"x\"}")"
 t guard-paths.sh 2 "bash redirect into a guard-state list"    "$(j Bash "{\"command\":\"echo x > $PM_LIST\"}")"
@@ -335,6 +365,7 @@ for gs_n in hooks rules bin commands agents skills output-styles plugins; do
   t guard-paths.sh 2 "linked config: Write to $gs_n via its target" "$(j Write "{\"file_path\":\"$GS_REAL/$gs_n/x\",\"content\":\"x\"}")"
   t guard-paths.sh 2 "linked config: Edit in $gs_n via its target"  "$(j Edit "{\"file_path\":\"$GS_REAL/$gs_n/x\"}")"
   t guard-paths.sh 2 "linked config: bash redirect into $gs_n via its target" "$(j Bash "{\"command\":\"echo x > $GS_REAL/$gs_n/x\"}")"
+  t guard-paths.sh 2 "linked config: NotebookEdit in $gs_n via its target" "$(j NotebookEdit "{\"notebook_path\":\"$GS_REAL/$gs_n/x.ipynb\",\"new_source\":\"x\"}")"
 done
 for gs_f in settings.json settings.local.json CLAUDE.md; do
   t guard-paths.sh 2 "linked config: Write $gs_f via its target" "$(j Write "{\"file_path\":\"$GS_REAL/$gs_f\",\"content\":\"x\"}")"
@@ -1652,6 +1683,32 @@ PY
 fails=$((fails + $?))
 [[ -x "$REPO/hooks/pr-monitor-record.sh" ]]
 pm_report $? state "the registered recorder ships executable"
+
+echo "== guard-paths registration (settings.base.json) =="
+# The guard enforces on every tool but Read, but only on the tools its matcher
+# sends it. NotebookEdit was missing from the matcher, so no path check ever
+# ran on it, while the matrix above fed the guard NotebookEdit payloads
+# directly and passed (ADR 0030). Checked as the file ships: registered once
+# under PreToolUse, on a matcher that catches every built-in tool that names
+# a file to read or write, and Bash.
+python3 - "$REPO/settings.base.json" <<'PY'
+import json, re, sys
+groups = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
+want = '"$HOME/.claude/hooks/guard-paths.sh"'
+found = [(g.get("matcher"), h) for g in groups for h in g["hooks"] if h.get("command") == want]
+def case(ok, label):
+    print("%s  %-14s %s" % ("PASS" if ok else "FAIL", "registration", label))
+    return 0 if ok else 1
+fails = case(len(found) == 1, "guard-paths is registered exactly once")
+if len(found) == 1:
+    matcher, hook = found[0]
+    fails += case(hook.get("timeout") == 10, "guard-paths has the 10 s timeout")
+    m = re.compile(matcher or "")
+    for tool in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"):
+        fails += case(bool(m.fullmatch(tool)), "its matcher catches %s" % tool)
+sys.exit(fails)
+PY
+fails=$((fails + $?))
 
 echo "== guard liveness check (SessionStart, settings.base.json) =="
 # The guards fail open when they cannot be found: move the checkout and every

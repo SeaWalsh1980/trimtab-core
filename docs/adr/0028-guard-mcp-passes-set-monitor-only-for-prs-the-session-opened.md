@@ -11,6 +11,12 @@ rest of both stands. ADR 0020
 (`docs/adr/0020-routines-refuse-the-remote-session-mcp-tools.md`) still
 governs cloud routines.
 
+Corrected 2026-10-17 by
+[ADR 0030](0030-guard-paths-is-registered-for-and-reads-notebookedit.md): the
+claim below that a session's NotebookEdit cannot write `guard-state/` did not
+hold until then, because guard-paths was not registered for NotebookEdit and
+did not read its path.
+
 ## Context
 
 ADR 0027 lets guard-mcp pass `mcp__ccd_pr__set_monitor` by exact name, so a
