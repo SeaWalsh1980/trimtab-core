@@ -49,7 +49,6 @@ def with_generic(body):
     return body + GENERIC
 
 
-
 def in_place_of_attribution(body, footer):
     """What the platform did on create in a later trial (2026-10-17): its footer where the run's last line was."""
     assert body.endswith(ATTRIBUTION)
