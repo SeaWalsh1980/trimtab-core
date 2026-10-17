@@ -1171,7 +1171,7 @@ for n in \
   mcp__ccd_session_mgmt__set_session_title \
   mcp__ccd_session_mgmt__set_session_permission_mode \
   mcp__ccd_host__sync_with_base_branch \
-  mcp__ccd_session_mgmt__send_message \
+  mcp__ccd_session_mgmt__delete_session \
   mcp__ccd_session_mgmt__set_session_model \
   mcp__ccd_session_mgmt__set_session_effort \
   mcp__ccd_session_mgmt__set_session_fast_mode \
