@@ -1323,6 +1323,13 @@ printf '#!/bin/sh\n' > "$LV_REPO/hooks/rule-usage.sh"; chmod +x "$LV_REPO/hooks/
 # to stop work, would overstate it.
 hm() {
   local label="$1" cmd="$2" hook="$3" out rc verdict
+  # Said by name: a hook the fixture never stubbed would otherwise run the
+  # check on a healthy install and show up only as unparseable output.
+  if [[ ! -x "$LV_REPO/hooks/$hook.sh" ]]; then
+    printf 'FAIL  %-14s %s  -- %s\n' "liveness" "$label" "the fixture has no stub for hooks/$hook.sh"
+    fails=$((fails+1))
+    return
+  fi
   rm "$LV_REPO/hooks/$hook.sh"
   out=$(HOME="$LV_HOME" sh -c "$cmd" 2>&1); rc=$?
   printf '#!/bin/sh\n' > "$LV_REPO/hooks/$hook.sh"; chmod +x "$LV_REPO/hooks/$hook.sh"
@@ -1360,7 +1367,7 @@ lv "restored again after HOOKS MISSING"           "$LV_HOME"  silent
 # Only the four hooks named above are soft. Any other name in the list, such
 # as a blocking hook added later without the guard- prefix, must fall through
 # to GUARDS OFF: an unknown hook missing fails closed.
-LV_EXTRA=$(printf '%s' "$LIVENESS" | sed 's/ rule-usage; do / rule-usage new-blocker; do /')
+LV_EXTRA=$(printf '%s' "$LIVENESS" | sed 's/\(for g in [A-Za-z0-9_ -]*\); do /\1 new-blocker; do /')
 if [[ "$LV_EXTRA" == "$LIVENESS" ]]; then
   printf 'FAIL  %-14s %s\n' "liveness" "could not add a hook to the shipped list"
   fails=$((fails+1))
