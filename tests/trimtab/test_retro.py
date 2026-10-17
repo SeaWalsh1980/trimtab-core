@@ -14,7 +14,7 @@ from pathlib import Path
 
 from instance_fixture import env_for, make_instance
 from trimtab.capture.ingest import LABEL, PullRequest, rebuild
-from trimtab.capture.sources import FixtureSource, SourceError
+from trimtab.capture.sources import FixtureIssues, FixtureSource, SourceError
 from trimtab.items import Item, Proposal, Strength
 from trimtab.lint import structure
 from trimtab.propose import (
@@ -365,6 +365,35 @@ class AFixtureDecline(unittest.TestCase):
 
     def test_one_closed_before_the_window_is_not(self):
         self.assertEqual(self.listed("2026-08-20T00:00:00Z"), [])
+
+
+class AFixtureRead(unittest.TestCase):
+    """The fixtures refuse what GitHub's sources refuse, wherever the row sits."""
+
+    def test_a_window_that_is_not_a_day_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pulls.json"
+            path.write_text(json.dumps([]))
+
+            with self.assertRaises(SourceError):
+                FixtureSource(path).recent_pulls("2026-9-1")
+
+    def test_a_pr_row_outside_the_window_with_no_title_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pulls.json"
+            path.write_text(json.dumps([{"number": 9, "state": "closed", "closed_at": "2026-01-01T00:00:00Z"}]))
+
+            with self.assertRaises(SourceError):
+                FixtureSource(path).recent_pulls("2026-09-01")
+
+    def test_an_issue_row_outside_the_window_with_no_title_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "issues.json"
+            path.write_text(json.dumps([{"labels": [ISSUE_LABEL], "state": "closed",
+                                         "closed_at": "2026-01-01T00:00:00Z"}]))
+
+            with self.assertRaises(SourceError):
+                FixtureIssues(path).recent_titles(ISSUE_LABEL, "2026-09-01")
 
 
 class AFixtureRowWithNoTitle(unittest.TestCase):

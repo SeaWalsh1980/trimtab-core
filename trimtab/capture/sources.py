@@ -169,6 +169,24 @@ def _within_scan(limit: int) -> None:
         raise SourceError(f"a scan of closed PRs reads at most {SCAN_LIMIT}; lower the limit")
 
 
+def _window_day(merged: bool, updated_at: str, closed_at: str, merged_at: str = "") -> str:
+    """The day that puts a closed PR in the window: a merged one by its last update, one closed unmerged by when it
+    closed (else its last update), so a comment on an old decline does not bring it back."""
+    return ((updated_at or merged_at) if merged else (closed_at or updated_at))[:10]
+
+
+def _require_day(closed_since: str | None) -> None:
+    """The window is compared as a day against updated_at, closed_at and the scan's floor."""
+    if closed_since is not None and not DATE.fullmatch(closed_since):
+        raise SourceError("closed_since must be a YYYY-MM-DD date")
+
+
+def _require_titles(rows: list, what: str) -> None:
+    """Every row read carries a title, as GitHub's do: one without is refused, never matched as ''."""
+    if not all(isinstance(r, dict) and isinstance(r.get("title"), str) for r in rows):
+        raise SourceError(f"{what}: a row has no title")
+
+
 class GhSource:
     """Merged PRs from `repos/<r>/pulls?state=closed`, filtered here by merge time and label.
 
@@ -215,18 +233,13 @@ class GhSource:
         fetched again. A PR closed unmerged counts by when it closed, not when it was last touched: a comment on an
         old decline does not bring it back into the window. A merged one counts by its last update."""
         what = "gh api pulls"
-        if closed_since is not None and not DATE.fullmatch(closed_since):
-            # The window is compared as a day against updated_at, closed_at and the scan's floor.
-            raise SourceError("closed_since must be a YYYY-MM-DD date")
+        _require_day(closed_since)
         rows = self.api.all_pages(f"repos/{self.repo}/pulls", {"state": "open"}, SCAN_LIMIT, what)
         found = [PullTitle(r.number, r.title, "open") for r in map(_pull_row, rows)]
         if closed_since:
-            def in_window(r: _PullRow) -> bool:
-                when = r.updated_at if r.merged_at else (r.closed_at or r.updated_at)
-                return when[:10] >= closed_since
-
             found += [PullTitle(r.number, r.title, "merged" if r.merged_at else "closed", r.merged_at, r.closed_at)
-                      for r in self._closed_since(closed_since) if in_window(r)]
+                      for r in self._closed_since(closed_since)
+                      if _window_day(bool(r.merged_at), r.updated_at, r.closed_at) >= closed_since]
         return found
 
     def _page(self, order: Mapping[str, str], page: int) -> list[_PullRow]:
@@ -328,12 +341,14 @@ class FixtureSource:
         def recent(r):
             if state(r) == "open":
                 return True
-            when = (r.get("updated_at") or r.get("merged_at") if state(r) == "merged"
-                    else r.get("closed_at") or r.get("updated_at"))
-            return closed_since is not None and (when or "")[:10] >= closed_since
-        rows = [r for r in self._rows() if recent(r)]
-        if not all(isinstance(r.get("title"), str) for r in rows):
-            raise SourceError("fixture pulls: a PR row has no title")  # GitHub's rows always carry one
+            when = _window_day(state(r) == "merged", r.get("updated_at") or "", r.get("closed_at") or "",
+                               r.get("merged_at") or "")
+            return closed_since is not None and when >= closed_since
+
+        _require_day(closed_since)
+        everything = self._rows()
+        _require_titles(everything, "fixture pulls")
+        rows = [r for r in everything if recent(r)]
         return [PullTitle(r["number"], r["title"], state(r), r["merged_at"] if self._merged(r) else "",
                           r.get("closed_at") or "") for r in rows]
 
@@ -620,10 +635,9 @@ class FixtureIssues:
             if r.get("state", "open") == "open":
                 return True
             return closed_since is not None and (r.get("closed_at") or "")[:10] >= closed_since
-        rows = [r for r in self._rows() if label in r.get("labels", []) and recent(r)]
-        if not all(isinstance(r.get("title"), str) for r in rows):
-            raise SourceError("fixture issues: an issue row has no title")  # as GhIssues refuses one
-        return [r["title"] for r in rows]
+        everything = self._rows()
+        _require_titles(everything, "fixture issues")
+        return [r["title"] for r in everything if label in r.get("labels", []) and recent(r)]
 
     def create(self, title: str, body: str, labels) -> str:
         rows = self._rows()
