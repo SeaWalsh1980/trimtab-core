@@ -113,6 +113,47 @@ class CreatedPr(unittest.TestCase):
         stdout = api_response(GHE_URL, 42, "team/service")
         self.assertEqual(pm.created_pr(bash_result(command, stdout)), PrKey("ghe.example.com", "team", "service", 42))
 
+    def test_a_create_naming_its_repository_records_a_pr_there(self):
+        for flag in ("-R owner/repo", "--repo owner/repo", "--repo=owner/repo", "-Rowner/repo",
+                     "-R github.com/owner/repo", "--repo https://github.com/owner/repo"):
+            with self.subTest(flag=flag):
+                self.assertEqual(pm.created_pr(bash_result(f"gh pr create --fill {flag}", OWN_URL)), OWN_KEY)
+
+    def test_an_enterprise_create_naming_its_host_records_its_pr(self):
+        command = "gh pr create --fill -R ghe.example.com/team/service"
+        self.assertEqual(pm.created_pr(bash_result(command, GHE_URL)), PrKey("ghe.example.com", "team", "service", 42))
+
+    def test_a_pr_on_a_host_the_create_did_not_name_is_not_recorded(self):
+        for command, stdout in (("gh pr create --fill", GHE_URL),
+                                ("gh pr create --fill -R ghe.example.com/owner/repo", OWN_URL),
+                                ("gh pr create --fill -R owner/repo", OTHER_HOST_URL)):
+            with self.subTest(command=command):
+                self.assertIsNone(pm.created_pr(bash_result(command, stdout)))
+
+    def test_a_pr_in_a_repository_the_create_did_not_name_is_not_recorded(self):
+        self.assertIsNone(pm.created_pr(bash_result("gh pr create --fill -R owner/elsewhere", OWN_URL)))
+
+    def test_an_unclear_repository_flag_records_nothing(self):
+        for flag in ("-R owner/repo -R owner/repo", "-R owner", "-R a/b/c/d", "-R", "--repo http://github.com/owner/repo",
+                     "-R owner/..", "-R bad_host/owner/repo"):
+            with self.subTest(flag=flag):
+                self.assertIsNone(pm.created_pr(bash_result(f"gh pr create --fill {flag}", OWN_URL)))
+
+    def test_a_rest_response_from_another_host_is_not_recorded(self):
+        for command in ("gh api --hostname evil.example.com -X POST repos/owner/repo/pulls --input b.json",
+                        "gh api --hostname=evil.example.com -X POST repos/owner/repo/pulls --input b.json"):
+            with self.subTest(command=command):
+                self.assertIsNone(pm.created_pr(bash_result(command, api_response())))
+
+    def test_a_rest_create_without_a_hostname_records_only_github_com(self):
+        command = "gh api -X POST repos/team/service/pulls --input b.json"
+        self.assertIsNone(pm.created_pr(bash_result(command, api_response(GHE_URL, 42, "team/service"))))
+
+    def test_a_rest_response_for_another_repository_than_the_path_is_not_recorded(self):
+        command = "gh api -X POST repos/owner/repo/pulls --input b.json"
+        stdout = api_response(OTHER_REPO_URL, 7, "owner/other")
+        self.assertIsNone(pm.created_pr(bash_result(command, stdout)))
+
     def test_commands_that_could_print_another_url_record_nothing(self):
         for command in ("echo " + OWN_URL,
                         "gh pr create --fill; echo x",

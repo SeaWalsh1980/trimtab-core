@@ -625,7 +625,7 @@ if [[ -x "$CLAUDE_HOME/hooks/guard-mcp.sh" && -x "$CLAUDE_HOME/hooks/pr-monitor-
   # An example host: the public scrub refuses a repository URL outside tests/.
   pm_url="https://git.example.com/owner/repo/pull"
   set +e
-  printf '%s' '{"session_id":"bootstrap-probe","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"'"$pm_url/1"'\n","stderr":"","interrupted":false}}' \
+  printf '%s' '{"session_id":"bootstrap-probe","tool_name":"Bash","tool_input":{"command":"gh pr create --fill -R git.example.com/owner/repo"},"tool_response":{"stdout":"'"$pm_url/1"'\n","stderr":"","interrupted":false}}' \
     | CLAUDE_CONFIG_DIR="$pm_cfg" "$CLAUDE_HOME/hooks/pr-monitor-record.sh" >/dev/null 2>&1
   rc_rec=$?
   out_own=$(pm_probe_call "$pm_cfg" bootstrap-probe "$pm_url/1"); rc_own=$?

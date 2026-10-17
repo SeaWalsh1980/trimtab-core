@@ -92,6 +92,14 @@ session on stderr.
   it is a PR URL. For `gh api`, stdout is one JSON object whose `html_url`
   is a PR URL, whose integer `number` matches it, and whose
   `base.repo.full_name`, when present, matches its owner and repository.
+- **Bound to where the create went.** A server only vouches for its own PRs,
+  so the PR must be on the host the command sent the create to, and in the
+  repository the command names, if it names one:
+  - `gh pr create`: the host and repository of `-R`/`--repo`
+    (`OWNER/REPO`, `HOST/OWNER/REPO` or an https URL; given twice, or in any
+    other form, nothing is recorded), else `github.com` and any repository;
+  - `gh api`: the `--hostname` value, else `github.com`; and the path's
+    owner and repository unless it uses gh's `{owner}/{repo}` placeholders.
 - **The key.** `(host, owner, repo, number)`: https only, no userinfo, no
   port; host lower-cased and limited to `[a-z0-9.-]`; path exactly
   `/<owner>/<repo>/pull/<n>` with an optional trailing `/`; owner and
@@ -99,8 +107,8 @@ session on stderr.
   with no leading zero; query and fragment dropped. A `%`, `/pulls/`, a
   sub-page or an API URL produces no key. A fork's `html_url` is the base
   repository's PR, which is what the app binds, so forks need no special
-  case. The host comes from the URL, so GitHub Enterprise works without a
-  host list.
+  case. GitHub Enterprise works without a host list, provided the command
+  names its host (above).
 
 **Store.** `<config dir>/guard-state/pr-monitor/<sha256 of session_id>.json`,
 JSON with `"v": 1`. The session ID must match `[A-Za-z0-9_-]{1,128}`; the
@@ -182,7 +190,11 @@ tools, only `set_monitor` has its arguments read, and only it can be denied.
 - **Ask GitHub who authored the PR.** Rejected. A network call and a
   credential inside a hook.
 - **A host allowlist.** Rejected. It breaks GitHub Enterprise, which the app
-  supports. **Comparing URLs as raw strings.** Rejected. Case and a trailing
+  supports.
+- **Trust the host the printed URL names.** Rejected after review. A session
+  can log gh in to a server it runs and send the create there
+  (`--hostname`, `-R host/…`); that server can answer with any PR's URL on
+  any host. Binding the URL to the host the command named stops that. **Comparing URLs as raw strings.** Rejected. Case and a trailing
   `/` would deny the session's own PR.
 - **Clean up in a SessionEnd hook.** Rejected. A crash or kill skips it, so
   an age limit is needed anyway. **No clean-up.** Rejected: unbounded growth.
@@ -213,6 +225,13 @@ tools, only `set_monitor` has its arguments read, and only it can be denied.
 - A create in any other shape, including a heredoc body or a `--jq` REST
   create, still creates the PR, but it is not recorded, and Auto-fix for it
   is denied. It cannot be recorded after the fact.
+- A GitHub Enterprise create is recorded only when the command names the
+  host (`-R HOST/OWNER/REPO`, or `gh api --hostname`); a bare `gh pr create`
+  in an Enterprise checkout is not.
+- The binding reads the command, not gh's configuration. gh can also pick
+  its host from its own config or `GH_HOST`, which the recorder cannot see;
+  a session that rewrites those, or the shell environment gh runs in, is
+  outside what this record closes.
 - "Auto-fix only on the session's own PRs" rests on two layers: this
   guard's list, and the app acting only on the PR in `url`. The second is
   app behaviour, read from 44.7.2. The trial checks it live, and an app

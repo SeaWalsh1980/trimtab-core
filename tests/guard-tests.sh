@@ -1129,6 +1129,18 @@ pmt "the list directories are 0700"                         test "$(pm_py 'impor
 pmt "the list file is 0600"                                 test "$(pm_py 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$(pm_file $PM_A)")" = 0o600
 pmt "the list file is named by a hash, not the session"     test -z "$(find "$PM_DIR" -name '*.json' | grep -v -E '/[0-9a-f]{64}\.json$')"
 
+# The PR must be on the host the create went to, and in the repository the
+# command names: a server only vouches for its own PRs.
+GHE="https://ghe.example.com/owner/repo/pull"
+pmr 0 "a REST create to another host is not recorded"       "$(pm_post $PM_A 'gh api --hostname evil.example.com -X POST repos/owner/repo/pulls --input b.json' "{\"html_url\":\"$PR/16\",\"number\":16,\"base\":{\"repo\":{\"full_name\":\"owner/repo\"}}}")"
+pmv not-recorded "a PR another host vouched for is denied"   "$(pm_fix $PM_A 16)"
+pmr 0 "an enterprise create naming its host is recorded"    "$(pm_post $PM_A 'gh pr create --fill -R ghe.example.com/owner/repo' "$GHE/17")"
+pmv pass "an enterprise PR created with -R"                  "$(pm_call $PM_A "{\"auto_fix\":true,\"url\":\"$GHE/17\"}")"
+pmr 0 "a bare create printing an enterprise URL"            "$(pm_post $PM_A 'gh pr create --fill' "$GHE/18")"
+pmv not-recorded "an enterprise PR from a bare create"      "$(pm_call $PM_A "{\"auto_fix\":true,\"url\":\"$GHE/18\"}")"
+pmr 0 "a create naming one repo, printing another"          "$(pm_post $PM_A 'gh pr create --fill -R owner/elsewhere' "$PR/19")"
+pmv not-recorded "a PR outside the named repository"        "$(pm_fix $PM_A 19)"
+
 pmv pass "auto-archive alone passes, with no list"          "$(pm_call pm-session-none '{"auto_archive_on_close":true}')"
 pmv no-url "auto_fix without url"                           "$(pm_call $PM_A '{"auto_fix":true}')"
 pmv bad-arguments "an argument this version does not read"  "$(pm_call $PM_A "{\"auto_fix\":true,\"url\":\"$PR/7\",\"pr\":8}")"

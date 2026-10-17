@@ -48,14 +48,22 @@ MAX_STDOUT_BYTES = 1 << 20
 
 SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+")
-PULL_PATH = re.compile(r"/([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9._-]{1,100})/pull/([1-9][0-9]{0,9})/?")
-PULLS_ENDPOINT = re.compile(r"/?repos/[^/\s]+/[^/\s]+/pulls/?")
+_OWNER = r"[A-Za-z0-9][A-Za-z0-9-]{0,38}"
+_REPO = r"[A-Za-z0-9._-]{1,100}"
+OWNER, REPO_NAME = re.compile(_OWNER), re.compile(_REPO)
+PULL_PATH = re.compile(rf"/({_OWNER})/({_REPO})/pull/([1-9][0-9]{{0,9}})/?")
+PULLS_ENDPOINT = re.compile(r"/?repos/([^/\s]+)/([^/\s]+)/pulls/?")
+# The host gh talks to when a command names none. A create sent to another host
+# must name it (`--hostname`, or `-R <host>/<owner>/<repo>`), and the PR URL it
+# prints must be on that host: a server only vouches for its own PRs.
+DEFAULT_HOST = "github.com"
 
 # Rejected anywhere in a create command: each lets text other than gh's own reach stdout,
 # or makes the command something other than what it reads as.
 UNSAFE_CHARS = ("$", "`", "\\", "\n", "\r")
 GLOB_CHARS = set("*?[{")
 PORCELAIN_REFUSED = {"--web", "-w", "--dry-run"}
+REPO_FLAGS = {"-R", "--repo"}
 API_VALUED = {"-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "--input",
               "-q", "--jq", "-t", "--template", "--hostname", "-p", "--preview", "--cache"}
 API_FIELDS = {"-f", "--raw-field", "-F", "--field", "--input"}
@@ -84,6 +92,14 @@ class PrKey:
     owner: str
     repo: str
     number: int
+
+
+@dataclass(frozen=True)
+class Target:
+    """Where a create command sent the PR: the host, and the repository when the command names
+    one literally (lower-cased owner and name), else None."""
+    host: str
+    repo: tuple[str, str] | None
 
 
 @dataclass(frozen=True)
@@ -159,17 +175,57 @@ def _flag_name(arg: str) -> str:
     return arg.partition("=")[0] if arg.startswith("--") else arg
 
 
-def _porcelain_create(tokens: list[str]) -> bool:
+def _repo_target(value: str) -> Target | None:
+    """The target `-R/--repo` names: `OWNER/REPO`, `HOST/OWNER/REPO`, or an https URL."""
+    if "://" in value:
+        try:
+            parts = urlsplit(value)
+        except ValueError:
+            return None
+        if parts.scheme != "https" or "@" in parts.netloc or ":" in parts.netloc:
+            return None
+        host, segments = parts.netloc.lower(), [s for s in parts.path.split("/") if s]
+    else:
+        segments = value.split("/")
+        host = DEFAULT_HOST if len(segments) == 2 else segments[0].lower()
+        segments = segments[-2:] if len(segments) in (2, 3) else []
+    if len(segments) != 2 or not HOST.fullmatch(host):
+        return None
+    owner, repo = segments
+    if not OWNER.fullmatch(owner) or not REPO_NAME.fullmatch(repo) or repo in (".", ".."):
+        return None
+    return Target(host, (owner.lower(), repo.lower()))
+
+
+def _porcelain_create(tokens: list[str]) -> Target | None:
+    """The target of a `gh pr create`, or None when it is not a plain create or names no clear one."""
     if tokens[:3] != ["gh", "pr", "create"]:
-        return False
-    return not any(_flag_name(arg) in PORCELAIN_REFUSED for arg in tokens[3:])
+        return None
+    args, repos = tokens[3:], []
+    for i, arg in enumerate(args):
+        name = _flag_name(arg)
+        if name in PORCELAIN_REFUSED:
+            return None
+        if name in REPO_FLAGS:
+            if arg.startswith("--repo="):
+                repos.append(arg.partition("=")[2])
+            elif i + 1 < len(args):
+                repos.append(args[i + 1])
+            else:
+                return None
+        elif arg.startswith("-R") and len(arg) > 2:
+            repos.append(arg[2:].removeprefix("="))
+    if len(repos) > 1:
+        return None  # which one gh used is not this parser's guess to make
+    return _repo_target(repos[0]) if repos else Target(DEFAULT_HOST, None)
 
 
-def _api_create(tokens: list[str]) -> bool:
-    """`gh api` with a POST to `repos/<o>/<r>/pulls` and nothing that reshapes its stdout."""
+def _api_create(tokens: list[str]) -> Target | None:
+    """The target of a `gh api` POST to `repos/<o>/<r>/pulls` with nothing that reshapes its
+    stdout, or None."""
     if tokens[:2] != ["gh", "api"]:
-        return False
-    args, method, path, fields = tokens[2:], None, None, False
+        return None
+    args, method, path, fields, host = tokens[2:], None, None, False, DEFAULT_HOST
     i = 0
     while i < len(args):
         arg = args[i]
@@ -180,31 +236,39 @@ def _api_create(tokens: list[str]) -> bool:
         else:
             name, eq, value = arg, "", ""
         if name in API_REFUSED:
-            return False
+            return None
         if name in API_VALUED:
             if not eq:
                 if i + 1 >= len(args):
-                    return False
+                    return None
                 i += 1
                 value = args[i]
             if name in ("-X", "--method"):
                 method = value.upper()
+            if name == "--hostname":
+                host = value.lower()
             fields = fields or name in API_FIELDS
         elif arg.startswith("-"):
-            return False  # an option this version does not know
+            return None  # an option this version does not know
         elif path is None:
             path = arg
         else:
-            return False
+            return None
         i += 1
-    if path is None or not PULLS_ENDPOINT.fullmatch(path.split("?", 1)[0]):
-        return False
+    match = PULLS_ENDPOINT.fullmatch(path.split("?", 1)[0]) if path is not None else None
     # gh api defaults to GET, and to POST once any field or input is given.
-    return (method or ("POST" if fields else "GET")) == "POST"
+    if match is None or (method or ("POST" if fields else "GET")) != "POST" or not HOST.fullmatch(host):
+        return None
+    owner, repo = match.groups()
+    if (owner, repo) == ("{owner}", "{repo}"):
+        return Target(host, None)  # gh fills these from the checkout's remote
+    if not OWNER.fullmatch(owner) or not REPO_NAME.fullmatch(repo):
+        return None
+    return Target(host, (owner.lower(), repo.lower()))
 
 
-def _create_form(command: str) -> str | None:
-    """'porcelain' | 'api' when the command is an allowed create, else None.
+def _create_form(command: str) -> tuple[str, Target] | None:
+    """('porcelain' | 'api', target) when the command is an allowed create, else None.
 
     Allowed: `[cd <literal path> &&] [git push [args] &&] <create>`, nothing after the create.
     """
@@ -222,11 +286,23 @@ def _create_form(command: str) -> str | None:
         prefixes = prefixes[1:]
     if prefixes:
         return None
-    if _porcelain_create(create):
-        return "porcelain"
-    if _api_create(create):
-        return "api"
+    target = _porcelain_create(create)
+    if target is not None:
+        return "porcelain", target
+    target = _api_create(create)
+    if target is not None:
+        return "api", target
     return None
+
+
+def _on_target(key: PrKey | None, target: Target) -> PrKey | None:
+    """The key, when it is a PR on the host the create went to and, if the command named a
+    repository, in that repository; else None."""
+    if key is None or key.host != target.host:
+        return None
+    if target.repo is not None and (key.owner, key.repo) != target.repo:
+        return None
+    return key
 
 
 def _key_from_api_response(stdout: str) -> PrKey | None:
@@ -253,7 +329,9 @@ def created_pr(payload: object) -> PrKey | None:
 
     The key comes only from the call's stdout, never from its command text: for `gh pr
     create`, stdout is exactly one line and that line is a PR URL; for `gh api`, it is one
-    JSON object whose `html_url`, `number` and `base.repo.full_name` agree.
+    JSON object whose `html_url`, `number` and `base.repo.full_name` agree. The command
+    text only bounds it: the PR must be on the host the create went to, and in the
+    repository the command names, if it names one.
     """
     if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
         return None
@@ -269,13 +347,14 @@ def created_pr(payload: object) -> PrKey | None:
         return None  # the output seen is not the whole of it
     if len(stdout.encode("utf-8", errors="replace")) > MAX_STDOUT_BYTES:
         return None
-    form = _create_form(command)
+    created = _create_form(command)
+    if created is None:
+        return None
+    form, target = created
     if form == "porcelain":
         lines = stdout.strip().splitlines()
-        return canonical(lines[0]) if len(lines) == 1 else None
-    if form == "api":
-        return _key_from_api_response(stdout)
-    return None
+        return _on_target(canonical(lines[0]), target) if len(lines) == 1 else None
+    return _on_target(_key_from_api_response(stdout), target)
 
 
 def list_name(session_id: object) -> str:
