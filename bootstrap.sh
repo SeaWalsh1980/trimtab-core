@@ -129,11 +129,11 @@ unreadable() {
   if [[ $CHECK_ONLY -eq 1 ]]; then note "$1 cannot be read as settings"; else die "$1 cannot be read as settings"; fi
 }
 
-# The python3 floor. The launchers (bin/trimtab, the drift hook, pr-body-check.sh)
-# run `python3 -P`, which needs 3.11: on anything older bin/trimtab fails, the
-# drift hook goes quiet and pr-body-check.sh fails open through its probe. So the
-# installer refuses first, before it writes, links or switches anything, --check
-# included. The version test is `sys.version_info`, not `-P`, so it also runs on
+# The python3 floor. bin/trimtab runs `python3 -P`, and the hooks that start
+# python3 probe for it with `python3 -P` (ADR 0035), which needs 3.11: on anything
+# older bin/trimtab fails, the drift hook goes quiet and pr-body-check.sh fails
+# open through its probe. So the installer refuses first, before it writes,
+# links or switches anything, --check included. The version test is `sys.version_info`, not `-P`, so it also runs on
 # the interpreters it is there to refuse.
 # See docs/adr/0014-the-installer-refuses-python-older-than-3-11.md.
 command -v python3 >/dev/null 2>&1 || die "python3 is required (3.11 or newer: the launchers need python3 -P)"
@@ -222,8 +222,15 @@ read_record
 # one third-party dependency is checked here: a missing PyYAML is a missing
 # dependency, and must not be reported as a fault in the instance's doctrine.
 TRIMTAB_BIN="$BASE/bin/trimtab"
-python3 -c 'import yaml' 2>/dev/null \
+# -P: a yaml/ or yaml.py in bootstrap's own working directory must not pass
+# for PyYAML (3.11 is already required, so -P is always there).
+python3 -P -c 'import yaml' 2>/dev/null \
   || die "PyYAML is required (the registry check imports it) and python3 cannot import it; nothing was changed"
+# And as pr-body-check imports it, with -I: that hook cannot see user
+# site-packages (ADR 0035), so a PyYAML installed only there would leave the
+# hook failing open with no sign.
+python3 -I -c 'import yaml' 2>/dev/null \
+  || die "PyYAML is reachable only where python3 -I cannot see it (user site-packages, or a PYTHONPATH or other PYTHON* variable), so pr-body-check could not import it; install it system-wide (e.g. apt install python3-yaml); nothing was changed"
 against=()
 # The baseline is the last installed SHA of this same instance, if one is recorded.
 [[ "$rec_root" == "$INSTANCE" && "$rec_instance_sha" =~ ^[0-9a-f]{40}$ ]] \

@@ -21,15 +21,19 @@
 payload=$(cat) || exit 1
 create='gh[[:space:]]+(pr[[:space:]]+create|api)'
 [[ "$payload" =~ $create ]] || exit 0
-if ! command -v python3 >/dev/null 2>&1 || ! python3 -P -c '' >/dev/null 2>&1; then
+# -P exists only from 3.11, so the probe is also the version check.
+if ! command -v python3 >/dev/null 2>&1 || ! python3 -P -I -S -c '' >/dev/null 2>&1; then
   echo "pr-monitor: python3 3.11 or later is not available; a PR create was not recorded" >&2
   exit 1
 fi
 
 here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
-# -P: never put the working directory on sys.path, so a trimtab/ directory
-# there cannot shadow this checkout's package. -B: write no bytecode beside the
+# -I -S: no working directory (a trimtab/ there cannot shadow this checkout's
+# package), no site-packages of any kind (so no .pth and no sitecustomize), no
+# PYTHON* variables. run_module.py loads the package without putting the root
+# on sys.path, so no file at the root can stand in for a module and record a PR
+# the session never created (ADR 0035). -B: write no bytecode beside the
 # package; a snapshot is never written.
-PYTHONPATH="$here/.." python3 -P -B -m trimtab.adapters.pr_monitor record <<<"$payload" >/dev/null
+python3 -I -S -B "$here/run_module.py" "$here/.." trimtab.adapters.pr_monitor record <<<"$payload" >/dev/null
 [[ $? -eq 0 ]] && exit 0
 exit 1

@@ -21,4 +21,10 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 # -B: write no bytecode beside the script; a snapshot is never written.
-exec python3 -B "$dir/rule_usage.py"
+# -I -S: no script or working directory on sys.path, no site-packages of any
+# kind (so no .pth the session wrote), no PYTHON* variables. The observer runs
+# on every Skill call and at session, subagent, instruction-load and prompt
+# events, so code that ran inside it could write guard-state, which guard-paths
+# keeps the session itself away from (ADR 0035). It needs nothing beyond the
+# standard library.
+exec python3 -I -S -B "$dir/rule_usage.py"

@@ -823,6 +823,28 @@ check_retention_spares_a_snapshot_systemd_links_into() {
   fi
 }
 
+# pr-body-check imports PyYAML under python3 -I, which cannot see user
+# site-packages (ADR 0035). A PyYAML visible only without -I must stop the
+# install with that reason, not leave the hook failing open. The stub python3
+# hides PyYAML from -I alone.
+check_pyyaml_hidden_from_isolated_python_is_named() {
+  local h inst fake real
+  h=$(new_home); inst=$(inst_of "$h")
+  fake=$(mktemp -d -p "$work" noyaml-isolated.XXXXXX); real=$(command -v python3)
+  cat > "$fake/python3" <<EOF
+#!/usr/bin/env bash
+if [[ "\${1-}" == -I && "\${2-}" == -c && "\${3-}" == "import yaml" ]]; then exit 1; fi
+exec "$real" "\$@"
+EOF
+  chmod +x "$fake/python3"
+  PATH="$fake:$PATH" boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 1 && "$out" == *"python3 -I cannot see it"* ]] && nothing_written "$h" "$inst"; then
+    pass "a PyYAML hidden from python3 -I stops the install, naming why"
+  else
+    fail "a PyYAML hidden from python3 -I stops the install, naming why" "rc=$rc"; echo "$out" | tail -5
+  fi
+}
+
 # Without PyYAML the registry check cannot run; that is a missing dependency,
 # not a doctrine failure, and the message must say which.
 check_missing_pyyaml_is_named() {
@@ -1195,6 +1217,7 @@ check_cli_probe_accepts_a_config_dir_with_a_trailing_slash
 check_silent_session_path_fails_the_install
 check_retention_spares_a_snapshot_systemd_links_into
 check_missing_pyyaml_is_named
+check_pyyaml_hidden_from_isolated_python_is_named
 check_instance_without_claude_md_drops_a_dangling_link
 check_instance_without_claude_md_drops_a_link_into_the_store
 check_instance_without_claude_md_keeps_a_link_it_did_not_make

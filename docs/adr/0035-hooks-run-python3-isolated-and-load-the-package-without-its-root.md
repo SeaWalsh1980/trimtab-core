@@ -1,0 +1,188 @@
+# 0035. The hooks that start python3 run it isolated, and load the package without putting its root on sys.path
+
+## Status
+
+Accepted (2026-10-17), by the operator. Extends ADR 0001's amendment
+(`docs/adr/0001-guards-fail-closed-on-missing-dependencies.md`), which
+isolated the guards' inline python3 parsers, to the hooks that run a module
+of this package and to the rule-usage observer. Strengthens ADR 0028
+(`docs/adr/0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md`),
+whose `set_monitor` deny check is one of them.
+
+## Context
+
+Four hooks ran a module of this package with
+`PYTHONPATH="$here/.." python3 -P -B -m trimtab.adapters.<module>`:
+guard-mcp's `set_monitor` check (`pr_monitor check`), `pr-monitor-record.sh`
+(`pr_monitor record`), `pr-body-check.sh` and `doctrine-drift.sh`. A fifth,
+`rule-usage.sh`, runs `python3 -B rule_usage.py` on every Skill call and at
+session, subagent, instruction-load and prompt events.
+
+Three things the session can write could run code inside those interpreters:
+
+- **A `.pth` file in user site-packages.** `-P` leaves user site on, and
+  Python runs every `.pth` there at start up. The default user site
+  (`~/.local/lib/python3.X/site-packages`) is writable by the session, and a
+  `pip install --user` of a hostile package puts one there.
+- **A `sitecustomize.py` at the package root.** `site` imports it from any
+  `sys.path` entry, and `PYTHONPATH` put the root on `sys.path`. `-s` does not
+  stop it.
+- **A standard-library name at the package root**, such as `json.py`.
+  `PYTHONPATH` entries come before the standard library, so it is imported
+  instead, even with `-S`.
+
+guard-paths protects the checkout's `hooks/`, `rules/`, `bin/` and named
+files, but not a new file at the checkout root. On 2026-10-17 a plant that
+prints `pass` and exits 0 made guard-mcp pass `set_monitor` for a PR the
+session never created. That is ADR 0028's deny check failing open. The same
+plant can write a session's PR list from inside the recorder, and from inside
+the rule-usage observer, which runs on every Skill call. It also runs inside the
+other two hooks.
+
+The adapter hooks need the package root on `sys.path`, and `-I` drops
+`PYTHONPATH`, so they cannot simply take `-I` as the inline parsers did.
+
+## Decision
+
+- **guard-mcp's `set_monitor` check, the recorder and doctrine-drift** run
+  `python3 -I -S -B "$here/run_module.py" "$here/.." trimtab.adapters.<module> …`.
+  `hooks/run_module.py` is one standard-library-only loader, shared by all
+  four adapter hooks. It loads the `trimtab` package straight from
+  `<root>/trimtab` (`importlib.util.spec_from_file_location`, with the
+  package's own directory as its search path) and runs the module with
+  `runpy`. It refuses a module name outside `trimtab`. The root itself never
+  goes on `sys.path`.
+  - `-I` means no working directory, no user site and no `PYTHON*`
+    variables.
+  - `-S` means no site-packages of any kind, so no `.pth` and no
+    `sitecustomize`, including a venv's or pyenv's own.
+  - Because the root is never on `sys.path`, no file at the root can stand
+    in for any module, whatever its name. Only `trimtab.*` comes from the
+    checkout; every other import resolves from the standard library (and,
+    for pr-body-check, site-packages) as usual.
+- **pr-body-check** does the same with `-I` but not `-S`. It needs PyYAML,
+  which lives in system site-packages.
+  - The loader registers the checkout's `trimtab` before anything else is
+    imported, so a `trimtab` package installed in site-packages (a venv's or
+    the system's) cannot stand in for it. A root `yaml.py` cannot stand in
+    for PyYAML either.
+  - A `.pth` in system site-packages stays able to run in it. This is
+    accepted: the hook fails open by design and CI is its gate.
+  - bootstrap checks PyYAML both as the registry check sees it and with
+    `python3 -I`, as this hook sees it. A PyYAML reachable only through user
+    site-packages or a `PYTHON*` variable stops the install, instead of
+    leaving the hook failing open.
+  - If its loader is missing, the hook exits 0 before starting python3. It
+    fails open, as for every other fault: python3 would exit 2, which the
+    hook reads as a block.
+- **rule-usage** runs `python3 -I -S -B rule_usage.py`. It needs only the
+  standard library.
+- **The version probes** run `python3 -P -I -S -c ''` (pr-body-check: `-P -I`).
+  `-P` exists only from Python 3.11, so the probe is still the version check.
+
+## Options considered
+
+- **`-P -s`, as this record first decided.** Rejected after review. It closes
+  the user-site `.pth` but not a `sitecustomize.py` or a standard-library name
+  at the package root, both shown by trial below.
+- **The root on `sys.path` after the standard library, as the second and
+  third versions of this record did.** Rejected after review. A name the
+  standard library only tries to import, such as `nt` or `_winapi` (which
+  `shutil` probes for on Linux), still resolved to a root file. A root `nt.py`
+  forged the `set_monitor` verdict. Before site-packages, a root `yaml.py`
+  also stood in for PyYAML.
+- **`-P -S` with `PYTHONPATH`.** Rejected. A standard-library name at the
+  root still shadows, because `PYTHONPATH` comes first.
+- **`-E -s`.** Rejected. `-E` drops `PYTHONPATH`, and the root is still
+  first if it is put back.
+- **Switching user site off inside the modules.** Rejected. A `.pth` or
+  `sitecustomize` runs before any module code, so it is too late.
+- **Protecting user site and the package root in guard-paths.** Not taken
+  here. It would cover writes the session makes through paths guard-paths
+  can see, but not a write by a script, a package install, or anything else
+  it cannot see. The interpreter flags close the route whoever wrote the
+  file.
+- **Leave it.** Rejected by the operator: it lets the session forge the
+  `set_monitor` verdict and the recorder's list.
+
+## Trial
+
+On 2026-10-17 `tests/guard-tests.sh` gained plants. Each runs a copy of the
+hooks and the package under `$CPTMP`, with three plants:
+- a `.pth` in a user site that `PYTHONUSERBASE` points at;
+- a `sitecustomize.py` at the copy's package root;
+- a `json.py` at the same root.
+
+Each plant writes a mark file when loaded. With `SC_FORGE` set, each also
+prints `pass` and exits 0.
+
+- **Against `main`'s hooks** (9fd16a1): the mark appeared for every hook, and
+  guard-mcp passed the forged `set_monitor` case.
+- **Against this record's first version** (`-P -s`, dd8a532): the same
+  cases still failed. The root plants loaded, which is why it was replaced.
+- **With this decision:** none of the plants load in any of the five hooks,
+  the forged case is denied, and the recorder still records the session's
+  own PR.
+- **Positive controls:** a copy of each hook with its isolation flags
+  stripped does load a plant. So each case reached its python3, and the
+  passes come from the flags.
+- **An earlier draft** exported the plants' variables to the whole test. The
+  harness's own python3 then loaded the plant, and a case failed for the
+  wrong reason. The variables now go to the hook alone.
+- **A second review of this change**, at dfd4b75, found several problems:
+  - The inline loader appended the root after site-packages, so a `trimtab`
+    package in site-packages stood in for the checkout's in pr-body-check.
+    A test plants one in a venv's site-packages: it failed with the appended
+    root, and passes with the loader.
+  - The recorder case could not fail, because the control wrote to the same
+    config directory. The control now has its own.
+  - The root plants had no positive control. Fixtures now show that both
+    load when the root comes first on `sys.path`.
+  - Each isolated case now also checks that its hook ran and did its work,
+    where the hook has a visible effect: guard-mcp's deny, the recorder's
+    entry, rule-usage's log line. A broken loader turns the recorder's case
+    red; guard-mcp then denies, its fail-closed answer.
+- **A bootstrap-env case** gives bootstrap a python3 that hides PyYAML from
+  `-I` alone. The install must stop and say why. It did not before the
+  check, and does after.
+- **A third review**, at fc4bb54, reproduced a root `nt.py` forging the
+  verdict, and a root `yaml.py` loading in pr-body-check, through the loader
+  that kept the root on `sys.path`. Changes made in response:
+  - The root plants now include `nt.py`, `_winapi.py` and `yaml.py`. They
+    loaded in all four adapter hooks with that loader, and load in none with
+    the package-only loader.
+  - A control runs each adapter hook with a loader that appends the root,
+    and shows that a root plant does load. So the hooks' imports reach those
+    names.
+  - Two cases run the allowed path through the isolated loader. The
+    recorder records the session's own PR, and guard-mcp then passes
+    `set_monitor` for it. pr-body-check still blocks a `--fill` create, which
+    it blocks before reading any instance's registry, so the case holds in CI
+    too. With a broken loader, both fail.
+  - A case removes the loader, with the same blocking payload. pr-body-check
+    exits 0 instead of blocking.
+  - The first version of the pr-body-check case used `--body b`. That body
+    only blocks against an instance's registry, so the case passed locally
+    and failed in CI, which has no `TRIMTAB_INSTANCE`.
+
+## Consequences
+
+- No file the session can write in user site-packages or at the package
+  root, whatever its name, runs inside these five hooks. guard-mcp's `set_monitor` verdict, the
+  recorder's list and the observer cannot be forged that way.
+- Packages an operator installed into site-packages are invisible to these
+  hooks, except pr-body-check's view of system site-packages. They need
+  nothing from there.
+- Accepted residuals:
+  - A `.pth` in **system** site-packages can still run inside pr-body-check,
+    for its PyYAML. That hook fails open and CI is its gate.
+  - Any python3 the session starts itself can still write guard-state
+    through a route guard-paths cannot see, the known limit of a guard that
+    reads commands rather than what they do. These
+    flags close the routes that run without the session meaning to: a file
+    in the repository under work, a package install, or a plant left for a
+    hook to load.
+- Not covered here: `bin/env-names.sh` reads its script from stdin
+  (`python3 -`), which puts the working directory first on `sys.path`. The
+  same review found it. guard-paths blocks every read of that file, which is
+  the right policy for the inspector, so its fix is left to the operator.
