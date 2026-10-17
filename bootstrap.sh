@@ -600,6 +600,23 @@ if [[ -x "$CLAUDE_HOME/hooks/guard-mcp.sh" ]]; then
     note "guard-mcp did not pass mcp__ccd_turn__wrap_up (exit $rc_allow) — the app's UI tools will prompt every turn"
   fi
 fi
+# A PR edit that marks a draft ready must still ask (ADR 0030): if the argument
+# check stopped running, draft-until-final would lose its enforcement.
+probe_ask guard-mcp.sh "a PR edit that marks a draft ready" \
+  '{"tool_name":"mcp__github__update_pull_request","tool_input":{"owner":"o","repo":"r","pullNumber":1,"draft":false}}'
+# And a title edit passes; a miss only costs a prompt, so it is a note.
+if [[ -x "$CLAUDE_HOME/hooks/guard-mcp.sh" ]]; then
+  set +e
+  out_edit=$(printf '%s' '{"tool_name":"mcp__github__update_pull_request","tool_input":{"owner":"o","repo":"r","pullNumber":1,"title":"t"}}' \
+    | "$CLAUDE_HOME/hooks/guard-mcp.sh" 2>/dev/null)
+  rc_edit=$?
+  set -e
+  if [[ $rc_edit -eq 0 && -z "$out_edit" ]]; then
+    ok "guard-mcp passes a PR title edit"
+  else
+    note "guard-mcp did not pass a PR title edit (exit $rc_edit) — every PR body or title edit will prompt"
+  fi
+fi
 
 # The probes below run a hook on a payload whose cwd is a fresh empty directory.
 # Both hooks resolve the git toplevel of that cwd, so git is fenced at the

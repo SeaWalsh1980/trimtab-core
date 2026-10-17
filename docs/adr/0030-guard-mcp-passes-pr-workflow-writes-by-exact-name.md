@@ -60,11 +60,14 @@ matched as well as the tool part.
   just before `PR_WORKFLOW_ALLOW`. For that name only, guard-mcp reads the
   call's arguments. It passes when `tool_input` is an object whose keys are
   all among `owner`, `repo`, `pullNumber`, `title`, `body` and `reviewers`.
-  Anything else asks: `draft` either way, `state`, `base`,
+  An empty object, or one naming only the PR, passes too: it changes
+  nothing. Anything else asks: `draft` either way, `state`, `base`,
   `maintainer_can_modify`, an argument a later release adds, arguments that
-  are not an object, and no arguments at all. The comparison runs inside the
-  parser (jq, or python3 without it), so a key is never split, echoed or put
-  in a reason.
+  are not an object, and a call with no `tool_input` at all. The comparison
+  runs inside the parser (jq, or isolated python3 without it), so a key is
+  never split, echoed or put in a reason. The ask names its cause: an
+  argument off the list, no argument object, or a check that could not
+  finish, which says nothing about what the call changes.
 
 The key list is an allowlist, not a list of keys to refuse, so a new argument
 asks until it is reviewed. The call asks rather than denies, unlike
@@ -203,6 +206,13 @@ with jq off the PATH.
 - guard-mcp's python3 fallback runs isolated (`-I`), so neither a module in
   the working directory nor a `PYTHON*` variable can answer for it. The
   `set_monitor` check already ran with `-P` (ADR 0028).
+- The bootstrap self-probe asks guard-mcp about a ready-marking
+  `update_pull_request` and fails the install if it does not ask; a title
+  edit that does not pass is a note. A test proves the install refuses a
+  guard that passes the tool by name.
+- A test fails when a name whose arguments are read (`CCD_OWN_PR`,
+  `PR_EDIT`) also sits on a name-only list, or its tool part on the
+  verb-last list, so its arguments cannot be skipped by a pass by name.
 - The tests pin `PR_WORKFLOW_ALLOW` and `PR_EDIT` against the guard, as for
   `CCD_ALLOW`, and run the argument cases with jq only and with python3
   only. `mcp__ccd_session_mgmt__delete_session` takes `send_message`'s place

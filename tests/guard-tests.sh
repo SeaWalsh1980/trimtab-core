@@ -1036,36 +1036,27 @@ CCD_OWN=( mcp__ccd_pr__set_monitor )
 for n in "${CCD_PASS[@]}"; do
   tm pass "app allowlist: ${n#mcp__}"         "$(j "$n" '{}')"
 done
-# The guard's CCD_ALLOW must hold exactly the names tested above: a name added
-# to the guard alone would pass untested, and one dropped from it alone would
-# still be listed here as passing. Read from the shipped guard, not a copy.
-ccd_guard=$(awk '/^CCD_ALLOW=\($/{f=1; next} f && /^\)$/{exit} f' \
-  "$HOOKS/guard-mcp.sh" | tr -s ' \t' '\n' | sed '/^$/d' | sort)
-ccd_tests=$(printf '%s\n' "${CCD_PASS[@]}" | sort)
-if [[ -n "$ccd_guard" && "$ccd_guard" == "$ccd_tests" ]]; then
-  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_ALLOW holds exactly the tested names"
-else
-  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_ALLOW differs from the tested names (or could not be read)"
-  diff <(printf '%s\n' "$ccd_guard") <(printf '%s\n' "$ccd_tests") | sed 's/^/      /'
-  fails=$((fails+1))
-fi
-# The same for CCD_OWN_PR, and the two lists never share a name: one on both
-# would pass by name before its arguments were ever checked.
-own_guard=$(awk '/^CCD_OWN_PR=\($/{f=1; next} f && /^\)$/{exit} f' \
-  "$HOOKS/guard-mcp.sh" | tr -s ' \t' '\n' | sed '/^$/d' | sort)
-own_tests=$(printf '%s\n' "${CCD_OWN[@]}" | sort)
-if [[ -n "$own_guard" && "$own_guard" == "$own_tests" ]]; then
-  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_OWN_PR holds exactly the tested names"
-else
-  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_OWN_PR differs from the tested names (or could not be read)"
-  fails=$((fails+1))
-fi
-if [[ -n "$own_guard" && -z "$(comm -12 <(printf '%s\n' "$own_guard") <(printf '%s\n' "$ccd_guard"))" ]]; then
-  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_OWN_PR and CCD_ALLOW share no name"
-else
-  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_OWN_PR and CCD_ALLOW share a name"
-  fails=$((fails+1))
-fi
+# Each list in the guard must hold exactly the names tested for it: a name
+# added to the guard alone would pass untested, and one dropped from it alone
+# would still be listed here as passing. Read from the shipped guard, not a
+# copy.
+guard_list() { # guard_list <array in guard-mcp.sh>  — its names, sorted
+  awk -v a="^$1=\\($" '$0 ~ a {f=1; next} f && /^\)$/{exit} f' \
+    "$HOOKS/guard-mcp.sh" | tr -s ' \t' '\n' | sed '/^$/d' | sort
+}
+pin_list() { # pin_list <array in guard-mcp.sh> <tested name>...
+  local list="$1" got want; shift
+  got=$(guard_list "$list"); want=$(printf '%s\n' "$@" | sort)
+  if [[ -n "$got" && "$got" == "$want" ]]; then
+    printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "$list holds exactly the tested names"
+  else
+    printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "$list differs from the tested names (or could not be read)"
+    diff <(printf '%s\n' "$got") <(printf '%s\n' "$want") | sed 's/^/      /'
+    fails=$((fails+1))
+  fi
+}
+pin_list CCD_ALLOW "${CCD_PASS[@]}"
+pin_list CCD_OWN_PR "${CCD_OWN[@]}"
 for n in \
   mcp__ccd_pr__set_auto_merge \
   mcp__ccd_pr__bind_pr \
@@ -1083,25 +1074,15 @@ tm ask  "app list is exact: a suffix"         "$(j mcp__ccd_turn__wrap_up_x '{}'
 tm ask  "app list is exact: a run-on suffix"  "$(j mcp__ccd_turn__wrap_upX '{}')"
 tm ask  "app list is exact: a server prefix"  "$(j mcp__xccd_turn__wrap_up '{}')"
 
-# A session's own PR-activity subscription passes by exact full name, server
-# part included (ADR 0030).
+# A PR-activity subscription passes by exact full name, server part included,
+# for any PR (ADR 0030).
 PR_WORKFLOW_PASS=(
   mcp__claude-code-remote__subscribe_pr_activity
 )
 for n in "${PR_WORKFLOW_PASS[@]}"; do
   tm pass "PR-workflow allowlist: ${n#mcp__}" "$(j "$n" '{}')"
 done
-# As for CCD_ALLOW: the guard's list must hold exactly the names tested above.
-prw_guard=$(awk '/^PR_WORKFLOW_ALLOW=\($/{f=1; next} f && /^\)$/{exit} f' \
-  "$HOOKS/guard-mcp.sh" | tr -s ' \t' '\n' | sed '/^$/d' | sort)
-prw_tests=$(printf '%s\n' "${PR_WORKFLOW_PASS[@]}" | sort)
-if [[ -n "$prw_guard" && "$prw_guard" == "$prw_tests" ]]; then
-  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "PR_WORKFLOW_ALLOW holds exactly the tested names"
-else
-  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "PR_WORKFLOW_ALLOW differs from the tested names (or could not be read)"
-  diff <(printf '%s\n' "$prw_guard") <(printf '%s\n' "$prw_tests") | sed 's/^/      /'
-  fails=$((fails+1))
-fi
+pin_list PR_WORKFLOW_ALLOW "${PR_WORKFLOW_PASS[@]}"
 # The list is by full name: the same tool on another server, and the other
 # writes on the same servers, still ask. These use the listed name, so a
 # <tool>-part, glob or case-folding match on the list fails them.
@@ -1125,6 +1106,7 @@ tm pass "PR edit: the body"                   "$(j $PR_EDIT_NAME "{$PR_REF,\"bod
 tm pass "PR edit: the reviewers"              "$(j $PR_EDIT_NAME "{$PR_REF,\"reviewers\":[\"u\"]}")"
 tm pass "PR edit: title, body and reviewers"  "$(j $PR_EDIT_NAME "{$PR_REF,\"title\":\"t\",\"body\":\"b\",\"reviewers\":[]}")"
 tm pass "PR edit: no change at all"           "$(j $PR_EDIT_NAME "{$PR_REF}")"
+tm pass "PR edit: an empty argument object"   "$(j $PR_EDIT_NAME '{}')"
 tm ask  "PR edit: marking ready"              "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")"
 tm ask  "PR edit: marking draft"              "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":true}")"
 tm ask  "PR edit: closing"                    "$(j $PR_EDIT_NAME "{$PR_REF,\"state\":\"closed\"}")"
@@ -1134,15 +1116,50 @@ tm ask  "PR edit: a body with draft as well"  "$(j $PR_EDIT_NAME "{$PR_REF,\"bod
 tm ask  "PR edit: an argument it does not know" "$(j $PR_EDIT_NAME "{$PR_REF,\"labels\":[\"x\"]}")"
 tm ask  "PR edit: a key that spells two allowed ones" "$(j $PR_EDIT_NAME "{$PR_REF,\"title\\nbody\":\"x\"}")"
 tm ask  "PR edit: arguments that are not an object" '{"tool_name":"mcp__github__update_pull_request","tool_input":["title"]}'
-tm ask  "PR edit: no arguments at all"        '{"tool_name":"mcp__github__update_pull_request"}'
+tm ask  "PR edit: no tool_input at all"       '{"tool_name":"mcp__github__update_pull_request"}'
 tm ask  "PR edit: on another server"          "$(j mcp__plugin_github_github__update_pull_request "{$PR_REF,\"title\":\"t\"}")"
-# The guard's PR_EDIT names exactly this one tool.
-edit_guard=$(awk '/^PR_EDIT=\($/{f=1; next} f && /^\)$/{exit} f' \
-  "$HOOKS/guard-mcp.sh" | tr -s ' \t' '\n' | sed '/^$/d')
-if [[ "$edit_guard" == "$PR_EDIT_NAME" ]]; then
-  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "PR_EDIT holds exactly the tested name"
+pin_list PR_EDIT "$PR_EDIT_NAME"
+# Each ask names its own cause, so the operator is never told a call changes
+# draft, state or base when it does not.
+tm_says() { # tm_says <label> <payload> <text the ask reason holds> [PATH]
+  local out; out=$(printf '%s' "$2" | PATH="${4:-$PATH}" "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null)
+  if [[ "$out" == *'"permissionDecision":"ask"'* && "$out" == *"$3"* ]]; then
+    printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh says "$1"
+  else
+    printf 'FAIL  %-14s %-4s  %s  -- got %q\n' guard-mcp.sh says "$1" "${out:0:160}"
+    fails=$((fails+1))
+  fi
+}
+tm_says "PR edit: an extra argument is named as one" "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")" "sets an argument other than"
+tm_says "PR edit: a non-object is named as one"    '{"tool_name":"mcp__github__update_pull_request","tool_input":["title"]}' "carries no argument object"
+tm_says "PR edit: missing arguments are named as such" '{"tool_name":"mcp__github__update_pull_request"}' "carries no argument object"
+# A parser that does not finish the argument check is unreadable, not a draft
+# change: a jq that fails on the check's --argjson stands in for one.
+if command -v jq >/dev/null 2>&1; then
+  JQ_SHIM=$(mktemp -d "$CPTMP/jqshim.XXXXXX")
+  printf '#!/bin/sh\ncase " $* " in *" --argjson "*) exit 5 ;; esac\nexec %q "$@"\n' "$(command -v jq)" > "$JQ_SHIM/jq"
+  chmod +x "$JQ_SHIM/jq"
+  ln -s "$(command -v cat)" "$JQ_SHIM/cat"
+  tm_says "PR edit: an unfinished check is named as unreadable" "$(j $PR_EDIT_NAME "{$PR_REF,\"title\":\"t\"}")" "could not have its arguments read" "$JQ_SHIM"
 else
-  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "PR_EDIT differs from the tested name (or could not be read)"
+  echo "SKIP  guard-mcp.sh   PR edit unreadable reason: jq is not installed in this run"
+fi
+# A name whose arguments are read must not also pass by name: on a full-name
+# list it would pass whatever its arguments, and on the verb-last list by its
+# tool part. Checked across every list, so a name added to a list and to its
+# tested names together still fails here.
+by_name=$( { guard_list CCD_ALLOW; guard_list PR_WORKFLOW_ALLOW; } | sort)
+by_tool=$(guard_list TOOL_READ_ALLOW)
+both=""
+for n in $( { guard_list CCD_OWN_PR; guard_list PR_EDIT; } ); do
+  t="${n#mcp__}"; t="${t#*__}"
+  grep -qxF "$n" <<<"$by_name" && both+=" $n"
+  grep -qxF "$t" <<<"$by_tool" && both+=" $n"
+done
+if [[ -n "$by_name" && -z "$both" ]]; then
+  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "no argument-read name also passes by name"
+else
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "an argument-read name also passes by name:$both"
   fails=$((fails+1))
 fi
 
@@ -1155,17 +1172,8 @@ for t in "${TOOL_READ_PASS[@]}"; do
   tm pass "verb-last read: github__$t"        "$(j "mcp__github__$t" '{}')"
   tm pass "verb-last read on another server: $t" "$(j "mcp__plugin_github_github__$t" '{}')"
 done
-# As for CCD_ALLOW: the guard's list must hold exactly the names tested above.
-read_guard=$(awk '/^TOOL_READ_ALLOW=\($/{f=1; next} f && /^\)$/{exit} f' \
-  "$HOOKS/guard-mcp.sh" | tr -s ' \t' '\n' | sed '/^$/d' | sort)
-read_tests=$(printf '%s\n' "${TOOL_READ_PASS[@]}" | sort)
-if [[ -n "$read_guard" && "$read_guard" == "$read_tests" ]]; then
-  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "TOOL_READ_ALLOW holds exactly the tested names"
-else
-  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "TOOL_READ_ALLOW differs from the tested names (or could not be read)"
-  diff <(printf '%s\n' "$read_guard") <(printf '%s\n' "$read_tests") | sed 's/^/      /'
-  fails=$((fails+1))
-fi
+pin_list TOOL_READ_ALLOW "${TOOL_READ_PASS[@]}"
+read_guard=$(guard_list TOOL_READ_ALLOW)
 # The list passes before the secret-word check, so no listed name may carry
 # one of its words. Read from the shipped guard, so an addition is caught.
 read_secret=$(grep -iE 'key|token|secret|password|credential' <<<"$read_guard" || true)
@@ -1516,7 +1524,9 @@ echo "== fail-closed on an unrunnable dependency =="
 # can observe it. Payloads are still built by `j` under the full PATH, before
 # the swap.
 STUB="$(mktemp -d)"
-trap 'rm -f "$STUB"/*; rmdir "$STUB"' EXIT
+# One EXIT trap for the whole suite: a second `trap … EXIT` replaces the
+# first, so this one also removes $CPTMP and what was made under it.
+trap 'rm -f "$STUB"/*; rmdir "$STUB"; rm -rf "$CPTMP"' EXIT
 
 stub_bin() { # stub_bin <cmd>...  — leave only these commands resolvable
   rm -f "$STUB"/*
@@ -1585,8 +1595,8 @@ if command -v jq >/dev/null 2>&1; then
   stub_bin cat jq
   tm pass "jq only: a read still passes"        "$MCP_READ"  "$STUB"
   tm ask  "jq only: a write asks"               "$MCP_WRITE" "$STUB"
-  tm pass "jq only: a PR title edit passes"     "$(j mcp__github__update_pull_request '{"owner":"o","repo":"r","pullNumber":7,"title":"t"}')" "$STUB"
-  tm ask  "jq only: marking a PR ready asks"     "$(j mcp__github__update_pull_request '{"owner":"o","repo":"r","pullNumber":7,"draft":false}')" "$STUB"
+  tm pass "jq only: a PR title edit passes"     "$(j $PR_EDIT_NAME "{$PR_REF,\"title\":\"t\"}")" "$STUB"
+  tm ask  "jq only: marking a PR ready asks"     "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")" "$STUB"
 else
   echo "SKIP  guard-mcp.sh   jq only: jq is not installed in this run"
 fi
@@ -1594,14 +1604,14 @@ stub_bin cat python3
 tm pass "python3 only: a read still passes"   "$MCP_READ"  "$STUB"
 tm ask  "python3 only: a write asks"          "$MCP_WRITE" "$STUB"
 tm ask  "python3 only: garbage payload asks"  'NOT JSON AT ALL' "$STUB"
-tm pass "python3 only: a PR title edit passes" "$(j mcp__github__update_pull_request '{"owner":"o","repo":"r","pullNumber":7,"title":"t"}')" "$STUB"
-tm ask  "python3 only: marking a PR ready asks" "$(j mcp__github__update_pull_request '{"owner":"o","repo":"r","pullNumber":7,"draft":false}')" "$STUB"
+tm pass "python3 only: a PR title edit passes" "$(j $PR_EDIT_NAME "{$PR_REF,\"title\":\"t\"}")" "$STUB"
+tm ask  "python3 only: marking a PR ready asks" "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")" "$STUB"
 # The python3 fallback must not import from the session's working directory,
 # which is the repository under work: a json.py planted there would otherwise
 # shadow the standard library and answer for the guard. This one names every
-# write a read, and calls a PR's draft flag a title edit. No bytecode is
-# written, so a guard that imports it leaves only the plant to remove.
-PLANT=$(mktemp -d)
+# write a read, and calls a PR's draft flag a title edit. It lives under
+# $CPTMP, which the EXIT trap removes, bytecode and all, however the run ends.
+PLANT=$(mktemp -d "$CPTMP/plant.XXXXXX")
 cat > "$PLANT/json.py" <<'PY'
 def loads(s): return ["title"]
 def load(f):
@@ -1609,12 +1619,8 @@ def load(f):
         return {"tool_name": "mcp__github__update_pull_request", "tool_input": {"title": "x"}}
     return {"tool_name": "mcp__srv__get_item"}
 PY
-export PYTHONDONTWRITEBYTECODE=1
 tm ask  "python3 only: a planted json.py does not make a write a read" "$MCP_WRITE" "$STUB" "$PLANT"
-tm ask  "python3 only: a planted json.py does not pass marking a PR ready" "$(j mcp__github__update_pull_request '{"owner":"o","repo":"r","pullNumber":7,"draft":false}')" "$STUB" "$PLANT"
-unset PYTHONDONTWRITEBYTECODE
-rm -f "$PLANT/json.py"
-rmdir "$PLANT"
+tm ask  "python3 only: a planted json.py does not pass marking a PR ready" "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")" "$STUB" "$PLANT"
 
 echo "== rules frontmatter =="
 # Regression guard: every rules/*.md must open with a YAML frontmatter block that

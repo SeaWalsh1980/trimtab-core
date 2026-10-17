@@ -15,19 +15,23 @@
 # a write, not lose the tool. Outside an interactive session an ask ends as a
 # denial (measured, ADR 0013).
 #
-# Classifies by tool name only, never by the call's arguments, with two
-# exceptions:
+# Checks run in this order, and the first that answers wins.
+#
+# Arguments read (the two exceptions to "by name only"):
 #   mcp__ccd_pr__set_monitor (CCD_OWN_PR below)     -> pass when its url is a PR
 #                                                      this session created, or
 #                                                      it is the auto-archive
 #                                                      switch alone; deny
 #                                                      otherwise, never ask
 #                                                      (ADR 0028)
+# By name only:
 #   a full name on the desktop app's exact-name list
 #   (CCD_ALLOW below, ADR 0027)                     -> pass
+# Arguments read:
 #   mcp__github__update_pull_request (PR_EDIT below) -> pass when it sets only
 #                                                      title, body or reviewers;
 #                                                      ask otherwise (ADR 0030)
+# By name only:
 #   a full name on the PR-workflow exact-name list
 #   (PR_WORKFLOW_ALLOW below, ADR 0030)             -> pass
 #   a <tool> part on the verb-last read list, on any
@@ -173,24 +177,36 @@ PR_EDIT=(
 pr_edit_args='["owner","repo","pullNumber","title","body","reviewers"]'
 for edit in "${PR_EDIT[@]}"; do
   [[ "$name" == "$edit" ]] || continue
+  # pass, no-object (tool_input missing or not an object) or extra (a key off
+  # the list). Anything else, an empty answer included, means the parser did
+  # not finish, and asks as unreadable.
   if command -v jq >/dev/null 2>&1; then
     verdict=$(printf '%s' "$payload" | jq -r --argjson ok "$pr_edit_args" \
-      'if (.tool_input | type) == "object" and ((.tool_input | keys) - $ok | length) == 0 then "pass" else "ask" end' 2>/dev/null)
+      'if (.tool_input | type) != "object" then "no-object" elif ((.tool_input | keys) - $ok | length) == 0 then "pass" else "extra" end' 2>/dev/null)
   else
     verdict=$(printf '%s' "$payload" | python3 -I -c '
 import json, sys
 ok = set(json.loads(sys.argv[1]))
 a = json.load(sys.stdin).get("tool_input")
-sys.stdout.write("pass" if isinstance(a, dict) and set(a) <= ok else "ask")
+sys.stdout.write("no-object" if not isinstance(a, dict) else "pass" if set(a) <= ok else "extra")
 ' "$pr_edit_args" 2>/dev/null)
   fi
-  [[ "$verdict" == "pass" ]] && exit 0
-  ask "$name changes more than the title, body or reviewers (draft, state, base or another argument), so it asks (ADR 0030). Approve it only if you intended this change."
+  case "$verdict" in
+    pass)
+      exit 0 ;;
+    extra)
+      ask "$name sets an argument other than the title, body or reviewers (draft, state, base or another), so it asks (ADR 0030). Approve it only if you intended this change." ;;
+    no-object)
+      ask "$name carries no argument object, so its arguments cannot be checked and it asks (ADR 0030). Approve it only if you intended this call." ;;
+    *)
+      ask "$name could not have its arguments read, so it asks (fail closed, ADR 0030). This says nothing about what the call changes. Approve it only if you intended this call." ;;
+  esac
 done
 
-# A session's own PR-activity subscription passes by exact full name, server
-# part included (ADR 0030). Never by <tool> part alone: a server's name is set
-# per deployment, and the same name on another server is another tool.
+# A PR-activity subscription passes by exact full name, server part included,
+# for any PR: no own-PR limit like set_monitor's (ADR 0030). Never by <tool>
+# part alone: a server's name is set per deployment, and the same name on
+# another server is another tool.
 PR_WORKFLOW_ALLOW=(
   mcp__claude-code-remote__subscribe_pr_activity
 )
