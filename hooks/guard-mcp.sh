@@ -25,6 +25,8 @@
 #                                                      (ADR 0028)
 #   a full name on the desktop app's exact-name list
 #   (CCD_ALLOW below, ADR 0027)                     -> pass
+#   a full name on the PR-workflow exact-name list
+#   (PR_WORKFLOW_ALLOW below, ADR 0029)             -> pass
 #   a <tool> part on the verb-last read list, on any
 #   server (TOOL_READ_ALLOW below, ADR 0013)        -> pass
 #   <tool> starting gtm_                           -> ask: its verb is in an
@@ -144,12 +146,25 @@ CCD_ALLOW=(
   mcp__ccd_session_mgmt__get_session mcp__ccd_session_mgmt__list_sessions
   mcp__ccd_session_mgmt__list_events mcp__ccd_session_mgmt__get_usage
   mcp__ccd_session_mgmt__search_session_transcripts
+  mcp__ccd_session_mgmt__send_message
   mcp__ccd_host__get_storage_usage mcp__ccd_host__open_in_editor
   mcp__ccd_host__reveal_path mcp__ccd_host__request_keep_awake
   mcp__ccd_session__list_start_targets mcp__ccd_session__dismiss_task
   mcp__ccd_connectors__session_connectors_status
 )
 for allowed in "${CCD_ALLOW[@]}"; do
+  # Quoted right-hand side: a literal string comparison, never a pattern.
+  [[ "$name" == "$allowed" ]] && exit 0
+done
+
+# Writes a session makes to drive its own PR pass by exact full name, server
+# part included (ADR 0029). Never by <tool> part alone: a server's name is set
+# per deployment, and the same name on another server is another tool.
+PR_WORKFLOW_ALLOW=(
+  mcp__github__update_pull_request
+  mcp__claude-code-remote__subscribe_pr_activity
+)
+for allowed in "${PR_WORKFLOW_ALLOW[@]}"; do
   # Quoted right-hand side: a literal string comparison, never a pattern.
   [[ "$name" == "$allowed" ]] && exit 0
 done

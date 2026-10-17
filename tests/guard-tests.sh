@@ -972,6 +972,7 @@ CCD_PASS=(
   mcp__ccd_session_mgmt__get_session mcp__ccd_session_mgmt__list_sessions
   mcp__ccd_session_mgmt__list_events mcp__ccd_session_mgmt__get_usage
   mcp__ccd_session_mgmt__search_session_transcripts
+  mcp__ccd_session_mgmt__send_message
   mcp__ccd_host__get_storage_usage mcp__ccd_host__open_in_editor
   mcp__ccd_host__reveal_path mcp__ccd_host__request_keep_awake
   mcp__ccd_session__list_start_targets mcp__ccd_session__dismiss_task
@@ -1019,7 +1020,7 @@ for n in \
   mcp__ccd_session_mgmt__set_session_title \
   mcp__ccd_session_mgmt__set_session_permission_mode \
   mcp__ccd_host__sync_with_base_branch \
-  mcp__ccd_session_mgmt__send_message \
+  mcp__ccd_session_mgmt__delete_session \
   mcp__ccd_session_mgmt__set_session_model \
   mcp__ccd_session_mgmt__set_session_effort \
   mcp__ccd_session_mgmt__set_session_fast_mode \
@@ -1029,6 +1030,37 @@ done
 tm ask  "app list is exact: a suffix"         "$(j mcp__ccd_turn__wrap_up_x '{}')"
 tm ask  "app list is exact: a run-on suffix"  "$(j mcp__ccd_turn__wrap_upX '{}')"
 tm ask  "app list is exact: a server prefix"  "$(j mcp__xccd_turn__wrap_up '{}')"
+
+# Writes a session makes to drive its own PR pass by exact full name, server
+# part included (ADR 0029).
+PR_WORKFLOW_PASS=(
+  mcp__github__update_pull_request
+  mcp__claude-code-remote__subscribe_pr_activity
+)
+for n in "${PR_WORKFLOW_PASS[@]}"; do
+  tm pass "PR-workflow allowlist: ${n#mcp__}" "$(j "$n" '{}')"
+done
+# As for CCD_ALLOW: the guard's list must hold exactly the names tested above.
+prw_guard=$(awk '/^PR_WORKFLOW_ALLOW=\($/{f=1; next} f && /^\)$/{exit} f' \
+  "$HOOKS/guard-mcp.sh" | tr -s ' \t' '\n' | sed '/^$/d' | sort)
+prw_tests=$(printf '%s\n' "${PR_WORKFLOW_PASS[@]}" | sort)
+if [[ -n "$prw_guard" && "$prw_guard" == "$prw_tests" ]]; then
+  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "PR_WORKFLOW_ALLOW holds exactly the tested names"
+else
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "PR_WORKFLOW_ALLOW differs from the tested names (or could not be read)"
+  diff <(printf '%s\n' "$prw_guard") <(printf '%s\n' "$prw_tests") | sed 's/^/      /'
+  fails=$((fails+1))
+fi
+# The list is by full name: the same tool on another server, and the other
+# writes on the same servers, still ask.
+tm ask  "PR-workflow list names the server"   "$(j mcp__plugin_github_github__update_pull_request '{}')"
+tm ask  "PR-workflow list is exact: a suffix" "$(j mcp__github__update_pull_request_branch '{}')"
+tm ask  "PR-workflow list is exact: a prefix" "$(j mcp__xgithub__update_pull_request '{}')"
+tm ask  "PR-workflow list is exact: a case change" "$(j mcp__github__Update_Pull_Request '{}')"
+tm ask  "PR-workflow: a merge still asks"     "$(j mcp__github__merge_pull_request '{}')"
+tm ask  "PR-workflow: an unsubscribe still asks" "$(j mcp__claude-code-remote__unsubscribe_pr_activity '{}')"
+tm ask  "PR-workflow: a remote send_message still asks" "$(j mcp__claude-code-remote__send_message '{}')"
+tm ask  "PR-workflow: a remote create_session still asks" "$(j mcp__claude-code-remote__create_session '{}')"
 
 # Read-only tools whose verb comes last pass by exact <tool> part, on any
 # server (ADR 0013, amendment 2026-10-16).

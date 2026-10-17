@@ -13,6 +13,11 @@ proposed) takes `mcp__ccd_pr__set_monitor` off this list and passes it only
 for PRs the session created, denying it otherwise. That narrows the accepted
 risk below; the rest of this record stands.
 
+2026-10-17: ADR 0029
+(`docs/adr/0029-guard-mcp-passes-pr-workflow-writes-by-exact-name.md`) puts
+`mcp__ccd_session_mgmt__send_message` on this list, which the Decision below
+kept off. The rest of this record stands.
+
 ## Context
 
 The Claude desktop app injects its own MCP tools into a session, on servers

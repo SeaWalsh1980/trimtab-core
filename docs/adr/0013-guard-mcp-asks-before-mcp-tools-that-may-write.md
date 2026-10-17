@@ -12,7 +12,9 @@ name. See [Amendment (2026-10-16): verb-last reads](#amendment-2026-10-16-verb-l
 Amended 2026-10-17 by
 [ADR 0028](0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md)
 (proposed): for `mcp__ccd_pr__set_monitor` only, guard-mcp reads the call's
-arguments and denies rather than asks.
+arguments and denies rather than asks. Amended 2026-10-17 by
+[ADR 0029](0029-guard-mcp-passes-pr-workflow-writes-by-exact-name.md): three
+PR-workflow writes pass by exact full name.
 
 ## Context
 
