@@ -88,6 +88,7 @@ def compare(sent: str, found: str) -> Readback:
     sent, found = _plain(sent), _plain(found)
     if found == sent:
         return Readback.SAME
+    stripped = _plain(ATTRIBUTION.sub("", sent))  # equal to `sent` when it has no attribution line
     for footer, after, in_place in ((FOOTER_LINK, Readback.FOOTER, Readback.IN_PLACE),
                                     (FOOTER_GENERIC, Readback.GENERIC, Readback.IN_PLACE_GENERIC)):
         match = footer.search(found)
@@ -96,8 +97,7 @@ def compare(sent: str, found: str) -> Readback:
             heads = {head, _plain(FOOTER_RULE.sub("", head))}
             if sent in heads:
                 return after
-            stripped = _plain(ATTRIBUTION.sub("", sent))
-            if stripped != sent and stripped in heads:
+            if stripped in heads:
                 return in_place
     return Readback.DIFFERS
 
