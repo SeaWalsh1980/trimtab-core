@@ -82,8 +82,9 @@ def compare(sent: str, found: str) -> Readback:
     platform's line linking no session, each with or without its rule; IN_PLACE (session link) or IN_PLACE_GENERIC
     when that footer stands where `sent`'s last line, the run's attribution line, was; else DIFFERS.
 
-    The rule is tried both ways, so a body that itself ends with a `---` rule keeps it. Never REPLACED: that is
-    what a write-back came to, which only `verify_bodies` knows.
+    The rule is tried both ways, so a body that itself ends with a `---` rule keeps it. Never REPLACED,
+    IN_PLACE_REPLACED or IN_PLACE_GENERIC_KEPT: those are what a write-back came to, which only `verify_bodies`
+    knows.
     """
     sent, found = _plain(sent), _plain(found)
     if found == sent:
@@ -114,11 +115,12 @@ WRITTEN_BACK = {Readback.FOOTER: Readback.REPLACED, Readback.IN_PLACE: Readback.
 def verify_bodies(bodies: Bodies, targets: list[Target], *,
                   settle_seconds: float, sleep: Callable[[float], None]) -> list[Readback]:
     """Read back each target after one shared wait; write back the body sent to every one that carries the
-    platform's session footer or has a footer in place of its attribution line, wait once more, and require them
-    identical, or carrying only the generic footer after the body sent (REPLACED). A generic footer
-    found on the first read is left alone (GENERIC): it names nothing, and a write would only bring it back. Any
-    other change, or a run reference, fails, but only after every target has been checked and every session footer
-    taken off: one WrittenBodyError names each target that failed. A read or write that fails (GitHub) does not stop
+    platform's session footer after it (FOOTER) or either footer in place of its attribution line (IN_PLACE,
+    IN_PLACE_GENERIC), wait once more, and require them identical, or carrying only the generic footer after the
+    body sent: REPLACED, IN_PLACE_REPLACED or IN_PLACE_GENERIC_KEPT, by what the first read found. A generic footer
+    found after the body on the first read is left alone (GENERIC): it names nothing, and a write would only bring
+    it back. Any other change, or a run reference, fails, but only after every target has been checked and every
+    body due a write-back written: one WrittenBodyError names each target that failed. A read or write that fails (GitHub) does not stop
     the others either. If that is all that failed, the first such error is raised as it came; if a body also failed,
     the WrittenBodyError names both, each by its target. The caller supplies the wait (`sleep`): waiting is the
     outer layer's."""
