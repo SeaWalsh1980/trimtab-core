@@ -441,28 +441,40 @@ def cmd_propose(args) -> int:
     drafts = [render(p, registry, project=project) for p in proposals]
     if not args.apply:
         print(f"propose --dry-run: {len(drafts)} proposal(s) at threshold {args.threshold}; nothing opened")
+    # The issues and the project's PRs are read apart: a listing that cannot be read marks its own drafts NOT
+    # CHECKED and ends the run 2, but never hides what the other listing found.
+    unreadable: list[SourceError] = []
     try:
         plan = (propose.plan_issues(drafts, _issues(args, issues_repo), closed_since=_since(args))
                 if (args.apply or args.check_open) else None)
     except SourceError as err:
-        print(f"error: {err}", file=sys.stderr)
-        return 2
-    # The project's PRs are read apart from the issues: a PR listing that cannot be read marks the project drafts
-    # unchecked and ends the run 2, but never hides the issue plan or its token.
-    unreadable = None
+        if args.apply:
+            print(f"error: {err}", file=sys.stderr)
+            return 2
+        plan = None
+        unreadable.append(err)
+        issues_unread = {d.item_id: f"NOT CHECKED: the issue listing could not be read ({err})"
+                         for d in drafts if d.kind == "issue"}
+    else:
+        issues_unread = {}
     try:
         held = (propose.plan_project_prs(drafts, source, closed_since=_since(args), threshold=args.threshold)
                 if args.check_open and not args.apply else {})
     except SourceError as err:
         held = {d.item_id: f"NOT CHECKED: the PR listing could not be read ({err})" for d in drafts if d.kind == "pr"}
-        unreadable = err
+        unreadable.append(err)
+        prs_unread = True
+    else:
+        prs_unread = False
     if not args.apply:
-        if args.check_open and _since(args) is None and any(d.kind == "pr" for d in drafts) and unreadable is None:
+        if args.check_open and _since(args) is None and any(d.kind == "pr" for d in drafts) and not prs_unread:
             print("no window: merged and closed [<ID>] PRs were not checked; only open ones")
         for d in drafts:
             where = f"issue on {issues_repo}" if d.kind == "issue" else "draft PR in this project (session step)"
             if plan is not None and d.item_id in plan.already_open:
                 where += ", SKIPPED: an issue for this ID is open or was closed within the window"
+            if d.kind == "issue" and d.item_id in issues_unread:
+                where += f", {issues_unread[d.item_id]}"
             if d.item_id in held:
                 where += f", {held[d.item_id]}"
             labels = f" [labels: {', '.join(d.labels)}]" if d.labels else ""
@@ -474,8 +486,9 @@ def cmd_propose(args) -> int:
                   f" --threshold {args.threshold}"
                   + (f" --issues-fixture {args.issues_fixture}" if args.issues_fixture else "")
                   + (f" --issues-repo {args.issues_repo}" if args.issues_repo else ""))
-        if unreadable is not None:
-            print(f"error: {unreadable}", file=sys.stderr)
+        for err in unreadable:
+            print(f"error: {err}", file=sys.stderr)
+        if unreadable:
             return 2
         return 0
     try:

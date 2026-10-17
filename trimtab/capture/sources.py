@@ -610,7 +610,10 @@ class FixtureIssues:
             if r.get("state", "open") == "open":
                 return True
             return closed_since is not None and (r.get("closed_at") or "")[:10] >= closed_since
-        return [r["title"] for r in self._rows() if label in r.get("labels", []) and recent(r)]
+        rows = [r for r in self._rows() if label in r.get("labels", []) and recent(r)]
+        if not all(isinstance(r.get("title"), str) for r in rows):
+            raise SourceError("fixture issues: an issue row has no title")  # as GhIssues refuses one
+        return [r["title"] for r in rows]
 
     def create(self, title: str, body: str, labels) -> str:
         rows = self._rows()

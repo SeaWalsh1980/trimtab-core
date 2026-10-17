@@ -429,6 +429,31 @@ class APullListingThatCannotBeRead(RunsTheCli):
         self.assertIn("draft PR in this project (session step), NOT CHECKED: the PR listing could not be read", dry)
 
 
+class AnIssueListingThatCannotBeRead(RunsTheCli):
+    """The issue listing failing marks the issue drafts unchecked, but the project's marks are still printed."""
+
+    def test_the_project_marks_are_still_printed_and_the_run_ends_2(self):
+        both = AMBIGUOUS.replace('''  evidence: "in-memory fake vs mock is undecided for our own HTTP client"
+```''', '''  evidence: "in-memory fake vs mock is undecided for our own HTTP client"
+- id: TST-2
+  kind: gap
+  scope: project
+  evidence: "the project's rule is silent on it"
+```''')
+        self.write_pulls([{"number": n, "title": f"change {n}", "body": both, "merged_at": at, "labels": []}
+                          for n, at in ((101, "2026-09-10T00:00:00Z"), (102, "2026-09-18T00:00:00Z"))]
+                         + [{"number": 103, "title": "[TST-2] settle fake vs mock", "body": "",
+                             "merged_at": "2026-09-19T00:00:00Z", "labels": []}])
+        self.issues.write_text(json.dumps([{"labels": [ISSUE_LABEL], "state": "open"}]))  # no title: unreadable
+        self.ingest(as_of="2026-09-20")
+
+        dry = self.propose("--check-open", as_of="2026-09-20", code=2)
+
+        self.assertIn("draft PR in this project (session step), RESOLVED: #103 merged after the evidence", dry)
+        self.assertIn("NOT CHECKED: the issue listing could not be read", dry)
+        self.assertNotIn("confirm: ", dry)
+
+
 class NoWindow(RunsTheCli):
     """With no window only open PRs are listed, and the dry run says so rather than imply the rest were checked."""
 

@@ -139,9 +139,10 @@ trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels
   ID, and report each marked one as the dry run words it. If the dry run
   exits 2, a GitHub listing (the ledger, the issues or the PRs) could not be
   read whole: say which, from its error, and open no project draft this run.
-  When only the PR listing failed, the drafts are marked `NOT CHECKED` and the
-  issue plan and its token are still printed: the upstream issues may still
-  be applied.
+  A listing that failed marks only its own drafts `NOT CHECKED`; the other's
+  marks are still printed. When only the PR listing failed, the issue plan
+  and its token are printed too, and the upstream issues may still be
+  applied.
   Otherwise, on a branch `trimtab/retro-<ID>-<YYYY-MM-DD>` from the default
   branch (prefix it `claude/` if the environment only lets you push those):
   - a project rule's item: edit that section to resolve what the evidence says
