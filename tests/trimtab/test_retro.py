@@ -426,6 +426,32 @@ class APullListingThatCannotBeRead(RunsTheCli):
         self.assertIn("draft PR in this project (session step), NOT CHECKED: the PR listing could not be read", dry)
 
 
+class NoWindow(RunsTheCli):
+    """With no window only open PRs are listed, and the dry run says so rather than imply the rest were checked."""
+
+    def run_ledger(self, *args, window):
+        ledger = self.pulls.parent / "ledger.json"
+        done = subprocess.run([str(TRIMTAB), *args, "--fixture", str(self.pulls), "--ledger", str(ledger),
+                               "--window-weeks", str(window), "--as-of", "2026-09-20"],
+                              capture_output=True, text=True, cwd=self.project, env=self.env)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout
+
+    def dry_run(self, window):
+        body = AMBIGUOUS.replace("scope: upstream", "scope: project")
+        self.write_pulls([{"number": n, "title": f"change {n}", "body": body, "merged_at": at, "labels": []}
+                          for n, at in ((101, "2026-09-10T00:00:00Z"), (102, "2026-09-18T00:00:00Z"))])
+        token = self.run_ledger("ingest", "--dry-run", window=window).split("confirm: ")[1].split()[0]
+        self.run_ledger("ingest", "--apply", "--confirm", token, window=window)
+        return self.run_ledger("propose", "--issues-fixture", str(self.issues), "--check-open", window=window)
+
+    def test_with_no_window_the_dry_run_says_merged_and_closed_prs_were_not_checked(self):
+        self.assertIn("no window: merged and closed [<ID>] PRs were not checked", self.dry_run(window=0))
+
+    def test_with_a_window_it_says_nothing_of_the_kind(self):
+        self.assertNotIn("no window", self.dry_run(window=8))
+
+
 class TheIngestFloor(unittest.TestCase):
     """Builds a fixture project, instance and PR file in a temporary directory.
 

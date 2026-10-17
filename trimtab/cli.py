@@ -457,6 +457,8 @@ def cmd_propose(args) -> int:
         held = {d.item_id: f"NOT CHECKED: the PR listing could not be read ({err})" for d in drafts if d.kind == "pr"}
         unreadable = err
     if not args.apply:
+        if args.check_open and _since(args) is None and any(d.kind == "pr" for d in drafts) and unreadable is None:
+            print("no window: merged and closed [<ID>] PRs were not checked; only open ones")
         for d in drafts:
             where = f"issue on {issues_repo}" if d.kind == "issue" else "draft PR in this project (session step)"
             if plan is not None and d.item_id in plan.already_open:
