@@ -20,7 +20,7 @@ from trimtab import instance, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
 from trimtab.ids import ID_SHAPE
-from trimtab.items import Problem
+from trimtab.items import ITEM_ID, Problem
 from trimtab.capture.sources import (
     FixtureContents, FixtureIssues, FixtureSource, GhBodies, GhContents, GhIssues, GhPullRequests, GhSource,
     SourceError, changed_files, open_feedback_issues, staged_files,
@@ -421,15 +421,29 @@ def _opening_stopped(err) -> int:
     return 2
 
 
-def _check_ids(text: str) -> dict[str, str]:
-    """`ID=YYYY-MM-DD,...` -> {ID: day}; ValueError naming the first entry that is not of that form."""
-    found: dict[str, str] = {}
+def _check_ids(text: str) -> dict[str, tuple[str, ...]]:
+    """`ID=YYYY-MM-DD+YYYY-MM-DD,...` -> {ID: report days}; ValueError naming the first entry that is not of that
+    form: an ID not shaped like an item ID, a day that is not a real date, or an ID given twice."""
+    found: dict[str, tuple[str, ...]] = {}
     for entry in filter(None, (e.strip() for e in text.split(","))):
-        item_id, _, day = entry.partition("=")
-        if not item_id or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
-            raise ValueError(f"--check-ids: {entry!r} is not ID=YYYY-MM-DD")
-        found[item_id] = day
+        item_id, _, days = (part.strip() for part in entry.partition("="))
+        parts = tuple(day.strip() for day in days.split("+"))
+        if not ITEM_ID.fullmatch(item_id) or not all(_real_day(day) for day in parts):
+            raise ValueError(f"--check-ids: {entry!r} is not ID=YYYY-MM-DD[+YYYY-MM-DD...]")
+        if item_id in found:
+            raise ValueError(f"--check-ids: {item_id} is given twice; list all its report days in one entry")
+        found[item_id] = parts
     return found
+
+
+def _real_day(text: str) -> bool:
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return False
+    try:
+        date.fromisoformat(text)
+    except ValueError:
+        return False
+    return True
 
 
 def cmd_propose(args) -> int:
@@ -438,8 +452,8 @@ def cmd_propose(args) -> int:
     except ValueError as err:
         print(f"error: {err}", file=sys.stderr)
         return 2
-    if check_ids and not args.check_open:
-        print("error: --check-ids needs --check-open", file=sys.stderr)
+    if check_ids and (args.apply or not args.check_open):
+        print("error: --check-ids goes with a --check-open dry run", file=sys.stderr)
         return 2
     setup = _setup(args)
     if setup is None:
@@ -493,7 +507,8 @@ def cmd_propose(args) -> int:
     drafted = {d.item_id for d in drafts if d.kind == "pr"}
     marks.update({("pr", i): mark for i, mark in held.items() if i in drafted})
     if not args.apply:
-        if args.check_open and _since(args) is None and any(d.kind == "pr" for d in drafts) and pr_error is None:
+        if (args.check_open and _since(args) is None and pr_error is None
+                and (any(d.kind == "pr" for d in drafts) or check_ids)):
             print("no window: merged and closed [<ID>] PRs were not checked; only open ones")
         for d in drafts:
             where = f"issue on {issues_repo}" if d.kind == "issue" else "draft PR in this project (session step)"
@@ -1012,8 +1027,8 @@ def build_parser() -> argparse.ArgumentParser:
     pmode.add_argument("--apply", action="store_true", help="open the upstream issues; needs --confirm")
     pro.add_argument("--confirm", help="the token a dry run printed")
     pro.add_argument("--check-ids", default="",
-                     help="with --check-open: also mark IDs with no draft, as ID=YYYY-MM-DD,... where the day is "
-                          "the latest conformance report naming the ID")
+                     help="with --check-open: also mark IDs with no draft, as ID=YYYY-MM-DD+YYYY-MM-DD,... giving "
+                          "the day of every conformance report naming the ID")
     pro.add_argument("--check-open", action="store_true",
                      help="in a dry run, also read existing issues and this project's PRs to show what would be "
                           "skipped or is already resolved, and print a token")

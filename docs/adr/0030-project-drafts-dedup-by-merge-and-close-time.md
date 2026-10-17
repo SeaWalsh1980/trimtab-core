@@ -18,7 +18,8 @@ within the window, judging "within the window" by `updated_at`.
 On 2026-10-17 a consumer's retro listed one of its project rule IDs at
 threshold although a fix for it had merged two days before. The session
 skipped the ID, but for the wrong reason: the same run's ingest had labelled
-the fix PR, which bumped its `updated_at` into the window. Reading the rule as written:
+the fix PR, which bumped its `updated_at` into the window. Reading the rule
+as written:
 
 - any touch to a PR (a label, a comment, a bot) brought it back into the
   window, merged or declined;
@@ -44,11 +45,15 @@ one bounded REST listing of the project's PRs, and prints a mark beside each:
   fix, which supersedes it.
 - **Unreadable.** `NOT CHECKED` when the listing could not be read; the run
   ends 2, and the issue plan is still printed.
-- **Conformance candidates.** `--check-ids ID=<latest report day>` gives an ID
-  with no ledger draft the same marks, `RESOLVED` by a fix merged on or after
-  that day.
+- **Conformance candidates.** `--check-ids ID=<day>+<day>…`, every report
+  day, gives an ID with no ledger draft the same marks, its reports counted
+  against the latest fix with the conformance threshold of 2. A report on the
+  day the fix merged counts as after it: a report has no time of day, so the
+  check errs towards proposing.
 
-The session opens a draft only for an unmarked or `REOPENED` ID.
+The session opens a draft only for an unmarked or `REOPENED` ID. Both kinds of
+draft read the open PR, the latest fix and any standing decline through one
+helper, so the two cannot drift.
 
 ## Options considered
 

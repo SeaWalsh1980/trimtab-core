@@ -116,14 +116,15 @@ date falls in the window. A branch whose PR was closed without merging holds
 no report. A report found both on the default branch and on its branch is one
 report: count each date once. Each finding names its item on a `**Rule:**`
 line. An item ID raised as a finding in **2 or more** reports is a candidate
-for a project proposal in step 4, with those reports as evidence. Note each
-candidate's latest report date: step 4 passes it as `--check-ids`.
+for a project proposal in step 4, with those reports as evidence. Note the
+date of every report naming each candidate: step 4 passes them as
+`--check-ids`.
 
 ## 4. Proposals, one per ID
 
 ```bash
 trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels \
-  --check-ids "<ID>=<latest report date>,..."  # step 3; omit if none
+  --check-ids "<ID>=<date>+<date>,..."  # step 3's reports; omit if none
 ```
 
 - **Upstream** proposals (base items) become issues on Trimtab labelled
@@ -168,8 +169,9 @@ trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels \
   `verify-body` reads the PR back: exit 1 or 2: stop and report it. Never mark
   it ready.
 - Treat each step 3 candidate the same way, from its `--- also checked:` line:
-  open a draft only for one with `no mark`. A step 3 candidate has no
-  ledger draft, so the plain dry run would never mark it.
+  open a draft only for one with `no mark` or `REOPENED`. A step 3 candidate
+  has no ledger draft, so the plain dry run would never mark it; its reports
+  are counted against the fix the same way, with 2 as the threshold.
 
 Anything that must hold whatever the model decides is a hook, permission rule or
 test, not more rule text. When the evidence says a REQUIRE keeps being

@@ -592,37 +592,58 @@ class OneIdInBothScopes(RunsTheCli):
 
 
 class ConformanceCandidates(RunsTheCli):
-    """An ID raised by conformance reports has no draft; --check-ids gives it the same marks."""
+    """An ID raised by conformance reports has no draft; --check-ids gives it the same marks, counting its reports."""
 
-    def dry_run(self, pulls, check="CT-X-1=2026-09-15"):
+    def dry_run(self, pulls, check="CT-X-1=2026-10-03+2026-10-14", *more, code=0):
         self.write_pulls([{"number": 101, "title": "change 101", "body": AMBIGUOUS,
-                           "merged_at": "2026-09-10T00:00:00Z", "labels": []}] + pulls)
-        self.ingest(as_of="2026-09-20")
-        return self.propose("--check-open", "--check-ids", check, as_of="2026-09-20")
+                           "merged_at": "2026-10-10T00:00:00Z", "labels": []}] + pulls)
+        self.ingest(as_of="2026-10-20")
+        return self.propose("--check-open", "--check-ids", check, *more, as_of="2026-10-20", code=code)
+
+    def fix(self, merged_at):
+        return {"number": 105, "title": "[CT-X-1] fix", "body": "", "merged_at": merged_at, "labels": []}
 
     def test_an_open_pr_for_the_candidate_skips_it(self):
         dry = self.dry_run([{"number": 104, "title": "[CT-X-1] in progress", "state": "open", "labels": []}])
 
         self.assertIn("--- also checked: CT-X-1, SKIPPED: #104 for this ID is open", dry)
 
-    def test_a_fix_merged_after_the_latest_report_resolves_it(self):
-        dry = self.dry_run([{"number": 105, "title": "[CT-X-1] fix", "body": "",
-                             "merged_at": "2026-09-16T00:00:00Z", "labels": []}])
+    def test_one_report_after_a_fix_between_them_resolves_it(self):
+        dry = self.dry_run([self.fix("2026-10-08T00:00:00Z")])
 
-        self.assertIn("--- also checked: CT-X-1, RESOLVED: #105 merged on or after the latest report (2026-09-15)",
+        self.assertIn("--- also checked: CT-X-1, RESOLVED: #105 merged after the earlier evidence; 1 report(s) "
+                      "since, below the threshold of 2", dry)
+
+    def test_a_fix_after_every_report_resolves_it(self):
+        dry = self.dry_run([self.fix("2026-10-15T00:00:00Z")])
+
+        self.assertIn("--- also checked: CT-X-1, RESOLVED: #105 merged after the evidence", dry)
+
+    def test_reports_since_the_fix_that_reach_the_threshold_reopen_it(self):
+        dry = self.dry_run([self.fix("2026-10-02T00:00:00Z")])
+
+        self.assertIn("--- also checked: CT-X-1, REOPENED: #105 merged; 2 report(s) since: 2026-10-03, 2026-10-14",
                       dry)
 
-    def test_a_fix_merged_before_the_latest_report_does_not(self):
-        dry = self.dry_run([{"number": 105, "title": "[CT-X-1] fix", "body": "",
-                             "merged_at": "2026-09-12T00:00:00Z", "labels": []}])
+    def test_a_report_on_the_fixs_own_day_counts_as_after_it(self):
+        dry = self.dry_run([self.fix("2026-10-14T08:00:00Z")])
 
-        self.assertIn("--- also checked: CT-X-1, no mark", dry)
+        self.assertIn("1 report(s) since, below the threshold of 2", dry)
 
     def test_a_candidate_with_nothing_has_no_mark(self):
         self.assertIn("--- also checked: CT-X-1, no mark", self.dry_run([]))
 
-    def test_a_malformed_value_is_refused(self):
-        self.propose("--check-open", "--check-ids", "CT-X-1=15/09/2026", as_of="2026-09-20", code=2)
+    def test_malformed_values_are_refused(self):
+        for bad in ("CT-X-1=14/10/2026", "CT-X-1=2026-13-45", "not an id=2026-10-14",
+                    "CT-X-1=2026-10-03,CT-X-1=2026-10-14"):
+            with self.subTest(bad=bad):
+                self.propose("--check-open", "--check-ids", bad, as_of="2026-10-20", code=2)
+
+    def test_spaces_around_the_parts_are_ignored(self):
+        self.assertIn("--- also checked: CT-X-1, no mark", self.dry_run([], "CT-X-1 = 2026-10-03 + 2026-10-14"))
+
+    def test_it_is_refused_with_apply(self):
+        self.propose("--apply", "--confirm", "x", "--check-ids", "CT-X-1=2026-10-14", as_of="2026-10-20", code=2)
 
 
 class NoIssueDraft(RunsTheCli):
@@ -663,6 +684,17 @@ class NoWindow(RunsTheCli):
 
     def test_with_no_window_the_dry_run_says_merged_and_closed_prs_were_not_checked(self):
         self.assertIn("no window: merged and closed [<ID>] PRs were not checked", self.dry_run(window=0))
+
+    def test_with_no_window_and_only_ids_to_check_it_says_so_too(self):
+        self.write_pulls([{"number": 101, "title": "change 101", "body": AMBIGUOUS,
+                           "merged_at": "2026-09-10T00:00:00Z", "labels": []}])
+        token = self.run_ledger("ingest", "--dry-run", window=0).split("confirm: ")[1].split()[0]
+        self.run_ledger("ingest", "--apply", "--confirm", token, window=0)
+
+        dry = self.run_ledger("propose", "--issues-fixture", str(self.issues), "--check-open",
+                              "--check-ids", "CT-X-1=2026-09-15", window=0)
+
+        self.assertIn("no window: merged and closed [<ID>] PRs were not checked", dry)
 
     def test_with_a_window_it_says_nothing_of_the_kind(self):
         self.assertNotIn("no window", self.dry_run(window=8))
