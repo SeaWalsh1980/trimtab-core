@@ -444,7 +444,7 @@ def cmd_propose(args) -> int:
     try:
         plan = (propose.plan_issues(drafts, _issues(args, issues_repo), closed_since=_since(args))
                 if (args.apply or args.check_open) else None)
-        held = (propose.plan_project_prs(drafts, source, closed_since=_since(args))
+        held = (propose.plan_project_prs(drafts, source, closed_since=_since(args), threshold=args.threshold)
                 if args.check_open and not args.apply else {})
     except SourceError as err:
         print(f"error: {err}", file=sys.stderr)

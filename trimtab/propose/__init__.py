@@ -15,10 +15,10 @@ reports can file it again.
 
 A project draft is checked against the project's PRs the same way (`plan_project_prs`):
 skipped while a `[<ID>]` PR is open or was closed unmerged within the window, and
-resolved by one that merged after every other evidence PR merged (by merge time,
-not PR number). A fix merged before some evidence did not see it, so the ID is
-proposed again. Merged within the
-window was not enough: ingest labels the fix PR, which bumps its update time, and
+resolved by a merged one (by merge time, not PR number): the fix saw the evidence
+that merged before it, so only reports since the latest fix count, and the ID is
+proposed again once those reach the threshold. Merged within the window was not
+enough: ingest labels the fix PR, which bumps its update time, and
 evidence that arrived after the fix was blocked for the whole window.
 """
 
@@ -31,6 +31,7 @@ from typing import Callable, ContextManager, Mapping, Protocol, Sequence
 
 from trimtab.items import Item, Proposal
 from trimtab.registry.rules import RuleType
+from trimtab.score import THRESHOLD
 
 ISSUE_LABEL = "harness-feedback"
 ITEM_TYPES = {"rule": RuleType()}
@@ -127,21 +128,28 @@ class PullSink(Protocol):
         ...
 
 
-def _merged_after_evidence(fix: PullTitle, draft: Draft) -> bool:
-    """Whether `fix` merged after every evidence PR but itself merged: only then did it see all the evidence.
+def _reports_since(fix: PullTitle, draft: Draft) -> list[str] | None:
+    """The merge times of the evidence PRs that merged after `fix`, leaving out `fix` itself if it is evidence; None
+    when it cannot be told.
 
     Merge time, not PR number: a PR is numbered when it opens, and the order PRs open in says nothing about the order
-    they merge in. A draft with no evidence merge times, or a fix with none, is never resolved: it is proposed.
+    they merge in. A draft with no evidence merge times, or a fix with none, cannot be told: it is proposed.
     """
-    if not fix.merged_at or len(draft.merged_at) != len(draft.prs):
-        return False
+    if not fix.merged_at or not draft.prs or len(draft.merged_at) != len(draft.prs):
+        return None
     others = [m for n, m in zip(draft.prs, draft.merged_at) if n != fix.number]
-    return bool(others) and all(m and fix.merged_at > m for m in others)
+    if not others or not all(others):
+        return None
+    return [m for m in others if m > fix.merged_at]
 
 
-def plan_project_prs(drafts: Sequence[Draft], sink: PullSink, closed_since: str | None = None) -> dict[str, str]:
-    """Item ID -> why its project draft is not opened, for each one that is not. Reads only, and nothing at all
-    when there is no project draft: a listing that cannot be read must not hold up the upstream issues."""
+def plan_project_prs(drafts: Sequence[Draft], sink: PullSink, closed_since: str | None = None,
+                     threshold: int = THRESHOLD) -> dict[str, str]:
+    """Item ID -> why its project draft is not opened, for each one that is not. Reads nothing when there is no
+    project draft.
+
+    A merged `[<ID>]` fix saw the evidence that merged before it, so only reports since the latest fix count: the
+    draft is RESOLVED while they stay below `threshold`, and proposed again once they reach it."""
     if not any(d.kind == "pr" for d in drafts):
         return {}
     pulls = sink.recent_pulls(closed_since)
@@ -150,10 +158,15 @@ def plan_project_prs(drafts: Sequence[Draft], sink: PullSink, closed_since: str 
         if d.kind != "pr":
             continue
         mine = sorted((p for p in pulls if p.title.startswith(title_prefix(d.item_id))), key=lambda p: p.number)
+        fixes = sorted((p for p in mine if p.state == "merged" and p.merged_at), key=lambda p: p.merged_at)
+        since = _reports_since(fixes[-1], d) if fixes else None
         if (found := next((p for p in mine if p.state == "open"), None)) is not None:
             why[d.item_id] = f"SKIPPED: #{found.number} for this ID is open"
-        elif (found := next((p for p in mine if p.state == "merged" and _merged_after_evidence(p, d)), None)):
-            why[d.item_id] = f"RESOLVED: #{found.number} merged after the evidence"
+        elif since is not None and not since:
+            why[d.item_id] = f"RESOLVED: #{fixes[-1].number} merged after the evidence"
+        elif since is not None and len(since) < threshold:
+            why[d.item_id] = (f"RESOLVED: #{fixes[-1].number} merged after the earlier evidence; {len(since)} "
+                              f"report(s) since, below the threshold of {threshold}")
         elif (found := next((p for p in mine if p.state == "closed"), None)) is not None:
             why[d.item_id] = f"SKIPPED: #{found.number} for this ID was closed unmerged within the window"
     return why

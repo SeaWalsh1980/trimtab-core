@@ -244,8 +244,32 @@ class ProjectDrafts(unittest.TestCase):
         self.assertEqual(self.held(PullTitle(946, "[SCR-X-2] fix", "merged", self.AFTER_ALL)),
                          {"SCR-X-2": "RESOLVED: #946 merged after the evidence"})
 
-    def test_a_fix_opened_after_the_evidence_but_merged_before_some_of_it_does_not_resolve_the_id(self):
-        self.assertEqual(self.held(PullTitle(946, "[SCR-X-2] fix", "merged", self.BETWEEN)), {})
+    def test_a_fix_merged_before_some_evidence_counts_only_the_reports_since_it(self):
+        self.assertEqual(self.held(PullTitle(946, "[SCR-X-2] fix", "merged", self.BETWEEN)),
+                         {"SCR-X-2": "RESOLVED: #946 merged after the earlier evidence; 1 report(s) since, below the "
+                                     "threshold of 2"})
+
+    def test_reports_since_the_fix_that_reach_the_threshold_propose_the_id_again(self):
+        prs, merged_at = (10, 11, 12, 21, 22, 23), ("2026-09-01T00:00:00Z", "2026-09-02T00:00:00Z",
+                                                    "2026-09-03T00:00:00Z", "2026-09-11T00:00:00Z",
+                                                    "2026-09-12T00:00:00Z", "2026-09-13T00:00:00Z")
+        fix = PullTitle(20, "[SCR-X-2] fix", "merged", "2026-09-10T00:00:00Z")
+
+        found = plan_project_prs([draft("SCR-X-2", kind="pr", prs=prs, merged_at=merged_at)], FakePulls(fix),
+                                 threshold=3)
+
+        self.assertEqual(found, {})
+
+    def test_one_report_since_the_fix_does_not_re_propose_a_fixed_rule(self):
+        prs, merged_at = (10, 11, 12, 21), ("2026-09-01T00:00:00Z", "2026-09-02T00:00:00Z",
+                                            "2026-09-03T00:00:00Z", "2026-09-11T00:00:00Z")
+        fix = PullTitle(20, "[SCR-X-2] fix", "merged", "2026-09-10T00:00:00Z")
+
+        found = plan_project_prs([draft("SCR-X-2", kind="pr", prs=prs, merged_at=merged_at)], FakePulls(fix),
+                                 threshold=3)
+
+        self.assertEqual(found, {"SCR-X-2": "RESOLVED: #20 merged after the earlier evidence; 1 report(s) since, "
+                                            "below the threshold of 3"})
 
     def test_a_fix_opened_before_the_evidence_but_merged_after_all_of_it_resolves_the_id(self):
         self.assertEqual(self.held(PullTitle(900, "[SCR-X-2] fix", "merged", self.AFTER_ALL)),
