@@ -2,9 +2,7 @@
 
 ## Status
 
-Accepted. Amended 2026-10-16: the check also names the four non-guard
-hooks the base registers, and bootstrap now probes it; see
-[Amendment (2026-10-16)](#amendment-2026-10-16).
+Accepted.
 
 ## Context
 
@@ -96,42 +94,3 @@ stays silent; a guard that is not executable is named; a moved checkout
 names the dangling guards and rules; a machine with no install at all gets a
 warning; and a restored install is silent again. Every warning is checked to
 be valid JSON with both fields.
-
-## Amendment (2026-10-16)
-
-**Context.** The check named the five guards only. `pr-body-check`,
-`doctrine-drift`, `session-path` and `rule-usage` are registered too, and a
-missing one fails the same silent way: Claude Code treats a hook that cannot
-run (exit 127) as a non-blocking error. A review of the bootstrap self-probe
-also found that nothing proved this check itself fires: it was tested in the
-guard matrix, but never on the installed settings.
-
-**Decision.** The check's list names all nine hook scripts. The message stays
-`GUARDS OFF`: an operator who sees it must re-run bootstrap whichever hook is
-missing. Bootstrap now runs the installed check under an empty `HOME` (it must
-name `hooks/guard-paths.sh`) and under a `HOME` whose `.claude` is the install
-(it must name no hook).
-
-**Options considered.**
-- *Keep the list to the guards and add a second check for the rest.* Rejected:
-  two inline commands to keep in step, for one action (re-run bootstrap).
-- *Derive the list from the registered commands at session start.* Rejected:
-  it needs a JSON parser, and this check deliberately uses only POSIX `sh` and
-  `test` (Decision above).
-
-**Consequences.** A missing non-guard hook now reads `GUARDS OFF`, which
-overstates it; the named path says which hook it is. The guard matrix stubs
-every name the shipped command lists, so it follows the longer list unchanged.
-
-**Status.** Accepted. Amends the Decision's "each of the four guard scripts".
-
-Guards and the other hooks now get different messages. A missing guard, or
-missing rules, bin or CLAUDE.md, still reads `GUARDS OFF` and names every
-missing path. When every guard is present and only `pr-body-check`,
-`doctrine-drift`, `session-path` or `rule-usage` is missing, the check reads
-`HOOKS MISSING`, names those, and tells the session to have bootstrap re-run
-without telling it to stop work. The reason: a missing usage log must not tell
-the session it is unguarded. A warning that overstates the fault teaches the
-operator to ignore `GUARDS OFF`, which then loses its force on the day the
-guards really are gone. The one `for g in` loop and the single inline POSIX
-command stay, so the guard matrix still reads the list from it.
