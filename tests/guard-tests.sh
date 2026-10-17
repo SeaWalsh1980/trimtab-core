@@ -1343,6 +1343,31 @@ ln -sf "$(command -v cat)" "$GM_FAKE/cat"
 printf '#!/bin/sh\ncase "$*" in *pr_monitor*) echo pass; exit 1 ;; esac\nexec %s "$@"\n' "$(command -v python3)" > "$GM_FAKE/python3"
 chmod +x "$GM_FAKE/python3"
 tm deny "a check that prints pass but exits 1"        "$(pm_fix gm-a 7)" "$GM_FAKE"
+
+# A check that does not run to a verdict says nothing about the url, so its
+# deny must say so and must not blame the url. Each fake replaces only the
+# check: <case body> runs for it, the real python3 for everything else.
+gm_fake() { # gm_fake <case body>: point $GM_FAKE/python3 at a check that does <case body>
+  printf '#!/bin/sh\ncase "$*" in *pr_monitor*) %s ;; esac\nexec %s "$@"\n' "$1" "$(command -v python3)" > "$GM_FAKE/python3"
+  chmod +x "$GM_FAKE/python3"
+}
+gm_failed() { # gm_failed <label>: the call is denied with the could-not-run reason
+  local out; out=$(printf '%s' "$(pm_fix gm-a 7)" | PATH="$GM_FAKE" "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null)
+  [[ "$out" == *'"permissionDecision":"deny"'* && "$out" == *"could not run to a verdict"* \
+     && "$out" != *"not on the session's list"* ]]
+  pm_report $? deny "$1"
+}
+gm_failed "a check that prints pass but exits 1 is not blamed on the url"
+gm_fake 'echo "Traceback" >&2; exit 1'
+gm_failed "a check that crashes is denied as could-not-run"
+gm_fake 'exit 0'
+gm_failed "a check that prints nothing is denied as could-not-run"
+gm_fake 'echo maybe; exit 0'
+gm_failed "a verdict the guard does not know is denied as could-not-run"
+gm_fake 'echo not-recorded; exit 0'
+out=$(printf '%s' "$(pm_fix gm-a 7)" | PATH="$GM_FAKE" "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null)
+[[ "$out" == *"not on the session's list"* && "$out" != *"could not run"* ]]
+pm_report $? deny "a not-recorded verdict keeps the url reason"
 if command -v jq >/dev/null 2>&1; then
   rm -f "$GM_STUB/python3"; ln -sf "$(command -v jq)" "$GM_STUB/jq"
   tm deny "jq only: no python3 for the check, denied" "$(pm_fix gm-a 7)" "$GM_STUB"

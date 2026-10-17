@@ -157,7 +157,11 @@ or wrongly permissioned list, a missing `python3`, and any parse error. The
 reason is fixed text that names no URL, session or hash. It tells the model
 that Auto-fix passes only for a PR this session created in the recorded
 shape, with its `url`; not to retry with another PR's URL; and to carry on
-without Auto-fix and report it to the operator.
+without Auto-fix and report it to the operator. A check that does not run
+to a verdict (a nonzero exit, no output, or an answer the guard does not
+know) is denied with its own fixed reason, which says the check could not
+run and nothing about the url (added after review: it first fell through
+to the url reason, which sent a broken install hunting a foreign PR).
 
 Every other tool name keeps its ADR 0013 or ADR 0027 answer. Of all MCP
 tools, only `set_monitor` has its arguments read, and only it can be denied.

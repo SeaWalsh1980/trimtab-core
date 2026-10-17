@@ -111,14 +111,21 @@ for owned in "${CCD_OWN_PR[@]}"; do
   fi
   verdict=$(printf '%s' "$payload" | PYTHONPATH="$here/.." python3 -P -B -m trimtab.adapters.pr_monitor check 2>/dev/null)
   rc=$?
-  [[ $rc -eq 0 && "$verdict" == pass ]] && exit 0
+  # A verdict counts only from a check that ran to the end. A crash, an empty
+  # answer or one this guard does not know says nothing about the url, so its
+  # reason must not blame the url. $rc is an integer, safe in the JSON reason.
+  [[ $rc -eq 0 ]] || verdict="(failed)"
   case "$verdict" in
+    pass)
+      exit 0 ;;
+    not-recorded)
+      deny "$own_pr_denied" ;;
     no-url)
       deny "set_monitor with auto_fix or address_comments needs the url of a PR this session created; call it again with url (ADR 0028)." ;;
     bad-arguments)
       deny "set_monitor was called with arguments this guard does not read, so it cannot be checked (fail closed, ADR 0028)." ;;
     *)
-      deny "$own_pr_denied" ;;
+      deny "the set_monitor check could not run to a verdict (exit $rc), so it is denied (fail closed, ADR 0028). This says nothing about the url. Carry on without Auto-fix and report it to the operator." ;;
   esac
 done
 
