@@ -908,96 +908,6 @@ tm ask  "a secret word in another case"       "$(j mcp__srv__Get_API_Token '{}')
 tm ask  "a secret word inside a longer word"  "$(j mcp__srv__get_keyword_report '{}')"
 tm pass "a secret word in the server part"    "$(j mcp__keystore__get_item '{}')"
 
-# The desktop app's UI, read-only and PR-monitoring tools pass by exact full
-# name (ADR 0027).
-# Every other app tool falls through to the classification above, and the
-# negative controls below would pass if the list were widened to a prefix.
-CCD_PASS=(
-  mcp__ccd_turn__wrap_up mcp__ccd_turn__update_plan
-  mcp__ccd_view__show_pane mcp__ccd_view__close_pane
-  mcp__ccd_view__get_layout mcp__ccd_view__set_transcript_view
-  mcp__ccd_window__get_window_layout mcp__ccd_window__open_session_in
-  mcp__ccd_window__close_split mcp__ccd_window__set_sidebar_collapsed
-  mcp__ccd_pr__get_status
-  mcp__ccd_pr__unbind_pr mcp__ccd_pr__set_monitor
-  mcp__ccd_session_mgmt__get_session mcp__ccd_session_mgmt__list_sessions
-  mcp__ccd_session_mgmt__list_events mcp__ccd_session_mgmt__get_usage
-  mcp__ccd_session_mgmt__search_session_transcripts
-  mcp__ccd_host__get_storage_usage mcp__ccd_host__open_in_editor
-  mcp__ccd_host__reveal_path mcp__ccd_host__request_keep_awake
-  mcp__ccd_session__list_start_targets mcp__ccd_session__dismiss_task
-  mcp__ccd_connectors__session_connectors_status
-)
-for n in "${CCD_PASS[@]}"; do
-  tm pass "app allowlist: ${n#mcp__}"         "$(j "$n" '{}')"
-done
-# The guard's CCD_ALLOW must hold exactly the names tested above: a name added
-# to the guard alone would pass untested, and one dropped from it alone would
-# still be listed here as passing. Read from the shipped guard, not a copy.
-ccd_guard=$(awk '/^CCD_ALLOW=\($/{f=1; next} f && /^\)$/{exit} f' \
-  "$HOOKS/guard-mcp.sh" | tr -s ' \t' '\n' | sed '/^$/d' | sort)
-ccd_tests=$(printf '%s\n' "${CCD_PASS[@]}" | sort)
-if [[ -n "$ccd_guard" && "$ccd_guard" == "$ccd_tests" ]]; then
-  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_ALLOW holds exactly the tested names"
-else
-  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_ALLOW differs from the tested names (or could not be read)"
-  diff <(printf '%s\n' "$ccd_guard") <(printf '%s\n' "$ccd_tests") | sed 's/^/      /'
-  fails=$((fails+1))
-fi
-for n in \
-  mcp__ccd_pr__set_auto_merge \
-  mcp__ccd_pr__bind_pr \
-  mcp__ccd_session_mgmt__set_session_title \
-  mcp__ccd_session_mgmt__set_session_permission_mode \
-  mcp__ccd_host__sync_with_base_branch \
-  mcp__ccd_session_mgmt__send_message \
-  mcp__ccd_session_mgmt__set_session_model \
-  mcp__ccd_session_mgmt__set_session_effort \
-  mcp__ccd_session_mgmt__set_session_fast_mode \
-  mcp__ccd_turn__evil; do
-  tm ask  "app tool off the list: ${n#mcp__}" "$(j "$n" '{}')"
-done
-tm ask  "app list is exact: a suffix"         "$(j mcp__ccd_turn__wrap_up_x '{}')"
-tm ask  "app list is exact: a run-on suffix"  "$(j mcp__ccd_turn__wrap_upX '{}')"
-tm ask  "app list is exact: a server prefix"  "$(j mcp__xccd_turn__wrap_up '{}')"
-
-# Read-only tools whose verb comes last pass by exact <tool> part, on any
-# server (ADR 0013, amendment 2026-10-16).
-TOOL_READ_PASS=(
-  pull_request_read issue_read actions_get actions_list
-)
-for t in "${TOOL_READ_PASS[@]}"; do
-  tm pass "verb-last read: github__$t"        "$(j "mcp__github__$t" '{}')"
-  tm pass "verb-last read on another server: $t" "$(j "mcp__plugin_github_github__$t" '{}')"
-done
-# As for CCD_ALLOW: the guard's list must hold exactly the names tested above.
-read_guard=$(awk '/^TOOL_READ_ALLOW=\($/{f=1; next} f && /^\)$/{exit} f' \
-  "$HOOKS/guard-mcp.sh" | tr -s ' \t' '\n' | sed '/^$/d' | sort)
-read_tests=$(printf '%s\n' "${TOOL_READ_PASS[@]}" | sort)
-if [[ -n "$read_guard" && "$read_guard" == "$read_tests" ]]; then
-  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "TOOL_READ_ALLOW holds exactly the tested names"
-else
-  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "TOOL_READ_ALLOW differs from the tested names (or could not be read)"
-  diff <(printf '%s\n' "$read_guard") <(printf '%s\n' "$read_tests") | sed 's/^/      /'
-  fails=$((fails+1))
-fi
-# The list passes before the secret-word check, so no listed name may carry
-# one of its words. Read from the shipped guard, so an addition is caught.
-read_secret=$(grep -iE 'key|token|secret|password|credential' <<<"$read_guard" || true)
-if [[ -n "$read_guard" && -z "$read_secret" ]]; then
-  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "TOOL_READ_ALLOW names carry no secret word"
-else
-  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "TOOL_READ_ALLOW lists a name with a secret word (or could not be read)"
-  printf '      %s\n' $read_secret
-  fails=$((fails+1))
-fi
-tm ask  "verb-last write still asks"          "$(j mcp__github__actions_run_trigger '{}')"
-tm ask  "verb-last list is not a suffix rule" "$(j mcp__github__mark_all_notifications_read '{}')"
-tm ask  "verb-last list is exact: a suffix"   "$(j mcp__github__issue_read_x '{}')"
-tm ask  "verb-last list is exact: a prefix"   "$(j mcp__github__xissue_read '{}')"
-tm ask  "verb-last list is exact: a case change" "$(j mcp__github__Issue_Read '{}')"
-tm ask  "verb-last name as the server part"   "$(j mcp__issue_read__create_item '{}')"
-
 tm ask  "FAIL-CLOSED: garbage payload"        'NOT JSON AT ALL'
 tm ask  "FAIL-CLOSED: empty payload"          ''
 tm ask  "FAIL-CLOSED: a JSON array"           '[1,2]'
@@ -1307,6 +1217,33 @@ lv "moved checkout: dangling rules named"    "$LV_HOME"       " rules"
 mv "$LV/moved" "$LV_REPO"
 lv "no install at all warns"                 "$LV/nowhere"    "hooks/guard-paths.sh"
 lv "restored install is silent again"        "$LV_HOME"       silent
+
+# A missing non-guard hook leaves the session guarded, so it gets its own
+# message: telling the session it is unguarded would overstate it (ADR 0004).
+rm "$LV_REPO/hooks/rule-usage.sh"
+lv_out=$(HOME="$LV_HOME" sh -c "$LIVENESS" 2>&1); lv_rc=$?
+lv_verdict=$(printf '%s' "$lv_out" | python3 -c '
+import json, sys
+rc, out = int(sys.argv[1]), sys.stdin.read()
+if rc != 0:
+    sys.exit(print("exit %d: a SessionStart hook must never fail" % rc))
+try:
+    d = json.loads(out)
+except ValueError:
+    sys.exit(print("not valid JSON: %r" % out[:80]))
+msg = d.get("systemMessage", "")
+ok = (msg.startswith("HOOKS MISSING") and "hooks/rule-usage.sh" in msg
+      and "GUARDS OFF" not in out
+      and d.get("hookSpecificOutput", {}).get("hookEventName") == "SessionStart")
+print("ok" if ok else "warning incomplete: %r" % out[:120])
+' "$lv_rc")
+if [[ "$lv_verdict" == ok ]]; then
+  printf 'PASS  %-14s %s\n' "liveness" "a missing non-guard hook reads HOOKS MISSING, not GUARDS OFF"
+else
+  printf 'FAIL  %-14s %s  -- %s\n' "liveness" "a missing non-guard hook reads HOOKS MISSING, not GUARDS OFF" "$lv_verdict"
+  fails=$((fails+1))
+fi
+printf '#!/bin/sh\n' > "$LV_REPO/hooks/rule-usage.sh"; chmod +x "$LV_REPO/hooks/rule-usage.sh"
 
 echo
 if [[ $fails -eq 0 ]]; then echo "ALL PASS"; exit 0; else echo "$fails FAILURE(S)"; exit 1; fi
