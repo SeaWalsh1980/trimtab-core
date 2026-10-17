@@ -23,11 +23,11 @@ PACKAGE = "trimtab"
 def _load_package(root):
     """Import the package from <root>/trimtab, without putting <root> on sys.path."""
     pkg_dir = os.path.join(root, PACKAGE)
-    spec = importlib.util.spec_from_file_location(
-        PACKAGE, os.path.join(pkg_dir, "__init__.py"),
-        submodule_search_locations=[pkg_dir])
-    if spec is None or spec.loader is None:
+    init = os.path.join(pkg_dir, "__init__.py")
+    if not os.path.isfile(init):
         sys.exit(f"run_module.py: no {PACKAGE} package under {root}")
+    spec = importlib.util.spec_from_file_location(
+        PACKAGE, init, submodule_search_locations=[pkg_dir])
     package = importlib.util.module_from_spec(spec)
     sys.modules[PACKAGE] = package
     spec.loader.exec_module(package)

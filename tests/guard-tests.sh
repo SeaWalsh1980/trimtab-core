@@ -1667,7 +1667,8 @@ sc_payload() { # sc_payload <hook>  — a payload that reaches the hook's python
 }
 sc_effect() { # sc_effect <hook> <output>  — 0 when the run shows the hook reached python3 and did its work
   case "$1" in
-    guard-mcp.sh)         [[ "$2" == *'"permissionDecision":"deny"'* ]] ;;
+    # guard-mcp's deny here is also its fail-closed answer, so it is no evidence;
+    # the own-PR pass case below is guard-mcp's check.
     pr-monitor-record.sh) [[ -n "$(find "$SC_RUN_CFG" -path '*pr-monitor*' -name '*.json' -type f -exec grep -l '"number":16' {} + 2>/dev/null)" ]] ;;
     rule-usage.sh)        [[ -s "$SC_RUN_CFG/rule-usage.jsonl" ]] ;;
     *)                    return 2 ;;   # silent on these payloads; the control below covers them
@@ -1769,6 +1770,15 @@ ln -s "$SC_ROOT/trimtab" "$SC_NOLOADER/trimtab"
 rm -f "$SC_NOLOADER/hooks/run_module.py"
 sc_run "$SC_NOLOADER/hooks" pr-body-check.sh "$(sc_payload pr-body-check.sh)" >/dev/null
 sc_report $? pr-body-check.sh "a missing loader fails open, not as a block"
+# The loader names a root with no package, and a module outside the package,
+# and exits 1 with that reason rather than a traceback.
+sc_empty=$(mktemp -d "$CPTMP/sc-empty.XXXXXX")
+sc_err=$(python3 -I -S -B "$SC_ROOT/hooks/run_module.py" "$sc_empty" trimtab.adapters.pr_monitor check 2>&1 </dev/null); rc=$?
+[[ $rc -eq 1 && "$sc_err" == *"no trimtab package under"* && "$sc_err" != *Traceback* ]]
+sc_report $? run_module.py "a root with no package is named, not a traceback"
+sc_err=$(python3 -I -S -B "$SC_ROOT/hooks/run_module.py" "$SC_ROOT" json 2>&1 </dev/null); rc=$?
+[[ $rc -eq 1 && "$sc_err" == *"runs only trimtab modules"* ]]
+sc_report $? run_module.py "a module outside the package is refused"
 export CLAUDE_CONFIG_DIR="$GM_SAVED_CFG"
 
 echo "== fail-closed on an unrunnable dependency =="

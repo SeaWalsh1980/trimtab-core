@@ -9,7 +9,8 @@ in, value out. Command text, stdout and the call's arguments are untrusted: they
 reduced to a `PrKey` by fixed rules and nothing else is kept. A doubt anywhere yields no
 key, which records nothing and denies.
 
-The edge comes last, run as `python3 -m trimtab.adapters.pr_monitor record|check`:
+The edge comes last, run by the hooks through hooks/run_module.py (ADR 0035) as the module
+`trimtab.adapters.pr_monitor` with `record` or `check`:
 
     record   PostToolUse (Bash), from hooks/pr-monitor-record.sh. Writes nothing to stdout;
              exits 0, or 1 with one line on stderr when a create was seen and not recorded.
@@ -653,7 +654,7 @@ def check(payload: object, config: Path, now: int) -> Verdict:
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if args not in (["record"], ["check"]):
-        print("usage: python3 -m trimtab.adapters.pr_monitor record|check", file=sys.stderr)
+        print("usage: trimtab.adapters.pr_monitor record|check (run through hooks/run_module.py)", file=sys.stderr)
         return 1
     now = int(time.time())
     try:
