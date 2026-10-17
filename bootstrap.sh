@@ -678,12 +678,13 @@ PY
     else
       die "the liveness check stayed silent with no guards installed — sessions would not be warned"
     fi
-    # Only GUARDS OFF is judged: HOOKS MISSING names a non-guard hook this base
-    # lacks, which leaves the session guarded and its own section notes.
+    # Only a guard named missing is judged. A non-guard hook this base lacks
+    # leaves the session guarded and its own section notes it; GUARDS OFF also
+    # names it when CLAUDE.md, rules or bin is missing, so match the guard path.
     if [[ "$out_on" != *"hooks/"* ]]; then
       ok "the liveness check names no hook as missing on this install"
-    elif [[ "$out_on" != *"GUARDS OFF"* ]]; then
-      note "the liveness check reports HOOKS MISSING on this install — a non-guard hook is not linked"
+    elif [[ "$out_on" != *"hooks/guard-"* ]]; then
+      note "the liveness check names a non-guard hook as missing on this install — it is not linked"
     elif [[ $CHECK_ONLY -eq 1 ]]; then
       note "the liveness check names an installed hook as missing — every session would warn GUARDS OFF"
     else

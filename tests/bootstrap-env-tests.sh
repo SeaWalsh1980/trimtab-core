@@ -464,11 +464,28 @@ check_base_without_rule_usage_is_noted_not_refused() {
   make_store "$h/share/trimtab/core"
   rm "$snap_new/hooks/rule-usage.sh"
   boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
-  if [[ $rc -eq 0 && "$out" == *"the liveness check reports HOOKS MISSING on this install"* \
+  if [[ $rc -eq 0 && "$out" == *"names a non-guard hook as missing on this install"* \
         && "$out" != *"names an installed hook as missing"* ]]; then
     pass "a base without rule-usage.sh is noted by the liveness probe, not refused"
   else
     fail "a base without rule-usage.sh is noted by the liveness probe, not refused" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# Without a CLAUDE.md the check reads GUARDS OFF and names every missing path,
+# the non-guard hook among them; that is still not a guard named missing.
+check_base_without_rule_usage_and_no_claude_md_is_not_refused() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  rm "$snap_new/hooks/rule-usage.sh"
+  rm -f "$inst/CLAUDE.md"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"names a non-guard hook as missing on this install"* \
+        && "$out" != *"names an installed hook as missing"* ]]; then
+    pass "a base without rule-usage.sh and an instance without CLAUDE.md are not refused"
+  else
+    fail "a base without rule-usage.sh and an instance without CLAUDE.md are not refused" "rc=$rc"; echo "$out" | tail -6
   fi
 }
 
@@ -1015,6 +1032,7 @@ check_silent_pr_body_check_ends_not_green
 check_silent_liveness_check_fails_the_install
 check_liveness_check_that_always_fires_fails_the_install
 check_base_without_rule_usage_is_noted_not_refused
+check_base_without_rule_usage_and_no_claude_md_is_not_refused
 check_broken_doctrine_drift_ends_not_green
 check_check_reports_a_silent_pr_body_check
 check_check_reports_a_broken_doctrine_drift
