@@ -32,9 +32,9 @@ ISSUE_URL = "https://github.com/owner/repo/issues/9"
 PULLS = f"repos/{REPO}/pulls"
 
 
-def pull(number, merged_at=AFTER_SINCE, updated_at=None, labels=(), body=""):
+def pull(number, merged_at=AFTER_SINCE, updated_at=None, labels=(), body="", title=""):
     """One row of `GET repos/{o}/{r}/pulls`: a merged PR unless merged_at is None."""
-    return {"number": number, "body": body, "merged_at": merged_at,
+    return {"number": number, "title": title, "body": body, "merged_at": merged_at,
             "updated_at": updated_at or merged_at or AFTER_SINCE, "labels": [{"name": n} for n in labels]}
 
 
@@ -64,6 +64,7 @@ def every_call(gh):
     source.unlabelled_merged(LABEL, SINCE, 10)
     source.unlabelled_merged(LABEL, None, 10)
     source.labelled_merged(LABEL, SINCE, 10)
+    source.recent_pulls(SINCE)
     source.add_label(PR, LABEL)
     source.body(PR)
     issues = GhIssues(REPO, run=gh, settle_seconds=0)
@@ -163,6 +164,32 @@ class EveryCallIsRepositoryScopedRest(unittest.TestCase):
         GhPullRequests(REPO, run=gh).runs(HEAD_SHA, "ci checks.yml", 10)
 
         self.assertEqual(path_of(gh.argvs()[0]), f"repos/{REPO}/actions/workflows/ci%20checks.yml/runs")
+
+
+class RecentPulls(unittest.TestCase):
+    """What a project draft is checked against: open PRs, and closed ones updated within the window."""
+
+    def test_open_merged_and_closed_prs_are_told_apart_by_title(self):
+        gh = FakeGh(answers={("GET", PULLS): [page({"number": 3, "title": "[X-1] open"}),
+                                              page(pull(1, title="[X-1] merged"),
+                                                   pull(2, merged_at=None, title="[X-1] declined"))]})
+
+        found = GhSource(REPO, run=gh).recent_pulls(SINCE)
+
+        self.assertEqual([(p.number, p.title, p.state) for p in found],
+                         [(3, "[X-1] open", "open"), (1, "[X-1] merged", "merged"), (2, "[X-1] declined", "closed")])
+
+    def test_a_closed_pr_last_updated_before_the_window_is_left_out(self):
+        gh = FakeGh(answers={("GET", PULLS): [page(), page(pull(1, merged_at=BEFORE_SINCE, title="[X-1] old"))]})
+
+        self.assertEqual(GhSource(REPO, run=gh).recent_pulls(SINCE), [])
+
+    def test_with_no_window_only_open_prs_are_read(self):
+        gh = FakeGh(answers={("GET", PULLS): [page({"number": 3, "title": "[X-1] open"})]})
+
+        found = GhSource(REPO, run=gh).recent_pulls(None)
+
+        self.assertEqual(([p.number for p in found], len(gh.calls)), ([3], 1))
 
 
 class TheClosedPullsScan(unittest.TestCase):

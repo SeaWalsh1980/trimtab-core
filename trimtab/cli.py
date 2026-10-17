@@ -432,6 +432,8 @@ def cmd_propose(args) -> int:
     try:
         plan = (propose.plan_issues(drafts, _issues(args, issues_repo), closed_since=_since(args))
                 if (args.apply or args.check_open) else None)
+        held = (propose.plan_project_prs(drafts, source, closed_since=_since(args))
+                if args.check_open and not args.apply else {})
     except SourceError as err:
         print(f"error: {err}", file=sys.stderr)
         return 2
@@ -440,6 +442,8 @@ def cmd_propose(args) -> int:
             where = f"issue on {issues_repo}" if d.kind == "issue" else "draft PR in this project (session step)"
             if plan is not None and d.item_id in plan.already_open:
                 where += ", SKIPPED: an issue for this ID is open or was closed within the window"
+            if d.item_id in held:
+                where += f", {held[d.item_id]}"
             labels = f" [labels: {', '.join(d.labels)}]" if d.labels else ""
             print(f"\n--- would open: {where}{labels}\n# {d.title}\n\n{d.body}")
         if plan is not None and plan.to_open:
@@ -945,7 +949,8 @@ def build_parser() -> argparse.ArgumentParser:
     pmode.add_argument("--apply", action="store_true", help="open the upstream issues; needs --confirm")
     pro.add_argument("--confirm", help="the token a dry run printed")
     pro.add_argument("--check-open", action="store_true",
-                     help="in a dry run, also read existing issues to show what --apply would skip, and print a token")
+                     help="in a dry run, also read existing issues and this project's PRs to show what would be "
+                          "skipped or is already resolved, and print a token")
     iss = pro.add_mutually_exclusive_group()
     iss.add_argument("--issues-repo", help="where upstream issues go (default: the instance's repository)")
     iss.add_argument("--issues-fixture", help="JSON file of issues, for scratch runs and tests")

@@ -26,7 +26,7 @@ from trimtab.capture.ingest import PullRequest
 from trimtab.capture.written import SETTLE_SECONDS, WrittenBodyError, verify_bodies
 from trimtab.ids import ANY_ID_SHAPE
 from trimtab.dependabot import CiRun, HostError, PullRequestView
-from trimtab.propose import Filer
+from trimtab.propose import Filer, PullTitle
 from trimtab.upstream import Issue
 
 GH_TIMEOUT_SECONDS = 60
@@ -141,6 +141,7 @@ class _ClosedPull:
     merged_at: str
     updated_at: str
     labels: frozenset[str]
+    title: str = ""
 
     def pull(self) -> PullRequest:
         return PullRequest(self.number, self.body, self.merged_at)
@@ -150,11 +151,13 @@ def _closed_pull(r) -> _ClosedPull:
     what = "gh api pulls"
     try:
         row = _ClosedPull(number=r["number"], body=r.get("body") or "", merged_at=r["merged_at"] or "",
-                          updated_at=r["updated_at"], labels=frozenset(label["name"] for label in r["labels"]))
+                          updated_at=r["updated_at"], labels=frozenset(label["name"] for label in r["labels"]),
+                          title=r.get("title") or "")
     except (KeyError, TypeError, AttributeError) as err:
         raise SourceError(f"{what} returned unexpected JSON") from err
     if not (_is_int(row.number) and isinstance(row.body, str) and isinstance(row.merged_at, str)
-            and isinstance(row.updated_at, str) and all(isinstance(n, str) for n in row.labels)):
+            and isinstance(row.updated_at, str) and all(isinstance(n, str) for n in row.labels)
+            and isinstance(row.title, str)):
         raise SourceError(f"{what} returned unexpected JSON")
     return row
 
@@ -201,6 +204,21 @@ class GhSource:
         rows = [r for r in self._closed_since(merged_since)
                 if r.merged_at and r.merged_at[:10] >= merged_since and label in r.labels]
         return [r.pull() for r in sorted(rows, key=lambda r: (r.merged_at, r.number), reverse=True)[:limit]]
+
+    def recent_pulls(self, closed_since: str | None) -> list[PullTitle]:
+        """Open PRs, and closed ones updated since `closed_since`: the scan ingest reads, so a run fetches it once."""
+        what = "gh api pulls"
+        rows = self.api.all_pages(f"repos/{self.repo}/pulls", {"state": "open"}, SCAN_LIMIT, what)
+        try:
+            found = [PullTitle(r["number"], r["title"], "open") for r in rows]
+        except (KeyError, TypeError) as err:
+            raise SourceError(f"{what} returned unexpected JSON") from err
+        if not all(_is_int(p.number) and isinstance(p.title, str) for p in found):
+            raise SourceError(f"{what} returned unexpected JSON")
+        if closed_since:
+            found += [PullTitle(r.number, r.title, "merged" if r.merged_at else "closed")
+                      for r in self._closed_since(closed_since) if r.updated_at[:10] >= closed_since]
+        return found
 
     def _page(self, order: Mapping[str, str], page: int) -> list[_ClosedPull]:
         data = self.api.json("GET", f"repos/{self.repo}/pulls", "gh api pulls",
@@ -277,14 +295,26 @@ class FixtureSource:
 
     def unlabelled_merged(self, label: str, merged_since: str | None, limit: int) -> list[PullRequest]:
         rows = sorted(self._rows(), key=lambda r: r["number"])
-        todo = [r for r in rows if label not in r.get("labels", [])
+        todo = [r for r in rows if r.get("merged_at") and label not in r.get("labels", [])
                 and (merged_since is None or r["merged_at"][:10] >= merged_since)]
         return [PullRequest(r["number"], r.get("body", ""), r["merged_at"]) for r in todo[:limit]]
 
     def labelled_merged(self, label: str, merged_since: str, limit: int) -> list[PullRequest]:
         rows = sorted(self._rows(), key=lambda r: r["number"], reverse=True)
-        done = [r for r in rows if label in r.get("labels", []) and r["merged_at"][:10] >= merged_since]
+        done = [r for r in rows if r.get("merged_at") and label in r.get("labels", [])
+                and r["merged_at"][:10] >= merged_since]
         return [PullRequest(r["number"], r.get("body", ""), r["merged_at"]) for r in done[:limit]]
+
+    def recent_pulls(self, closed_since: str | None) -> list[PullTitle]:
+        """Rows with `"state": "open"` are open; the rest are closed, merged when `merged_at` is set, and dated by
+        `updated_at`, else `merged_at`."""
+        def state(r):
+            return "open" if r.get("state") == "open" else "merged" if r.get("merged_at") else "closed"
+
+        def recent(r):
+            return state(r) == "open" or (closed_since is not None
+                                          and (r.get("updated_at") or r.get("merged_at") or "")[:10] >= closed_since)
+        return [PullTitle(r["number"], r.get("title", ""), state(r)) for r in self._rows() if recent(r)]
 
     def add_label(self, number: int, label: str) -> None:
         rows = self._rows()

@@ -17,7 +17,8 @@ from trimtab.capture.ingest import LABEL, PullRequest, rebuild
 from trimtab.items import Item, Proposal, Strength
 from trimtab.lint import structure
 from trimtab.propose import (
-    ISSUE_LABEL, Draft, Filer, OpeningStopped, StaleProposals, confirmation, open_issues, plan_issues, render,
+    ISSUE_LABEL, Draft, Filer, OpeningStopped, PullTitle, StaleProposals, confirmation, open_issues, plan_issues,
+    plan_project_prs, render,
 )
 from trimtab.score import candidates, tally
 
@@ -72,8 +73,18 @@ class FailingAt(FakeIssues):
         return super().create(title, body, labels)
 
 
-def draft(item_id, kind="issue"):
-    return Draft(kind, item_id, f"[{item_id}] reported ambiguous in 2 PRs", "body", (ISSUE_LABEL,))
+def draft(item_id, kind="issue", prs=()):
+    return Draft(kind, item_id, f"[{item_id}] reported ambiguous in 2 PRs", "body", (ISSUE_LABEL,), prs)
+
+
+class FakePulls:
+    """A project's PRs: GitHub, a true external system, so a fake is allowed."""
+
+    def __init__(self, *pulls):
+        self.pulls = list(pulls)
+
+    def recent_pulls(self, closed_since):
+        return self.pulls
 
 
 class Rebuild(unittest.TestCase):
@@ -209,8 +220,40 @@ class Issues(unittest.TestCase):
         self.assertIn("project: owner/consumer", body)
 
 
-class TwoWeeklyRuns(unittest.TestCase):
-    """End to end: one PR per week, no ledger file, and the second week proposes."""
+class ProjectDrafts(unittest.TestCase):
+    """A project draft is held back by a PR for its ID, and resolved only by a fix newer than its evidence."""
+
+    EVIDENCE = (915, 916, 918)
+
+    def held(self, *pulls):
+        return plan_project_prs([draft("SCR-X-2", kind="pr", prs=self.EVIDENCE)], FakePulls(*pulls))
+
+    def test_an_id_with_no_pr_is_proposed(self):
+        self.assertEqual(self.held(PullTitle(940, "[SCR-Y-1] other", "open")), {})
+
+    def test_an_open_pr_for_the_id_holds_the_draft(self):
+        self.assertEqual(self.held(PullTitle(946, "[SCR-X-2] fix", "open")),
+                         {"SCR-X-2": "SKIPPED: #946 for this ID is open"})
+
+    def test_a_fix_merged_after_the_evidence_resolves_the_id(self):
+        self.assertEqual(self.held(PullTitle(946, "[SCR-X-2] fix", "merged")),
+                         {"SCR-X-2": "RESOLVED: #946 merged after the evidence"})
+
+    def test_a_fix_older_than_some_evidence_does_not_resolve_the_id(self):
+        self.assertEqual(self.held(PullTitle(917, "[SCR-X-2] fix", "merged")), {})
+
+    def test_a_pr_closed_unmerged_within_the_window_holds_the_draft(self):
+        self.assertEqual(self.held(PullTitle(950, "[SCR-X-2] fix", "closed")),
+                         {"SCR-X-2": "SKIPPED: #950 for this ID was closed unmerged within the window"})
+
+    def test_an_issue_draft_is_left_to_plan_issues(self):
+        found = plan_project_prs([draft("TST-2", prs=self.EVIDENCE)], FakePulls(PullTitle(946, "[TST-2] x", "open")))
+
+        self.assertEqual(found, {})
+
+
+class RunsTheCli(unittest.TestCase):
+    """A scratch project, its PRs and issues as fixture files, and the CLI run against them."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -240,6 +283,10 @@ class TwoWeeklyRuns(unittest.TestCase):
     def propose(self, *args, as_of):
         return self.run_cli("propose", "--issues-fixture", str(self.issues), *args, as_of=as_of)
 
+
+class TwoWeeklyRuns(RunsTheCli):
+    """End to end: one PR per week, no ledger file, and the second week proposes."""
+
     def test_evidence_from_separate_runs_reaches_the_threshold_and_files_once(self):
         self.ingest(as_of="2026-09-12")
         self.assertIn("0 proposal(s)", self.propose("--check-open", as_of="2026-09-12"))
@@ -260,6 +307,22 @@ class TwoWeeklyRuns(unittest.TestCase):
         self.assertEqual([i["title"][:7] for i in json.loads(self.issues.read_text())], ["[TST-2]"])
         self.assertIn("SKIPPED: an issue for this ID is open or was closed", again)
         self.assertNotIn("confirm: ", again)
+
+
+class AProjectDraftAlreadyFixed(RunsTheCli):
+    """End to end: the dry run marks a project draft whose fix PR merged after its evidence."""
+
+    def test_check_open_marks_the_draft_resolved_by_the_merged_fix(self):
+        body = AMBIGUOUS.replace("scope: upstream", "scope: project")
+        self.write_pulls([{"number": n, "body": body, "merged_at": at, "labels": []}
+                          for n, at in ((101, "2026-09-10T00:00:00Z"), (102, "2026-09-18T00:00:00Z"))]
+                         + [{"number": 103, "title": "[TST-2] settle fake vs mock", "body": "",
+                             "merged_at": "2026-09-19T00:00:00Z", "labels": []}])
+        self.ingest(as_of="2026-09-20")
+
+        dry = self.propose("--check-open", as_of="2026-09-20")
+
+        self.assertIn("draft PR in this project (session step), RESOLVED: #103 merged after the evidence", dry)
 
 
 class TheIngestFloor(unittest.TestCase):

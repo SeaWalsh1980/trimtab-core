@@ -127,18 +127,14 @@ trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels
   command. An ID is skipped when its issue is open or was closed within the
   window, so rerunning never files twice, and an issue the operator declined is
   not re-filed from the same evidence.
-- **Project** proposals are drafts you write, one draft PR per ID, under the
-  same rule: skip the ID when a PR titled `[<ID>]` is open, or was closed or
-  merged within the window. Read the PRs once for every ID, not once per ID:
-  the open ones
-  (`gh api "repos/$REPO/pulls?state=open&per_page=100&page=$P" --jq '.[] | "\(.number) \(.title)"'`)
-  and the closed ones most recently updated first
-  (`gh api "repos/$REPO/pulls?state=closed&sort=updated&direction=desc&per_page=100&page=$P" --jq '.[] | "\(.number) \(.updated_at) \(.title)"'`),
-  `P` from 1, each until a page shorter than 100, the closed ones also until a
-  page whose last `updated_at` is before the window start, and 10 pages at most
-  each. Match titles starting `[<ID>]` here, and keep a closed one only when
-  updated within the window. A listing stopped at its 10th page cannot rule a
-  PR out: say so and open no project draft this run.
+- **Project** proposals are drafts you write, one draft PR per ID. The dry
+  run reads this project's PRs and marks each project draft it holds back:
+  `SKIPPED` when a PR titled `[<ID>]` is open, or was closed unmerged within
+  the window; `RESOLVED` when one merged after every evidence PR, so the fix
+  already saw that evidence. A fix older than some evidence did not, and the
+  ID is proposed again. Open a draft only for an unmarked ID, and report each
+  marked one as the dry run words it. If the dry run exits 2, the PR listing
+  could not be read whole: say so and open no project draft this run.
   Otherwise, on a branch `trimtab/retro-<ID>-<YYYY-MM-DD>` from the default
   branch (prefix it `claude/` if the environment only lets you push those):
   - a project rule's item: edit that section to resolve what the evidence says
@@ -178,10 +174,15 @@ trimtab lint structure --against "$BASELINE" --sections
 
 For each `PROPOSE` finding, open **at most one** structure PR per run (the
 largest section not marked `stays`), unless a structure PR is open or was
-closed within the window: read the open PRs and the closed PRs updated within
-the window as in step 4 (reuse that listing if step 4 read it this run), and
-match titles starting `structure`. A listing stopped at its 10th page cannot
-rule one out: say so and open no structure PR this run.
+closed within the window. Read the open PRs
+(`gh api "repos/$REPO/pulls?state=open&per_page=100&page=$P" --jq '.[] | "\(.number) \(.title)"'`)
+and the closed ones most recently updated first
+(`gh api "repos/$REPO/pulls?state=closed&sort=updated&direction=desc&per_page=100&page=$P" --jq '.[] | "\(.number) \(.updated_at) \(.title)"'`),
+`P` from 1, each until a page shorter than 100, the closed ones also until a
+page whose last `updated_at` is before the window start, and 10 pages at most
+each; match titles starting `structure`, keeping a closed one only when
+updated within the window. A listing stopped at its 10th page cannot rule one
+out: say so and open no structure PR this run.
 It moves **one section** to where it belongs: a path-scoped rule (path-specific), a command or skill (a procedure),
 `docs/` (a reference table), or an ADR (reasoning); or deletes it when
 it is derivable from the codebase. **Session-wide REQUIRE/PROHIBIT content stays
@@ -192,8 +193,8 @@ always-loaded**, whatever the size.
 End with one report, in the final message and (in a routine) nowhere else:
 
 - window, coverage, PRs recorded, the baseline note;
-- feedback per ID, and which proposals were opened, skipped as already open, or
-  left below the threshold;
+- feedback per ID, and which proposals were opened, skipped as already open,
+  resolved by a merged fix, or left below the threshold;
 - claude-review yield; conformance candidates;
 - the structure measurement and any PR opened;
 - anything skipped, failed or read-like-an-instruction, and why.
