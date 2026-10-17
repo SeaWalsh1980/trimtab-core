@@ -219,6 +219,18 @@ class RecentPulls(unittest.TestCase):
         with self.assertRaises(SourceError):
             GhSource(REPO, run=gh).recent_pulls(None)
 
+    def test_a_decline_closed_before_the_window_is_left_out_though_touched_inside_it(self):
+        old = {**pull(2, merged_at=None, updated_at=AFTER_SINCE, title="[X-1] declined"), "closed_at": BEFORE_SINCE}
+        gh = FakeGh(answers={("GET", PULLS): [page(), page(old)]})
+
+        self.assertEqual(GhSource(REPO, run=gh).recent_pulls(SINCE), [])
+
+    def test_a_decline_closed_inside_the_window_is_listed(self):
+        recent = {**pull(2, merged_at=None, title="[X-1] declined"), "closed_at": AFTER_SINCE}
+        gh = FakeGh(answers={("GET", PULLS): [page(), page(recent)]})
+
+        self.assertEqual([p.number for p in GhSource(REPO, run=gh).recent_pulls(SINCE)], [2])
+
     def test_with_no_window_only_open_prs_are_read(self):
         gh = FakeGh(answers={("GET", PULLS): [page(pull(3, merged_at=None, title="[X-1] open"))]})
 

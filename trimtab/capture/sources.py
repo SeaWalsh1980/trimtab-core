@@ -211,14 +211,19 @@ class GhSource:
         return [r.pull() for r in sorted(rows, key=lambda r: (r.merged_at, r.number), reverse=True)[:limit]]
 
     def recent_pulls(self, closed_since: str | None) -> list[PullTitle]:
-        """Open PRs, and closed ones updated since `closed_since`, from the closed-PR pages ingest reads: a page
-        already read is not fetched again."""
+        """Open PRs, and closed ones in the window, from the closed-PR pages ingest reads: a page already read is not
+        fetched again. A PR closed unmerged counts by when it closed, not when it was last touched: a comment on an
+        old decline does not bring it back into the window. A merged one counts by its last update."""
         what = "gh api pulls"
         rows = self.api.all_pages(f"repos/{self.repo}/pulls", {"state": "open"}, SCAN_LIMIT, what)
         found = [PullTitle(r.number, r.title, "open") for r in map(_pull_row, rows)]
         if closed_since:
+            def in_window(r: _PullRow) -> bool:
+                when = r.updated_at if r.merged_at else (r.closed_at or r.updated_at)
+                return when[:10] >= closed_since
+
             found += [PullTitle(r.number, r.title, "merged" if r.merged_at else "closed", r.merged_at, r.closed_at)
-                      for r in self._closed_since(closed_since) if r.updated_at[:10] >= closed_since]
+                      for r in self._closed_since(closed_since) if in_window(r)]
         return found
 
     def _page(self, order: Mapping[str, str], page: int) -> list[_PullRow]:
