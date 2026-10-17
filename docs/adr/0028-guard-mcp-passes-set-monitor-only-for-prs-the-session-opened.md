@@ -37,6 +37,17 @@ Measured for this record:
   `persistedOutputPath` and `noOutputExpected`. A failed tool call raises a
   separate `PostToolUseFailure` event, not PostToolUse. The payload carries
   `session_id`.
+- **Claude Code 2.1.302, a nonzero exit** (read from the CLI's code,
+  2026-10-17): PostToolUse runs only when a tool returns, and
+  PostToolUseFailure only when it throws. Bash judges an exit by the last
+  command in the chain: only `grep`, `rg`, `egrep`, `fgrep`, `find`, `diff`,
+  `test`, `[`, `git diff` and `git grep` treat exit 1 as success. For any
+  other command, `gh` included, a nonzero exit throws, so the call raises
+  PostToolUseFailure and never reaches the recorder. A user interrupt
+  returns normally with `interrupted: true`. `tool_response` carries no exit
+  status; `returnCodeInterpretation` is set only for those non-error codes.
+  So a `git push … && gh pr create` whose create fails cannot record a line
+  that something else wrote to stdout: the recorder never sees that call.
 - **Desktop app 44.7.2** (read from its `ccd_pr` server code, 2026-10-17):
   - `set_monitor` takes `auto_fix`, `address_comments`,
     `auto_archive_on_close` and `url`, none required.
@@ -206,6 +217,11 @@ tools, only `set_monitor` has its arguments read, and only it can be denied.
   guard's list, and the app acting only on the PR in `url`. The second is
   app behaviour, read from 44.7.2. The trial checks it live, and an app
   update can change it.
+- The recorder cannot see an exit status, so "only a successful create is
+  recorded" rests on the CLI raising PostToolUseFailure for a failed Bash
+  call (measured on 2.1.302, above). A CLI that returned an error exit as a
+  normal result would let a `git push` prefix supply the one stdout line
+  when the create fails; the trial checks it.
 - A host without `python3` 3.11 or later denies `set_monitor`.
 - The recorder reads a tool's input and output, which ADR 0010 says the
   evidence loop never does. This list is guard state, not evidence: no loop
@@ -240,7 +256,10 @@ In a desktop session in auto mode, on a base that carries this change:
    `url`: Auto-fix turns on for the session's own PR, not the foreign one.
 4. `set_monitor` with only `auto_archive_on_close`: passes.
 5. A deny reaches the model as a tool error, with no prompt.
-6. Not yet known, recorded here when seen: whether a subagent's PostToolUse
+6. `git push … && gh pr create …` for a branch that already has a PR, so
+   the create fails: nothing is recorded, and `set_monitor` for that PR is
+   denied. This re-checks the 2.1.302 measurement on the CLI in use.
+7. Not yet known, recorded here when seen: whether a subagent's PostToolUse
    carries its parent's `session_id`; whether a resumed session keeps its
    `session_id`; the exact non-TTY stdout of `gh pr create`; and which
    sessions the app classes as unattended.
