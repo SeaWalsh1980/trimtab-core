@@ -5,7 +5,10 @@
 Accepted. Amended 2026-10-17: the check also names the four non-guard hooks
 the base registers, and a missing one of those reads `HOOKS MISSING` rather
 than `GUARDS OFF`; see
-[Amendment (2026-10-17)](#amendment-2026-10-17).
+[Amendment (2026-10-17)](#amendment-2026-10-17). Amended again 2026-10-17:
+bootstrap runs the installed check and refuses an install where it stays
+silent or names an installed guard as missing; see
+[Amendment (2026-10-17, bootstrap self-probe)](#amendment-2026-10-17-bootstrap-self-probe).
 
 ## Context
 
@@ -164,3 +167,57 @@ and dropping a registered hook from the list.
 
 **Status.** Accepted. Amends the Decision's "each of the four guard scripts"
 and the `GUARDS OFF`-only description of the two fields.
+
+## Amendment (2026-10-17, bootstrap self-probe)
+
+**Context.** The guard matrix runs the check as it is written in
+`settings.base.json`, but nothing ran it as installed. The live
+`settings.json` is merged from the base, the instance and the machine, and a
+layer that drops or rewrites the command, or a base whose check never fires,
+would install silently. Nothing then warns a session that its guards are
+missing, which is the failure this record exists to catch.
+
+**Decision.** Bootstrap reads the registered check out of the live
+`settings.json` and runs it twice, under a fake `HOME`:
+
+- With an empty `HOME`, it must print `GUARDS OFF` naming
+  `hooks/guard-paths.sh`. If it stays silent, the install is refused.
+- With a `HOME` whose `.claude` is this install, it must name no
+  `hooks/guard-*` path. If it names one, the install is refused: every
+  session would warn. A non-guard hook named here is a note, not a refusal,
+  since the session stays guarded and that hook's own section reports it.
+- No check registered at all refuses the install.
+
+Under `--check`, each refusal is reported as drift instead, so `--check`
+exits 1 on it.
+
+**Options considered.**
+- *Rely on the guard matrix.* Rejected: it tests the string in the
+  repository, not what a machine installed after the layers merged.
+- *Refuse when the installed run names any hook.* Tried in #67 and reverted
+  after review. A base without `rule-usage.sh` was refused with a false
+  "every session would warn GUARDS OFF", where the observer's own section
+  only notes it.
+- *Refuse when the installed run prints `GUARDS OFF`.* Rejected: `GUARDS OFF`
+  also fires for a missing `CLAUDE.md`, which an instance may legitimately
+  lack, and it then lists missing non-guard hooks too. That was the second
+  trial in #67, reverted when a base without `rule-usage.sh` plus an instance
+  without `CLAUDE.md` was refused.
+
+**Consequences.**
+- Two short `sh` runs per install and per `--check`.
+- A missing `rules`, `bin` or `CLAUDE.md` on the install is not judged here,
+  so an instance without `CLAUDE.md` installs while its sessions read
+  `GUARDS OFF`. Bootstrap's `CLAUDE.md` section, not this probe, owns that
+  link.
+- A non-guard hook missing from the base installs with a note, and the run
+  does not end NOT GREEN for it.
+
+**Measured.** In `tests/bootstrap-env-tests.sh`, against throwaway homes: a
+check that never fires refuses the install, and `--check` exits 1 on it; a
+check that always fires refuses the install; a complete install prints both
+✓ lines; a base without `rule-usage.sh` installs with the note, with and
+without an instance `CLAUDE.md`. The last two each fail against the code
+before their fix.
+
+**Status.** Accepted. Adds to the Decision; supersedes nothing.

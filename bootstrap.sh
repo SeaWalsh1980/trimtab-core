@@ -657,8 +657,9 @@ fi
 # session its guards are missing. It is inline in settings.base.json, so it is
 # run as registered: read out of the live settings, under a fake HOME. With an
 # empty HOME it must report GUARDS OFF; with HOME's .claude pointing at this
-# install it must name no hook. (It also checks rules, bin and CLAUDE.md, and an
-# instance without a CLAUDE.md makes it name that, so only hooks are judged.)
+# install it must name no guard. (It also checks rules, bin and CLAUDE.md, and
+# an instance without a CLAUDE.md makes it name that, so only guards are judged;
+# ADR 0004, amendment 2026-10-17, bootstrap self-probe.)
 if [[ $settings_bad -eq 1 ]]; then
   skip "liveness-check probe skipped: settings.json cannot be read (reported above)"
 else
