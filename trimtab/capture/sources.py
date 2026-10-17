@@ -216,7 +216,7 @@ class GhSource:
         if not all(_is_int(p.number) and isinstance(p.title, str) for p in found):
             raise SourceError(f"{what} returned unexpected JSON")
         if closed_since:
-            found += [PullTitle(r.number, r.title, "merged" if r.merged_at else "closed")
+            found += [PullTitle(r.number, r.title, "merged" if r.merged_at else "closed", r.merged_at)
                       for r in self._closed_since(closed_since) if r.updated_at[:10] >= closed_since]
         return found
 
@@ -314,7 +314,8 @@ class FixtureSource:
         def recent(r):
             return state(r) == "open" or (closed_since is not None
                                           and (r.get("updated_at") or r.get("merged_at") or "")[:10] >= closed_since)
-        return [PullTitle(r["number"], r.get("title", ""), state(r)) for r in self._rows() if recent(r)]
+        return [PullTitle(r["number"], r.get("title", ""), state(r), r.get("merged_at") or "") for r in self._rows()
+                if recent(r)]
 
     def add_label(self, number: int, label: str) -> None:
         rows = self._rows()

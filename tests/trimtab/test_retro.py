@@ -73,8 +73,8 @@ class FailingAt(FakeIssues):
         return super().create(title, body, labels)
 
 
-def draft(item_id, kind="issue", prs=()):
-    return Draft(kind, item_id, f"[{item_id}] reported ambiguous in 2 PRs", "body", (ISSUE_LABEL,), prs)
+def draft(item_id, kind="issue", prs=(), merged_at=()):
+    return Draft(kind, item_id, f"[{item_id}] reported ambiguous in 2 PRs", "body", (ISSUE_LABEL,), prs, merged_at)
 
 
 class FakePulls:
@@ -221,12 +221,16 @@ class Issues(unittest.TestCase):
 
 
 class ProjectDrafts(unittest.TestCase):
-    """A project draft is held back by a PR for its ID, and resolved only by a fix newer than its evidence."""
+    """A project draft is held back by a PR for its ID, and resolved only by a fix merged after all its evidence."""
 
     EVIDENCE = (915, 916, 918)
+    # Evidence merged out of number order: #915 opened first and merged last.
+    MERGED = ("2026-09-20T00:00:00Z", "2026-09-05T00:00:00Z", "2026-09-08T00:00:00Z")
+    AFTER_ALL = "2026-09-25T00:00:00Z"
+    BETWEEN = "2026-09-10T00:00:00Z"
 
-    def held(self, *pulls):
-        return plan_project_prs([draft("SCR-X-2", kind="pr", prs=self.EVIDENCE)], FakePulls(*pulls))
+    def held(self, *pulls, prs=EVIDENCE, merged_at=MERGED):
+        return plan_project_prs([draft("SCR-X-2", kind="pr", prs=prs, merged_at=merged_at)], FakePulls(*pulls))
 
     def test_an_id_with_no_pr_is_proposed(self):
         self.assertEqual(self.held(PullTitle(940, "[SCR-Y-1] other", "open")), {})
@@ -235,12 +239,22 @@ class ProjectDrafts(unittest.TestCase):
         self.assertEqual(self.held(PullTitle(946, "[SCR-X-2] fix", "open")),
                          {"SCR-X-2": "SKIPPED: #946 for this ID is open"})
 
-    def test_a_fix_merged_after_the_evidence_resolves_the_id(self):
-        self.assertEqual(self.held(PullTitle(946, "[SCR-X-2] fix", "merged")),
+    def test_a_fix_merged_after_all_the_evidence_resolves_the_id(self):
+        self.assertEqual(self.held(PullTitle(946, "[SCR-X-2] fix", "merged", self.AFTER_ALL)),
                          {"SCR-X-2": "RESOLVED: #946 merged after the evidence"})
 
-    def test_a_fix_older_than_some_evidence_does_not_resolve_the_id(self):
-        self.assertEqual(self.held(PullTitle(917, "[SCR-X-2] fix", "merged")), {})
+    def test_a_fix_opened_after_the_evidence_but_merged_before_some_of_it_does_not_resolve_the_id(self):
+        self.assertEqual(self.held(PullTitle(946, "[SCR-X-2] fix", "merged", self.BETWEEN)), {})
+
+    def test_a_fix_opened_before_the_evidence_but_merged_after_all_of_it_resolves_the_id(self):
+        self.assertEqual(self.held(PullTitle(900, "[SCR-X-2] fix", "merged", self.AFTER_ALL)),
+                         {"SCR-X-2": "RESOLVED: #900 merged after the evidence"})
+
+    def test_a_fix_that_is_itself_evidence_resolves_the_id_when_it_merged_last(self):
+        found = self.held(PullTitle(946, "[SCR-X-2] fix", "merged", self.AFTER_ALL),
+                          prs=self.EVIDENCE + (946,), merged_at=self.MERGED + (self.AFTER_ALL,))
+
+        self.assertEqual(found, {"SCR-X-2": "RESOLVED: #946 merged after the evidence"})
 
     def test_a_pr_closed_unmerged_within_the_window_holds_the_draft(self):
         self.assertEqual(self.held(PullTitle(950, "[SCR-X-2] fix", "closed")),
