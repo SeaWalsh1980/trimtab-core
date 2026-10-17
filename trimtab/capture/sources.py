@@ -169,10 +169,10 @@ def _within_scan(limit: int) -> None:
         raise SourceError(f"a scan of closed PRs reads at most {SCAN_LIMIT}; lower the limit")
 
 
-def _window_day(merged: bool, updated_at: str, closed_at: str, merged_at: str = "") -> str:
-    """The day that puts a closed PR in the window: a merged one by its last update, one closed unmerged by when it
-    closed (else its last update), so a comment on an old decline does not bring it back."""
-    return ((updated_at or merged_at) if merged else (closed_at or updated_at))[:10]
+def _window_day(merged_at: str, closed_at: str, updated_at: str) -> str:
+    """The day that puts a closed PR in the window: a merged one by when it merged, one closed unmerged by when it
+    closed (else its last update). A later comment or label brings neither back."""
+    return (merged_at or closed_at or updated_at)[:10]
 
 
 def _require_day(closed_since: str | None) -> None:
@@ -230,8 +230,8 @@ class GhSource:
 
     def recent_pulls(self, closed_since: str | None) -> list[PullTitle]:
         """Open PRs, and closed ones in the window, from the closed-PR pages ingest reads: a page already read is not
-        fetched again. A PR closed unmerged counts by when it closed, not when it was last touched: a comment on an
-        old decline does not bring it back into the window. A merged one counts by its last update."""
+        fetched again. A closed PR counts by when it merged or closed, not when it was last touched: a comment on an
+        old fix or decline does not bring it back into the window."""
         what = "gh api pulls"
         _require_day(closed_since)
         rows = self.api.all_pages(f"repos/{self.repo}/pulls", {"state": "open"}, SCAN_LIMIT, what)
@@ -239,7 +239,7 @@ class GhSource:
         if closed_since:
             found += [PullTitle(r.number, r.title, "merged" if r.merged_at else "closed", r.merged_at, r.closed_at)
                       for r in self._closed_since(closed_since)
-                      if _window_day(bool(r.merged_at), r.updated_at, r.closed_at) >= closed_since]
+                      if _window_day(r.merged_at, r.closed_at, r.updated_at) >= closed_since]
         return found
 
     def _page(self, order: Mapping[str, str], page: int) -> list[_PullRow]:
@@ -332,17 +332,16 @@ class FixtureSource:
         return [PullRequest(r["number"], r.get("body", ""), r["merged_at"]) for r in done[:limit]]
 
     def recent_pulls(self, closed_since: str | None) -> list[PullTitle]:
-        """Rows with `"state": "open"` are open; the rest are closed, merged when `merged_at` is set. A merged row is
-        dated by `updated_at`, else `merged_at`; one closed unmerged by `closed_at`, else `updated_at`, as
-        `GhSource` dates them."""
+        """Rows `{"number", "title", "state", "merged_at", "closed_at", "updated_at"}`: `"state": "open"` is open, the
+        rest closed, merged when `merged_at` is set; dated into the window as `GhSource` dates them."""
         def state(r):
             return "open" if r.get("state") == "open" else "merged" if self._merged(r) else "closed"
 
         def recent(r):
             if state(r) == "open":
                 return True
-            when = _window_day(state(r) == "merged", r.get("updated_at") or "", r.get("closed_at") or "",
-                               r.get("merged_at") or "")
+            when = _window_day(r.get("merged_at") or "" if state(r) == "merged" else "", r.get("closed_at") or "",
+                               r.get("updated_at") or "")
             return closed_since is not None and when >= closed_since
 
         _require_day(closed_since)

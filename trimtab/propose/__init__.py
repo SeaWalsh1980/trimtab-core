@@ -133,8 +133,8 @@ class PullTitle:
 
 class PullSink(Protocol):
     def recent_pulls(self, closed_since: str | None) -> list[PullTitle]:
-        """The project's open PRs; merged ones last updated on or after `closed_since`; and ones closed unmerged that
-        closed on or after it (a later comment does not bring a decline back into the window)."""
+        """The project's open PRs, and closed ones that merged or closed on or after `closed_since` (a later comment
+        does not bring an old fix or decline back into the window)."""
         ...
 
 

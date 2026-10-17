@@ -239,6 +239,17 @@ class RecentPulls(unittest.TestCase):
 
         self.assertEqual(gh.calls, [])
 
+    def test_a_fix_merged_before_the_window_is_left_out_though_touched_inside_it(self):
+        old = pull(2, merged_at=BEFORE_SINCE, updated_at=AFTER_SINCE, title="[X-1] fix")
+        gh = FakeGh(answers={("GET", PULLS): [page(), page(old)]})
+
+        self.assertEqual(GhSource(REPO, run=gh).recent_pulls(SINCE), [])
+
+    def test_a_fix_merged_inside_the_window_is_listed(self):
+        gh = FakeGh(answers={("GET", PULLS): [page(), page(pull(2, title="[X-1] fix"))]})
+
+        self.assertEqual([p.number for p in GhSource(REPO, run=gh).recent_pulls(SINCE)], [2])
+
     def test_with_no_window_only_open_prs_are_read(self):
         gh = FakeGh(answers={("GET", PULLS): [page(pull(3, merged_at=None, title="[X-1] open"))]})
 
