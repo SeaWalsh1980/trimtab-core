@@ -210,14 +210,25 @@ exits 1 on it.
   so an instance without `CLAUDE.md` installs while its sessions read
   `GUARDS OFF`. Bootstrap's `CLAUDE.md` section, not this probe, owns that
   link.
-- A non-guard hook missing from the base installs with a note, and the run
-  does not end NOT GREEN for it.
+- This probe only notes a missing non-guard hook. Whether the install goes on
+  is up to that hook's own section: a missing `rule-usage.sh` is a note, but a
+  missing `pr-body-check.sh` or `doctrine-drift.sh` refuses the install, while
+  a broken one of those two only ends the run NOT GREEN. That asymmetry is
+  known, and not settled here.
+- The fake `HOME` links `.claude` to the install, while sessions read the
+  real `$HOME/.claude`. With a `CLAUDE_CONFIG_DIR` elsewhere (a sandboxed
+  install), the probe proves the command against this install, not what those
+  sessions see; the Consequences above already put such a session outside the
+  check's view.
+- A probe whose own setup fails (no temp directory, no payload) stops the run
+  by name rather than probing the wrong thing.
 
 **Measured.** In `tests/bootstrap-env-tests.sh`, against throwaway homes: a
 check that never fires refuses the install, and `--check` exits 1 on it; a
 check that always fires refuses the install; a complete install prints both
 ✓ lines; a base without `rule-usage.sh` installs with the note, with and
-without an instance `CLAUDE.md`. The last two each fail against the code
-before their fix.
+without an instance `CLAUDE.md`; and a `TMPDIR` that cannot hold a temp
+directory stops the run naming the probe. The last three each fail against
+the code before their fix.
 
 **Status.** Accepted. Adds to the Decision; supersedes nothing.

@@ -552,7 +552,10 @@ for e in d["hooks"]["SessionStart"]:
 json.dump(d, open(p, "w"), indent=2)
 PY2
   boot "$h" "$live" --instance "$inst" --check
-  if [[ $rc -eq 1 && "$out" == *"the liveness check stayed silent with no guards installed"* ]]; then
+  # Editing settings.json is drift on its own, so rc 1 does not prove the probe
+  # ran: the probe's own line does, and its pass line must be absent.
+  if [[ $rc -eq 1 && "$out" == *"the liveness check stayed silent with no guards installed"* \
+        && "$out" != *"the liveness check reports GUARDS OFF when the guards are missing"* ]]; then
     pass "--check reports a liveness check that never fires"
   else
     fail "--check reports a liveness check that never fires" "rc=$rc"; echo "$out" | tail -6
@@ -603,6 +606,20 @@ check_probes_ignore_a_tmpdir_inside_an_adopted_project() {
     pass "the hook probes ignore a TMPDIR inside an adopted project"
   else
     fail "the hook probes ignore a TMPDIR inside an adopted project" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# A probe whose temp directory cannot be made would run the hook in the
+# checkout with git unfenced; the run must stop and say so, not probe there.
+check_probe_without_a_temp_dir_stops_and_says_so() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  TMPDIR="$h/no-such-dir" boot "$h" "$live" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"could not create a temp directory for the pr-body-check probe"* \
+        && "$out" != *"pr-body-check blocks a PR body"* ]]; then
+    pass "a probe without a temp directory stops the run and names it"
+  else
+    fail "a probe without a temp directory stops the run and names it" "rc=$rc"; echo "$out" | tail -6
   fi
 }
 
@@ -1040,6 +1057,7 @@ check_check_reports_a_silent_liveness_check
 check_probes_accept_a_tmpdir_with_json_metacharacters
 check_probes_accept_a_tmpdir_with_a_colon
 check_probes_ignore_a_tmpdir_inside_an_adopted_project
+check_probe_without_a_temp_dir_stops_and_says_so
 check_install_probes_the_unprobed_hooks
 check_cli_reaches_sessions_by_name
 check_cli_probe_accepts_a_config_dir_with_a_trailing_slash

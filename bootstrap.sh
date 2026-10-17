@@ -606,6 +606,9 @@ fi
 # directory's parent: a TMPDIR inside an adopted project must not lend the probe
 # that project's lock. The payload is built by json.dumps, so a TMPDIR holding a
 # quote or a backslash cannot make it unparseable.
+# A probe whose own setup fails would test the wrong thing (an empty directory
+# runs the hook in the checkout, unfenced; an empty payload takes its fast
+# path), so a failed mktemp or payload stops the run and says which.
 #   with_cwd <payload json> <dir>: the payload with "cwd" set to <dir>
 with_cwd() {
   python3 -c 'import json, sys; d = json.loads(sys.argv[1]); d["cwd"] = sys.argv[2]; print(json.dumps(d))' "$1" "$2"
@@ -619,11 +622,12 @@ run_in() {
 # probes under /tmp instead.
 probe_tmpdir() {
   local d
-  d=$(mktemp -d -t "$1.XXXXXX")
+  d=$(mktemp -d -t "$1.XXXXXX") || return 1
   if [[ "$(dirname "$d")" == *:* ]]; then
     rmdir "$d"
-    d=$(mktemp -d "/tmp/$1.XXXXXX")
+    d=$(mktemp -d "/tmp/$1.XXXXXX") || return 1
   fi
+  [[ -n "$d" && -d "$d" ]] || return 1
   printf '%s\n' "$d"
 }
 
@@ -633,11 +637,12 @@ probe_tmpdir() {
 # --check still reports it as drift, so a cloud setup script that runs --check
 # fails the session either way.
 if [[ -x "$CLAUDE_HOME/hooks/pr-body-check.sh" ]]; then
-  probe_dir=$(probe_tmpdir pr-body-probe)
+  probe_dir=$(probe_tmpdir pr-body-probe) \
+    || die "could not create a temp directory for the pr-body-check probe (TMPDIR=${TMPDIR:-/tmp})"
+  probe_payload=$(with_cwd '{"tool_name":"Bash","tool_input":{"command":"gh pr create --draft --title t --body x"}}' "$probe_dir") \
+    || die "could not build the pr-body-check probe payload (python3 failed)"
   set +e
-  run_in "$probe_dir" "$CLAUDE_HOME/hooks/pr-body-check.sh" \
-    "$(with_cwd '{"tool_name":"Bash","tool_input":{"command":"gh pr create --draft --title t --body x"}}' "$probe_dir")" \
-    >/dev/null 2>&1
+  run_in "$probe_dir" "$CLAUDE_HOME/hooks/pr-body-check.sh" "$probe_payload" >/dev/null 2>&1
   rc_pr=$?
   set -e
   rm -rf "$probe_dir"
@@ -718,10 +723,12 @@ fi
 # exit means it no longer runs. Informational, so a failure is red, like the
 # observer, not a refused install.
 if [[ -x "$CLAUDE_HOME/hooks/doctrine-drift.sh" ]]; then
-  probe_dir=$(probe_tmpdir drift-probe)
+  probe_dir=$(probe_tmpdir drift-probe) \
+    || die "could not create a temp directory for the doctrine-drift probe (TMPDIR=${TMPDIR:-/tmp})"
+  probe_payload=$(with_cwd '{"hook_event_name":"SessionStart"}' "$probe_dir") \
+    || die "could not build the doctrine-drift probe payload (python3 failed)"
   set +e
-  drift_out=$(run_in "$probe_dir" "$CLAUDE_HOME/hooks/doctrine-drift.sh" \
-    "$(with_cwd '{"hook_event_name":"SessionStart"}' "$probe_dir")" 2>&1)
+  drift_out=$(run_in "$probe_dir" "$CLAUDE_HOME/hooks/doctrine-drift.sh" "$probe_payload" 2>&1)
   rc_drift=$?
   set -e
   rm -rf "$probe_dir"
