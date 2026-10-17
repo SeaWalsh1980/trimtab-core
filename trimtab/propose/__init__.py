@@ -156,14 +156,19 @@ def _reports_since(fix: PullTitle, draft: Draft) -> list[int] | None:
 
 
 def plan_project_prs(drafts: Sequence[Draft], sink: PullSink, closed_since: str | None = None,
-                     threshold: int = THRESHOLD) -> dict[str, str]:
+                     threshold: int = THRESHOLD, check_ids: Mapping[str, str] | None = None) -> dict[str, str]:
     """Item ID -> why its project draft is not opened, for each one that is not. Reads nothing when there is no
-    project draft.
+    project draft and no ID to check.
 
     A merged `[<ID>]` fix saw the evidence that merged before it, so only reports since the latest fix count: the
     draft is RESOLVED while they stay below `threshold`, and proposed again, marked REOPENED with the reports since,
-    once they reach it."""
-    if not any(d.kind == "pr" for d in drafts):
+    once they reach it.
+
+    `check_ids` maps an ID with no draft (a conformance candidate: its evidence is reports, not PRs) to the day of its
+    latest report. It is SKIPPED for an open `[<ID>]` PR or a standing decline, and RESOLVED by a fix merged on or
+    after that day; otherwise it takes no mark."""
+    check_ids = dict(check_ids or {})
+    if not any(d.kind == "pr" for d in drafts) and not check_ids:
         return {}
     # Grouped once by the ID a title opens with, so each draft is a lookup, not a scan of every PR (ENG-6.2).
     by_id: dict[str, list[PullTitle]] = {}
@@ -194,6 +199,19 @@ def plan_project_prs(drafts: Sequence[Draft], sink: PullSink, closed_since: str 
             # Proposed again: say which reports are new, since the draft lists the fix's evidence too.
             why[d.item_id] = (f"REOPENED: #{fixes[-1].number} merged; {len(since)} report(s) since: "
                               + ", ".join(f"#{n}" for n in since))
+    drafted = {d.item_id for d in drafts if d.kind == "pr"}
+    for item_id, latest in check_ids.items():
+        if item_id in drafted:
+            continue
+        mine = sorted(by_id.get(item_id, ()), key=lambda p: p.number)
+        fixes = sorted((p for p in mine if p.state == "merged" and p.merged_at), key=lambda p: p.merged_at)
+        if (found := next((p for p in mine if p.state == "open"), None)) is not None:
+            why[item_id] = f"SKIPPED: #{found.number} for this ID is open"
+        elif fixes and fixes[-1].merged_at[:10] >= latest:
+            why[item_id] = f"RESOLVED: #{fixes[-1].number} merged on or after the latest report ({latest})"
+        elif (found := next((p for p in mine if p.state == "closed"
+                             and not (fixes and p.closed_at and p.closed_at < fixes[-1].merged_at)), None)):
+            why[item_id] = f"SKIPPED: #{found.number} for this ID was closed unmerged within the window"
     return why
 
 

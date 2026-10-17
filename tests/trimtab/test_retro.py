@@ -583,6 +583,40 @@ class OneIdInBothScopes(RunsTheCli):
         self.assertEqual((issue.count(","), "to open 1 issue(s)" in dry), (0, True))
 
 
+class ConformanceCandidates(RunsTheCli):
+    """An ID raised by conformance reports has no draft; --check-ids gives it the same marks."""
+
+    def dry_run(self, pulls, check="CT-X-1=2026-09-15"):
+        self.write_pulls([{"number": 101, "title": "change 101", "body": AMBIGUOUS,
+                           "merged_at": "2026-09-10T00:00:00Z", "labels": []}] + pulls)
+        self.ingest(as_of="2026-09-20")
+        return self.propose("--check-open", "--check-ids", check, as_of="2026-09-20")
+
+    def test_an_open_pr_for_the_candidate_skips_it(self):
+        dry = self.dry_run([{"number": 104, "title": "[CT-X-1] in progress", "state": "open", "labels": []}])
+
+        self.assertIn("--- also checked: CT-X-1, SKIPPED: #104 for this ID is open", dry)
+
+    def test_a_fix_merged_after_the_latest_report_resolves_it(self):
+        dry = self.dry_run([{"number": 105, "title": "[CT-X-1] fix", "body": "",
+                             "merged_at": "2026-09-16T00:00:00Z", "labels": []}])
+
+        self.assertIn("--- also checked: CT-X-1, RESOLVED: #105 merged on or after the latest report (2026-09-15)",
+                      dry)
+
+    def test_a_fix_merged_before_the_latest_report_does_not(self):
+        dry = self.dry_run([{"number": 105, "title": "[CT-X-1] fix", "body": "",
+                             "merged_at": "2026-09-12T00:00:00Z", "labels": []}])
+
+        self.assertIn("--- also checked: CT-X-1, no mark", dry)
+
+    def test_a_candidate_with_nothing_has_no_mark(self):
+        self.assertIn("--- also checked: CT-X-1, no mark", self.dry_run([]))
+
+    def test_a_malformed_value_is_refused(self):
+        self.propose("--check-open", "--check-ids", "CT-X-1=15/09/2026", as_of="2026-09-20", code=2)
+
+
 class NoIssueDraft(RunsTheCli):
     """With no issue draft the issues are not read, so an issue listing that cannot be read holds nothing up."""
 

@@ -116,12 +116,14 @@ date falls in the window. A branch whose PR was closed without merging holds
 no report. A report found both on the default branch and on its branch is one
 report: count each date once. Each finding names its item on a `**Rule:**`
 line. An item ID raised as a finding in **2 or more** reports is a candidate
-for a project proposal in step 4, with those reports as evidence.
+for a project proposal in step 4, with those reports as evidence. Note each
+candidate's latest report date: step 4 passes it as `--check-ids`.
 
 ## 4. Proposals, one per ID
 
 ```bash
-trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels
+trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels \
+  --check-ids "<ID>=<latest report date>,..."   # step 3's candidates; omit if none
 ```
 
 - **Upstream** proposals (base items) become issues on Trimtab labelled
@@ -165,7 +167,9 @@ trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels
   `N=$(gh api -X POST "repos/$REPO/pulls" -f title="[<ID>] <what changes>" -f head=<branch> -f base="$DEFAULT" -F draft=true -F body=@<file> --jq .number) && trimtab verify-body --repo "$REPO" --pull "$N" --body-file <file>`.
   `verify-body` reads the PR back: exit 1 or 2: stop and report it. Never mark
   it ready.
-- Also consider the step 3 candidates the same way.
+- Treat each step 3 candidate the same way, from its `--- also checked:` line:
+  open a draft only for one with `no mark`. A step 3 candidate has no
+  ledger draft, so the plain dry run would never mark it.
 
 Anything that must hold whatever the model decides is a hook, permission rule or
 test, not more rule text. When the evidence says a REQUIRE keeps being

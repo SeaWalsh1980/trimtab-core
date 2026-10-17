@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -420,7 +421,26 @@ def _opening_stopped(err) -> int:
     return 2
 
 
+def _check_ids(text: str) -> dict[str, str]:
+    """`ID=YYYY-MM-DD,...` -> {ID: day}; ValueError naming the first entry that is not of that form."""
+    found: dict[str, str] = {}
+    for entry in filter(None, (e.strip() for e in text.split(","))):
+        item_id, _, day = entry.partition("=")
+        if not item_id or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+            raise ValueError(f"--check-ids: {entry!r} is not ID=YYYY-MM-DD")
+        found[item_id] = day
+    return found
+
+
 def cmd_propose(args) -> int:
+    try:
+        check_ids = _check_ids(args.check_ids)
+    except ValueError as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
+    if check_ids and not args.check_open:
+        print("error: --check-ids needs --check-open", file=sys.stderr)
+        return 2
     setup = _setup(args)
     if setup is None:
         return 1
@@ -462,13 +482,16 @@ def cmd_propose(args) -> int:
                       for i in plan.already_open})
     pr_error = None
     try:
-        held = (propose.plan_project_prs(drafts, source, closed_since=_since(args), threshold=args.threshold)
+        held = (propose.plan_project_prs(drafts, source, closed_since=_since(args), threshold=args.threshold,
+                                         check_ids=check_ids)
                 if args.check_open and not args.apply else {})
     except SourceError as err:
         pr_error = err
         unreadable.append(err)
-        held = {d.item_id: f"NOT CHECKED: the PR listing could not be read ({err})" for d in drafts if d.kind == "pr"}
-    marks.update({("pr", i): mark for i, mark in held.items()})
+        unchecked = f"NOT CHECKED: the PR listing could not be read ({err})"
+        held = {d.item_id: unchecked for d in drafts if d.kind == "pr"} | {i: unchecked for i in check_ids}
+    drafted = {d.item_id for d in drafts if d.kind == "pr"}
+    marks.update({("pr", i): mark for i, mark in held.items() if i in drafted})
     if not args.apply:
         if args.check_open and _since(args) is None and any(d.kind == "pr" for d in drafts) and pr_error is None:
             print("no window: merged and closed [<ID>] PRs were not checked; only open ones")
@@ -478,6 +501,9 @@ def cmd_propose(args) -> int:
                 where += f", {marks[(d.kind, d.item_id)]}"
             labels = f" [labels: {', '.join(d.labels)}]" if d.labels else ""
             print(f"\n--- would open: {where}{labels}\n# {d.title}\n\n{d.body}")
+        for item_id in check_ids:
+            if item_id not in drafted:
+                print(f"\n--- also checked: {item_id}" + (f", {held[item_id]}" if item_id in held else ", no mark"))
         if plan is not None and plan.to_open:
             token = propose.confirmation(plan)
             print(f"\nconfirm: {token}")
@@ -985,6 +1011,9 @@ def build_parser() -> argparse.ArgumentParser:
     pmode.add_argument("--dry-run", action="store_true", help="print only (the default)")
     pmode.add_argument("--apply", action="store_true", help="open the upstream issues; needs --confirm")
     pro.add_argument("--confirm", help="the token a dry run printed")
+    pro.add_argument("--check-ids", default="",
+                     help="with --check-open: also mark IDs with no draft, as ID=YYYY-MM-DD,... where the day is "
+                          "the latest conformance report naming the ID")
     pro.add_argument("--check-open", action="store_true",
                      help="in a dry run, also read existing issues and this project's PRs to show what would be "
                           "skipped or is already resolved, and print a token")
