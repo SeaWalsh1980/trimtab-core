@@ -170,7 +170,7 @@ class RecentPulls(unittest.TestCase):
     """What a project draft is checked against: open PRs, and closed ones updated within the window."""
 
     def test_open_merged_and_closed_prs_are_told_apart_by_title(self):
-        gh = FakeGh(answers={("GET", PULLS): [page({"number": 3, "title": "[X-1] open"}),
+        gh = FakeGh(answers={("GET", PULLS): [page(pull(3, merged_at=None, title="[X-1] open")),
                                               page(pull(1, title="[X-1] merged"),
                                                    pull(2, merged_at=None, title="[X-1] declined"))]})
 
@@ -212,8 +212,15 @@ class RecentPulls(unittest.TestCase):
 
         self.assertEqual([(p.number, p.closed_at) for p in found], [(2, AFTER_SINCE)])
 
+    def test_an_open_pr_with_no_title_is_refused_as_a_closed_one_is(self):
+        broken = {k: v for k, v in pull(3, merged_at=None).items() if k != "title"}
+        gh = FakeGh(answers={("GET", PULLS): [page(broken)]})
+
+        with self.assertRaises(SourceError):
+            GhSource(REPO, run=gh).recent_pulls(None)
+
     def test_with_no_window_only_open_prs_are_read(self):
-        gh = FakeGh(answers={("GET", PULLS): [page({"number": 3, "title": "[X-1] open"})]})
+        gh = FakeGh(answers={("GET", PULLS): [page(pull(3, merged_at=None, title="[X-1] open"))]})
 
         found = GhSource(REPO, run=gh).recent_pulls(None)
 

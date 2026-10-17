@@ -133,8 +133,8 @@ class GhApi:
 
 
 @dataclass(frozen=True)
-class _ClosedPull:
-    """One row of a repository's closed pulls: merged_at is "" for a PR closed without merging."""
+class _PullRow:
+    """One row of a repository's pulls, open or closed: merged_at is "" unless it merged."""
 
     number: int
     body: str
@@ -148,10 +148,11 @@ class _ClosedPull:
         return PullRequest(self.number, self.body, self.merged_at)
 
 
-def _closed_pull(r) -> _ClosedPull:
+def _pull_row(r) -> _PullRow:
+    """The one parser for a `pulls` row, open or closed: a row that does not have the expected shape is refused."""
     what = "gh api pulls"
     try:
-        row = _ClosedPull(number=r["number"], body=r.get("body") or "", merged_at=r["merged_at"] or "",
+        row = _PullRow(number=r["number"], body=r.get("body") or "", merged_at=r["merged_at"] or "",
                           updated_at=r["updated_at"], labels=frozenset(label["name"] for label in r["labels"]),
                           title=r["title"], closed_at=r.get("closed_at") or "")
     except (KeyError, TypeError, AttributeError) as err:
@@ -185,7 +186,7 @@ class GhSource:
         # ledger rebuild, the ingest and the PR check in one run read the same
         # listing: an earlier date continues from the last page read rather
         # than starting again, so each page is fetched once (ENG-6.2).
-        self._pages: list[list[_ClosedPull]] = []
+        self._pages: list[list[_PullRow]] = []
         self._exhausted = False
 
     def unlabelled_merged(self, label: str, merged_since: str | None, limit: int) -> list[PullRequest]:
@@ -214,29 +215,24 @@ class GhSource:
         already read is not fetched again."""
         what = "gh api pulls"
         rows = self.api.all_pages(f"repos/{self.repo}/pulls", {"state": "open"}, SCAN_LIMIT, what)
-        try:
-            found = [PullTitle(r["number"], r["title"], "open") for r in rows]
-        except (KeyError, TypeError) as err:
-            raise SourceError(f"{what} returned unexpected JSON") from err
-        if not all(_is_int(p.number) and isinstance(p.title, str) for p in found):
-            raise SourceError(f"{what} returned unexpected JSON")
+        found = [PullTitle(r.number, r.title, "open") for r in map(_pull_row, rows)]
         if closed_since:
             found += [PullTitle(r.number, r.title, "merged" if r.merged_at else "closed", r.merged_at, r.closed_at)
                       for r in self._closed_since(closed_since) if r.updated_at[:10] >= closed_since]
         return found
 
-    def _page(self, order: Mapping[str, str], page: int) -> list[_ClosedPull]:
+    def _page(self, order: Mapping[str, str], page: int) -> list[_PullRow]:
         data = self.api.json("GET", f"repos/{self.repo}/pulls", "gh api pulls",
                              query={"state": "closed", **order, "per_page": PER_PAGE, "page": page})
         if not isinstance(data, list):
             raise SourceError("gh api pulls returned unexpected JSON")
-        return [_closed_pull(r) for r in data]
+        return [_pull_row(r) for r in data]
 
     def _too_many(self, since: str) -> SourceError:
         return SourceError(f"more than {SCAN_LIMIT} closed PRs on {self.repo} {since}; "
                            "refusing to work from a partial list")
 
-    def _closed_since(self, floor: str) -> list[_ClosedPull]:
+    def _closed_since(self, floor: str) -> list[_PullRow]:
         # The rows can reach back before `floor`, unmerged ones included:
         # every caller filters by merged_at or updated_at itself.
         def reached() -> bool:
@@ -250,16 +246,16 @@ class GhSource:
             self._pages.append(batch)
             if len(batch) < PER_PAGE:
                 self._exhausted = True
-        found: dict[int, _ClosedPull] = {}
+        found: dict[int, _PullRow] = {}
         for batch in self._pages:
             for r in batch:
                 # A PR updated during the scan shifts the pages and can be seen twice.
                 found.setdefault(r.number, r)
         return list(found.values())
 
-    def _oldest_unlabelled(self, label: str, limit: int) -> list[_ClosedPull]:
+    def _oldest_unlabelled(self, label: str, limit: int) -> list[_PullRow]:
         """With no date, the oldest created first, until `limit` unlabelled merged PRs are found."""
-        found: dict[int, _ClosedPull] = {}
+        found: dict[int, _PullRow] = {}
         page = 1
         while True:
             batch = self._page({"sort": "created", "direction": "asc"}, page)
