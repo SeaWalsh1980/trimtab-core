@@ -202,12 +202,21 @@ class VerifyBody(unittest.TestCase):
         self.assertEqual((outcome, bodies.writes, bodies.found), (Readback.IN_PLACE_GENERIC, [SENT], SENT))
 
     def test_a_footer_in_place_again_after_the_write_back_fails(self):
-        for footer in (FOOTER, GENERIC):
-            with self.subTest(generic=footer is GENERIC):
-                bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, FOOTER),
-                                        then=in_place_of_attribution(SENT, footer))
+        for first in (FOOTER, GENERIC):
+            for second in (FOOTER, GENERIC):
+                with self.subTest(first_generic=first is GENERIC, second_generic=second is GENERIC):
+                    bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, first),
+                                            then=in_place_of_attribution(SENT, second))
 
-                with self.assertRaisesRegex(WrittenBodyError, "replaced the attribution line again"):
+                    with self.assertRaisesRegex(WrittenBodyError, "replaced the attribution line again"):
+                        verify(bodies, SENT)
+
+    def test_a_session_footer_after_the_restored_line_fails_whichever_footer_stood_in_place(self):
+        for first in (FOOTER, GENERIC):
+            with self.subTest(first_generic=first is GENERIC):
+                bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, first), then=with_footer(SENT))
+
+                with self.assertRaisesRegex(WrittenBodyError, "came back after the body sent was written again"):
                     verify(bodies, SENT)
 
     def test_a_footer_in_place_only_after_the_write_back_is_not_called_a_repeat(self):
