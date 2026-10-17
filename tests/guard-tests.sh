@@ -1658,7 +1658,9 @@ sc_payload() { # sc_payload <hook>  — a payload that reaches the hook's python
   case "$1" in
     guard-mcp.sh)         pm_fix sc-a 9 ;;
     pr-monitor-record.sh) pm_post sc-a 'gh pr create --fill' "$PR/16" ;;
-    pr-body-check.sh)     j Bash '{"command":"gh pr create --title t --body b"}' ;;
+    # --fill blocks before the instance's registry is read, so the verdict is
+    # 2 whether or not TRIMTAB_INSTANCE is set (CI has none).
+    pr-body-check.sh)     j Bash '{"command":"gh pr create --title t --fill"}' ;;
     rule-usage.sh)        python3 -c 'import json; print(json.dumps({"hook_event_name":"PreToolUse","session_id":"sc-a","tool_name":"Skill","tool_input":{"skill":"trimtab-plan"}}))' ;;
     *)                    j Read '{"file_path":"/p/app/main.py"}' ;;
   esac
@@ -1754,11 +1756,11 @@ sc_out=$(sc_run "$SC_ROOT/hooks" guard-mcp.sh "$(pm_fix sc-own 21)")
 sc_report $? guard-mcp.sh "the isolated recorder and check pass set_monitor for the session's own PR"
 SC_RUN_CFG="$SC_CFG"
 # pr-body-check does its work through the isolated loader, with every plant in
-# reach: a PR body with no harness block is blocked (exit 2), so PyYAML and the
-# checker loaded from where they should.
+# reach: a create with --fill (no harness block possible) is blocked, exit 2.
+# The checker module, with its PyYAML-importing dependencies, loaded and ran.
 sc_run "$SC_ROOT/hooks" pr-body-check.sh "$(sc_payload pr-body-check.sh)" >/dev/null; rc=$?
 [[ $rc -eq 2 && ! -e "$SC_MARK" ]]
-sc_report $? pr-body-check.sh "the isolated check still blocks a body with no harness block"
+sc_report $? pr-body-check.sh "the isolated check still blocks a create with no harness block"
 # pr-body-check fails open (CI is its gate). Without its loader, python3 would
 # exit 2, which the hook reads as a block; it must exit 0 instead.
 SC_NOLOADER=$(mktemp -d "$CPTMP/noloader.XXXXXX")
