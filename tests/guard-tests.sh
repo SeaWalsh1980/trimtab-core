@@ -213,6 +213,19 @@ t guard-paths.sh 2 "empty file_path does not hide path"          "$(j Write '{"f
 t guard-paths.sh 2 "an empty-list file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":[],"notebook_path":"/home/x/dev/ct/.env","new_source":"x"}')"
 t guard-paths.sh 2 "a zero file_path does not hide notebook_path"       "$(j NotebookEdit '{"file_path":0,"notebook_path":"/home/x/dev/ct/.env","new_source":"x"}')"
 t guard-paths.sh 2 "a list file_path does not hide the command"         "$(j Bash '{"file_path":["x","y"],"command":"cat /x/.env"}')"
+# A payload that names more than one of file_path, notebook_path and path is
+# ambiguous: the guard can check one, and the tool may write the other. It
+# fails closed. A decoy file_path beside a protected notebook_path or path
+# used to be judged on the decoy (ADR 0033).
+t guard-paths.sh 2 "a decoy file_path beside a protected notebook_path" "$(j NotebookEdit '{"file_path":"/p/app/x.py","notebook_path":"/home/x/dev/ct/.env","new_source":"x"}')"
+t guard-paths.sh 2 "a decoy file_path beside a protected path"          "$(j Write '{"file_path":"/p/app/x.py","path":"/home/x/dev/ct/.env","content":"x"}')"
+t guard-paths.sh 0 "a null second key is not a second path"            "$(j NotebookEdit '{"file_path":null,"notebook_path":"/p/app/analysis.ipynb","new_source":"x"}')"
+# The rule is the count, not what the keys hold: two harmless paths block too,
+# and so does an empty file_path beside one. Checking every path, or keying on
+# the tool name, would pass the decoy cases above but allow these.
+t guard-paths.sh 2 "two harmless path keys still block"               "$(j NotebookEdit '{"file_path":"/p/app/x.py","notebook_path":"/p/app/analysis.ipynb","new_source":"x"}')"
+t guard-paths.sh 2 "an empty file_path beside a harmless notebook_path blocks" "$(j NotebookEdit '{"file_path":"","notebook_path":"/p/app/analysis.ipynb","new_source":"x"}')"
+t guard-paths.sh 2 "a harmless file_path and path still block"       "$(j Write '{"file_path":"/p/app/x.py","path":"/p/app/y.py","content":"x"}')"
 
 echo "== guard-paths: live control plane =="
 # The guards are enforced by files the guards did not protect: every case in
@@ -244,6 +257,7 @@ t guard-paths.sh 2 "edit repo-root CLAUDE.md"                 "$(j Edit "{\"file
 t guard-paths.sh 2 "edit the live inspector in bin/"          "$(j Edit "{\"file_path\":\"$CP_REPO/bin/env-names.sh\"}")"
 t guard-paths.sh 2 "MultiEdit a live hook (not just Edit)"    "$(j MultiEdit "{\"file_path\":\"$CP_HOME/hooks/guard-bash.sh\"}")"
 t guard-paths.sh 2 "NotebookEdit into the live hooks dir"     "$(j NotebookEdit "{\"notebook_path\":\"$CP_HOME/hooks/x.ipynb\",\"new_source\":\"x\"}")"
+t guard-paths.sh 2 "a decoy file_path beside a live-hooks notebook_path" "$(j NotebookEdit "{\"file_path\":\"/p/app/x.py\",\"notebook_path\":\"$CP_HOME/hooks/x.ipynb\",\"new_source\":\"x\"}")"
 
 # -- path shapes that must still resolve into the live tree --------------
 CP_REAL_HOME="$HOME"; HOME="$CPTMP/home"   # one case only; see the fixture note
