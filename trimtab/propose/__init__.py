@@ -137,19 +137,19 @@ class PullSink(Protocol):
         ...
 
 
-def _reports_since(fix: PullTitle, draft: Draft) -> list[str] | None:
-    """The merge times of the evidence PRs that merged after `fix`, leaving out `fix` itself if it is evidence; None
-    when it cannot be told.
+def _reports_since(fix: PullTitle, draft: Draft) -> list[int] | None:
+    """The evidence PRs that merged after `fix`, leaving out `fix` itself if it is evidence; None when it cannot be
+    told.
 
     Merge time, not PR number: a PR is numbered when it opens, and the order PRs open in says nothing about the order
     they merge in. A draft with no evidence merge times, or a fix with none, cannot be told: it is proposed.
     """
     if not fix.merged_at or not draft.prs or len(draft.merged_at) != len(draft.prs):
         return None
-    others = [m for n, m in zip(draft.prs, draft.merged_at) if n != fix.number]
-    if not others or not all(others):
+    others = [(n, m) for n, m in zip(draft.prs, draft.merged_at) if n != fix.number]
+    if not others or not all(m for _, m in others):
         return None
-    return [m for m in others if m > fix.merged_at]
+    return [n for n, m in others if m > fix.merged_at]
 
 
 def plan_project_prs(drafts: Sequence[Draft], sink: PullSink, closed_since: str | None = None,
@@ -158,7 +158,8 @@ def plan_project_prs(drafts: Sequence[Draft], sink: PullSink, closed_since: str 
     project draft.
 
     A merged `[<ID>]` fix saw the evidence that merged before it, so only reports since the latest fix count: the
-    draft is RESOLVED while they stay below `threshold`, and proposed again once they reach it."""
+    draft is RESOLVED while they stay below `threshold`, and proposed again, marked REOPENED with the reports since,
+    once they reach it."""
     if not any(d.kind == "pr" for d in drafts):
         return {}
     # Grouped once by the ID a title opens with, so each draft is a lookup, not a scan of every PR (ENG-6.2).
@@ -186,6 +187,10 @@ def plan_project_prs(drafts: Sequence[Draft], sink: PullSink, closed_since: str 
         elif (found := next((p for p in mine if p.state == "closed"
                              and not (fixes and p.closed_at and p.closed_at < fixes[-1].merged_at)), None)):
             why[d.item_id] = f"SKIPPED: #{found.number} for this ID was closed unmerged within the window"
+        elif since:
+            # Proposed again: say which reports are new, since the draft lists the fix's evidence too.
+            why[d.item_id] = (f"REOPENED: #{fixes[-1].number} merged; {len(since)} report(s) since: "
+                              + ", ".join(f"#{n}" for n in since))
     return why
 
 

@@ -258,7 +258,7 @@ class ProjectDrafts(unittest.TestCase):
         found = plan_project_prs([draft("SCR-X-2", kind="pr", prs=prs, merged_at=merged_at)], FakePulls(fix),
                                  threshold=3)
 
-        self.assertEqual(found, {})
+        self.assertEqual(found, {"SCR-X-2": "REOPENED: #20 merged; 3 report(s) since: #21, #22, #23"})
 
     def test_one_report_since_the_fix_does_not_re_propose_a_fixed_rule(self):
         prs, merged_at = (10, 11, 12, 21), ("2026-09-01T00:00:00Z", "2026-09-02T00:00:00Z",
@@ -288,7 +288,7 @@ class ProjectDrafts(unittest.TestCase):
 
         found = plan_project_prs([draft("SCR-X-2", kind="pr", prs=prs, merged_at=merged_at)], FakePulls(decline, fix))
 
-        self.assertEqual(found, {})
+        self.assertEqual(found, {"SCR-X-2": "REOPENED: #20 merged; 2 report(s) since: #21, #22"})
 
     def test_a_decline_after_the_latest_fix_still_holds_the_draft(self):
         prs, merged_at = (21, 22), ("2026-09-11T00:00:00Z", "2026-09-12T00:00:00Z")
