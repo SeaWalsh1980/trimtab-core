@@ -597,6 +597,56 @@ if [[ -x "$CLAUDE_HOME/hooks/guard-mcp.sh" ]]; then
     note "guard-mcp did not pass mcp__ccd_turn__wrap_up (exit $rc_allow) — the app's UI tools will prompt every turn"
   fi
 fi
+# set_monitor passes only for a PR the session created (ADR 0028). Probed end
+# to end through the symlinks, in a scratch config directory, never the live
+# list: the recorder records a synthetic create for one session, and the guard
+# must then deny that session another PR, and deny another session the same
+# PR. Either passing is a guard that lets Auto-fix reach any PR: die. The
+# recorded PR itself must pass; a miss only costs Auto-fix, which the guard
+# then denies, so it is a note.
+is_deny() { # is_deny <hook stdout>: one PreToolUse "deny" answer, and nothing else
+  python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit(1)
+h = d.get("hookSpecificOutput") if isinstance(d, dict) else None
+sys.exit(0 if isinstance(h, dict) and h.get("hookEventName") == "PreToolUse"
+         and h.get("permissionDecision") == "deny" else 1)
+' "$1"
+}
+pm_probe_call() { # pm_probe_call <config dir> <session> <url>: the guard's answer to set_monitor
+  printf '{"session_id":"%s","tool_name":"mcp__ccd_pr__set_monitor","tool_input":{"auto_fix":true,"url":"%s"}}' "$2" "$3" \
+    | CLAUDE_CONFIG_DIR="$1" "$CLAUDE_HOME/hooks/guard-mcp.sh" 2>/dev/null
+}
+if [[ -x "$CLAUDE_HOME/hooks/guard-mcp.sh" && -x "$CLAUDE_HOME/hooks/pr-monitor-record.sh" ]]; then
+  pm_cfg=$(mktemp -d -t pr-monitor-probe.XXXXXX)
+  # An example host: the public scrub refuses a repository URL outside tests/.
+  pm_url="https://git.example.com/owner/repo/pull"
+  set +e
+  printf '%s' '{"session_id":"bootstrap-probe","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"'"$pm_url/1"'\n","stderr":"","interrupted":false}}' \
+    | CLAUDE_CONFIG_DIR="$pm_cfg" "$CLAUDE_HOME/hooks/pr-monitor-record.sh" >/dev/null 2>&1
+  rc_rec=$?
+  out_own=$(pm_probe_call "$pm_cfg" bootstrap-probe "$pm_url/1"); rc_own=$?
+  out_num=$(pm_probe_call "$pm_cfg" bootstrap-probe "$pm_url/2"); rc_num=$?
+  out_ses=$(pm_probe_call "$pm_cfg" bootstrap-probe-other "$pm_url/1"); rc_ses=$?
+  set -e
+  rm -rf "$pm_cfg"
+  [[ $rc_num -eq 0 ]] && is_deny "$out_num" && ok "guard-mcp denies set_monitor for a PR the session did not create" \
+    || die "guard-mcp did not deny set_monitor for another PR (exit $rc_num) — Auto-fix could reach any PR"
+  [[ $rc_ses -eq 0 ]] && is_deny "$out_ses" && ok "guard-mcp denies set_monitor for a PR another session created" \
+    || die "guard-mcp did not deny set_monitor for another session's PR (exit $rc_ses) — Auto-fix could reach any PR"
+  if [[ $rc_rec -eq 0 && $rc_own -eq 0 && -z "$out_own" ]]; then
+    ok "guard-mcp passes set_monitor for a PR the recorder saw the session create"
+  else
+    note "set_monitor was not passed for a recorded PR (recorder exit $rc_rec, guard exit $rc_own) — Auto-fix will be denied for every PR"
+  fi
+elif [[ $CHECK_ONLY -eq 1 ]]; then
+  note "guard-mcp.sh or pr-monitor-record.sh not linked into $CLAUDE_HOME — set_monitor probe skipped"
+else
+  die "guard-mcp.sh or pr-monitor-record.sh not linked into $CLAUDE_HOME after section 3 — refusing to report a successful install with an unverified set_monitor check"
+fi
 # The declared private pattern file must parse with guard-secrets' own parser:
 # a benign write has to pass with it. The guard refuses a relative path or an
 # unreadable file, so a bad declaration fails here and not on the first edit.
