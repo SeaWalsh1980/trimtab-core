@@ -104,6 +104,8 @@ def compare(sent: str, found: str) -> Readback:
 
 Target = tuple[str, int, str]  # (kind, number, body sent)
 
+# A footer standing where the attribution line was, with or without a session link.
+IN_PLACE_OUTCOMES = (Readback.IN_PLACE, Readback.IN_PLACE_GENERIC)
 # What a first read is written back for, and what it becomes when the generic footer follows the body sent after.
 WRITTEN_BACK = {Readback.FOOTER: Readback.REPLACED, Readback.IN_PLACE: Readback.IN_PLACE_REPLACED,
                 Readback.IN_PLACE_GENERIC: Readback.IN_PLACE_GENERIC_KEPT}
@@ -180,8 +182,9 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
             outcomes[(kind, number)] = WRITTEN_BACK[outcomes[(kind, number)]]
         elif again is Readback.FOOTER:
             failures.append(((kind, number), "the platform's footer came back after the body sent was written again"))
-        elif again in (Readback.IN_PLACE, Readback.IN_PLACE_GENERIC):
-            failures.append(((kind, number), "the platform's footer replaced the attribution line again after the "
+        elif again in IN_PLACE_OUTCOMES:
+            repeat = " again" if outcomes[(kind, number)] in IN_PLACE_OUTCOMES else ""
+            failures.append(((kind, number), f"the platform's footer replaced the attribution line{repeat} after the "
                                              "body sent was written again"))
         elif again is not Readback.SAME:
             failures.append(((kind, number), "the body differs from the one sent after it was written again"))

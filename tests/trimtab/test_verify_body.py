@@ -210,6 +210,14 @@ class VerifyBody(unittest.TestCase):
                 with self.assertRaisesRegex(WrittenBodyError, "replaced the attribution line again"):
                     verify(bodies, SENT)
 
+    def test_a_footer_in_place_only_after_the_write_back_is_not_called_a_repeat(self):
+        bodies = InMemoryBodies(("pull", PR), with_footer(SENT), then=in_place_of_attribution(SENT, GENERIC))
+
+        with self.assertRaises(WrittenBodyError) as raised:
+            verify(bodies, SENT)
+
+        self.assertIn("replaced the attribution line after", str(raised.exception))
+
     def test_the_generic_footer_after_the_restored_line_passes_naming_the_footer_that_stood_in_its_place(self):
         for footer, expected in ((FOOTER, Readback.IN_PLACE_REPLACED), (GENERIC, Readback.IN_PLACE_GENERIC_KEPT)):
             with self.subTest(generic=footer is GENERIC):
