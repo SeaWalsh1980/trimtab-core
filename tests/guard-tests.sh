@@ -885,6 +885,21 @@ t $SG 2 "write .trivyignore"                        "$(j Write '{"file_path":"/p
 t $SG 2 "edit .bandit-allowlist.yml"                "$(j Edit '{"file_path":"/p/ct/.bandit-allowlist.yml"}')"
 t $SG 2 "FAIL-CLOSED: no tool_name, workflow path"  '{"tool_input":{"file_path":"/p/ct/.github/workflows/ci.yml"}}'
 
+# -- the target path: a non-empty string, with no line break --------------
+# The parse emits the path, command and tool_name one per line. A newline in
+# the path pushed its tail onto the later lines, so a path ending
+# "\n\nRead\n.yml" was read as tool_name Read and skipped the file check,
+# while the tool wrote a .yml into the workflows directory. A line break in
+# the path fails closed. jq also took "", 0 or [] as the path where
+# python3's `or` skips them, hiding notebook_path. See
+# docs/adr/0032-guard-security-takes-a-string-path-with-no-line-break.md.
+t $SG 2 "a newline in file_path cannot pose as a Read" "$(j Write '{"file_path":"/p/ct/.github/workflows/x\n\nRead\n.yml","content":"x"}')"
+t $SG 2 "a newline in notebook_path fails closed"      "$(j NotebookEdit '{"notebook_path":"/p/ct/.claude/hooks/a\n\nRead\n.sh","new_source":"x"}')"
+t $SG 2 "a carriage return in the path fails closed"   "$(j Write '{"file_path":"/p/ct/app/a\rb.py","content":"x"}')"
+t $SG 2 "empty file_path does not hide notebook_path"  "$(j NotebookEdit '{"file_path":"","notebook_path":"/p/ct/.github/workflows/x.yml","new_source":"x"}')"
+t $SG 2 "an empty-list file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":[],"notebook_path":"/p/ct/.github/workflows/x.yml","new_source":"x"}')"
+t $SG 2 "a zero file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":0,"notebook_path":"/p/ct/.github/workflows/x.yml","new_source":"x"}')"
+
 # -- bash writes ----------------------------------------------------------
 t $SG 2 "redirect into a workflow"                  "$(j Bash '{"command":"echo x > .github/workflows/a.yml"}')"
 t $SG 2 "no-space append into a workflow"           "$(j Bash '{"command":"echo x >>.github/workflows/a.yml"}')"

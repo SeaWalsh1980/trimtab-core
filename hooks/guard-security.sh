@@ -37,6 +37,14 @@ fi
 # reasoning as guard-paths (tool_name third, so branch skew degrades to
 # "enforce") — then the command split into QUOTE-AWARE segments, one per line.
 #
+# The file path is the first non-empty STRING of file_path, notebook_path and
+# path, in both branches (jq's `//` alone kept "", 0 and [], which python3's
+# `or` skips). A path holding a newline or carriage return fails the parse,
+# so the call blocks: a newline in it pushed its tail onto the later lines,
+# and a path ending "\n\nRead\n.yml" was read as tool_name Read, skipping the
+# file check while the tool wrote into the workflows directory. See
+# docs/adr/0032-guard-security-takes-a-string-path-with-no-line-break.md.
+#
 # Unlike guard-paths, a newline in the command becomes " ; " rather than a
 # space. This guard reads the command WORD of each segment, and joining
 # `echo hi` and `rm .gitleaks.toml` into one line would hide the rm behind the
@@ -53,7 +61,9 @@ parse() {
   if command -v jq >/dev/null 2>&1; then
     jq -r '((.tool_input.command // "") | split("\\\n") | join(" ")
            | split("\n") | join(" ; ")) as $c
-           | (.tool_input.file_path // .tool_input.notebook_path // .tool_input.path // ""),
+           | (([.tool_input.file_path, .tool_input.notebook_path, .tool_input.path]
+                | map(select(type == "string" and . != "")) | .[0] // "")
+               | if test("[\n\r]") then error("line break in the path") else . end),
              $c,
              ((.tool_name // "") | split("\n") | join(" ")),
              ($c | split(">|") | join(">") | split("&>") | join(">")
@@ -68,7 +78,11 @@ import json, re, sys
 d = json.load(sys.stdin)
 ti = d.get("tool_input", {}) or {}
 c = (ti.get("command") or "").replace("\\\n", " ").replace("\n", " ; ")
-print(ti.get("file_path") or ti.get("notebook_path") or ti.get("path") or "")
+keys = [ti.get("file_path"), ti.get("notebook_path"), ti.get("path")]
+path = next((k for k in keys if isinstance(k, str) and k), "")
+if "\n" in path or "\r" in path:
+    sys.exit("line break in the path")
+print(path)
 print(c)
 print((d.get("tool_name") or "").replace("\n", " "))
 q = c.replace(">|", ">").replace("&>", ">")
@@ -82,7 +96,7 @@ print("".join(p if len(p) > 1 and p[0] in "\x27\"" else re.sub(r"[;&|()`]", "\n"
 }
 
 if ! parsed=$(printf '%s' "$payload" | parse 2>/dev/null); then
-  echo "guard-security: cannot parse payload (needs jq or python3). Blocking." >&2
+  echo "guard-security: cannot parse payload (needs jq or python3, and a file path with no line break). Blocking." >&2
   exit 2
 fi
 
