@@ -140,7 +140,10 @@ def _merged_after_evidence(fix: PullTitle, draft: Draft) -> bool:
 
 
 def plan_project_prs(drafts: Sequence[Draft], sink: PullSink, closed_since: str | None = None) -> dict[str, str]:
-    """Item ID -> why its project draft is not opened, for each one that is not. Reads only."""
+    """Item ID -> why its project draft is not opened, for each one that is not. Reads only, and nothing at all
+    when there is no project draft: a listing that cannot be read must not hold up the upstream issues."""
+    if not any(d.kind == "pr" for d in drafts):
+        return {}
     pulls = sink.recent_pulls(closed_since)
     why: dict[str, str] = {}
     for d in drafts:

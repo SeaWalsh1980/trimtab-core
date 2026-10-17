@@ -14,6 +14,7 @@ from pathlib import Path
 
 from instance_fixture import env_for, make_instance
 from trimtab.capture.ingest import LABEL, PullRequest, rebuild
+from trimtab.capture.sources import SourceError
 from trimtab.items import Item, Proposal, Strength
 from trimtab.lint import structure
 from trimtab.propose import (
@@ -259,6 +260,13 @@ class ProjectDrafts(unittest.TestCase):
     def test_a_pr_closed_unmerged_within_the_window_holds_the_draft(self):
         self.assertEqual(self.held(PullTitle(950, "[SCR-X-2] fix", "closed")),
                          {"SCR-X-2": "SKIPPED: #950 for this ID was closed unmerged within the window"})
+
+    def test_with_no_project_draft_the_prs_are_not_read(self):
+        class Unreadable:
+            def recent_pulls(self, closed_since):
+                raise SourceError("more than 1000 closed PRs")
+
+        self.assertEqual(plan_project_prs([draft("TST-2", prs=self.EVIDENCE)], Unreadable()), {})
 
     def test_an_issue_draft_is_left_to_plan_issues(self):
         found = plan_project_prs([draft("TST-2", prs=self.EVIDENCE)], FakePulls(PullTitle(946, "[TST-2] x", "open")))
