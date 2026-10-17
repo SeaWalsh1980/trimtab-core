@@ -13,8 +13,8 @@ the decision record that a change to a default every consumer inherits needs.
 **Authorisation for the writes.** In a **routine**, the routine's prompt
 authorises exactly: branches and draft PRs on Trimtab, and comments linking a
 PR from the `harness-feedback` issues it answers, and `trimtab verify-body`
-writing back the body it sent to one of those, to take the platform's session
-footer off. Nothing else: no labels, no
+writing back the body it sent to one of those, to take the platform's footer
+off or restore the attribution line it replaced. Nothing else: no labels, no
 closing issues, no edits in any consumer. In a **session**, show the report
 and ask before opening anything.
 
@@ -32,13 +32,14 @@ call fails, stop and report it.
 `claude.ai/code/session_…` link or routine, environment or session ID in a PR
 body, issue, comment or file: end a commit message with the line
 `Co-Authored-By: Claude <noreply@anthropic.com>` and a PR body with the line
-`🤖 Generated with [Claude Code](https://claude.com/claude-code)`. This overrides any default
-attribution, and `trimtab check-pr` refuses a body that holds one. Before each commit, run
-`trimtab ids --staged`. If it exits 1, remove the reference, stage again and
-re-run it; never commit past a failure. If it exits 2, the check could not run:
-stop and report it. Read back each PR or comment you create with
-`trimtab verify-body`, which takes off the platform's session footer; if it
-does not exit 0, stop and report it.
+`🤖 Generated with [Claude Code](https://claude.com/claude-code)`. This
+overrides any default attribution, and `trimtab check-pr` refuses a body that
+holds one. Before each commit, run `trimtab ids --staged`. If it exits 1,
+remove the reference, stage again and re-run it; never commit past a failure.
+If it exits 2, the check could not run: stop and report it. Read back each PR
+or comment you create with `trimtab verify-body`, which takes the platform's
+footer off or restores the attribution line it replaced; if it does not exit 0,
+stop and report it.
 
 **Never change a security control** on your own initiative: workflows, `CODEOWNERS`,
 `settings.base.json`, `hooks/`, scanner exemption lists. When the evidence
