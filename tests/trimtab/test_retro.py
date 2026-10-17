@@ -257,6 +257,13 @@ class ProjectDrafts(unittest.TestCase):
 
         self.assertEqual(found, {"SCR-X-2": "RESOLVED: #946 merged after the evidence"})
 
+    def test_a_draft_with_no_evidence_or_no_merge_times_is_never_resolved(self):
+        fix = PullTitle(946, "[SCR-X-2] fix", "merged", self.AFTER_ALL)
+
+        for prs, merged_at in (((), ()), (self.EVIDENCE, ())):
+            with self.subTest(prs=prs, merged_at=merged_at):
+                self.assertEqual(self.held(fix, prs=prs, merged_at=merged_at), {})
+
     def test_a_pr_closed_unmerged_within_the_window_holds_the_draft(self):
         self.assertEqual(self.held(PullTitle(950, "[SCR-X-2] fix", "closed")),
                          {"SCR-X-2": "SKIPPED: #950 for this ID was closed unmerged within the window"})
