@@ -15,23 +15,22 @@
 # a write, not lose the tool. Outside an interactive session an ask ends as a
 # denial (measured, ADR 0013).
 #
-# Checks run in this order, and the first that answers wins.
+# Checks run in this order, and the first that answers wins. Every check is by
+# name only except the two marked [args], which also read the call's
+# arguments.
 #
-# Arguments read (the two exceptions to "by name only"):
-#   mcp__ccd_pr__set_monitor (CCD_OWN_PR below)     -> pass when its url is a PR
+#   [args] mcp__ccd_pr__set_monitor (CCD_OWN_PR)    -> pass when its url is a PR
 #                                                      this session created, or
 #                                                      it is the auto-archive
 #                                                      switch alone; deny
 #                                                      otherwise, never ask
 #                                                      (ADR 0028)
-# By name only:
 #   a full name on the desktop app's exact-name list
 #   (CCD_ALLOW below, ADR 0027)                     -> pass
-# Arguments read:
-#   mcp__github__update_pull_request (PR_EDIT below) -> pass when it sets only
+#   [args] mcp__github__update_pull_request
+#   (PR_EDIT below, ADR 0031)                       -> pass when it sets only
 #                                                      title, body or reviewers;
-#                                                      ask otherwise (ADR 0031)
-# By name only:
+#                                                      ask otherwise
 #   a full name on the PR-workflow exact-name list
 #   (PR_WORKFLOW_ALLOW below, ADR 0031)             -> pass
 #   a <tool> part on the verb-last read list, on any
@@ -78,9 +77,11 @@ payload=$(cat)
 [[ -z "$payload" ]] && ask "empty hook payload, so the call cannot be classified. Approve it only if you intended it."
 
 # Emits tool_name when the payload is one JSON object whose tool_name is a
-# string, and nothing otherwise. A parse error or a second document fails.
+# string, and nothing otherwise. A parse error or a second value of any kind
+# fails: jq reads every value at once (-s) and accepts exactly one object, as
+# python3's json.load does, so the two parsers agree.
 if command -v jq >/dev/null 2>&1; then
-  name=$(printf '%s' "$payload" | jq -r 'if type == "object" then (.tool_name | strings) else empty end' 2>/dev/null)
+  name=$(printf '%s' "$payload" | jq -rs 'if length == 1 and (.[0] | type) == "object" then (.[0].tool_name | strings) else empty end' 2>/dev/null)
   rc=$?
 elif command -v python3 >/dev/null 2>&1; then
   # -I: isolated, so a json.py in the working directory (the repository under
@@ -182,6 +183,7 @@ for edit in "${PR_EDIT[@]}"; do
   if command -v jq >/dev/null 2>&1; then
     verdict=$(printf '%s' "$payload" | jq -r --argjson ok "$pr_edit_args" \
       'if (.tool_input | type) != "object" then "no-object" elif ((.tool_input | keys) - $ok | length) == 0 then "pass" else "extra" end' 2>/dev/null)
+    rc=$?
   else
     verdict=$(printf '%s' "$payload" | python3 -I -c '
 import json, sys
@@ -189,7 +191,11 @@ ok = set(json.loads(sys.argv[1]))
 a = json.load(sys.stdin).get("tool_input")
 sys.stdout.write("no-object" if not isinstance(a, dict) else "pass" if set(a) <= ok else "extra")
 ' "$pr_edit_args" 2>/dev/null)
+    rc=$?
   fi
+  # A verdict counts only from a parser that finished: one that printed and
+  # then failed has not checked the whole payload.
+  [[ $rc -eq 0 ]] || verdict="(failed)"
   case "$verdict" in
     pass)
       exit 0 ;;

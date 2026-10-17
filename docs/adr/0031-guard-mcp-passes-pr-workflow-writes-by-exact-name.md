@@ -1,4 +1,4 @@
-# 0031. guard-mcp passes three PR-workflow writes by exact full name
+# 0031. guard-mcp passes two PR-workflow writes by exact full name, and PR edits by their arguments
 
 ## Status
 
@@ -48,9 +48,10 @@ rules still decide whether the call prompts.
 
 ## Decision
 
-guard-mcp passes the three by exact full name, a literal string equality,
-never a prefix, suffix, glob or `<tool>`-part match. The server part is
-matched as well as the tool part.
+guard-mcp matches each of the three by exact full name, a literal string
+equality, never a prefix, suffix, glob or `<tool>`-part match. The server
+part is matched as well as the tool part. Two then pass on the name alone;
+`update_pull_request` passes only on its arguments, as below.
 
 - `mcp__claude-code-remote__subscribe_pr_activity` and
   `mcp__ccd_session_mgmt__send_message` go on a new list,
@@ -217,6 +218,13 @@ with jq off the PATH.
 - guard-mcp's python3 fallback runs isolated (`-I`), so neither a module in
   the working directory nor a `PYTHON*` variable can answer for it. The
   `set_monitor` check already ran with `-P` (ADR 0028).
+- Both parsers accept exactly one JSON object. jq used to skip a second
+  value that was not an object (`{…} 5`), so the first object answered
+  alone while python3 refused the payload. It now reads every value at once
+  (`-s`) and asks unless there is exactly one. A fifth review found this,
+  along with the PR-edit check taking jq's printed verdict without its exit
+  status; a verdict now counts only from a parser that finished. Tests for
+  each went red before the fix and pass after.
 - The bootstrap self-probe asks guard-mcp about a ready-marking
   `update_pull_request` and fails the install if it does not ask; a title
   edit that does not pass is a note. A test proves the install refuses a

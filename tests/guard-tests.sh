@@ -1107,8 +1107,8 @@ tm ask  "app list is exact: a suffix"         "$(j mcp__ccd_turn__wrap_up_x '{}'
 tm ask  "app list is exact: a run-on suffix"  "$(j mcp__ccd_turn__wrap_upX '{}')"
 tm ask  "app list is exact: a server prefix"  "$(j mcp__xccd_turn__wrap_up '{}')"
 
-# A PR-activity subscription passes by exact full name, server part included,
-# for any PR (ADR 0031).
+# A PR-activity subscription, for any PR, and a message into a sibling desktop
+# session pass by exact full name, server part included (ADR 0031).
 PR_WORKFLOW_PASS=(
   mcp__claude-code-remote__subscribe_pr_activity
   mcp__ccd_session_mgmt__send_message
@@ -1169,6 +1169,10 @@ if command -v jq >/dev/null 2>&1; then
   chmod +x "$JQ_SHIM/jq"
   ln -s "$(command -v cat)" "$JQ_SHIM/cat"
   tm_says "PR edit: an unfinished check is named as unreadable" "$(j $PR_EDIT_NAME "{$PR_REF,\"title\":\"t\"}")" "could not have its arguments read" "$JQ_SHIM"
+  # A jq that prints "pass" and then fails has not finished either: its
+  # verdict must not count.
+  printf '#!/bin/sh\ncase " $* " in *" --argjson "*) echo pass; exit 1 ;; esac\nexec %q "$@"\n' "$(command -v jq)" > "$JQ_SHIM/jq"
+  tm_says "PR edit: a pass from a check that then failed does not count" "$(j $PR_EDIT_NAME "{$PR_REF,\"title\":\"t\"}")" "could not have its arguments read" "$JQ_SHIM"
 else
   echo "SKIP  guard-mcp.sh   PR edit unreadable reason: jq is not installed in this run"
 fi
@@ -1223,6 +1227,11 @@ tm ask  "FAIL-CLOSED: garbage payload"        'NOT JSON AT ALL'
 tm ask  "FAIL-CLOSED: empty payload"          ''
 tm ask  "FAIL-CLOSED: a JSON array"           '[1,2]'
 tm ask  "FAIL-CLOSED: two JSON documents"     "$MCP_READ$MCP_READ"
+# A second value that is not an object must fail too: jq once skipped it, so
+# the first object answered alone and the python3 fallback disagreed.
+tm ask  "FAIL-CLOSED: an object, then a number" "$MCP_READ 5"
+tm ask  "FAIL-CLOSED: an object, then an array" "$MCP_READ [1]"
+tm ask  "FAIL-CLOSED: a PR title edit, then a number" "$(j mcp__github__update_pull_request '{"owner":"o","repo":"r","pullNumber":7,"title":"t"}') 5"
 tm ask  "FAIL-CLOSED: no tool_name"           '{"tool_input":{}}'
 tm ask  "FAIL-CLOSED: a non-string tool_name" '{"tool_name":["mcp__srv__get_item"]}'
 tm ask  "FAIL-CLOSED: a non-MCP tool"         "$(j Bash '{"command":"ls"}')"
