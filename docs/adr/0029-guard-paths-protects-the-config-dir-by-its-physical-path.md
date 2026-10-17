@@ -9,7 +9,9 @@ exercises the decision in full. Amends ADR 0002
 for the config directory's own names. Generalises the physical guard-state
 root of ADR 0028
 (`docs/adr/0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md`)
-to every config name. The rest of both stands.
+to every config name. The rest of both stands. The NotebookEdit gap listed
+under Consequences (#81) is closed by
+[ADR 0030](0030-guard-paths-is-registered-for-and-reads-notebookedit.md).
 
 ## Context
 

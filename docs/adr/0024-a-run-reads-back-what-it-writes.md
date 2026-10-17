@@ -107,7 +107,7 @@ The upstream retro also comments on issues.
   Both exit 0 and say so. The session footer coming back after the
   write-back still fails, as does any other link or text.
 - **A footer in place of the attribution line is written back** (amendment,
-  2026-10-17). The ControlTower retro's draft PR came back with its last line,
+  2026-10-17). A consumer project's retro draft PR came back with its last line,
   `🤖 Generated with [Claude Code](https://claude.com/claude-code)`, replaced
   by the session footer: not after the body, in place of part of it.
   `verify-body` read that as a change, exited 1, and the run stopped with the
