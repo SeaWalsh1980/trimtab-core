@@ -137,7 +137,10 @@ time it was recorded.
   protected by its physical path as well (added after review): when the
   config dir is a link, a path spelt through the link's target would
   otherwise miss the root. A config dir that exists and does not resolve
-  blocks every call, as a config link that does not resolve already does.
+  blocks every call except a Read, as a config link that does not resolve
+  already does for writes. A Read cannot write the list, and it is what a
+  session needs to see why the dir does not resolve (added after review: the
+  first version blocked Reads too). An empty or unknown tool still blocks.
 
 **Check.** guard-mcp gives `mcp__ccd_pr__set_monitor` its own one-name list,
 `CCD_OWN_PR`, and takes it off `CCD_ALLOW`. For that name only, it hands the

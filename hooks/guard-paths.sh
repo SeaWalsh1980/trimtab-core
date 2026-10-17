@@ -179,11 +179,14 @@ cp_files+=( "$cp_home/settings.json" "$cp_home/settings.local.json" \
 # link (a dotfiles checkout, or a CLAUDE_CONFIG_DIR that names one), a Write
 # spelt through the link's target misses the lexical root above, and a list the
 # same user writes there passes the recorder's owner and mode checks (ADR 0028).
-# A config dir that exists and does not resolve blocks, as a config link does.
+# A config dir that exists and does not resolve blocks every call but a Read,
+# as a config link does for writes: Read never writes, so it cannot reach the
+# list, and it is what a session needs to see why the dir does not resolve.
+# Only an exact Read is exempt; an empty or unknown tool still blocks.
 if [[ -e "$cp_home" || -L "$cp_home" ]]; then
   if cp_hphys=$(cd -P "$cp_home" 2>/dev/null && pwd -P); then
     [[ "$cp_hphys" != "$cp_home" ]] && cp_roots+=( "${cp_hphys%/}/guard-state" )
-  else
+  elif [[ "$tool" != Read ]]; then
     echo "guard-paths: $cp_home exists but does not resolve; cannot establish guard-state's physical path. Blocking." >&2
     exit 2
   fi

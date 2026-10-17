@@ -322,7 +322,13 @@ t guard-paths.sh 0 "linked config: plans stay writable"       "$(j Write "{\"fil
 GS_DANGLING="$CPTMP/gs-dangling-config"
 ln -s "$CPTMP/gs-nowhere" "$GS_DANGLING"
 export CLAUDE_CONFIG_DIR="$GS_DANGLING"
-t guard-paths.sh 2 "a config dir link that does not resolve blocks" "$(j Read '{"file_path":"/p/app/main.py"}')"
+# A config dir that does not resolve blocks every call but a Read: reading
+# never reaches the list, and is how a session sees what is wrong.
+t guard-paths.sh 2 "unresolvable config dir: a Write blocks"   "$(j Write '{"file_path":"/p/app/main.py","content":"x"}')"
+t guard-paths.sh 2 "unresolvable config dir: a Bash call blocks" "$(j Bash '{"command":"ls"}')"
+t guard-paths.sh 2 "unresolvable config dir: no tool_name blocks" '{"tool_input":{"file_path":"/p/app/main.py"}}'
+t guard-paths.sh 0 "unresolvable config dir: a Read passes"    "$(j Read '{"file_path":"/p/app/main.py"}')"
+t guard-paths.sh 2 "unresolvable config dir: a Read of .env still blocks" "$(j Read '{"file_path":"/p/app/.env"}')"
 export CLAUDE_CONFIG_DIR="$GS_SAVED_CFG"
 t guard-paths.sh 0 "an unlinked config dir adds no second root" "$(j Write "{\"file_path\":\"$GS_REAL/guard-state/x.json\",\"content\":\"{}\"}")"
 
