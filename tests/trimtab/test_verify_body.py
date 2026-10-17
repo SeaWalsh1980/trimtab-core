@@ -25,7 +25,8 @@ from trimtab.capture.written import (
     ATTRIBUTION_LINE, Readback, WrittenBodyError, compare, verify_bodies, verify_body,
 )
 from trimtab.cli import VERIFY_BODY_REPORTS, _opening_stopped
-from trimtab.propose import OpeningStopped
+from trimtab.items import Proposal
+from trimtab.propose import OpeningStopped, render
 
 REPO = "owner/repo"
 PR = 931
@@ -580,16 +581,33 @@ class CreatedIssues(unittest.TestCase):
 
         self.assertEqual((url, [method_of(a) for a in gh.argvs()]), (ISSUE_URL, ["POST", "GET", "PATCH", "GET"]))
 
-    def test_an_issue_whose_attribution_line_a_footer_replaced_has_the_body_written_back(self):
-        for footer in (FOOTER, GENERIC):
-            with self.subTest(generic=footer is GENERIC):
-                gh = self.created(in_place_of_attribution(SENT, footer), SENT)
+    def rendered(self):
+        """An issue body as `propose` writes it: it ends with its own line, not the attribution line."""
+        return render(Proposal("TST-2", "upstream", ("ambiguous",), ("e1", "e2"), (101, 102)), {}).body
 
-                with GhIssues(REPO, run=gh, settle_seconds=0).filing() as filer:
-                    filer.create("title", SENT, ["harness-feedback"])
+    def test_a_rendered_issue_never_ends_with_the_attribution_line(self):
+        self.assertFalse(self.rendered().rstrip().endswith(ATTRIBUTION_LINE))
 
-                patch = [(path_of(a), json.loads(s)) for a, s in gh.calls if method_of(a) == "PATCH"]
-                self.assertEqual(patch, [(f"repos/{REPO}/issues/{ISSUE}", {"body": SENT})])
+    def test_a_rendered_issue_with_the_session_footer_after_it_has_the_body_written_back(self):
+        body = self.rendered()
+        gh = self.created(with_footer(body), body)
+
+        with GhIssues(REPO, run=gh, settle_seconds=0).filing() as filer:
+            filer.create("title", body, ["harness-feedback"])
+
+        patch = [(path_of(a), json.loads(s)) for a, s in gh.calls if method_of(a) == "PATCH"]
+        self.assertEqual(patch, [(f"repos/{REPO}/issues/{ISSUE}", {"body": body})])
+
+    def test_a_footer_in_place_of_a_rendered_issues_last_line_is_a_difference(self):
+        body = self.rendered()
+        last = body.rstrip().rsplit("\n", 1)[1]
+        gh = self.created(body.rstrip()[:-len(last)].rstrip("\n") + "\n" + FOOTER)
+
+        with self.assertRaisesRegex(WrittenBodyError, "edit each by hand"):
+            with GhIssues(REPO, run=gh, settle_seconds=0).filing() as filer:
+                filer.create("title", body, ["harness-feedback"])
+
+        self.assertNotIn("PATCH", [method_of(a) for a in gh.argvs()])
 
     def test_an_issue_with_only_the_generic_footer_is_not_edited(self):
         gh = self.created(with_generic(SENT))
