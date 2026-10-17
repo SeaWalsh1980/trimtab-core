@@ -928,8 +928,8 @@ def build_parser() -> argparse.ArgumentParser:
     ids.set_defaults(func=cmd_ids)
 
     vb = sub.add_parser("verify-body", help="read back a PR, issue or comment a run created; take the platform's "
-                                            "footer off or restore text it replaced, and fail on any other change "
-                                            "(ADR 0024)")
+                                            "footer off or restore the attribution line it replaced, and fail on any "
+                                            "other change (ADR 0024)")
     vb.add_argument("--repo", required=True, help="owner/name")
     target = vb.add_mutually_exclusive_group(required=True)
     target.add_argument("--pull", type=int, metavar="N", help="PR number (the POST's `--jq .number`)")

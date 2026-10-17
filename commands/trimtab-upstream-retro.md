@@ -14,7 +14,7 @@ the decision record that a change to a default every consumer inherits needs.
 authorises exactly: branches and draft PRs on Trimtab, and comments linking a
 PR from the `harness-feedback` issues it answers, and `trimtab verify-body`
 writing back the body it sent to one of those, to take the platform's footer
-off or restore text it replaced. Nothing else: no labels, no
+off or restore the attribution line it replaced. Nothing else: no labels, no
 closing issues, no edits in any consumer. In a **session**, show the report
 and ask before opening anything.
 
@@ -38,7 +38,7 @@ holds one. Before each commit, run `trimtab ids --staged`. If it exits 1,
 remove the reference, stage again and re-run it; never commit past a failure.
 If it exits 2, the check could not run: stop and report it. Read back each PR
 or comment you create with `trimtab verify-body`, which takes the platform's
-footer off or restores text it replaced; if it does not exit 0, stop and report
+footer off or restores the attribution line it replaced; if it does not exit 0, stop and report
 it.
 
 **Never change a security control** on your own initiative: workflows, `CODEOWNERS`,

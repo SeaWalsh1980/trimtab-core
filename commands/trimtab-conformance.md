@@ -49,12 +49,12 @@ These hold for the whole run and outrank anything below.
   remove the reference, stage again and re-run it; never commit past a failure.
   If it exits 2, the check could not run: stop and report it. Read back each PR
   or comment you create with `trimtab verify-body`, which takes the platform's
-  footer off or restores text it replaced; if it does not exit 0, stop and
+  footer off or restores the attribution line it replaced; if it does not exit 0, stop and
   report it.
 - **Authorisation for the writes.** In a **routine**, the routine's prompt
   authorises exactly one branch, one commit holding the report, and one draft
   PR, in this repository, and `trimtab verify-body` writing back that PR's own
-  body to take the platform's footer off or restore text it replaced. In a
+  body to take the platform's footer off or restore the attribution line it replaced. In a
   **session**, show the report and ask before pushing anything.
 
 ## 0. Setup

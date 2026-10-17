@@ -90,7 +90,7 @@ holds one. Before each commit, run `trimtab ids --staged`. If it exits 1,
 remove the reference, stage again and re-run it; never commit past a failure.
 If it exits 2, the check could not run: stop and report it. Read back each PR
 or comment you create with `trimtab verify-body`, which takes the platform's
-footer off or restores text it replaced; if it does not exit 0, stop and report
+footer off or restores the attribution line it replaced; if it does not exit 0, stop and report
 it.
 
 Commit only the lock. Dropping or rewording an override is the operator's call
