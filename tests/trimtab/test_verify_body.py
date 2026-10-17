@@ -1,10 +1,12 @@
-"""A run reads back what it wrote to GitHub, and takes the platform's session footer off (ADR 0024).
+"""A run reads back what it wrote, takes the platform's footer off and restores what it replaced (ADR 0024).
 
 A cloud session's PR came back with a footer after the body the run sent: a
 rule and a line linking the session. The run's settings did not stop it, so
 the run reads each body back, removes exactly that footer, and fails on
-anything else it did not send, except the platform's generic footer, which
-links no session and comes back on every edit, so it is accepted and left.
+anything else it did not send. The platform's generic footer, which links no
+session and comes back on every edit, is accepted and left when it follows the
+body sent. Either footer standing in place of the run's attribution line has
+deleted text the run sent, so the body is written back whichever it is.
 """
 
 import contextlib
@@ -117,10 +119,12 @@ class Compare(unittest.TestCase):
 
         self.assertIs(compare(sent, "## Verdict\n\nDone." + FOOTER), Readback.DIFFERS)
 
-    def test_a_body_without_the_attribution_line_never_counts_as_in_place(self):
-        sent = SENT[:-len(ATTRIBUTION)]
+    def test_a_footer_in_place_of_the_last_line_of_a_body_without_the_attribution_line_is_a_difference(self):
+        sent = "## Verdict\n\nNothing to raise.\n"
 
-        self.assertIs(compare(sent, with_generic(sent)), Readback.GENERIC)
+        for footer in (FOOTER, GENERIC):
+            with self.subTest(generic=footer is GENERIC):
+                self.assertIs(compare(sent, "## Verdict\n" + footer), Readback.DIFFERS)
 
     def test_the_footer_in_place_of_another_last_line_is_a_difference(self):
         sent = SENT + "Signed off.\n"
@@ -535,6 +539,17 @@ class CreatedIssues(unittest.TestCase):
             url = filer.create("title", SENT, ["harness-feedback"])
 
         self.assertEqual((url, [method_of(a) for a in gh.argvs()]), (ISSUE_URL, ["POST", "GET", "PATCH", "GET"]))
+
+    def test_an_issue_whose_attribution_line_a_footer_replaced_has_the_body_written_back(self):
+        for footer in (FOOTER, GENERIC):
+            with self.subTest(generic=footer is GENERIC):
+                gh = self.created(in_place_of_attribution(SENT, footer), SENT)
+
+                with GhIssues(REPO, run=gh, settle_seconds=0).filing() as filer:
+                    filer.create("title", SENT, ["harness-feedback"])
+
+                patch = [(path_of(a), json.loads(s)) for a, s in gh.calls if method_of(a) == "PATCH"]
+                self.assertEqual(patch, [(f"repos/{REPO}/issues/{ISSUE}", {"body": SENT})])
 
     def test_an_issue_with_only_the_generic_footer_is_not_edited(self):
         gh = self.created(with_generic(SENT))
