@@ -2,6 +2,10 @@
 
 ## Status
 
+Accepted (2026-10-16), by the operator: the trial passed on a retro run and a
+conformance run (see "Trial result" below). The notes below are kept as they
+were written.
+
 Proposed (2026-10-12). Narrows ADR 0019. Becomes accepted once a guarded cloud
 routine runs `ingest` and its command end to end on this base (see "Trial,
 still open" below).
@@ -121,7 +125,39 @@ no new dependency.
 
 ## Trial, still open
 
+Closed 2026-10-16: see "Trial result" below.
+
 The first guarded cloud routine run on this base: `ingest --dry-run
 --ledger-from-labels` and the conformance command complete with no 403, and
 the run log shows no `gh api` call outside `repos/`. The result is recorded
 here.
+
+## Trial result (2026-10-16)
+
+Two manual runs of per-project routines on a base carrying this decision and
+its successors, each with its guards live: a retro (2026-10-15) and a
+conformance review (2026-10-16). Both whole logs were read on 2026-10-16.
+
+The retro:
+
+- `trimtab ingest --dry-run --ledger-from-labels`, `ingest --apply` and
+  `propose --apply` ran end to end with no 403 and no failed `gh` call. The
+  rebuilt ledger covered every labelled PR merged in the window, and the
+  report printed the ingest floor.
+- Every `gh api` path shown in the log was under `repos/`, including
+  `repos/{owner}/{repo}` once. The log cuts some long commands short, so not
+  every path is shown, and the CLI's own calls are not logged one by one;
+  `GhApi` refuses any other path before gh runs, and nothing was refused.
+- A separate shell command, chaining a push with the PR create, was refused
+  by the guards for an unrelated reason; it made no GitHub call.
+
+The conformance review:
+
+- It listed the window's merged PRs from the closed-pulls listing, read
+  each one's body, reviews and check runs, opened its report as a draft PR
+  and wrote the body back, end to end, with no 403 and no failed `gh` call.
+- Every `gh api` path shown in the log was under `repos/`, including
+  `repos/{owner}/{repo}` once, with the same caveat on long commands cut
+  short. The only refused call was the guard probe the prompt requires.
+
+Result: passed. No path outside `repos/` was needed for either command.
