@@ -114,6 +114,13 @@ class Compare(unittest.TestCase):
     def test_the_generic_footer_in_place_of_the_attribution_line_is_told_apart(self):
         self.assertIs(compare(SENT, in_place_of_attribution(SENT, GENERIC)), Readback.IN_PLACE_GENERIC)
 
+    def test_either_footer_without_its_rule_in_place_of_the_attribution_line_is_told_apart(self):
+        for footer, expected in ((FOOTER, Readback.IN_PLACE), (GENERIC, Readback.IN_PLACE_GENERIC)):
+            with self.subTest(generic=footer is GENERIC):
+                found = in_place_of_attribution(SENT, footer.replace("\n---", ""))
+
+                self.assertIs(compare(SENT, found), expected)
+
     def test_a_footer_in_place_of_the_attribution_text_ending_a_longer_line_is_a_difference(self):
         sent = "## Verdict\n\nDone. " + ATTRIBUTION
 
@@ -207,6 +214,15 @@ class VerifyBody(unittest.TestCase):
         outcome = verify(bodies, SENT)
 
         self.assertEqual((outcome, bodies.writes, bodies.found), (Readback.IN_PLACE_GENERIC, [SENT], SENT))
+
+    def test_either_footer_without_its_rule_in_place_is_written_back(self):
+        for footer in (FOOTER, GENERIC):
+            with self.subTest(generic=footer is GENERIC):
+                bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, footer.replace("\n---", "")))
+
+                verify(bodies, SENT)
+
+                self.assertEqual((bodies.writes, bodies.found), ([SENT], SENT))
 
     def test_a_footer_in_place_again_after_the_write_back_fails(self):
         for first in (FOOTER, GENERIC):
