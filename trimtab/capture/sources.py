@@ -316,14 +316,18 @@ class FixtureSource:
         return [PullRequest(r["number"], r.get("body", ""), r["merged_at"]) for r in done[:limit]]
 
     def recent_pulls(self, closed_since: str | None) -> list[PullTitle]:
-        """Rows with `"state": "open"` are open; the rest are closed, merged when `merged_at` is set, and dated by
-        `updated_at`, else `merged_at`."""
+        """Rows with `"state": "open"` are open; the rest are closed, merged when `merged_at` is set. A merged row is
+        dated by `updated_at`, else `merged_at`; one closed unmerged by `closed_at`, else `updated_at`, as
+        `GhSource` dates them."""
         def state(r):
             return "open" if r.get("state") == "open" else "merged" if self._merged(r) else "closed"
 
         def recent(r):
-            return state(r) == "open" or (closed_since is not None
-                                          and (r.get("updated_at") or r.get("merged_at") or "")[:10] >= closed_since)
+            if state(r) == "open":
+                return True
+            when = (r.get("updated_at") or r.get("merged_at") if state(r) == "merged"
+                    else r.get("closed_at") or r.get("updated_at"))
+            return closed_since is not None and (when or "")[:10] >= closed_since
         rows = [r for r in self._rows() if recent(r)]
         if not all(isinstance(r.get("title"), str) for r in rows):
             raise SourceError("fixture pulls: a PR row has no title")  # GitHub's rows always carry one

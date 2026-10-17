@@ -342,6 +342,23 @@ class AFixtureRow(unittest.TestCase):
         self.assertEqual((evidence, states), ([], [(7, "open", "")]))
 
 
+class AFixtureDecline(unittest.TestCase):
+    """A fixture decline is dated by when it closed, as GitHub's are."""
+
+    def listed(self, closed_at):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pulls.json"
+            path.write_text(json.dumps([{"number": 9, "title": "[X-1] declined", "state": "closed",
+                                         "closed_at": closed_at, "labels": []}]))
+            return [p.number for p in FixtureSource(path).recent_pulls("2026-09-01")]
+
+    def test_one_closed_inside_the_window_is_listed(self):
+        self.assertEqual(self.listed("2026-09-10T00:00:00Z"), [9])
+
+    def test_one_closed_before_the_window_is_not(self):
+        self.assertEqual(self.listed("2026-08-20T00:00:00Z"), [])
+
+
 class AFixtureRowWithNoTitle(unittest.TestCase):
     def test_is_refused_as_github_would_refuse_it(self):
         with tempfile.TemporaryDirectory() as tmp:
