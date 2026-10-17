@@ -851,7 +851,8 @@ class VerifyBodyCli(unittest.TestCase):
         done = self.run_in_place(GENERIC, with_generic(SENT))
 
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("generic footer, linking no session, had replaced; that footer follows it", done.stdout)
+        self.assertIn("generic footer, linking no session, had replaced; that footer follows it; it names nothing, "
+                      "so it was left", done.stdout)
         self.assertNotIn("session footer", done.stdout)
 
     def test_a_session_footer_in_place_then_the_generic_one_says_both(self):

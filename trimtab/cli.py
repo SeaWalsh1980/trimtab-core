@@ -176,7 +176,8 @@ VERIFY_BODY_REPORTS = {
                                  "platform added its generic footer, linking no session, after it; GitHub's edit "
                                  "history still holds the session footer"),
     Readback.IN_PLACE_GENERIC_KEPT: ("restored the attribution line the platform's generic footer, linking no "
-                                     "session, had replaced; that footer follows it"),
+                                     "session, had replaced; that footer follows it; it names nothing, so it was "
+                                     "left"),
     Readback.REPLACED: ("removed the platform's session footer; the platform added its generic footer, linking no "
                         "session, in its place; GitHub's edit history still holds the session footer"),
     Readback.GENERIC: "the body is the one sent, then the platform's generic footer, linking no session; left as it is",
