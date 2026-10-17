@@ -319,6 +319,56 @@ t guard-paths.sh 2 "linked config: Edit via its target"       "$(j Edit "{\"file
 t guard-paths.sh 2 "linked config: bash redirect via its target" "$(j Bash "{\"command\":\"echo x > $GS_REAL/guard-state/pr-monitor/x.json\"}")"
 t guard-paths.sh 0 "linked config: Read via its target"       "$(j Read "{\"file_path\":\"$GS_REAL/guard-state/pr-monitor/x.json\"}")"
 t guard-paths.sh 0 "linked config: plans stay writable"       "$(j Write "{\"file_path\":\"$GS_REAL/plans/p.md\",\"content\":\"x\"}")"
+
+# Every other config name is protected by its physical path too (ADR 0029),
+# not only guard-state. hooks/ and rules/ are links here, as bootstrap makes
+# them: <target>/hooks/x reaches the linked tree through the kernel, yet it
+# matches neither the lexical root nor the link's realpath. The rest are absent,
+# because a config name is protected whether or not it exists. guard-state's
+# own cases are above.
+GS_REPO="$CPTMP/gs-config-repo"
+mkdir -p "$GS_REPO/hooks" "$GS_REPO/rules" "$GS_REAL/todos" \
+         "$GS_REAL/projects/-a-project/memory"
+ln -s "$GS_REPO/hooks" "$GS_REAL/hooks"
+ln -s "$GS_REPO/rules" "$GS_REAL/rules"
+for gs_n in hooks rules bin commands agents skills output-styles plugins; do
+  t guard-paths.sh 2 "linked config: Write to $gs_n via its target" "$(j Write "{\"file_path\":\"$GS_REAL/$gs_n/x\",\"content\":\"x\"}")"
+  t guard-paths.sh 2 "linked config: Edit in $gs_n via its target"  "$(j Edit "{\"file_path\":\"$GS_REAL/$gs_n/x\"}")"
+  t guard-paths.sh 2 "linked config: bash redirect into $gs_n via its target" "$(j Bash "{\"command\":\"echo x > $GS_REAL/$gs_n/x\"}")"
+done
+for gs_f in settings.json settings.local.json CLAUDE.md; do
+  t guard-paths.sh 2 "linked config: Write $gs_f via its target" "$(j Write "{\"file_path\":\"$GS_REAL/$gs_f\",\"content\":\"x\"}")"
+  t guard-paths.sh 2 "linked config: Edit $gs_f via its target"  "$(j Edit "{\"file_path\":\"$GS_REAL/$gs_f\"}")"
+  t guard-paths.sh 2 "linked config: bash tee $gs_f via its target" "$(j Bash "{\"command\":\"echo x | tee $GS_REAL/$gs_f\"}")"
+done
+# The target dir itself, by equality, as the lexical config dir is: replacing
+# it replaces every name beneath it at once.
+t guard-paths.sh 2 "linked config: bash mv onto its target"   "$(j Bash "{\"command\":\"mv /tmp/x $GS_REAL\"}")"
+t guard-paths.sh 2 "linked config: bash rm -rf its target"    "$(j Bash "{\"command\":\"rm -rf $GS_REAL/\"}")"
+pushd "$GS_REAL" >/dev/null
+t guard-paths.sh 2 "linked config: RELATIVE redirect to settings.json in its target" "$(j Bash '{"command":"echo x >settings.json"}')"
+t guard-paths.sh 2 "linked config: RELATIVE redirect into hooks in its target"      "$(j Bash '{"command":"echo x >hooks/x"}')"
+popd >/dev/null
+# ...while reads, and the agent's own state there, stay open. The Read case pins
+# that Read stays exempt; it passes whatever the roots are. The sibling cases
+# pin the physical roots' boundaries: a prefix ends at a `/`, a file is exact.
+# The target is in the exact-match list only, never substring-scanned, or the
+# cat below would block.
+t guard-paths.sh 0 "linked config: Read settings.json via its target" "$(j Read "{\"file_path\":\"$GS_REAL/settings.json\"}")"
+t guard-paths.sh 0 "linked config: a sibling of hooks via its target stays writable" "$(j Write "{\"file_path\":\"$GS_REAL/hooks-old/x\",\"content\":\"x\"}")"
+t guard-paths.sh 0 "linked config: a sibling of settings.json via its target stays writable" "$(j Write "{\"file_path\":\"$GS_REAL/settings.json.bak\",\"content\":\"x\"}")"
+t guard-paths.sh 0 "linked config: todos stay writable"       "$(j Write "{\"file_path\":\"$GS_REAL/todos/t.json\",\"content\":\"x\"}")"
+t guard-paths.sh 0 "linked config: memory stays writable"     "$(j Write "{\"file_path\":\"$GS_REAL/projects/-a-project/memory/m.md\",\"content\":\"x\"}")"
+t guard-paths.sh 0 "linked config: bash reading a plan via its target" "$(j Bash "{\"command\":\"cat $GS_REAL/plans/p.md\"}")"
+# A link on a PARENT of the config dir is resolved the same way.
+PL_REAL="$CPTMP/pl-real"
+PL_LINK="$CPTMP/pl-link"
+mkdir -p "$PL_REAL/.claude"
+ln -s "$PL_REAL" "$PL_LINK"
+export CLAUDE_CONFIG_DIR="$PL_LINK/.claude"
+t guard-paths.sh 2 "linked parent: settings.json via the target" "$(j Write "{\"file_path\":\"$PL_REAL/.claude/settings.json\",\"content\":\"x\"}")"
+t guard-paths.sh 0 "linked parent: plans via the target stay writable" "$(j Write "{\"file_path\":\"$PL_REAL/.claude/plans/p.md\",\"content\":\"x\"}")"
+export CLAUDE_CONFIG_DIR="$GS_LINK"
 GS_DANGLING="$CPTMP/gs-dangling-config"
 ln -s "$CPTMP/gs-nowhere" "$GS_DANGLING"
 export CLAUDE_CONFIG_DIR="$GS_DANGLING"
@@ -331,6 +381,8 @@ t guard-paths.sh 0 "unresolvable config dir: a Read passes"    "$(j Read '{"file
 t guard-paths.sh 2 "unresolvable config dir: a Read of .env still blocks" "$(j Read '{"file_path":"/p/app/.env"}')"
 export CLAUDE_CONFIG_DIR="$GS_SAVED_CFG"
 t guard-paths.sh 0 "an unlinked config dir adds no second root" "$(j Write "{\"file_path\":\"$GS_REAL/guard-state/x.json\",\"content\":\"{}\"}")"
+t guard-paths.sh 0 "an unlinked config dir: another dir's settings.json is open" "$(j Write "{\"file_path\":\"$GS_REAL/settings.json\",\"content\":\"x\"}")"
+t guard-paths.sh 0 "an unlinked config dir: another dir is not the config dir" "$(j Bash "{\"command\":\"ls $GS_REAL\"}")"
 
 # -- the agent's own state under CLAUDE_HOME must stay WRITABLE -----------
 # These assert an allow, against the general rule that new cases assert a

@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted.
+Accepted. Amended 2026-10-17 by
+[ADR 0029](0029-guard-paths-protects-the-config-dir-by-its-physical-path.md):
+the config directory's names are protected by their physical path too, when
+the directory or one above it is a link.
 
 ## Context
 

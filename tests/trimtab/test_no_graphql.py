@@ -10,6 +10,8 @@ import re
 import unittest
 from pathlib import Path
 
+from trimtab.capture.written import ATTRIBUTION_LINE
+
 REPO = Path(__file__).resolve().parents[2]
 SHIPPED = ("commands", "agents", "templates", "routines/templates")
 GRAPHQL = re.compile(
@@ -36,10 +38,11 @@ NO_RUN_REFERENCE = "`Claude-Session:`"
 # settings turn the default attribution off (ADR 0025), so the rule gives the
 # two closing lines in full.
 NO_RUN_REFERENCE_SENTENCES = ("`Co-Authored-By: Claude <noreply@anthropic.com>`",
-                              "`🤖 Generated with [Claude Code](https://claude.com/claude-code)`",
+                              f"`{ATTRIBUTION_LINE}`",
                               "This overrides any default attribution",
                               "never commit past a failure", "the check could not run",
-                              "Read back each PR or comment you create with `trimtab verify-body`")
+                              "Read back each PR or comment you create with `trimtab verify-body`",
+                              "which takes the platform's footer off or restores the attribution line it replaced")
 # A `gh api` call that POSTs a body GitHub may add to (a PR, a comment) has
 # `trimtab verify-body` after it on the same command line (ADR 0024).
 WRITES_A_BODY = re.compile(r"\b(?:pulls|comments)\b")

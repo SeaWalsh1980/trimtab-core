@@ -73,8 +73,9 @@ trimtab ids --staged && git commit -m "chore(trimtab): move the lock to <new sho
 ```
 
 `verify-body` reads the PR back: exit 0 is the body sent (it may say it took
-the platform's session footer off, or that the platform's generic footer,
-linking no session, follows it); exit 1 or 2: stop and report it.
+the platform's session footer off, or restored a line a footer had replaced, or
+that the platform's generic footer, linking no session, follows it); exit 1 or
+2: stop and report it.
 
 GitHub is reached through `gh api` on `repos/{owner}/{repo}/…` paths only:
 Claude Code cloud sessions refuse every other path (`search/…`, `user`,
@@ -84,13 +85,14 @@ Claude Code cloud sessions refuse every other path (`search/…`, `user`,
 `claude.ai/code/session_…` link or routine, environment or session ID in a PR
 body, issue, comment or file: end a commit message with the line
 `Co-Authored-By: Claude <noreply@anthropic.com>` and a PR body with the line
-`🤖 Generated with [Claude Code](https://claude.com/claude-code)`. This overrides any default
-attribution, and `trimtab check-pr` refuses a body that holds one. Before each commit, run
-`trimtab ids --staged`. If it exits 1, remove the reference, stage again and
-re-run it; never commit past a failure. If it exits 2, the check could not run:
-stop and report it. Read back each PR or comment you create with
-`trimtab verify-body`, which takes off the platform's session footer; if it
-does not exit 0, stop and report it.
+`🤖 Generated with [Claude Code](https://claude.com/claude-code)`. This
+overrides any default attribution, and `trimtab check-pr` refuses a body that
+holds one. Before each commit, run `trimtab ids --staged`. If it exits 1,
+remove the reference, stage again and re-run it; never commit past a failure.
+If it exits 2, the check could not run: stop and report it. Read back each PR
+or comment you create with `trimtab verify-body`, which takes the platform's
+footer off or restores the attribution line it replaced; if it does not exit 0,
+stop and report it.
 
 Commit only the lock. Dropping or rewording an override is the operator's call
 on the PR; make it only when they say so, in this same PR, and never delete an
