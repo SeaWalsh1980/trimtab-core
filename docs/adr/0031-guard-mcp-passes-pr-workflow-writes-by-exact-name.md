@@ -1,4 +1,4 @@
-# 0030. guard-mcp passes three PR-workflow writes by exact full name
+# 0031. guard-mcp passes three PR-workflow writes by exact full name
 
 ## Status
 

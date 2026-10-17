@@ -11,14 +11,14 @@ approve, call by call, an MCP tool call not named as a read (ADR 0013; the
 name is the only evidence, so a write named like a read is not asked). A
 few writes pass by exact full name instead: the desktop app's UI tools
 (ADR 0027) and a session's PR-activity subscription and sibling messages
-(ADR 0030).
+(ADR 0031).
 Two tools are judged by their arguments instead. The desktop app's Auto-fix
 switch (`set_monitor`) passes only for a PR the session itself created, as a
 PostToolUse recorder (`hooks/pr-monitor-record.sh`) saw it, and is otherwise
 denied rather than asked, so an unattended session carries on (ADR 0028).
 GitHub's `update_pull_request` passes only when it edits nothing but a PR's
 title, body or reviewers, and asks otherwise, so marking a draft ready stays
-the operator's (ADR 0030).
+the operator's (ADR 0031).
 And it runs a **loop** over a body of engineering rules: every rule is a
 *harness item* with a stable ID, pull requests cite the items they applied
 and report friction against them, and a retrospective tallies that evidence
