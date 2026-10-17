@@ -111,6 +111,11 @@ class Compare(unittest.TestCase):
     def test_the_generic_footer_in_place_of_the_attribution_line_is_told_apart(self):
         self.assertIs(compare(SENT, in_place_of_attribution(SENT, GENERIC)), Readback.IN_PLACE_GENERIC)
 
+    def test_a_footer_in_place_of_the_attribution_text_ending_a_longer_line_is_a_difference(self):
+        sent = "## Verdict\n\nDone. " + ATTRIBUTION
+
+        self.assertIs(compare(sent, "## Verdict\n\nDone." + FOOTER), Readback.DIFFERS)
+
     def test_a_body_without_the_attribution_line_never_counts_as_in_place(self):
         sent = SENT[:-len(ATTRIBUTION)]
 
