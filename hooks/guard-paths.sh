@@ -36,7 +36,9 @@ fi
 # Emits three lines: the target path, command, then tool_name (any may be
 # empty). The target path is file_path, or NotebookEdit's notebook_path, or
 # path, the same order guard-security reads them in: a key left out here is a
-# tool whose every path check passes on an empty string.
+# tool whose every path check passes on an empty string. An empty key is
+# skipped in both branches: jq's `//` alone keeps "" where python3's `or`
+# skips it, so `file_path: ""` once hid the next key from the jq branch only.
 # The command has newlines collapsed to spaces in BOTH branches — jq's raw
 # output would otherwise spread a multi-line command over several lines and
 # only the first would survive the line-2 extraction below.
@@ -48,7 +50,8 @@ fi
 # whole matrix twice, with jq and with jq removed, is what enforces it.
 parse() {
   if command -v jq >/dev/null 2>&1; then
-    jq -r '(.tool_input.file_path // .tool_input.notebook_path // .tool_input.path // ""),
+    jq -r '([.tool_input.file_path, .tool_input.notebook_path, .tool_input.path]
+              | map(select(. != null and . != false and . != "")) | .[0] // ""),
            ((.tool_input.command // "") | gsub("\n"; " ")),
            ((.tool_name // "") | gsub("\n"; " "))'
   elif command -v python3 >/dev/null 2>&1; then

@@ -202,6 +202,11 @@ t guard-paths.sh 2 "FAIL-CLOSED: garbage payload" 'NOT JSON AT ALL'
 t guard-paths.sh 2 "NotebookEdit a dotenv"       "$(j NotebookEdit '{"notebook_path":"/home/x/dev/ct/.env","new_source":"x"}')"
 t guard-paths.sh 2 "NotebookEdit a notebook under secrets/" "$(j NotebookEdit '{"notebook_path":"/home/x/dev/ct/secrets/a.ipynb","new_source":"x"}')"
 t guard-paths.sh 0 "NotebookEdit an ordinary notebook" "$(j NotebookEdit '{"notebook_path":"/p/app/analysis.ipynb","new_source":"x"}')"
+# An empty key is skipped, not taken as the target, in BOTH parse branches.
+# jq's `//` keeps "" where python3's `or` skips it, so the target, and the
+# verdict, used to depend on whether jq was installed.
+t guard-paths.sh 2 "empty file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":"","notebook_path":"/home/x/dev/ct/.env","new_source":"x"}')"
+t guard-paths.sh 2 "empty file_path does not hide path"          "$(j Write '{"file_path":"","path":"/home/x/dev/ct/.env","content":"x"}')"
 
 echo "== guard-paths: live control plane =="
 # The guards are enforced by files the guards did not protect: every case in

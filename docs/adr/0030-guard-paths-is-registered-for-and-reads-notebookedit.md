@@ -44,7 +44,11 @@ check failed on NotebookEdit alone.
 
 - The guard-paths matcher becomes `Read|Edit|Write|MultiEdit|NotebookEdit|Bash`.
 - `parse()` reads the target as `file_path`, then `notebook_path`, then
-  `path`, in both branches: the order guard-security uses.
+  `path`, in both branches: the order guard-security uses. An empty key is
+  skipped in both. jq's `//` alone keeps an empty string where python3's `or`
+  skips it, so a payload with `file_path: ""` and a protected later key was
+  allowed with jq and blocked without it; found in review, and pinned by two
+  matrix cases.
 - The matrix pins the registration as it ships: guard-paths is registered
   once under PreToolUse with the 10 s timeout, and its matcher matches each
   of Read, Edit, Write, MultiEdit, NotebookEdit and Bash in full.
