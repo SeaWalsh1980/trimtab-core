@@ -8,6 +8,9 @@ set -euo pipefail
 # self-probe expects guard-security to block, and an inherited HOOK_ALLOW_*
 # makes it return 0. Clear them all before bootstrap runs.
 for v in $(compgen -v HOOK_ALLOW_); do unset "$v"; done
+# The same for TRIMTAB_INSTANCE: a Claude session exports its own, and a probe
+# that leaned on it passed here while failing in CI, where nothing sets it.
+unset TRIMTAB_INSTANCE
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work=$(mktemp -d -t bootstrap-env.XXXXXX)
 trap 'rm -rf "$work"' EXIT
@@ -609,6 +612,39 @@ check_probes_ignore_a_tmpdir_inside_an_adopted_project() {
   fi
 }
 
+# GIT_DIR overrides GIT_CEILING_DIRECTORIES, so an exported one (bootstrap run
+# from a git hook or alias) would hand the probes that repository's lock.
+check_probes_ignore_an_exported_git_dir() {
+  local h inst p
+  h=$(new_home); inst=$(inst_of "$h"); p="$h/adopted"
+  mkdir -p "$p/.claude"
+  git -C "$p" init -q
+  printf '{}\n' > "$p/.claude/trimtab.json"
+  GIT_DIR="$p/.git" GIT_WORK_TREE="$p" boot "$h" "$live" --instance "$inst"
+  if [[ "$out" == *"doctrine-drift runs cleanly through the symlink"* \
+        && "$out" == *"pr-body-check blocks a PR body"* ]]; then
+    pass "the hook probes ignore an exported GIT_DIR and GIT_WORK_TREE"
+  else
+    fail "the hook probes ignore an exported GIT_DIR and GIT_WORK_TREE" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# Stderr that is not the hook's fault must not make a working doctrine-drift
+# red; a traceback still does (check_broken_doctrine_drift_ends_not_green).
+check_doctrine_drift_with_benign_stderr_stays_green() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\necho "x.py:1: DeprecationWarning: y" >&2\nexit 0\n' \
+    > "$snap_new/hooks/doctrine-drift.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"doctrine-drift runs cleanly through the symlink"* && "$out" != *"NOT GREEN"* ]]; then
+    pass "a doctrine-drift that only warns on stderr stays green"
+  else
+    fail "a doctrine-drift that only warns on stderr stays green" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
 # A probe whose temp directory cannot be made would run the hook in the
 # checkout with git unfenced; the run must stop and say so, not probe there.
 check_probe_without_a_temp_dir_stops_and_says_so() {
@@ -1073,6 +1109,8 @@ check_check_reports_a_silent_liveness_check
 check_probes_accept_a_tmpdir_with_json_metacharacters
 check_probes_accept_a_tmpdir_with_a_colon
 check_probes_ignore_a_tmpdir_inside_an_adopted_project
+check_probes_ignore_an_exported_git_dir
+check_doctrine_drift_with_benign_stderr_stays_green
 check_probe_without_a_temp_dir_stops_and_says_so
 check_liveness_probe_without_a_temp_dir_stops_and_says_so
 check_install_probes_the_unprobed_hooks

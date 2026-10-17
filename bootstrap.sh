@@ -614,8 +614,12 @@ with_cwd() {
   python3 -c 'import json, sys; d = json.loads(sys.argv[1]); d["cwd"] = sys.argv[2]; print(json.dumps(d))' "$1" "$2"
 }
 #   run_in <dir> <hook> <payload>: the hook run from <dir>, git fenced above it
+# (GIT_DIR and GIT_WORK_TREE would override the fence, so they are cleared), and
+# with TRIMTAB_INSTANCE set to the instance being installed, as the generated
+# settings give every session; the caller's own value must not decide a probe.
 run_in() {
-  printf '%s' "$3" | (cd "$1" && GIT_CEILING_DIRECTORIES="$(dirname "$1")" "$2")
+  printf '%s' "$3" | (cd "$1" && unset GIT_DIR GIT_WORK_TREE \
+    && GIT_CEILING_DIRECTORIES="$(dirname "$1")" TRIMTAB_INSTANCE="$INSTANCE" "$2")
 }
 #   probe_tmpdir <name>: a fresh directory for one probe. GIT_CEILING_DIRECTORIES
 # is colon-separated, so a TMPDIR holding a colon cannot be fenced; such a run
@@ -722,8 +726,10 @@ fi
 
 # doctrine-drift.sh cannot block (SessionStart) and exits 0 on everything, so a
 # broken one is silent. It runs on a payload whose cwd adopted nothing, where a
-# working hook prints nothing: any output (a Python traceback) or a non-zero
-# exit means it no longer runs. Informational, so a failure is red, like the
+# working hook prints nothing on stdout: any stdout, a non-zero exit, or a
+# Python traceback or the adapter's internal-error line on stderr means it no
+# longer runs. Other stderr (a DeprecationWarning, a git warning) is not the
+# hook's fault and is ignored. Informational, so a failure is red, like the
 # observer, not a refused install.
 if [[ -x "$CLAUDE_HOME/hooks/doctrine-drift.sh" ]]; then
   probe_dir=$(probe_tmpdir drift-probe) \
@@ -731,11 +737,14 @@ if [[ -x "$CLAUDE_HOME/hooks/doctrine-drift.sh" ]]; then
   probe_payload=$(with_cwd '{"hook_event_name":"SessionStart"}' "$probe_dir") \
     || die "could not build the doctrine-drift probe payload (python3 failed)"
   set +e
-  drift_out=$(run_in "$probe_dir" "$CLAUDE_HOME/hooks/doctrine-drift.sh" "$probe_payload" 2>&1)
+  drift_out=$(run_in "$probe_dir" "$CLAUDE_HOME/hooks/doctrine-drift.sh" "$probe_payload" \
+    2>"$probe_dir/.stderr")
   rc_drift=$?
+  drift_err=$(cat "$probe_dir/.stderr" 2>/dev/null)
   set -e
   rm -rf "$probe_dir"
-  if [[ $rc_drift -eq 0 && -z "$drift_out" ]]; then
+  if [[ $rc_drift -eq 0 && -z "$drift_out" && "$drift_err" != *"Traceback"* \
+        && "$drift_err" != *"doctrine-drift: internal error"* ]]; then
     ok "doctrine-drift runs cleanly through the symlink"
   else
     note "doctrine-drift exited $rc_drift with output on a quiet payload — sessions would not be told of drift"
