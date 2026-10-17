@@ -217,13 +217,29 @@ class VerifyBody(unittest.TestCase):
                     with self.assertRaisesRegex(WrittenBodyError, "replaced the attribution line again"):
                         verify(bodies, SENT)
 
-    def test_a_session_footer_after_the_restored_line_fails_whichever_footer_stood_in_place(self):
-        for first in (FOOTER, GENERIC):
-            with self.subTest(first_generic=first is GENERIC):
-                bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, first), then=with_footer(SENT))
+    def test_a_session_footer_after_the_restored_line_came_back_when_one_stood_in_place(self):
+        bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, FOOTER), then=with_footer(SENT))
 
-                with self.assertRaisesRegex(WrittenBodyError, "came back after the body sent was written again"):
-                    verify(bodies, SENT)
+        with self.assertRaisesRegex(WrittenBodyError, "session footer came back when the body sent was written back"):
+            verify(bodies, SENT)
+
+    def test_a_session_footer_after_the_restored_line_is_new_when_the_generic_one_stood_in_place(self):
+        bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, GENERIC), then=with_footer(SENT))
+
+        with self.assertRaises(WrittenBodyError) as raised:
+            verify(bodies, SENT)
+
+        self.assertIn("session footer appeared after the body sent", str(raised.exception))
+        self.assertNotIn("came back", str(raised.exception))
+
+    def test_a_repeat_says_again_once(self):
+        bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, FOOTER),
+                                then=in_place_of_attribution(SENT, FOOTER))
+
+        with self.assertRaises(WrittenBodyError) as raised:
+            verify(bodies, SENT)
+
+        self.assertEqual(str(raised.exception).count("again"), 1)
 
     def test_a_footer_in_place_only_after_the_write_back_is_not_called_a_repeat(self):
         bodies = InMemoryBodies(("pull", PR), with_footer(SENT), then=in_place_of_attribution(SENT, GENERIC))
@@ -231,7 +247,8 @@ class VerifyBody(unittest.TestCase):
         with self.assertRaises(WrittenBodyError) as raised:
             verify(bodies, SENT)
 
-        self.assertIn("replaced the attribution line after", str(raised.exception))
+        self.assertIn("replaced the attribution line when", str(raised.exception))
+        self.assertNotIn("again", str(raised.exception))
 
     def test_the_generic_footer_after_the_restored_line_passes_naming_the_footer_that_stood_in_its_place(self):
         for footer, expected in ((FOOTER, Readback.IN_PLACE_REPLACED), (GENERIC, Readback.IN_PLACE_GENERIC_KEPT)):

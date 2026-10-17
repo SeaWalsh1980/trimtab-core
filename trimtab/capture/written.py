@@ -183,11 +183,17 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
         if again is Readback.GENERIC:
             outcomes[(kind, number)] = WRITTEN_BACK[outcomes[(kind, number)]]
         elif again is Readback.FOOTER:
-            failures.append(((kind, number), "the platform's footer came back after the body sent was written again"))
+            # A session link that was there before "came back"; after a generic footer in place, it is new.
+            if outcomes[(kind, number)] is Readback.IN_PLACE_GENERIC:
+                failures.append(((kind, number), "the platform's session footer appeared after the body sent when it "
+                                                 "was written back"))
+            else:
+                failures.append(((kind, number), "the platform's session footer came back when the body sent was "
+                                                 "written back"))
         elif again in IN_PLACE_OUTCOMES:
             repeat = " again" if outcomes[(kind, number)] in IN_PLACE_OUTCOMES else ""
-            failures.append(((kind, number), f"the platform's footer replaced the attribution line{repeat} after the "
-                                             "body sent was written again"))
+            failures.append(((kind, number), f"the platform's footer replaced the attribution line{repeat} when the "
+                                             "body sent was written back"))
         elif again is not Readback.SAME:
             failures.append(((kind, number), "the body differs from the one sent after it was written again"))
     if errors and not failures:
