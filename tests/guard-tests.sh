@@ -821,14 +821,19 @@ t guard-secrets.sh 2 "NotebookEdit deleting a cell in a secrets dir (path rules 
 t guard-secrets.sh 0 "NotebookEdit with benign source" "$(j NotebookEdit '{"notebook_path":"/p/app/analysis.ipynb","new_source":"print(42)"}')"
 t guard-secrets.sh 0 "NotebookEdit test password fixture (relaxed)" "$(j NotebookEdit '{"notebook_path":"/p/tests/test_nb.ipynb","new_source":"password = \"correct-horse-battery-staple-1234\""}')"
 t guard-secrets.sh 0 "NotebookEdit deleting a cell in an ordinary notebook" "$(j NotebookEdit '{"notebook_path":"/p/app/analysis.ipynb","cell_id":"c1","edit_mode":"delete"}')"
-# An empty file_path is skipped, not taken as the path, in BOTH parse branches
-# (jq's `//` keeps "" where python3's `or` skips it). Pinned both ways: the
-# path rules must see notebook_path, and so must the test-path relaxation.
+# A payload naming more than one of file_path, notebook_path and path (any
+# value but null) fails closed: the guard judges one path and the tool may
+# write the other. A decoy file_path, empty, 0, [] or a benign string, used
+# to hide a protected notebook_path or path, and a tests/ decoy lent its
+# relaxation to the real target (ADRs 0031, 0033).
 t guard-secrets.sh 2 "empty file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":"","notebook_path":"/p/.env","new_source":"A=1"}')"
-t guard-secrets.sh 0 "empty file_path does not hide a test notebook_path (relaxed)" "$(j NotebookEdit '{"file_path":"","notebook_path":"/p/tests/test_nb.ipynb","new_source":"password = \"correct-horse-battery-staple-1234\""}')"
-# Only a non-empty string is the path: jq took 0 or [] where python3 skips them.
+t guard-secrets.sh 2 "an empty file_path beside a test notebook_path is two paths" "$(j NotebookEdit '{"file_path":"","notebook_path":"/p/tests/test_nb.ipynb","new_source":"password = \"correct-horse-battery-staple-1234\""}')"
 t guard-secrets.sh 2 "an empty-list file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":[],"notebook_path":"/p/.env","new_source":"A=1"}')"
 t guard-secrets.sh 2 "a zero file_path does not hide notebook_path"       "$(j NotebookEdit '{"file_path":0,"notebook_path":"/p/.env","new_source":"A=1"}')"
+t guard-secrets.sh 2 "a decoy file_path beside a .env notebook_path"     "$(j NotebookEdit '{"file_path":"/p/app/x.py","notebook_path":"/p/.env","new_source":"A=1"}')"
+t guard-secrets.sh 2 "a tests/ decoy beside a secrets/ notebook_path"    "$(j NotebookEdit '{"file_path":"/p/tests/t.py","notebook_path":"/p/secrets/k.ipynb","new_source":"x = 1"}')"
+t guard-secrets.sh 2 "a decoy file_path beside a .env path"              "$(j Write '{"file_path":"/p/app/x.py","path":"/p/.env","content":"A=1"}')"
+t guard-secrets.sh 0 "a null second key is not a second path"           "$(j NotebookEdit '{"file_path":null,"notebook_path":"/p/app/analysis.ipynb","new_source":"print(42)"}')"
 # The path is line 1 of the parse and the content follows it, so a line break
 # in the path left only its first line to the path rules: a Write of
 # "/p/a\n/.env" was judged as "/p/a". A path holding a newline or carriage

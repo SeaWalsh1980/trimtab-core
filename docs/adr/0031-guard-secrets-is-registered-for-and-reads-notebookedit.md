@@ -48,6 +48,15 @@ NotebookEdit alone.
   it gives against collapsing the break. The path is line 1 of the parse and
   the content follows, so a Write of `/p/a\n/.env` was judged as `/p/a` and
   allowed in both branches. Found in review; older than this record.
+- A payload that names more than one of `file_path`, `notebook_path` and
+  `path` (any value but `null`) fails the parse, so the call blocks: ADR
+  0033's rule
+  (`docs/adr/0033-guards-refuse-a-payload-that-names-more-than-one-path.md`),
+  taken here for guard-secrets. A benign `file_path` beside a `.env` or
+  `secrets/` `notebook_path` was judged on the decoy, and a `tests/` decoy
+  lent the real target its relaxation; 4 cases failed with exit 0, with and
+  without jq, before this. Found in review. `path` is now read as the third
+  key, as the other two guards read it.
 - The matrix pins the registration as it ships: guard-secrets is registered
   once under PreToolUse with the 10 s timeout, its matcher matches Write,
   Edit, MultiEdit and NotebookEdit in full, and it matches neither Read nor
