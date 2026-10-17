@@ -293,15 +293,20 @@ class FixtureSource:
     def _rows(self) -> list[dict]:
         return json.loads(self.path.read_text(encoding="utf-8"))
 
+    @staticmethod
+    def _merged(r: dict) -> bool:
+        """A row marked open is open, whatever else it carries: never merged evidence."""
+        return bool(r.get("merged_at")) and r.get("state") != "open"
+
     def unlabelled_merged(self, label: str, merged_since: str | None, limit: int) -> list[PullRequest]:
         rows = sorted(self._rows(), key=lambda r: r["number"])
-        todo = [r for r in rows if r.get("merged_at") and label not in r.get("labels", [])
+        todo = [r for r in rows if self._merged(r) and label not in r.get("labels", [])
                 and (merged_since is None or r["merged_at"][:10] >= merged_since)]
         return [PullRequest(r["number"], r.get("body", ""), r["merged_at"]) for r in todo[:limit]]
 
     def labelled_merged(self, label: str, merged_since: str, limit: int) -> list[PullRequest]:
         rows = sorted(self._rows(), key=lambda r: r["number"], reverse=True)
-        done = [r for r in rows if r.get("merged_at") and label in r.get("labels", [])
+        done = [r for r in rows if self._merged(r) and label in r.get("labels", [])
                 and r["merged_at"][:10] >= merged_since]
         return [PullRequest(r["number"], r.get("body", ""), r["merged_at"]) for r in done[:limit]]
 
@@ -309,13 +314,13 @@ class FixtureSource:
         """Rows with `"state": "open"` are open; the rest are closed, merged when `merged_at` is set, and dated by
         `updated_at`, else `merged_at`."""
         def state(r):
-            return "open" if r.get("state") == "open" else "merged" if r.get("merged_at") else "closed"
+            return "open" if r.get("state") == "open" else "merged" if self._merged(r) else "closed"
 
         def recent(r):
             return state(r) == "open" or (closed_since is not None
                                           and (r.get("updated_at") or r.get("merged_at") or "")[:10] >= closed_since)
-        return [PullTitle(r["number"], r.get("title", ""), state(r), r.get("merged_at") or "") for r in self._rows()
-                if recent(r)]
+        return [PullTitle(r["number"], r.get("title", ""), state(r), r["merged_at"] if self._merged(r) else "")
+                for r in self._rows() if recent(r)]
 
     def add_label(self, number: int, label: str) -> None:
         rows = self._rows()

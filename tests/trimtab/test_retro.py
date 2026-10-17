@@ -14,7 +14,7 @@ from pathlib import Path
 
 from instance_fixture import env_for, make_instance
 from trimtab.capture.ingest import LABEL, PullRequest, rebuild
-from trimtab.capture.sources import SourceError
+from trimtab.capture.sources import FixtureSource, SourceError
 from trimtab.items import Item, Proposal, Strength
 from trimtab.lint import structure
 from trimtab.propose import (
@@ -279,6 +279,22 @@ class ProjectDrafts(unittest.TestCase):
         found = plan_project_prs([draft("TST-2", prs=self.EVIDENCE)], FakePulls(PullTitle(946, "[TST-2] x", "open")))
 
         self.assertEqual(found, {})
+
+
+class AFixtureRow(unittest.TestCase):
+    """A scratch run's PRs: a row marked open is open, whatever else it carries."""
+
+    def test_an_open_row_with_a_merge_time_is_open_and_never_merged_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pulls.json"
+            path.write_text(json.dumps([{"number": 7, "title": "[X-1] fix", "state": "open", "body": AMBIGUOUS,
+                                         "merged_at": "2026-09-10T00:00:00Z", "labels": []}]))
+            source = FixtureSource(path)
+
+            evidence = source.unlabelled_merged(LABEL, "2026-09-01", 10)
+            states = [(p.number, p.state, p.merged_at) for p in source.recent_pulls("2026-09-01")]
+
+        self.assertEqual((evidence, states), ([], [(7, "open", "")]))
 
 
 class RunsTheCli(unittest.TestCase):
