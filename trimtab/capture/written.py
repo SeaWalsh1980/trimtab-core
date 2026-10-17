@@ -52,9 +52,9 @@ class WrittenBodyError(Exception):
 class Readback(enum.Enum):
     SAME = "the body is the one sent"
     FOOTER = "the platform's session footer was after the body sent"
-    IN_PLACE = "the platform's session footer stood in place of the body's attribution line, now restored"
+    IN_PLACE = "the platform's session footer stood in place of the body's attribution line"
     IN_PLACE_GENERIC = ("the platform's generic footer, linking no session, stood in place of the body's attribution "
-                        "line, now restored")
+                        "line")
     GENERIC = "the platform's generic footer, linking no session, is after the body sent"
     REPLACED = "the platform's session footer was taken off, and the platform put its generic footer in its place"
     IN_PLACE_REPLACED = ("the platform's session footer stood in place of the body's attribution line; the line is "
