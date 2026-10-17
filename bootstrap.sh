@@ -224,6 +224,11 @@ read_record
 TRIMTAB_BIN="$BASE/bin/trimtab"
 python3 -c 'import yaml' 2>/dev/null \
   || die "PyYAML is required (the registry check imports it) and python3 cannot import it; nothing was changed"
+# And as pr-body-check imports it, with -I: that hook cannot see user
+# site-packages (ADR 0035), so a PyYAML installed only there would leave the
+# hook failing open with no sign.
+python3 -I -c 'import yaml' 2>/dev/null \
+  || die "PyYAML is installed only where python3 -I cannot see it (user site-packages), so pr-body-check could not import it; install it system-wide (e.g. apt install python3-yaml); nothing was changed"
 against=()
 # The baseline is the last installed SHA of this same instance, if one is recorded.
 [[ "$rec_root" == "$INSTANCE" && "$rec_instance_sha" =~ ^[0-9a-f]{40}$ ]] \

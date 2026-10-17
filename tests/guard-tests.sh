@@ -1638,11 +1638,12 @@ printf 'import os, sys; exec(%s)\n' "$(python3 -c 'import sys; print(repr(sys.ar
 printf '%s\n' "$sc_plant" > "$SC_ROOT/sitecustomize.py"
 printf '%s\n' "$sc_plant" > "$SC_ROOT/json.py"
 SC_CFG=$(mktemp -d "$CPTMP/sc-config.XXXXXX")
+SC_RUN_CFG="$SC_CFG"
 sc_run() { # sc_run <hooks dir> <hook> <payload> [extra env]...  — run with every plant in reach
   local d="$1" h="$2" p="$3"; shift 3
   rm -f "$SC_MARK"
-  printf '%s' "$p" | env PYTHONUSERBASE="$SC_BASE" SC_MARK="$SC_MARK" CLAUDE_CONFIG_DIR="$SC_CFG" \
-    CLAUDE_RULE_USAGE_LOG="$SC_CFG/rule-usage.jsonl" "$@" bash "$d/$h" 2>/dev/null
+  printf '%s' "$p" | env PYTHONUSERBASE="$SC_BASE" SC_MARK="$SC_MARK" CLAUDE_CONFIG_DIR="$SC_RUN_CFG" \
+    CLAUDE_RULE_USAGE_LOG="$SC_RUN_CFG/rule-usage.jsonl" "$@" bash "$d/$h" 2>/dev/null
 }
 sc_report() { # sc_report <ok: 0|1> <hook> <label>
   if [[ "$1" == 0 ]]; then printf 'PASS  %-14s %-4s  %s\n' "$2" site "$3"
@@ -1654,25 +1655,69 @@ sc_payload() { # sc_payload <hook>  — a payload that reaches the hook's python
     guard-mcp.sh)         pm_fix sc-a 9 ;;
     pr-monitor-record.sh) pm_post sc-a 'gh pr create --fill' "$PR/16" ;;
     pr-body-check.sh)     j Bash '{"command":"gh pr create --title t --body b"}' ;;
+    rule-usage.sh)        python3 -c 'import json; print(json.dumps({"hook_event_name":"PreToolUse","session_id":"sc-a","tool_name":"Skill","tool_input":{"skill":"trimtab-plan"}}))' ;;
     *)                    j Read '{"file_path":"/p/app/main.py"}' ;;
+  esac
+}
+sc_effect() { # sc_effect <hook> <output>  — 0 when the run shows the hook reached python3 and did its work
+  case "$1" in
+    guard-mcp.sh)         [[ "$2" == *'"permissionDecision":"deny"'* ]] ;;
+    pr-monitor-record.sh) [[ -n "$(find "$SC_RUN_CFG" -path '*pr-monitor*' -name '*.json' -type f -exec grep -l '"number":16' {} + 2>/dev/null)" ]] ;;
+    rule-usage.sh)        [[ -s "$SC_RUN_CFG/rule-usage.jsonl" ]] ;;
+    *)                    return 2 ;;   # silent on these payloads; the control below covers them
   esac
 }
 for h in "${SC_HOOKS[@]}"; do
   pl=$(sc_payload "$h")
-  sc_run "$SC_ROOT/hooks" "$h" "$pl" >/dev/null
+  sc_out=$(sc_run "$SC_ROOT/hooks" "$h" "$pl")
   [[ ! -e "$SC_MARK" ]]; sc_report $? "$h" "no planted .pth, sitecustomize.py or json.py runs inside it"
+  sc_effect "$h" "$sc_out"; rc=$?
+  [[ $rc -eq 2 ]] || sc_report $rc "$h" "with its flags on it still runs and does its work"
 done
 # Positive control: the same hook with its isolation flags stripped does load
 # a plant, so each case above reached its python3 and the pass is the flags'.
+# Its own config directory, so its records cannot answer for the isolated run.
 SC_BARE=$(mktemp -d "$CPTMP/barehooks.XXXXXX")
 cp -RL "$SC_ROOT/hooks" "$SC_BARE/hooks"
 ln -s "$SC_ROOT/trimtab" "$SC_BARE/trimtab"
+SC_RUN_CFG=$(mktemp -d "$CPTMP/sc-bare-config.XXXXXX")
 for h in "${SC_HOOKS[@]}"; do
   sed -i 's/python3 -I -S /python3 /g; s/python3 -I /python3 /g' "$SC_BARE/hooks/$h"
   pl=$(sc_payload "$h")
   sc_run "$SC_BARE/hooks" "$h" "$pl" >/dev/null
   [[ -e "$SC_MARK" ]]; sc_report $? "$h" "control: without its flags it does load a plant"
 done
+SC_RUN_CFG="$SC_CFG"
+# The root plants are live: with the root first on sys.path, as PYTHONPATH put
+# it, json.py shadows the standard library and sitecustomize.py runs. So a pass
+# above is the loader's doing, not a plant that cannot load.
+rm -f "$SC_MARK"
+PYTHONPATH="$SC_ROOT" SC_MARK="$SC_MARK" python3 -S -c 'import json' >/dev/null 2>&1
+[[ -e "$SC_MARK" ]]; sc_report $? fixture "a root json.py shadows the standard library when the root comes first"
+rm -f "$SC_MARK"
+PYTHONPATH="$SC_ROOT" SC_MARK="$SC_MARK" python3 -c '' >/dev/null 2>&1
+[[ -e "$SC_MARK" ]]; sc_report $? fixture "a root sitecustomize.py runs when the root is on PYTHONPATH"
+# pr-body-check keeps site-packages for PyYAML, so the root must also come
+# before them: a trimtab package in site-packages (here a venv's, which is how a
+# user-owned interpreter carries one) must not stand in for the checkout's.
+SC_VENV="$CPTMP/sc-venv"
+if python3 -m venv --without-pip "$SC_VENV" >/dev/null 2>&1; then
+  sc_vsite=$("$SC_VENV/bin/python3" -I -c 'import sys; print(next(p for p in sys.path if p.endswith("site-packages")))')
+  mkdir -p "$sc_vsite/trimtab/adapters"
+  : > "$sc_vsite/trimtab/__init__.py"
+  : > "$sc_vsite/trimtab/adapters/__init__.py"
+  printf '%s\n' "$sc_plant" > "$sc_vsite/trimtab/adapters/pr_body_check.py"
+  pl=$(sc_payload pr-body-check.sh)
+  rm -f "$SC_MARK"
+  printf '%s' "$pl" | env PATH="$SC_VENV/bin:$PATH" SC_MARK="$SC_MARK" CLAUDE_CONFIG_DIR="$SC_CFG" \
+    bash "$SC_ROOT/hooks/pr-body-check.sh" >/dev/null 2>&1
+  [[ ! -e "$SC_MARK" ]]; sc_report $? pr-body-check.sh "a trimtab package in site-packages does not stand in for the checkout's"
+  rm -f "$SC_MARK"
+  SC_MARK="$SC_MARK" "$SC_VENV/bin/python3" -I -c 'import trimtab.adapters.pr_body_check' >/dev/null 2>&1
+  [[ -e "$SC_MARK" ]]; sc_report $? fixture "the planted trimtab in site-packages is importable"
+else
+  echo "SKIP  pr-body-check.sh site  python3 -m venv is not available in this run"
+fi
 # The forged verdict: guard-mcp must still deny set_monitor on a foreign PR.
 # The plants' variables go to the hook alone; the harness's own python3 would
 # load the user-site plant too.
@@ -1680,9 +1725,6 @@ pl=$(sc_payload guard-mcp.sh)
 sc_out=$(sc_run "$SC_ROOT/hooks" guard-mcp.sh "$pl" SC_FORGE=1)
 [[ "$sc_out" == *'"permissionDecision":"deny"'* ]]
 sc_report $? guard-mcp.sh "a plant cannot forge a set_monitor pass"
-# The recorder still records with the flags on: it ran, and it worked.
-sc_rec=$(find "$SC_CFG" -path '*pr-monitor*' -name '*.json' -type f -exec grep -l '"number":16' {} + 2>/dev/null)
-[[ -n "$sc_rec" ]]; sc_report $? pr-monitor-record.sh "the isolated recorder still records the session's PR"
 export CLAUDE_CONFIG_DIR="$GM_SAVED_CFG"
 
 echo "== fail-closed on an unrunnable dependency =="

@@ -14,9 +14,8 @@ command -v python3 >/dev/null 2>&1 || exit 0
 here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # -I -S: no working directory (a trimtab/ there cannot shadow this checkout's
 # package), no site-packages of any kind (so no .pth and no sitecustomize), no
-# PYTHON* variables. The package root goes on sys.path after the standard
+# PYTHON* variables. run_module.py puts the package root after the standard
 # library, so nothing at the root can stand in for it (ADR 0035).
 # -B: write no bytecode beside the package; a snapshot is never written.
-run_module='import runpy, sys; sys.path.append(sys.argv[1]); del sys.argv[:2]; runpy.run_module(sys.argv[0], run_name="__main__", alter_sys=True)'
-python3 -I -S -B -c "$run_module" "$here/.." trimtab.adapters.doctrine_drift <<<"$payload"
+python3 -I -S -B "$here/run_module.py" "$here/.." trimtab.adapters.doctrine_drift <<<"$payload"
 exit 0

@@ -33,12 +33,13 @@ python3 -P -I -c '' >/dev/null 2>&1 || exit 0
 here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # -I: no working directory (a trimtab/ there cannot shadow this checkout's
 # package), no user site-packages (so no .pth the session wrote), no PYTHON*
-# variables. The package root goes on sys.path after the standard library, so
-# no sitecustomize.py or standard-library name at the root can stand in for it
-# (ADR 0035). No -S: the check needs PyYAML from system site-packages.
+# variables. No -S: the check needs PyYAML from system site-packages, so
+# run_module.py puts the package root after the standard library and before
+# site-packages. No sitecustomize.py or standard-library name at the root can
+# stand in for the standard library, and no trimtab package installed in
+# site-packages can stand in for this checkout's (ADR 0035).
 # -B: write no bytecode beside the package; a snapshot is never written.
-run_module='import runpy, sys; sys.path.append(sys.argv[1]); del sys.argv[:2]; runpy.run_module(sys.argv[0], run_name="__main__", alter_sys=True)'
-python3 -I -B -c "$run_module" "$here/.." trimtab.adapters.pr_body_check <<<"$payload"
+python3 -I -B "$here/run_module.py" "$here/.." trimtab.adapters.pr_body_check <<<"$payload"
 rc=$?
 [[ $rc -eq 2 ]] && exit 2
 exit 0
