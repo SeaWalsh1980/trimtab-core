@@ -31,13 +31,15 @@ command -v python3 >/dev/null 2>&1 || exit 0
 python3 -P -I -c '' >/dev/null 2>&1 || exit 0
 
 here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+# python3 exits 2 when it cannot open its script, which would read as a block
+# below: a missing loader fails open like every other fault here.
+[[ -r "$here/run_module.py" ]] || exit 0
 # -I: no working directory (a trimtab/ there cannot shadow this checkout's
 # package), no user site-packages (so no .pth the session wrote), no PYTHON*
-# variables. No -S: the check needs PyYAML from system site-packages, so
-# run_module.py puts the package root after the standard library and before
-# site-packages. No sitecustomize.py or standard-library name at the root can
-# stand in for the standard library, and no trimtab package installed in
-# site-packages can stand in for this checkout's (ADR 0035).
+# variables. No -S: the check needs PyYAML from system site-packages.
+# run_module.py loads the package from the checkout without putting the root
+# on sys.path, so no file at the root, and no trimtab package installed in
+# site-packages, can stand in for a module (ADR 0035).
 # -B: write no bytecode beside the package; a snapshot is never written.
 python3 -I -B "$here/run_module.py" "$here/.." trimtab.adapters.pr_body_check <<<"$payload"
 rc=$?

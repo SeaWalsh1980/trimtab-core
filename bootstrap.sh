@@ -228,7 +228,7 @@ python3 -c 'import yaml' 2>/dev/null \
 # site-packages (ADR 0035), so a PyYAML installed only there would leave the
 # hook failing open with no sign.
 python3 -I -c 'import yaml' 2>/dev/null \
-  || die "PyYAML is installed only where python3 -I cannot see it (user site-packages), so pr-body-check could not import it; install it system-wide (e.g. apt install python3-yaml); nothing was changed"
+  || die "PyYAML is reachable only where python3 -I cannot see it (user site-packages, or a PYTHONPATH or other PYTHON* variable), so pr-body-check could not import it; install it system-wide (e.g. apt install python3-yaml); nothing was changed"
 against=()
 # The baseline is the last installed SHA of this same instance, if one is recorded.
 [[ "$rec_root" == "$INSTANCE" && "$rec_instance_sha" =~ ^[0-9a-f]{40}$ ]] \

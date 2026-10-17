@@ -123,9 +123,9 @@ for owned in "${CCD_OWN_PR[@]}"; do
     deny "the set_monitor check needs python3 3.11 or later, which is not available, so it is denied (fail closed, ADR 0028). Carry on without Auto-fix and report it to the operator."
   fi
   # -I -S: no working directory, no site-packages of any kind (so no .pth and
-  # no sitecustomize), no PYTHON* variables. run_module.py puts the package
-  # root after the standard library, so nothing at the root can stand in for
-  # it (ADR 0035).
+  # no sitecustomize), no PYTHON* variables. run_module.py loads the package
+  # without putting the root on sys.path, so no file at the root can stand in
+  # for a module and print the verdict (ADR 0035).
   verdict=$(printf '%s' "$payload" | python3 -I -S -B "$here/run_module.py" "$here/.." trimtab.adapters.pr_monitor check 2>/dev/null)
   rc=$?
   # A verdict counts only from a check that ran to the end. A crash, an empty

@@ -1616,9 +1616,11 @@ tm pass "the exported override passes set_monitor"    "$(pm_fix gm-a 8)"
 unset HOOK_ALLOW_MCP
 
 # The hooks that start python3 must not let anything the session can write run
-# inside it (ADR 0035): a .pth in user site-packages, or a sitecustomize.py or a
-# standard-library name (json.py) at the package root. The root used to be on
-# PYTHONPATH, ahead of the standard library. The cases run a copy of the hooks
+# inside it (ADR 0035): a .pth in user site-packages, or any module file at the
+# package root, whether a sitecustomize.py, a standard-library name (json.py),
+# a name the standard library only tries to import (nt.py, _winapi.py, which
+# shutil probes for) or a third-party name a hook imports (yaml.py). The root
+# used to be on PYTHONPATH, ahead of the standard library. The cases run a copy of the hooks
 # and package under $CPTMP, so the plants never touch the checkout, and
 # PYTHONUSERBASE points user site at a plant there too.
 SC_ROOT=$(mktemp -d "$CPTMP/pkgroot.XXXXXX")
@@ -1636,7 +1638,9 @@ if os.environ.get("SC_FORGE"):
     sys.stdout.write("pass"); sys.stdout.flush(); os._exit(0)'
 printf 'import os, sys; exec(%s)\n' "$(python3 -c 'import sys; print(repr(sys.argv[1]))' "$sc_plant")" > "$SC_SITE/plant.pth"
 printf '%s\n' "$sc_plant" > "$SC_ROOT/sitecustomize.py"
-printf '%s\n' "$sc_plant" > "$SC_ROOT/json.py"
+for sc_name in json nt _winapi yaml; do
+  printf '%s\n' "$sc_plant" > "$SC_ROOT/$sc_name.py"
+done
 SC_CFG=$(mktemp -d "$CPTMP/sc-config.XXXXXX")
 SC_RUN_CFG="$SC_CFG"
 sc_run() { # sc_run <hooks dir> <hook> <payload> [extra env]...  — run with every plant in reach
@@ -1670,7 +1674,7 @@ sc_effect() { # sc_effect <hook> <output>  — 0 when the run shows the hook rea
 for h in "${SC_HOOKS[@]}"; do
   pl=$(sc_payload "$h")
   sc_out=$(sc_run "$SC_ROOT/hooks" "$h" "$pl")
-  [[ ! -e "$SC_MARK" ]]; sc_report $? "$h" "no planted .pth, sitecustomize.py or json.py runs inside it"
+  [[ ! -e "$SC_MARK" ]]; sc_report $? "$h" "no planted .pth or root module runs inside it"
   sc_effect "$h" "$sc_out"; rc=$?
   [[ $rc -eq 2 ]] || sc_report $rc "$h" "with its flags on it still runs and does its work"
 done
@@ -1725,6 +1729,44 @@ pl=$(sc_payload guard-mcp.sh)
 sc_out=$(sc_run "$SC_ROOT/hooks" guard-mcp.sh "$pl" SC_FORGE=1)
 [[ "$sc_out" == *'"permissionDecision":"deny"'* ]]
 sc_report $? guard-mcp.sh "a plant cannot forge a set_monitor pass"
+# Root-plant control: the same copy, with a loader that puts the root on
+# sys.path (appended, as this change first did), does load a root plant through
+# each adapter hook. So the hooks' imports reach those names, and the passes
+# above come from keeping the root off sys.path.
+SC_LEAKY=$(mktemp -d "$CPTMP/leaky.XXXXXX")
+cp -RL "$SC_ROOT/." "$SC_LEAKY/"
+printf '%s\n' 'import runpy, sys' 'root, module = sys.argv[1], sys.argv[2]' 'sys.path.append(root)' \
+  'sys.argv = [module] + sys.argv[3:]' 'runpy.run_module(module, run_name="__main__", alter_sys=True)' \
+  > "$SC_LEAKY/hooks/run_module.py"
+SC_RUN_CFG=$(mktemp -d "$CPTMP/sc-leaky-config.XXXXXX")
+for h in guard-mcp.sh pr-monitor-record.sh pr-body-check.sh doctrine-drift.sh; do
+  pl=$(sc_payload "$h")
+  sc_run "$SC_LEAKY/hooks" "$h" "$pl" >/dev/null
+  [[ -e "$SC_MARK" ]]; sc_report $? "$h" "control: with the root on sys.path a root plant does load"
+done
+# The allowed path still works through the isolated loader: the recorder
+# records the session's own PR, and guard-mcp then passes set_monitor for it.
+# A broken loader would deny it, which the deny cases above cannot see.
+SC_RUN_CFG=$(mktemp -d "$CPTMP/sc-own-config.XXXXXX")
+sc_run "$SC_ROOT/hooks" pr-monitor-record.sh "$(pm_post sc-own 'gh pr create --fill' "$PR/21")" >/dev/null
+sc_out=$(sc_run "$SC_ROOT/hooks" guard-mcp.sh "$(pm_fix sc-own 21)")
+[[ -z "$sc_out" && ! -e "$SC_MARK" ]]
+sc_report $? guard-mcp.sh "the isolated recorder and check pass set_monitor for the session's own PR"
+SC_RUN_CFG="$SC_CFG"
+# pr-body-check does its work through the isolated loader, with every plant in
+# reach: a PR body with no harness block is blocked (exit 2), so PyYAML and the
+# checker loaded from where they should.
+sc_run "$SC_ROOT/hooks" pr-body-check.sh "$(sc_payload pr-body-check.sh)" >/dev/null; rc=$?
+[[ $rc -eq 2 && ! -e "$SC_MARK" ]]
+sc_report $? pr-body-check.sh "the isolated check still blocks a body with no harness block"
+# pr-body-check fails open (CI is its gate). Without its loader, python3 would
+# exit 2, which the hook reads as a block; it must exit 0 instead.
+SC_NOLOADER=$(mktemp -d "$CPTMP/noloader.XXXXXX")
+cp -RL "$SC_ROOT/hooks" "$SC_NOLOADER/hooks"
+ln -s "$SC_ROOT/trimtab" "$SC_NOLOADER/trimtab"
+rm -f "$SC_NOLOADER/hooks/run_module.py"
+sc_run "$SC_NOLOADER/hooks" pr-body-check.sh "$(sc_payload pr-body-check.sh)" >/dev/null
+sc_report $? pr-body-check.sh "a missing loader fails open, not as a block"
 export CLAUDE_CONFIG_DIR="$GM_SAVED_CFG"
 
 echo "== fail-closed on an unrunnable dependency =="
