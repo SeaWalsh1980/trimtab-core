@@ -11,8 +11,10 @@ same line, linking no session. That one names nothing, and writing again only
 brings it back, so it is accepted and left where it is.
 
 A later run (2026-10-17) showed a third form on create: the footer not after the
-body but in place of its last line, the run's own attribution line. The write-back
-restores that line with the rest of the body sent, so it is taken off the same way.
+body but in place of its last line, the run's own attribution line. Either footer
+in that place (IN_PLACE) has deleted text the run sent, so it is always written
+back, session link or not, and the body must come back as sent or with only the
+generic footer after it.
 """
 
 from __future__ import annotations
@@ -48,6 +50,7 @@ class WrittenBodyError(Exception):
 class Readback(enum.Enum):
     SAME = "the body is the one sent"
     FOOTER = "the platform's session footer was after the body sent"
+    IN_PLACE = "the platform's footer stood in place of the body's attribution line"
     GENERIC = "the platform's generic footer, linking no session, is after the body sent"
     REPLACED = "the platform's session footer was taken off, and the platform put its generic footer in its place"
     DIFFERS = "the body differs from the one sent, other than by the platform's footer"
@@ -68,22 +71,25 @@ def _plain(text: str) -> str:
 
 def compare(sent: str, found: str) -> Readback:
     """SAME; FOOTER when `found` is `sent` plus the platform's session link, GENERIC when it is `sent` plus the
-    platform's line linking no session, each with or without its rule; else DIFFERS.
+    platform's line linking no session, each with or without its rule; IN_PLACE when either footer stands where
+    `sent`'s last line, the run's attribution line, was; else DIFFERS.
 
-    The rule is tried both ways, so a body that itself ends with a `---` rule keeps it. A footer standing in place
-    of `sent`'s last line, the run's attribution line, counts as after it. Never REPLACED: that is what a write-back
-    came to, which only `verify_bodies` knows.
+    The rule is tried both ways, so a body that itself ends with a `---` rule keeps it. Never REPLACED: that is
+    what a write-back came to, which only `verify_bodies` knows.
     """
     sent, found = _plain(sent), _plain(found)
     if found == sent:
         return Readback.SAME
-    sents = {sent, _plain(ATTRIBUTION.sub("", sent))}
     for footer, outcome in ((FOOTER_LINK, Readback.FOOTER), (FOOTER_GENERIC, Readback.GENERIC)):
         match = footer.search(found)
         if match:
             head = _plain(found[:match.start()])
-            if sents & {head, _plain(FOOTER_RULE.sub("", head))}:
+            heads = {head, _plain(FOOTER_RULE.sub("", head))}
+            if sent in heads:
                 return outcome
+            stripped = _plain(ATTRIBUTION.sub("", sent))
+            if stripped != sent and stripped in heads:
+                return Readback.IN_PLACE
     return Readback.DIFFERS
 
 
@@ -92,8 +98,9 @@ Target = tuple[str, int, str]  # (kind, number, body sent)
 
 def verify_bodies(bodies: Bodies, targets: list[Target], *,
                   settle_seconds: float, sleep: Callable[[float], None]) -> list[Readback]:
-    """Read back each target after one shared wait; take the platform's session footer off every one that carries
-    it, wait once more, and require them identical, or carrying only the generic footer (REPLACED). A generic footer
+    """Read back each target after one shared wait; write back the body sent to every one that carries the
+    platform's session footer or has a footer in place of its attribution line, wait once more, and require them
+    identical, or carrying only the generic footer after the body sent (REPLACED). A generic footer
     found on the first read is left alone (GENERIC): it names nothing, and a write would only bring it back. Any
     other change, or a run reference, fails, but only after every target has been checked and every session footer
     taken off: one WrittenBodyError names each target that failed. A read or write that fails (GitHub) does not stop
@@ -145,9 +152,9 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
             failures.append(((kind, number), outcome.value))
         else:
             outcomes[(kind, number)] = outcome
-    # Every session footer found is taken off, whatever else in the batch failed; a generic footer is left, since a
-    # write only brings it back.
-    footed = [t for t in checked if outcomes.get((t[0], t[1])) is Readback.FOOTER]
+    # Every session footer and every footer in place of the attribution line is written over, whatever else in the
+    # batch failed; a generic footer after the body sent is left, since a write only brings it back.
+    footed = [t for t in checked if outcomes.get((t[0], t[1])) in (Readback.FOOTER, Readback.IN_PLACE)]
     written = [t for t in footed if write(*t)]
     if written:
         wait()
@@ -160,6 +167,9 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
             outcomes[(kind, number)] = Readback.REPLACED
         elif again is Readback.FOOTER:
             failures.append(((kind, number), "the platform's footer came back after the body sent was written again"))
+        elif again is Readback.IN_PLACE:
+            failures.append(((kind, number), "the platform's footer replaced the attribution line again after the "
+                                             "body sent was written again"))
         elif again is not Readback.SAME:
             failures.append(((kind, number), "the body differs from the one sent after it was written again"))
     if errors and not failures:

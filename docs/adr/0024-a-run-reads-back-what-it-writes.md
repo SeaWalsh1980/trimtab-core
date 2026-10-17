@@ -92,7 +92,8 @@ The upstream retro also comments on issues.
   It exits 2 only when GitHub refused the create (a 4xx), which filed
   nothing, so a re-run is safe.
 - **Comparing is a value, failing is the boundary's.** `compare` returns
-  SAME, FOOTER or DIFFERS; `verify_body` raises only to stop the run.
+  SAME, FOOTER or DIFFERS (and, by the amendments below, GENERIC and
+  IN_PLACE); `verify_body` raises only to stop the run.
 - **The write-back is authorised**: each routine prompt and command lists
   writing back the body the run sent, to take the footer off, among the
   writes the run may make.
@@ -104,6 +105,25 @@ The upstream retro also comments on issues.
     write would only bring it back.
   Both exit 0 and say so. The session footer coming back after the
   write-back still fails, as does any other link or text.
+- **A footer in place of the attribution line is written back** (amendment,
+  2026-10-17). The ControlTower retro's draft PR came back with its last line,
+  `🤖 Generated with [Claude Code](https://claude.com/claude-code)`, replaced
+  by the session footer: not after the body, in place of part of it.
+  `verify-body` read that as a change, exited 1, and the run stopped with the
+  session link left in the PR until the operator edited it. Opening the fix
+  for this showed the same on three more PRs; editing each body afterwards
+  restored the line and added no footer.
+  - Either footer, session link or generic, standing exactly where the
+    attribution line was is `IN_PLACE`, and is always written back: it has
+    deleted text the run sent, so leaving the generic form alone, as on the
+    first read after the body, would lose the line.
+  - After the write-back, the body must be as sent, or as sent with the
+    generic footer after it (`REPLACED`). A footer in place of the line
+    again fails.
+  - Only that one line, matched by its exact text, is recognised. A footer
+    in place of any other text is a difference. This is not the rejected
+    "strip whatever follows the `🤖 Generated with` line" below: nothing
+    unrecognised is deleted, and the write-back restores the line.
 
 ## Options considered
 

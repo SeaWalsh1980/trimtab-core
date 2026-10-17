@@ -105,11 +105,16 @@ class Compare(unittest.TestCase):
             with self.subTest(stacked=stacked[len(SENT):].replace("session_" + SESSION_TAIL, "session_…")):
                 self.assertIs(compare(SENT, stacked), Readback.DIFFERS)
 
-    def test_the_footer_in_place_of_the_attribution_line_is_recognised(self):
-        self.assertIs(compare(SENT, in_place_of_attribution(SENT, FOOTER)), Readback.FOOTER)
+    def test_the_footer_in_place_of_the_attribution_line_is_told_apart(self):
+        self.assertIs(compare(SENT, in_place_of_attribution(SENT, FOOTER)), Readback.IN_PLACE)
 
-    def test_the_generic_footer_in_place_of_the_attribution_line_is_recognised(self):
-        self.assertIs(compare(SENT, in_place_of_attribution(SENT, GENERIC)), Readback.GENERIC)
+    def test_the_generic_footer_in_place_of_the_attribution_line_is_told_apart(self):
+        self.assertIs(compare(SENT, in_place_of_attribution(SENT, GENERIC)), Readback.IN_PLACE)
+
+    def test_a_body_without_the_attribution_line_never_counts_as_in_place(self):
+        sent = SENT[:-len(ATTRIBUTION)]
+
+        self.assertIs(compare(sent, with_generic(sent)), Readback.GENERIC)
 
     def test_the_footer_in_place_of_another_last_line_is_a_difference(self):
         sent = SENT + "Signed off.\n"
@@ -177,7 +182,30 @@ class VerifyBody(unittest.TestCase):
 
         outcome = verify(bodies, SENT)
 
-        self.assertEqual((outcome, bodies.writes, bodies.found), (Readback.FOOTER, [SENT], SENT))
+        self.assertEqual((outcome, bodies.writes, bodies.found), (Readback.IN_PLACE, [SENT], SENT))
+
+    def test_a_generic_footer_in_place_of_the_attribution_line_is_written_back_too(self):
+        bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, GENERIC))
+
+        outcome = verify(bodies, SENT)
+
+        self.assertEqual((outcome, bodies.writes, bodies.found), (Readback.IN_PLACE, [SENT], SENT))
+
+    def test_a_footer_in_place_again_after_the_write_back_fails(self):
+        for footer in (FOOTER, GENERIC):
+            with self.subTest(generic=footer is GENERIC):
+                bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, FOOTER),
+                                        then=in_place_of_attribution(SENT, footer))
+
+                with self.assertRaisesRegex(WrittenBodyError, "replaced the attribution line again"):
+                    verify(bodies, SENT)
+
+    def test_the_generic_footer_after_the_restored_line_passes_as_replaced(self):
+        bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, FOOTER), then=with_generic(SENT))
+
+        outcome = verify(bodies, SENT)
+
+        self.assertEqual((outcome, bodies.writes), (Readback.REPLACED, [SENT]))
 
     def test_a_footer_added_while_the_run_waits_is_still_taken_off(self):
         bodies = InMemoryBodies(("pull", PR), SENT, arrives=with_footer(SENT))
@@ -681,6 +709,17 @@ class VerifyBodyCli(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("removed the platform's session footer", done.stdout)
         self.assertNotIn(SESSION_TAIL, done.stdout + done.stderr)
+
+    def test_a_footer_in_place_of_the_attribution_line_exits_0_and_says_the_line_was_restored(self):
+        self.answer.write_text(json.dumps({"body": in_place_of_attribution(SENT, GENERIC)}), encoding="utf-8")
+        clean = self.dir / "clean.json"
+        clean.write_text(json.dumps({"body": SENT}), encoding="utf-8")
+        self.env["FAKE_GH_AFTER_PATCH"] = str(clean)
+
+        done = self.verify("--pull", str(PR), "--body-file", str(self.body))
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("restored the attribution line", done.stdout)
 
     def test_a_session_footer_replaced_by_the_generic_one_exits_0_and_says_so(self):
         # ADR 0024's first trial: the run report records which footer was there and which one stayed.
