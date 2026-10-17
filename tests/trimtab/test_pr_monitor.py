@@ -292,6 +292,19 @@ class Codec(unittest.TestCase):
 
         self.assertEqual(pm.decode(pm.encode(entries)), entries)
 
+    def test_a_list_another_version_wrote_is_an_unknown_version(self):
+        for text in (json.dumps({"v": 2, "entries": []}), json.dumps({"v": 2, "shape": "anything"})):
+            with self.subTest(text=text):
+                with self.assertRaises(pm.UnknownVersionError):
+                    pm.decode(text)
+
+    def test_a_malformed_version_is_not_an_unknown_version(self):
+        for version in (True, 1.0, "2", None):
+            with self.subTest(version=version):
+                with self.assertRaises(pm.ListFormatError) as raised:
+                    pm.decode(json.dumps({"v": version, "entries": []}))
+                self.assertNotIsInstance(raised.exception, pm.UnknownVersionError)
+
     def test_lists_this_version_did_not_write_are_refused(self):
         row = {"host": "github.com", "owner": "owner", "repo": "repo", "number": 7, "at": NOW}
         for text in ("not json", "[]", json.dumps({"v": 2, "entries": []}),

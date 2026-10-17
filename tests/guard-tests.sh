@@ -1217,6 +1217,10 @@ pmr 0 "a corrupt list is replaced on the next create"       "$(pm_post pm-sessio
 pmv pass "a PR recorded over a corrupt list"                "$(pm_fix pm-session-d 71)"
 pm_write pm-session-e "{\"v\":2,\"entries\":[{\"host\":\"github.com\",\"owner\":\"owner\",\"repo\":\"repo\",\"number\":72,\"at\":$(date +%s)}]}"
 pmv not-recorded "a list of an unknown version"             "$(pm_fix pm-session-e 72)"
+# Another version of the module wrote this one and stopped: its file is older
+# than the TTL, so it may be pruned; the fresh one above must be kept.
+pm_write pm-session-h "{\"v\":2,\"entries\":[]}"
+touch -d '3 days ago' "$(pm_file pm-session-h)"
 pm_write pm-session-f "{\"v\":1,\"entries\":[{\"host\":\"github.com\",\"owner\":\"owner\",\"repo\":\"repo\",\"number\":73,\"at\":$(date +%s)}]}"
 chmod 644 "$(pm_file pm-session-f)"
 pmv not-recorded "a list file other users can read"         "$(pm_fix pm-session-f 73)"
@@ -1230,6 +1234,8 @@ pmt "the symlink is gone and its target unchanged"          test ! -L "$(pm_file
 pmr 0 "any create prunes another session's expired list"    "$(pm_post $PM_A 'gh pr create --fill' "$PR/12")"
 pmt "the expired list is gone"                              test ! -e "$(pm_file pm-session-c)"
 pmt "the live lists stay"                                   test -e "$(pm_file pm-session-d)" -a -e "$(pm_file $PM_A)"
+pmt "a fresh list another version wrote stays"              test -e "$(pm_file pm-session-e)"
+pmt "an untouched list another version wrote is pruned"     test ! -e "$(pm_file pm-session-h)"
 chmod 770 "$PM_DIR"
 pmv not-recorded "a group-writable list directory"          "$(pm_fix $PM_A 7)"
 pmr 1 "a create into a group-writable directory: exit 1"   "$(pm_post $PM_A 'gh pr create --fill' "$PR/13")"

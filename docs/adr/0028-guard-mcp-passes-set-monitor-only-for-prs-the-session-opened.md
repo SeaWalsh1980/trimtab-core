@@ -119,7 +119,12 @@ time it was recorded.
   at most **30** PRs; past that the oldest drops. Expiry gates only turning
   Auto-fix on: a monitor already on stays on in the app.
 - Every record rewrites the session's own list, dropping expired entries,
-  and deletes other sessions' lists whose newest entry has expired.
+  and deletes other sessions' lists whose newest entry has expired. A list
+  with another integer `v` was written by another version of this module
+  and is kept while its file is younger than the TTL, since that version
+  rewrites it on every record and prunes its own (added after review: a v1
+  recorder would otherwise delete a later version's live lists). `v` must be
+  exactly the integer 1 to be read; `true` or `1.0` is refused.
 - Writes take an exclusive `flock` and replace the file atomically. A replay
   of the same create leaves one entry.
 - The directory is created `0700` and checked with `lstat` on every use: a

@@ -82,6 +82,11 @@ class ListFormatError(PrMonitorError):
     """A stored list is not one this version wrote."""
 
 
+class UnknownVersionError(ListFormatError):
+    """A list with a well-formed version number other than this module's: another version of
+    the module wrote it, so this one neither reads it nor prunes it while it is in use."""
+
+
 class SessionIdError(PrMonitorError):
     """A session ID is missing or not of the expected shape."""
 
@@ -390,12 +395,17 @@ def encode(entries: tuple[Entry, ...]) -> str:
 
 
 def decode(text: str) -> tuple[Entry, ...]:
-    """The entries of a stored list. Raises ListFormatError for anything this version did not write."""
+    """The entries of a stored list. Raises ListFormatError for anything this version did not
+    write, and its subclass UnknownVersionError for a list carrying another integer version."""
     try:
         data = json.loads(text)
     except ValueError as err:
         raise ListFormatError("the list is not JSON") from err
-    if not isinstance(data, dict) or set(data) != {"v", "entries"} or data["v"] != LIST_VERSION:
+    version = data.get("v") if isinstance(data, dict) else None
+    if type(version) is int and version != LIST_VERSION:
+        raise UnknownVersionError("the list was written by another version of this module")
+    if (not isinstance(data, dict) or set(data) != {"v", "entries"}
+            or type(version) is not int or version != LIST_VERSION):  # true and 1.0 equal 1
         raise ListFormatError("the list is not a version-1 list")
     rows = data["entries"]
     if not isinstance(rows, list) or len(rows) > CAP:
@@ -559,7 +569,10 @@ class _Lock:
 
 def _prune(directory: Path, own: str, now: int) -> int:
     """Delete other sessions' expired or unreadable lists, planted symlinks, and stale temporary
-    files. Returns how many could not be handled; each is left in place."""
+    files. A list another version of this module wrote is kept while its file was written
+    within the TTL, since that version rewrites it on every record and prunes its own; only
+    an untouched one is deleted, so the directory stays bounded after a rollback. Returns how
+    many could not be handled; each is left in place."""
     failed = 0
     with os.scandir(directory) as it:
         for i, item in enumerate(it):
@@ -577,6 +590,8 @@ def _prune(directory: Path, own: str, now: int) -> int:
                 elif item.name.endswith(".json"):
                     try:
                         stale = is_expired_list(read_list(Path(item.path)), now)
+                    except UnknownVersionError:
+                        stale = now - int(item.stat(follow_symlinks=False).st_mtime) >= TTL_SECONDS
                     except ListFormatError:
                         stale = True
                 else:
