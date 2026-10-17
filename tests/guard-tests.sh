@@ -913,7 +913,7 @@ tm pass "a secret word in the server part"    "$(j mcp__keystore__get_item '{}')
 # Every other app tool falls through to the classification above, and the
 # negative controls below would pass if the list were widened to a prefix.
 CCD_PASS=(
-  mcp__ccd_turn__wrap_up
+  mcp__ccd_turn__wrap_up mcp__ccd_turn__update_plan
   mcp__ccd_view__show_pane mcp__ccd_view__close_pane
   mcp__ccd_view__get_layout mcp__ccd_view__set_transcript_view
   mcp__ccd_window__get_window_layout mcp__ccd_window__open_session_in
@@ -947,7 +947,6 @@ fi
 for n in \
   mcp__ccd_pr__set_auto_merge \
   mcp__ccd_pr__bind_pr \
-  mcp__ccd_turn__update_plan \
   mcp__ccd_session_mgmt__set_session_title \
   mcp__ccd_session_mgmt__set_session_permission_mode \
   mcp__ccd_host__sync_with_base_branch \
@@ -961,6 +960,43 @@ done
 tm ask  "app list is exact: a suffix"         "$(j mcp__ccd_turn__wrap_up_x '{}')"
 tm ask  "app list is exact: a run-on suffix"  "$(j mcp__ccd_turn__wrap_upX '{}')"
 tm ask  "app list is exact: a server prefix"  "$(j mcp__xccd_turn__wrap_up '{}')"
+
+# Read-only tools whose verb comes last pass by exact <tool> part, on any
+# server (ADR 0013, amendment 2026-10-16).
+TOOL_READ_PASS=(
+  pull_request_read issue_read actions_get actions_list
+)
+for t in "${TOOL_READ_PASS[@]}"; do
+  tm pass "verb-last read: github__$t"        "$(j "mcp__github__$t" '{}')"
+  tm pass "verb-last read on another server: $t" "$(j "mcp__plugin_github_github__$t" '{}')"
+done
+# As for CCD_ALLOW: the guard's list must hold exactly the names tested above.
+read_guard=$(awk '/^TOOL_READ_ALLOW=\($/{f=1; next} f && /^\)$/{exit} f' \
+  "$HOOKS/guard-mcp.sh" | tr -s ' \t' '\n' | sed '/^$/d' | sort)
+read_tests=$(printf '%s\n' "${TOOL_READ_PASS[@]}" | sort)
+if [[ -n "$read_guard" && "$read_guard" == "$read_tests" ]]; then
+  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "TOOL_READ_ALLOW holds exactly the tested names"
+else
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "TOOL_READ_ALLOW differs from the tested names (or could not be read)"
+  diff <(printf '%s\n' "$read_guard") <(printf '%s\n' "$read_tests") | sed 's/^/      /'
+  fails=$((fails+1))
+fi
+# The list passes before the secret-word check, so no listed name may carry
+# one of its words. Read from the shipped guard, so an addition is caught.
+read_secret=$(grep -iE 'key|token|secret|password|credential' <<<"$read_guard" || true)
+if [[ -n "$read_guard" && -z "$read_secret" ]]; then
+  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "TOOL_READ_ALLOW names carry no secret word"
+else
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "TOOL_READ_ALLOW lists a name with a secret word (or could not be read)"
+  printf '      %s\n' $read_secret
+  fails=$((fails+1))
+fi
+tm ask  "verb-last write still asks"          "$(j mcp__github__actions_run_trigger '{}')"
+tm ask  "verb-last list is not a suffix rule" "$(j mcp__github__mark_all_notifications_read '{}')"
+tm ask  "verb-last list is exact: a suffix"   "$(j mcp__github__issue_read_x '{}')"
+tm ask  "verb-last list is exact: a prefix"   "$(j mcp__github__xissue_read '{}')"
+tm ask  "verb-last list is exact: a case change" "$(j mcp__github__Issue_Read '{}')"
+tm ask  "verb-last name as the server part"   "$(j mcp__issue_read__create_item '{}')"
 
 tm ask  "FAIL-CLOSED: garbage payload"        'NOT JSON AT ALL'
 tm ask  "FAIL-CLOSED: empty payload"          ''

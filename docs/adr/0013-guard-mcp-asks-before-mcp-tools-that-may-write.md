@@ -7,7 +7,8 @@ product namespace is stripped before the verb check. See
 [Amendment (2026-10-05)](#amendment-2026-10-05). Amended 2026-10-16 by
 [ADR 0027](0027-guard-mcp-passes-desktop-app-tools-by-exact-name.md): the
 desktop app's UI, read-only and PR-monitoring tools pass by exact full
-name.
+name. Amended 2026-10-16: four verb-last GitHub reads pass by exact tool
+name. See [Amendment (2026-10-16): verb-last reads](#amendment-2026-10-16-verb-last-reads).
 
 ## Context
 
@@ -235,3 +236,63 @@ and every fail-closed path is unchanged.
   as rejected above.
 - Accepted false positive: a substring match asks on reads such as
   `get_keyword_report` or `list_monkeys`.
+
+## Amendment (2026-10-16): verb-last reads
+
+### Status
+
+Accepted, by the operator. Adds one pass before the read-verb check; the
+rest of the Decision and the earlier amendment stand.
+
+### Context
+
+The GitHub MCP server names some read-only tools with the verb last:
+`pull_request_read`, `issue_read`, `actions_get`, `actions_list`. Each takes
+a `method` argument, and every method each one accepts reads. The read-verb
+rule matches a leading verb only, so these ask on every call, among the most
+frequent calls in a session that watches a PR. That is the rubber-stamp
+prompt "Ask on every MCP call" was rejected for.
+
+### Decision
+
+guard-mcp passes a call whose `<tool>` part equals a name on `TOOL_READ_ALLOW`
+in the guard, after the name has split into one server and one tool and
+before the `gtm_` check. The comparison is literal string equality and case
+sensitive. It is never a suffix, prefix or glob. The server part is not
+checked, because it is set per deployment (`github`, or a plugin's
+`plugin_github_github`), for the reason the Decision gives for not naming
+servers.
+
+The list: `pull_request_read`, `issue_read`, `actions_get`, `actions_list`.
+`actions_run_trigger` stays off the list and asks.
+
+### Options considered
+
+- **A suffix rule** (`*_read`, `*_get`, `*_list`). Rejected:
+  `mark_all_notifications_read` ends in `_read` and writes.
+- **Full names, server included, as ADR 0027 does.** Rejected. The server
+  name varies by deployment, so the base could not name it. ADR 0027 could,
+  because the desktop app fixes its server names.
+- **Read the `method` argument.** Rejected for the reason the tag manager
+  option above was: guard-mcp classifies by name only.
+- **A data file of names.** Rejected for the reason the verb file above was.
+- **Leave it.** Rejected by the operator.
+
+### Consequences
+
+- The four GitHub tools pass on any server name.
+- Accepted residual: a tool on another server with one of these four tool
+  names passes, whatever it does. That is the same trust in a server's naming
+  that the read-verb rule already accepts.
+- Accepted residual: these pass whatever their `method`, so a GitHub release
+  that added a writing method to one of them would pass. A renamed tool falls
+  back to the classification and asks, which fails closed.
+- The secret-word check does not apply to these names, and none of them
+  carries a secret word. A test reads the list from the guard and fails on a
+  name that does, so a later addition cannot skip that check unnoticed.
+- The tests pin the list against the guard, as for `CCD_ALLOW`. Two negative
+  controls were run on a copy of the hooks on 2026-10-16:
+  - adding `mark_all_notifications_read` to the list failed the
+    list-equality case and the not-a-suffix case;
+  - replacing the exact comparison with a `*_read|*_get|*_list` glob failed
+    the not-a-suffix case and the prefix case.
