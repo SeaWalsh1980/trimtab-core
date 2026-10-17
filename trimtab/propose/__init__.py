@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass
 from typing import Callable, ContextManager, Mapping, Protocol, Sequence
 
@@ -54,6 +55,10 @@ class Draft:
 
 def title_prefix(item_id: str) -> str:
     return f"[{item_id}]"
+
+
+# The ID a title opens with, as `title_prefix` writes it.
+LEADING_ID = re.compile(r"\[([^\]]+)\]")
 
 
 def render(proposal: Proposal, registry: Mapping[str, Item], project: str | None = None) -> Draft:
@@ -152,17 +157,22 @@ def plan_project_prs(drafts: Sequence[Draft], sink: PullSink, closed_since: str 
     draft is RESOLVED while they stay below `threshold`, and proposed again once they reach it."""
     if not any(d.kind == "pr" for d in drafts):
         return {}
-    pulls = sink.recent_pulls(closed_since)
+    # Grouped once by the ID a title opens with, so each draft is a lookup, not a scan of every PR (ENG-6.2).
+    by_id: dict[str, list[PullTitle]] = {}
+    for p in sink.recent_pulls(closed_since):
+        if (opening := LEADING_ID.match(p.title)) is not None:
+            by_id.setdefault(opening.group(1), []).append(p)
     why: dict[str, str] = {}
     for d in drafts:
         if d.kind != "pr":
             continue
-        mine = sorted((p for p in pulls if p.title.startswith(title_prefix(d.item_id))), key=lambda p: p.number)
-        fixes = sorted((p for p in mine if p.state == "merged" and p.merged_at), key=lambda p: p.merged_at)
-        since = _reports_since(fixes[-1], d) if fixes else None
+        mine = sorted(by_id.get(d.item_id, ()), key=lambda p: p.number)
         if (found := next((p for p in mine if p.state == "open"), None)) is not None:
             why[d.item_id] = f"SKIPPED: #{found.number} for this ID is open"
-        elif since is not None and not since:
+            continue
+        fixes = sorted((p for p in mine if p.state == "merged" and p.merged_at), key=lambda p: p.merged_at)
+        since = _reports_since(fixes[-1], d) if fixes else None
+        if since is not None and not since:
             why[d.item_id] = f"RESOLVED: #{fixes[-1].number} merged after the evidence"
         elif since is not None and len(since) < threshold:
             why[d.item_id] = (f"RESOLVED: #{fixes[-1].number} merged after the earlier evidence; {len(since)} "

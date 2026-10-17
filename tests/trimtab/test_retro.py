@@ -299,6 +299,9 @@ class ProjectDrafts(unittest.TestCase):
 
         self.assertEqual(plan_project_prs([draft("TST-2", prs=self.EVIDENCE)], Unreadable()), {})
 
+    def test_a_pr_for_a_longer_id_sharing_the_prefix_is_not_this_ids(self):
+        self.assertEqual(self.held(PullTitle(946, "[SCR-X-20] other", "open")), {})
+
     def test_an_issue_draft_is_left_to_plan_issues(self):
         found = plan_project_prs([draft("TST-2", prs=self.EVIDENCE)], FakePulls(PullTitle(946, "[TST-2] x", "open")))
 
