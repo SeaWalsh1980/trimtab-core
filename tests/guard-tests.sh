@@ -821,6 +821,11 @@ t guard-secrets.sh 2 "NotebookEdit deleting a cell in a secrets dir (path rules 
 t guard-secrets.sh 0 "NotebookEdit with benign source" "$(j NotebookEdit '{"notebook_path":"/p/app/analysis.ipynb","new_source":"print(42)"}')"
 t guard-secrets.sh 0 "NotebookEdit test password fixture (relaxed)" "$(j NotebookEdit '{"notebook_path":"/p/tests/test_nb.ipynb","new_source":"password = \"correct-horse-battery-staple-1234\""}')"
 t guard-secrets.sh 0 "NotebookEdit deleting a cell in an ordinary notebook" "$(j NotebookEdit '{"notebook_path":"/p/app/analysis.ipynb","cell_id":"c1","edit_mode":"delete"}')"
+# An empty file_path is skipped, not taken as the path, in BOTH parse branches
+# (jq's `//` keeps "" where python3's `or` skips it). Pinned both ways: the
+# path rules must see notebook_path, and so must the test-path relaxation.
+t guard-secrets.sh 2 "empty file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":"","notebook_path":"/p/.env","new_source":"A=1"}')"
+t guard-secrets.sh 0 "empty file_path does not hide a test notebook_path (relaxed)" "$(j NotebookEdit '{"file_path":"","notebook_path":"/p/tests/test_nb.ipynb","new_source":"password = \"correct-horse-battery-staple-1234\""}')"
 
 echo "== guard-secrets: signature packs =="
 # A session launched after Task 2 inherits these from its settings; the cases
