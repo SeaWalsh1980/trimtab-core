@@ -22,10 +22,10 @@ fails=0
 # python3 in j() keeps the real HOME (see the fixture note below). A case that
 # sets HOME itself keeps its own value.
 REAL_HOME="$HOME"
-t() { # t <guard> <expected-exit> <label> <payload>
-  local g="$1" want="$2" label="$3" payload="$4" got h="$HOME"
+t() { # t <guard> <expected-exit> <label> <payload> [the guard's cwd]
+  local g="$1" want="$2" label="$3" payload="$4" d="${5:-.}" got h="$HOME"
   [[ "$g" == guard-paths.sh && "$h" == "$REAL_HOME" ]] && h="$GUARD_HOME"
-  printf '%s' "$payload" | HOME="$h" bash "$HOOKS/$g" >/dev/null 2>&1
+  (cd "$d" && printf '%s' "$payload" | HOME="$h" bash "$HOOKS/$g" >/dev/null 2>&1)
   got=$?
   if [[ "$got" == "$want" ]]; then
     printf 'PASS  %-14s exit=%s  %s\n' "$g" "$got" "$label"
@@ -1541,6 +1541,33 @@ stub_bin bash cat grep sed head tail basename jq python3
 tp "$STUB" guard-secrets.sh 0 "full deps: benign code allowed"   "$(j Write '{"file_path":"/p/app/x.py","content":"print(42)"}')"
 tp "$STUB" guard-paths.sh   0 "full deps: normal source allowed" "$(j Read '{"file_path":"/p/app/main.py"}')"
 tp "$STUB" guard-secrets.sh 2 "full deps: PEM still blocked"     "$PEM_PAYLOAD"
+
+# The python3 fallback must not import from the session's working directory,
+# which is the repository under work: a json.py planted there would otherwise
+# shadow the standard library and answer for the guard. This one reads every
+# payload as an empty Read, which each guard waves through. Each case runs
+# python3-only from the plant's directory and must still block. The plant
+# lives under $CPTMP, which the EXIT trap removes.
+SHADOW=$(mktemp -d "$CPTMP/plant.XXXXXX")
+cat > "$SHADOW/json.py" <<'PY'
+def load(f):
+    f.read()
+    return {"tool_name": "Read", "tool_input": {}}
+def loads(s):
+    return {"tool_name": "Read", "tool_input": {}}
+PY
+stub_bin bash cat grep sed head tail basename dirname readlink realpath tr cut sort python3
+tp "$STUB" guard-bash.sh     2 "python3 only: a planted json.py does not hide a destructive command" "$DESTRUCTIVE_PAYLOAD" "$SHADOW"
+tp "$STUB" guard-paths.sh    2 "python3 only: a planted json.py does not hide a credential read"    "$ENV_PAYLOAD" "$SHADOW"
+tp "$STUB" guard-secrets.sh  2 "python3 only: a planted json.py does not hide a secret write"       "$PEM_PAYLOAD" "$SHADOW"
+tp "$STUB" guard-security.sh 2 "python3 only: a planted json.py does not hide a workflow edit"      "$(j Edit '{"file_path":"/p/.github/workflows/ci.yml"}')" "$SHADOW"
+# The same cases from an ordinary directory, so a red above is the plant's
+# doing and not a stub that blocks everything.
+tp "$STUB" guard-bash.sh     2 "python3 only, no plant: a destructive command blocks" "$DESTRUCTIVE_PAYLOAD"
+tp "$STUB" guard-paths.sh    2 "python3 only, no plant: a credential read blocks"    "$ENV_PAYLOAD"
+tp "$STUB" guard-secrets.sh  2 "python3 only, no plant: a secret write blocks"       "$PEM_PAYLOAD"
+tp "$STUB" guard-security.sh 2 "python3 only, no plant: a workflow edit blocks"      "$(j Edit '{"file_path":"/p/.github/workflows/ci.yml"}')"
+tp "$STUB" guard-paths.sh    0 "python3 only, no plant: normal source allowed"       "$(j Read '{"file_path":"/p/app/main.py"}')"
 
 # guard-mcp answers "ask" rather than blocking, so it gets `tm`, given the stub
 # PATH directly: the answer is checked with python3 after the guard has run.

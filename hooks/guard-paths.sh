@@ -64,7 +64,9 @@ parse() {
            ((.tool_input.command // "") | gsub("\n"; " ")),
            ((.tool_name // "") | gsub("\n"; " "))'
   elif command -v python3 >/dev/null 2>&1; then
-    python3 -c '
+    # -I: isolated, so a json.py in the working directory (the repository
+    # under work) or a PYTHON* variable cannot stand in for the standard library.
+    python3 -I -c '
 import json, sys
 d = json.load(sys.stdin)
 ti = d.get("tool_input", {}) or {}

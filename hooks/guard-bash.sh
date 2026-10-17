@@ -48,7 +48,9 @@ if command -v jq >/dev/null 2>&1; then
     exit 2
   fi
 elif command -v python3 >/dev/null 2>&1; then
-  if ! cmd=$(printf '%s' "$payload" | python3 -c \
+  # -I: isolated, so a json.py in the working directory (the repository under
+  # work) or a PYTHON* variable cannot stand in for the standard library.
+  if ! cmd=$(printf '%s' "$payload" | python3 -I -c \
     'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("command",""))' 2>/dev/null); then
     echo "guard-bash: cannot parse hook payload. Blocking (fail closed)." >&2
     exit 2
