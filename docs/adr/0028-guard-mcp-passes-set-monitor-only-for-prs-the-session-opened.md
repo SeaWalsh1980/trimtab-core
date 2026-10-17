@@ -141,6 +141,8 @@ time it was recorded.
   already does for writes. A Read cannot write the list, and it is what a
   session needs to see why the dir does not resolve (added after review: the
   first version blocked Reads too). An empty or unknown tool still blocks.
+  [ADR 0029](0029-guard-paths-protects-the-config-dir-by-its-physical-path.md)
+  extends the physical root to every config name.
 
 **Check.** guard-mcp gives `mcp__ccd_pr__set_monitor` its own one-name list,
 `CCD_OWN_PR`, and takes it off `CCD_ALLOW`. For that name only, it hands the

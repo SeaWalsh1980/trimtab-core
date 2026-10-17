@@ -115,8 +115,10 @@ EOF
 # repo, a local edit is live for the next session with no commit, no pull
 # request and no CI — a shorter route than anything through GitHub.
 #
-# Scope is the LIVE tree only: $cp_home, the realpath targets of its symlinks,
-# the exact repo-root files bootstrap consumes, and the base snapshot store
+# Scope is the LIVE tree only: $cp_home's config names (as spelt, and by their
+# physical path when $cp_home is or sits under a link), the realpath targets of
+# its symlinks, the exact repo-root files bootstrap consumes, and the base
+# snapshot store
 # (every snapshot in it, linked or not: the rollback snapshot is live the
 # moment a rollback re-points the links at it). The roots derive from
 # CLAUDE_HOME and never from this script's own location — a guard that
@@ -147,6 +149,8 @@ fi
 # installed on this host — only the config names below are protected, which is
 # what lets the matrix run in CI); it resolves (full root list); or it exists
 # and does not resolve (block, because the protected set cannot be established).
+# One exception: a config dir itself that does not resolve still lets a Read
+# through, since Read cannot write a config name (see below).
 #
 # $cp_home is NOT a prefix root. It was, and that was wrong: ~/.claude holds
 # this agent's own working state as well as its config — projects/*/memory,
@@ -157,40 +161,55 @@ fi
 # docs/adr/0002-anchor-the-guards-to-the-live-control-plane.md.
 cp_roots=()
 cp_files=()
-# The config dir node ITSELF, matched by equality only — never as a prefix, and
-# deliberately not substring-scanned, or every path beneath it (including the
-# state dirs above) would match on the parent string alone.
-cp_exact=( "$cp_home" )
+cp_exact=()
 
-# Config locations under $cp_home. bootstrap.sh symlinks the first seven out of
-# the checkout (their realpaths are resolved below); plugins/ is Claude Code's
+# Config locations under $cp_home, as one list that every spelling in this file
+# is derived from. bootstrap.sh symlinks the first seven out of the checkout
+# (cp_linked; their realpaths are resolved below) from its own copy of these
+# names: a dir added there must be added here by hand, and no test compares
+# the two lists; plugins/ is Claude Code's
 # own, listed by name whether or not it exists on this host, because plugin
 # code executes. guard-state/ is written by hooks only, never by a session's
 # tools: it holds the list of PRs a session created, which decides what
 # guard-mcp passes (docs/adr/0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md).
 # A session that could write it could pass set_monitor for any PR.
-for cp_d in hooks rules bin commands agents skills output-styles plugins guard-state; do
-  cp_roots+=( "$cp_home/$cp_d" )
-done
-cp_files+=( "$cp_home/settings.json" "$cp_home/settings.local.json" \
-            "$cp_home/CLAUDE.md" )
+cp_linked=( hooks rules bin commands agents skills output-styles )
+cp_dnames=( "${cp_linked[@]}" plugins guard-state )
+cp_fnames=( settings.json settings.local.json CLAUDE.md )
 
-# guard-state is protected by its physical path too. When the config dir is a
-# link (a dotfiles checkout, or a CLAUDE_CONFIG_DIR that names one), a Write
-# spelt through the link's target misses the lexical root above, and a list the
-# same user writes there passes the recorder's owner and mode checks (ADR 0028).
+# Each name is protected as spelt under $cp_home and by its physical path.
+# When the config dir, or a directory above it, is a link (a dotfiles checkout,
+# or a CLAUDE_CONFIG_DIR that names one), a call spelt through the link's target
+# misses every lexical entry, and a linked name such as <target>/hooks/x misses
+# the link's realpath root too, though the kernel follows the link into it.
+# See docs/adr/0029-guard-paths-protects-the-config-dir-by-its-physical-path.md.
+#
 # A config dir that exists and does not resolve blocks every call but a Read,
-# as a config link does for writes: Read never writes, so it cannot reach the
-# list, and it is what a session needs to see why the dir does not resolve.
-# Only an exact Read is exempt; an empty or unknown tool still blocks.
+# as a config link does for writes: Read never writes, so it cannot reach a
+# config name, and it is what a session needs to see why the dir does not
+# resolve. Only an exact Read is exempt; an empty or unknown tool still blocks.
+cp_bases=( "$cp_home" )
 if [[ -e "$cp_home" || -L "$cp_home" ]]; then
   if cp_hphys=$(cd -P "$cp_home" 2>/dev/null && pwd -P); then
-    [[ "$cp_hphys" != "$cp_home" ]] && cp_roots+=( "${cp_hphys%/}/guard-state" )
+    [[ "$cp_hphys" != "$cp_home" ]] && cp_bases+=( "$cp_hphys" )
   elif [[ "$tool" != Read ]]; then
-    echo "guard-paths: $cp_home exists but does not resolve; cannot establish guard-state's physical path. Blocking." >&2
+    echo "guard-paths: $cp_home exists but does not resolve; cannot establish the config dir's physical path. Blocking." >&2
     exit 2
   fi
 fi
+for cp_b in "${cp_bases[@]}"; do
+  # The config dir node ITSELF, in each spelling, matched by equality only —
+  # never as a prefix, and deliberately not substring-scanned, or every path
+  # beneath it (including the agent's own state) would match on the parent
+  # string alone.
+  cp_exact+=( "$cp_b" )
+  for cp_d in "${cp_dnames[@]}"; do
+    cp_roots+=( "${cp_b%/}/$cp_d" )
+  done
+  for cp_f in "${cp_fnames[@]}"; do
+    cp_files+=( "${cp_b%/}/$cp_f" )
+  done
+done
 
 # Every link's realpath, not only the hooks link's parent (ADR 0002): the
 # mechanism links resolve into the base snapshot and the rules link into the
@@ -198,7 +217,7 @@ fi
 # reads. A link that exists and does not resolve blocks. The list is every
 # directory bootstrap.sh links, skills and output-styles included.
 cp_repos=()
-for cp_d in hooks rules bin commands agents skills output-styles; do
+for cp_d in "${cp_linked[@]}"; do
   cp_node="$cp_home/$cp_d"
   [[ -e "$cp_node" || -L "$cp_node" ]] || continue
   if cp_real=$(cd -P "$cp_node" 2>/dev/null && pwd -P); then
