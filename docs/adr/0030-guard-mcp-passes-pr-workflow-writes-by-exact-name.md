@@ -52,10 +52,12 @@ guard-mcp passes the three by exact full name, a literal string equality,
 never a prefix, suffix, glob or `<tool>`-part match. The server part is
 matched as well as the tool part.
 
-- `mcp__ccd_session_mgmt__send_message` joins `CCD_ALLOW`, since the desktop
-  app fixes its server's name (ADR 0027).
-- `mcp__claude-code-remote__subscribe_pr_activity` goes on a new list,
-  `PR_WORKFLOW_ALLOW`, checked after `CCD_ALLOW` and before the name is split.
+- `mcp__claude-code-remote__subscribe_pr_activity` and
+  `mcp__ccd_session_mgmt__send_message` go on a new list,
+  `PR_WORKFLOW_ALLOW`, checked after `CCD_ALLOW` and before the name is
+  split. `send_message` stays off `CCD_ALLOW`, whose rule is that its tools
+  only drive the app's UI or read its state; a message into another session
+  is a write, so it sits with this record's other passes.
 - `mcp__github__update_pull_request` goes on a new list, `PR_EDIT`, checked
   just before `PR_WORKFLOW_ALLOW`. For that name only, guard-mcp reads the
   call's arguments. It passes when `tool_input` is an object whose keys are
@@ -199,6 +201,15 @@ with jq off the PATH.
   message reaches that session as text from a peer, and can carry what the
   sender read from a PR or issue.
 - Accepted: a session can request reviewers on a PR without a prompt.
+- Accepted: the title, body and reviewer edits pass on any PR the session's
+  credentials reach, not only one it opened: the check reads which fields
+  change, not which PR. A session acting on injected text from a PR or
+  issue could rewrite another PR's body unprompted, including an
+  already-approved one, since editing a body does not dismiss an approval.
+  Limiting the edit to the session's own PRs, as ADR 0028 does for
+  `set_monitor`, is deferred with the subscription limit (Options
+  considered): the recorder would have to log PRs created through the
+  GitHub MCP server.
 - Accepted residual: the names and argument names are owned by their
   vendors. A listed name, or a listed argument, reused for something with
   another effect would pass. A renamed tool falls back to the classification
@@ -217,7 +228,8 @@ with jq off the PATH.
   `CCD_ALLOW`, and run the argument cases with jq only and with python3
   only. `mcp__ccd_session_mgmt__delete_session` takes `send_message`'s place
   among the off-list app tools, so that list keeps a session-management
-  write.
+  write. The bootstrap probes run the unparseable-payload probe once per
+  hook, and one `probe_pass` helper carries the note-only pass probes.
 - CI steps that run the base branch's guard matrix against this branch's
   hooks go red on the pull request that makes this change, because the
   base's matrix expects `send_message` to ask. That is by design.

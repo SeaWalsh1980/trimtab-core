@@ -548,20 +548,28 @@ unset pem
 # that lets MCP writes run unprompted.
 #
 #   probe_ask <hook> <what it asks about> <payload that must ask>
+PROBED_GARBAGE=" "   # hooks whose unparseable-payload probe already ran
 probe_ask() {
   local hook="$1" what="$2" probe="$3" name="${1%.sh}" out rc out_garbage rc_garbage
   if [[ -x "$CLAUDE_HOME/hooks/$hook" ]]; then
     set +e
     out=$(printf '%s' "$probe" | "$CLAUDE_HOME/hooks/$hook" 2>/dev/null)
     rc=$?
-    out_garbage=$(printf '%s' 'not json' | "$CLAUDE_HOME/hooks/$hook" 2>/dev/null)
-    rc_garbage=$?
     set -e
     # die, not note, as in probe_guard: a guard that does not ask is absent.
     [[ $rc -eq 0 ]] && is_ask "$out" && ok "$name asks about $what through the symlink" \
       || die "$name returned $rc without asking about $what — MCP writes would run unprompted"
-    [[ $rc_garbage -eq 0 ]] && is_ask "$out_garbage" && ok "$name asks on an unparseable payload" \
-      || die "$name returned $rc_garbage without asking on garbage — fails open"
+    # The garbage probe does not depend on the payload above, so it runs once
+    # per hook, however many probes that hook gets.
+    if [[ "$PROBED_GARBAGE" != *" $hook "* ]]; then
+      PROBED_GARBAGE+="$hook "
+      set +e
+      out_garbage=$(printf '%s' 'not json' | "$CLAUDE_HOME/hooks/$hook" 2>/dev/null)
+      rc_garbage=$?
+      set -e
+      [[ $rc_garbage -eq 0 ]] && is_ask "$out_garbage" && ok "$name asks on an unparseable payload" \
+        || die "$name returned $rc_garbage without asking on garbage — fails open"
+    fi
   elif [[ $CHECK_ONLY -eq 1 ]]; then
     note "$hook not linked into $CLAUDE_HOME — guard probe skipped"
   else
@@ -586,37 +594,32 @@ probe_ask guard-mcp.sh "an MCP write" \
 # tool that merges is off the list and must still be asked about.
 probe_ask guard-mcp.sh "a desktop-app tool off its exact-name list" \
   '{"tool_name":"mcp__ccd_pr__set_auto_merge","tool_input":{}}'
-# And a tool on the list passes. A miss only costs a prompt, so it is a note,
-# not a refusal: the guard still fails closed.
-if [[ -x "$CLAUDE_HOME/hooks/guard-mcp.sh" ]]; then
+# A pass that guard-mcp should give. A miss only costs a prompt, so it is a
+# note, not a refusal: the guard still fails closed.
+#   probe_pass <what passes> <payload that must pass> <cost of a miss>
+probe_pass() {
+  local what="$1" probe="$2" cost="$3" out rc
+  [[ -x "$CLAUDE_HOME/hooks/guard-mcp.sh" ]] || return 0
   set +e
-  out_allow=$(printf '%s' '{"tool_name":"mcp__ccd_turn__wrap_up","tool_input":{}}' \
-    | "$CLAUDE_HOME/hooks/guard-mcp.sh" 2>/dev/null)
-  rc_allow=$?
+  out=$(printf '%s' "$probe" | "$CLAUDE_HOME/hooks/guard-mcp.sh" 2>/dev/null)
+  rc=$?
   set -e
-  if [[ $rc_allow -eq 0 && -z "$out_allow" ]]; then
-    ok "guard-mcp passes a desktop-app tool on its exact-name list"
+  if [[ $rc -eq 0 && -z "$out" ]]; then
+    ok "guard-mcp passes $what"
   else
-    note "guard-mcp did not pass mcp__ccd_turn__wrap_up (exit $rc_allow) — the app's UI tools will prompt every turn"
+    note "guard-mcp did not pass $what (exit $rc) — $cost"
   fi
-fi
+}
+probe_pass "a desktop-app tool on its exact-name list" \
+  '{"tool_name":"mcp__ccd_turn__wrap_up","tool_input":{}}' \
+  "the app's UI tools will prompt every turn"
 # A PR edit that marks a draft ready must still ask (ADR 0030): if the argument
 # check stopped running, draft-until-final would lose its enforcement.
 probe_ask guard-mcp.sh "a PR edit that marks a draft ready" \
   '{"tool_name":"mcp__github__update_pull_request","tool_input":{"owner":"o","repo":"r","pullNumber":1,"draft":false}}'
-# And a title edit passes; a miss only costs a prompt, so it is a note.
-if [[ -x "$CLAUDE_HOME/hooks/guard-mcp.sh" ]]; then
-  set +e
-  out_edit=$(printf '%s' '{"tool_name":"mcp__github__update_pull_request","tool_input":{"owner":"o","repo":"r","pullNumber":1,"title":"t"}}' \
-    | "$CLAUDE_HOME/hooks/guard-mcp.sh" 2>/dev/null)
-  rc_edit=$?
-  set -e
-  if [[ $rc_edit -eq 0 && -z "$out_edit" ]]; then
-    ok "guard-mcp passes a PR title edit"
-  else
-    note "guard-mcp did not pass a PR title edit (exit $rc_edit) — every PR body or title edit will prompt"
-  fi
-fi
+probe_pass "a PR title edit" \
+  '{"tool_name":"mcp__github__update_pull_request","tool_input":{"owner":"o","repo":"r","pullNumber":1,"title":"t"}}' \
+  "every PR body or title edit will prompt"
 
 # The probes below run a hook on a payload whose cwd is a fresh empty directory.
 # Both hooks resolve the git toplevel of that cwd, so git is fenced at the

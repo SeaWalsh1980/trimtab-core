@@ -13,10 +13,11 @@ Amended 2026-10-17 by
 [ADR 0028](0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md)
 (proposed): for `mcp__ccd_pr__set_monitor` only, guard-mcp reads the call's
 arguments and denies rather than asks. Amended 2026-10-17 by
-[ADR 0030](0030-guard-mcp-passes-pr-workflow-writes-by-exact-name.md): three
-PR-workflow writes pass by exact full name, and for
-`mcp__github__update_pull_request` guard-mcp reads the arguments, passing an
-edit of the title, body or reviewers and asking on anything else.
+[ADR 0030](0030-guard-mcp-passes-pr-workflow-writes-by-exact-name.md): a
+PR-activity subscription and a sibling-session message pass by exact full
+name. `mcp__github__update_pull_request` does not pass by name: guard-mcp
+reads its arguments, passes an edit of only the title, body or reviewers,
+and asks on anything else.
 
 ## Context
 

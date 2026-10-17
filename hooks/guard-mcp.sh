@@ -155,7 +155,6 @@ CCD_ALLOW=(
   mcp__ccd_session_mgmt__get_session mcp__ccd_session_mgmt__list_sessions
   mcp__ccd_session_mgmt__list_events mcp__ccd_session_mgmt__get_usage
   mcp__ccd_session_mgmt__search_session_transcripts
-  mcp__ccd_session_mgmt__send_message
   mcp__ccd_host__get_storage_usage mcp__ccd_host__open_in_editor
   mcp__ccd_host__reveal_path mcp__ccd_host__request_keep_awake
   mcp__ccd_session__list_start_targets mcp__ccd_session__dismiss_task
@@ -203,12 +202,14 @@ sys.stdout.write("no-object" if not isinstance(a, dict) else "pass" if set(a) <=
   esac
 done
 
-# A PR-activity subscription passes by exact full name, server part included,
-# for any PR: no own-PR limit like set_monitor's (ADR 0030). Never by <tool>
-# part alone: a server's name is set per deployment, and the same name on
-# another server is another tool.
+# Writes that drive a session's PR work pass by exact full name, server part
+# included (ADR 0030): a PR-activity subscription, for any PR, with no own-PR
+# limit like set_monitor's; and a message into a sibling desktop session.
+# Never by <tool> part alone: a server's name is set per deployment, and the
+# same name on another server is another tool.
 PR_WORKFLOW_ALLOW=(
   mcp__claude-code-remote__subscribe_pr_activity
+  mcp__ccd_session_mgmt__send_message
 )
 for allowed in "${PR_WORKFLOW_ALLOW[@]}"; do
   # Quoted right-hand side: a literal string comparison, never a pattern.

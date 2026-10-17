@@ -928,8 +928,8 @@ echo "== guard-mcp =="
 # `t` cannot see it and `tm` checks the answer itself. A model's own account
 # of whether a call ran is not evidence (ADR 0013); the guard's output is. See
 # docs/adr/0013-guard-mcp-asks-before-mcp-tools-that-may-write.md.
-tm() { # tm <want: pass|ask|deny> <label> <payload> [PATH for the guard] [its cwd]
-  local want="$1" label="$2" payload="$3" p="${4:-$PATH}" d="${5:-.}" out rc verdict
+tm() { # tm <want: pass|ask|deny> <label> <payload> [PATH for the guard] [its cwd] [text the reason holds]
+  local want="$1" label="$2" payload="$3" p="${4:-$PATH}" d="${5:-.}" says="${6:-}" out rc verdict
   out=$(cd "$d" && printf '%s' "$payload" | PATH="$p" "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null); rc=$?
   verdict=$(printf '%s' "$out" | python3 -c '
 import json, sys
@@ -944,10 +944,11 @@ else:
     except ValueError:
         sys.exit(print("not valid JSON: %r" % out[:80]))
     h = d.get("hookSpecificOutput", {}) if isinstance(d, dict) else {}
+    reason = str(h.get("permissionDecisionReason", ""))
     ok = (h.get("hookEventName") == "PreToolUse" and h.get("permissionDecision") == want
-          and str(h.get("permissionDecisionReason", "")).startswith("guard-mcp: "))
-    print("ok" if ok else "not a %s: %r" % (want, out[:120]))
-' "$want" "$rc")
+          and reason.startswith("guard-mcp: ") and sys.argv[3] in reason)
+    print("ok" if ok else "not a %s naming %r: %r" % (want, sys.argv[3], out[:160]))
+' "$want" "$rc" "$says")
   if [[ "$verdict" == ok ]]; then
     printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh "$want" "$label"
   else
@@ -1024,7 +1025,6 @@ CCD_PASS=(
   mcp__ccd_session_mgmt__get_session mcp__ccd_session_mgmt__list_sessions
   mcp__ccd_session_mgmt__list_events mcp__ccd_session_mgmt__get_usage
   mcp__ccd_session_mgmt__search_session_transcripts
-  mcp__ccd_session_mgmt__send_message
   mcp__ccd_host__get_storage_usage mcp__ccd_host__open_in_editor
   mcp__ccd_host__reveal_path mcp__ccd_host__request_keep_awake
   mcp__ccd_session__list_start_targets mcp__ccd_session__dismiss_task
@@ -1080,6 +1080,7 @@ tm ask  "app list is exact: a server prefix"  "$(j mcp__xccd_turn__wrap_up '{}')
 # for any PR (ADR 0030).
 PR_WORKFLOW_PASS=(
   mcp__claude-code-remote__subscribe_pr_activity
+  mcp__ccd_session_mgmt__send_message
 )
 for n in "${PR_WORKFLOW_PASS[@]}"; do
   tm pass "PR-workflow allowlist: ${n#mcp__}" "$(j "$n" '{}')"
@@ -1124,13 +1125,7 @@ pin_list PR_EDIT "$PR_EDIT_NAME"
 # Each ask names its own cause, so the operator is never told a call changes
 # draft, state or base when it does not.
 tm_says() { # tm_says <label> <payload> <text the ask reason holds> [PATH]
-  local out; out=$(printf '%s' "$2" | PATH="${4:-$PATH}" "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null)
-  if [[ "$out" == *'"permissionDecision":"ask"'* && "$out" == *"$3"* ]]; then
-    printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh says "$1"
-  else
-    printf 'FAIL  %-14s %-4s  %s  -- got %q\n' guard-mcp.sh says "$1" "${out:0:160}"
-    fails=$((fails+1))
-  fi
+  tm ask "$1" "$2" "${4:-$PATH}" . "$3"
 }
 tm_says "PR edit: an extra argument is named as one" "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")" "sets an argument other than"
 tm_says "PR edit: a non-object is named as one"    '{"tool_name":"mcp__github__update_pull_request","tool_input":["title"]}' "carries no argument object"
