@@ -143,12 +143,35 @@ matrix run against each copy:
   `create_session` cases failed.
 - `merge_pull_request` added to the guard's list alone: the list-equality
   case failed, and so did the merge case.
+
+Those three ran while `update_pull_request` was on `PR_WORKFLOW_ALLOW`, and
+the exactness cases used its name. Once it moved to `PR_EDIT` they no longer
+exercised the list, so a second review found them protecting nothing. They
+now use `subscribe_pr_activity` (`mcp__evil__…`, a `_x` suffix, an
+`xclaude-code-remote` prefix, a case change), and were re-run against three
+loosened copies of the list:
+
+- a `<tool>`-part match: the other-server and prefix cases failed;
+- a substring match on the tool and server: the suffix and prefix cases
+  failed;
+- a case-folded match: the case-change case failed.
 - After review, `update_pull_request` moved to `PR_EDIT`. With its argument
   verdict ignored (pass by name): every ask case for it failed, ten in the
   main matrix plus the jq-only and python3-only ready cases.
 - With the key allowlist replaced by a refusal of `draft`, `state` and
   `base` alone: the `maintainer_can_modify`, unknown-argument, two-keys-in-one
   and no-arguments cases failed.
+
+The python3 fallback is run isolated (`python3 -I`), in both the name check
+and the argument check. Without it, a `json.py` in the session's working
+directory, the repository under work, shadowed the standard library when jq
+was missing: a second review found it, and a plant that names every write a
+read, and calls `draft: false` a title edit, passed both
+`mcp__srv__create_item` and a ready-marking `update_pull_request` with no
+prompt. The two cases that plant it failed on the unpatched guard and pass
+with `-I`. The name check had the flaw before this record; it is fixed here
+because the argument check shares it, and leaving it would keep a pass for
+every MCP write.
 
 The pr-monitor cases also failed on those copies, because the copied hooks
 directory sits outside the checkout that holds the Python package; they pass
@@ -177,6 +200,9 @@ with jq off the PATH.
   vendors. A listed name, or a listed argument, reused for something with
   another effect would pass. A renamed tool falls back to the classification
   and asks, and a renamed or new argument asks, which fails closed.
+- guard-mcp's python3 fallback runs isolated (`-I`), so neither a module in
+  the working directory nor a `PYTHON*` variable can answer for it. The
+  `set_monitor` check already ran with `-P` (ADR 0028).
 - The tests pin `PR_WORKFLOW_ALLOW` and `PR_EDIT` against the guard, as for
   `CCD_ALLOW`, and run the argument cases with jq only and with python3
   only. `mcp__ccd_session_mgmt__delete_session` takes `send_message`'s place

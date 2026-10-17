@@ -79,7 +79,9 @@ if command -v jq >/dev/null 2>&1; then
   name=$(printf '%s' "$payload" | jq -r 'if type == "object" then (.tool_name | strings) else empty end' 2>/dev/null)
   rc=$?
 elif command -v python3 >/dev/null 2>&1; then
-  name=$(printf '%s' "$payload" | python3 -c '
+  # -I: isolated, so a json.py in the working directory (the repository under
+  # work) or a PYTHON* variable cannot stand in for the standard library.
+  name=$(printf '%s' "$payload" | python3 -I -c '
 import json, sys
 d = json.load(sys.stdin)
 n = d.get("tool_name") if isinstance(d, dict) else None
@@ -175,7 +177,7 @@ for edit in "${PR_EDIT[@]}"; do
     verdict=$(printf '%s' "$payload" | jq -r --argjson ok "$pr_edit_args" \
       'if (.tool_input | type) == "object" and ((.tool_input | keys) - $ok | length) == 0 then "pass" else "ask" end' 2>/dev/null)
   else
-    verdict=$(printf '%s' "$payload" | python3 -c '
+    verdict=$(printf '%s' "$payload" | python3 -I -c '
 import json, sys
 ok = set(json.loads(sys.argv[1]))
 a = json.load(sys.stdin).get("tool_input")

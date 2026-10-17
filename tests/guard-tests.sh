@@ -928,9 +928,9 @@ echo "== guard-mcp =="
 # `t` cannot see it and `tm` checks the answer itself. A model's own account
 # of whether a call ran is not evidence (ADR 0013); the guard's output is. See
 # docs/adr/0013-guard-mcp-asks-before-mcp-tools-that-may-write.md.
-tm() { # tm <want: pass|ask|deny> <label> <payload> [PATH for the guard]
-  local want="$1" label="$2" payload="$3" p="${4:-$PATH}" out rc verdict
-  out=$(printf '%s' "$payload" | PATH="$p" "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null); rc=$?
+tm() { # tm <want: pass|ask|deny> <label> <payload> [PATH for the guard] [its cwd]
+  local want="$1" label="$2" payload="$3" p="${4:-$PATH}" d="${5:-.}" out rc verdict
+  out=$(cd "$d" && printf '%s' "$payload" | PATH="$p" "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null); rc=$?
   verdict=$(printf '%s' "$out" | python3 -c '
 import json, sys
 want, rc, out = sys.argv[1], int(sys.argv[2]), sys.stdin.read()
@@ -1103,11 +1103,13 @@ else
   fails=$((fails+1))
 fi
 # The list is by full name: the same tool on another server, and the other
-# writes on the same servers, still ask.
-tm ask  "PR-workflow list names the server"   "$(j mcp__plugin_github_github__update_pull_request '{}')"
-tm ask  "PR-workflow list is exact: a suffix" "$(j mcp__github__update_pull_request_branch '{}')"
-tm ask  "PR-workflow list is exact: a prefix" "$(j mcp__xgithub__update_pull_request '{}')"
-tm ask  "PR-workflow list is exact: a case change" "$(j mcp__github__Update_Pull_Request '{}')"
+# writes on the same servers, still ask. These use the listed name, so a
+# <tool>-part, glob or case-folding match on the list fails them.
+tm ask  "PR-workflow list names the server"   "$(j mcp__evil__subscribe_pr_activity '{}')"
+tm ask  "PR-workflow list is exact: a suffix" "$(j mcp__claude-code-remote__subscribe_pr_activity_x '{}')"
+tm ask  "PR-workflow list is exact: a prefix" "$(j mcp__xclaude-code-remote__subscribe_pr_activity '{}')"
+tm ask  "PR-workflow list is exact: a case change" "$(j mcp__claude-code-remote__Subscribe_PR_Activity '{}')"
+tm ask  "PR-workflow: a branch update still asks" "$(j mcp__github__update_pull_request_branch '{}')"
 tm ask  "PR-workflow: a merge still asks"     "$(j mcp__github__merge_pull_request '{}')"
 tm ask  "PR-workflow: an unsubscribe still asks" "$(j mcp__claude-code-remote__unsubscribe_pr_activity '{}')"
 tm ask  "PR-workflow: a remote send_message still asks" "$(j mcp__claude-code-remote__send_message '{}')"
@@ -1594,6 +1596,25 @@ tm ask  "python3 only: a write asks"          "$MCP_WRITE" "$STUB"
 tm ask  "python3 only: garbage payload asks"  'NOT JSON AT ALL' "$STUB"
 tm pass "python3 only: a PR title edit passes" "$(j mcp__github__update_pull_request '{"owner":"o","repo":"r","pullNumber":7,"title":"t"}')" "$STUB"
 tm ask  "python3 only: marking a PR ready asks" "$(j mcp__github__update_pull_request '{"owner":"o","repo":"r","pullNumber":7,"draft":false}')" "$STUB"
+# The python3 fallback must not import from the session's working directory,
+# which is the repository under work: a json.py planted there would otherwise
+# shadow the standard library and answer for the guard. This one names every
+# write a read, and calls a PR's draft flag a title edit. No bytecode is
+# written, so a guard that imports it leaves only the plant to remove.
+PLANT=$(mktemp -d)
+cat > "$PLANT/json.py" <<'PY'
+def loads(s): return ["title"]
+def load(f):
+    if "update_pull_request" in f.read():
+        return {"tool_name": "mcp__github__update_pull_request", "tool_input": {"title": "x"}}
+    return {"tool_name": "mcp__srv__get_item"}
+PY
+export PYTHONDONTWRITEBYTECODE=1
+tm ask  "python3 only: a planted json.py does not make a write a read" "$MCP_WRITE" "$STUB" "$PLANT"
+tm ask  "python3 only: a planted json.py does not pass marking a PR ready" "$(j mcp__github__update_pull_request '{"owner":"o","repo":"r","pullNumber":7,"draft":false}')" "$STUB" "$PLANT"
+unset PYTHONDONTWRITEBYTECODE
+rm -f "$PLANT/json.py"
+rmdir "$PLANT"
 
 echo "== rules frontmatter =="
 # Regression guard: every rules/*.md must open with a YAML frontmatter block that
