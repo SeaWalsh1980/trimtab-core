@@ -491,6 +491,23 @@ class AnIssueListingThatCannotBeRead(RunsTheCli):
         self.assertNotIn("confirm: ", dry)
 
 
+class NoIssueDraft(RunsTheCli):
+    """With no issue draft the issues are not read, so an issue listing that cannot be read holds nothing up."""
+
+    def test_an_unreadable_issue_listing_with_no_issue_draft_still_ends_0_with_the_project_marks(self):
+        body = AMBIGUOUS.replace("scope: upstream", "scope: project")
+        self.write_pulls([{"number": n, "title": f"change {n}", "body": body, "merged_at": at, "labels": []}
+                          for n, at in ((101, "2026-09-10T00:00:00Z"), (102, "2026-09-18T00:00:00Z"))]
+                         + [{"number": 103, "title": "[TST-2] settle fake vs mock", "body": "",
+                             "merged_at": "2026-09-19T00:00:00Z", "labels": []}])
+        self.issues.write_text(json.dumps([{"labels": [ISSUE_LABEL], "state": "open"}]))  # no title: unreadable
+        self.ingest(as_of="2026-09-20")
+
+        dry = self.propose("--check-open", as_of="2026-09-20")
+
+        self.assertIn("RESOLVED: #103 merged after the evidence", dry)
+
+
 class NoWindow(RunsTheCli):
     """With no window only open PRs are listed, and the dry run says so rather than imply the rest were checked."""
 

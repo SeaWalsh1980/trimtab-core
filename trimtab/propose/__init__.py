@@ -113,9 +113,11 @@ class IssuePlan:
 
 
 def plan_issues(drafts: Sequence[Draft], sink: IssueSink, closed_since: str | None = None) -> IssuePlan:
-    """Which issue drafts would open. Reads only."""
-    titles = sink.recent_titles(ISSUE_LABEL, closed_since)
+    """Which issue drafts would open. Reads only, and nothing at all when there is no issue draft."""
     issues = [d for d in drafts if d.kind == "issue"]
+    if not issues:
+        return IssuePlan(sink.destination, (), ())
+    titles = sink.recent_titles(ISSUE_LABEL, closed_since)
     skip = {d.item_id for d in issues if any(t.startswith(title_prefix(d.item_id)) for t in titles)}
     return IssuePlan(sink.destination, tuple(d for d in issues if d.item_id not in skip), tuple(sorted(skip)))
 
