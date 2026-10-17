@@ -304,6 +304,28 @@ popd >/dev/null
 t guard-paths.sh 0 "Read of a guard-state list still allowed" "$(j Read "{\"file_path\":\"$PM_LIST\"}")"
 t guard-paths.sh 0 "a sibling name is not guard-state"        "$(j Write "{\"file_path\":\"$CP_HOME/guard-statement.md\",\"content\":\"x\"}")"
 
+# ...and by its physical path, when the config dir is a link: a Write spelt
+# through the link's target must block as the lexical spelling does, while
+# the agent's own state there stays writable.
+GS_REAL="$CPTMP/gs-real-config"
+GS_LINK="$CPTMP/gs-linked-config"
+mkdir -p "$GS_REAL/plans"
+ln -s "$GS_REAL" "$GS_LINK"
+GS_SAVED_CFG="$CLAUDE_CONFIG_DIR"
+export CLAUDE_CONFIG_DIR="$GS_LINK"
+t guard-paths.sh 2 "linked config: guard-state via the link"  "$(j Write "{\"file_path\":\"$GS_LINK/guard-state/pr-monitor/x.json\",\"content\":\"{}\"}")"
+t guard-paths.sh 2 "linked config: guard-state via its target" "$(j Write "{\"file_path\":\"$GS_REAL/guard-state/pr-monitor/x.json\",\"content\":\"{}\"}")"
+t guard-paths.sh 2 "linked config: Edit via its target"       "$(j Edit "{\"file_path\":\"$GS_REAL/guard-state/pr-monitor/x.json\"}")"
+t guard-paths.sh 2 "linked config: bash redirect via its target" "$(j Bash "{\"command\":\"echo x > $GS_REAL/guard-state/pr-monitor/x.json\"}")"
+t guard-paths.sh 0 "linked config: Read via its target"       "$(j Read "{\"file_path\":\"$GS_REAL/guard-state/pr-monitor/x.json\"}")"
+t guard-paths.sh 0 "linked config: plans stay writable"       "$(j Write "{\"file_path\":\"$GS_REAL/plans/p.md\",\"content\":\"x\"}")"
+GS_DANGLING="$CPTMP/gs-dangling-config"
+ln -s "$CPTMP/gs-nowhere" "$GS_DANGLING"
+export CLAUDE_CONFIG_DIR="$GS_DANGLING"
+t guard-paths.sh 2 "a config dir link that does not resolve blocks" "$(j Read '{"file_path":"/p/app/main.py"}')"
+export CLAUDE_CONFIG_DIR="$GS_SAVED_CFG"
+t guard-paths.sh 0 "an unlinked config dir adds no second root" "$(j Write "{\"file_path\":\"$GS_REAL/guard-state/x.json\",\"content\":\"{}\"}")"
+
 # -- the agent's own state under CLAUDE_HOME must stay WRITABLE -----------
 # These assert an allow, against the general rule that new cases assert a
 # block, and deliberately so: they are the regression that shipped. A blanket

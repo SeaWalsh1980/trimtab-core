@@ -175,6 +175,20 @@ done
 cp_files+=( "$cp_home/settings.json" "$cp_home/settings.local.json" \
             "$cp_home/CLAUDE.md" )
 
+# guard-state is protected by its physical path too. When the config dir is a
+# link (a dotfiles checkout, or a CLAUDE_CONFIG_DIR that names one), a Write
+# spelt through the link's target misses the lexical root above, and a list the
+# same user writes there passes the recorder's owner and mode checks (ADR 0028).
+# A config dir that exists and does not resolve blocks, as a config link does.
+if [[ -e "$cp_home" || -L "$cp_home" ]]; then
+  if cp_hphys=$(cd -P "$cp_home" 2>/dev/null && pwd -P); then
+    [[ "$cp_hphys" != "$cp_home" ]] && cp_roots+=( "${cp_hphys%/}/guard-state" )
+  else
+    echo "guard-paths: $cp_home exists but does not resolve; cannot establish guard-state's physical path. Blocking." >&2
+    exit 2
+  fi
+fi
+
 # Every link's realpath, not only the hooks link's parent (ADR 0002): the
 # mechanism links resolve into the base snapshot and the rules link into the
 # instance. Each resolved link's parent is a root whose exact files bootstrap

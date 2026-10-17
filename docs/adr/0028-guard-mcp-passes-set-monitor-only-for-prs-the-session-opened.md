@@ -128,7 +128,11 @@ time it was recorded.
   Anything else and the check denies and the recorder writes nothing.
 - guard-paths adds `guard-state` to the config locations it protects, so a
   session's Write, Edit, MultiEdit, NotebookEdit or Bash command cannot
-  write there. Reads stay open. Hooks write outside those tools.
+  write there. Reads stay open. Hooks write outside those tools. It is
+  protected by its physical path as well (added after review): when the
+  config dir is a link, a path spelt through the link's target would
+  otherwise miss the root. A config dir that exists and does not resolve
+  blocks every call, as a config link that does not resolve already does.
 
 **Check.** guard-mcp gives `mcp__ccd_pr__set_monitor` its own one-name list,
 `CCD_OWN_PR`, and takes it off `CCD_ALLOW`. For that name only, it hands the
