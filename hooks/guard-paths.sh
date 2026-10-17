@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse hook, matcher: Read|Edit|Write|MultiEdit|Bash
+# PreToolUse hook, matcher: Read|Edit|Write|MultiEdit|NotebookEdit|Bash
 #
 # Path policy: refuses to touch protected files by location or filename.
 # Exit 2 = blocked, stderr is fed back to Claude. Exit 0 = allowed.
@@ -33,7 +33,20 @@ if [[ -z "$payload" ]]; then
 fi
 
 # ---- parse -------------------------------------------------------------
-# Emits three lines: file_path, command, then tool_name (any may be empty).
+# Emits three lines: the target path, command, then tool_name (any may be
+# empty). The target path is file_path, or NotebookEdit's notebook_path, or
+# path, the same order guard-security reads them in: a key left out here is a
+# tool whose every path check passes on an empty string. Only a non-empty
+# string counts, in both branches: jq's `//` alone kept "", 0, [] and {},
+# which python3's `or` skips, and printed an array over several lines.
+#
+# A target path holding a newline or carriage return fails the parse, so the
+# call blocks. The fields are one per line, and a newline in the path pushed
+# its tail onto the later lines: a path ending "\n\nRead\n/x" was split as
+# tool_name Read, skipping the control-plane check while the tool wrote
+# under the live tree. Collapsing it, as the command's are below, would check
+# a different path from the one the tool writes.
+#
 # The command has newlines collapsed to spaces in BOTH branches — jq's raw
 # output would otherwise spread a multi-line command over several lines and
 # only the first would survive the line-2 extraction below.
@@ -45,7 +58,9 @@ fi
 # whole matrix twice, with jq and with jq removed, is what enforces it.
 parse() {
   if command -v jq >/dev/null 2>&1; then
-    jq -r '(.tool_input.file_path // .tool_input.path // ""),
+    jq -r '(([.tool_input.file_path, .tool_input.notebook_path, .tool_input.path]
+              | map(select(type == "string" and . != "")) | .[0] // "")
+             | if test("[\n\r]") then error("line break in the target path") else . end),
            ((.tool_input.command // "") | gsub("\n"; " ")),
            ((.tool_name // "") | gsub("\n"; " "))'
   elif command -v python3 >/dev/null 2>&1; then
@@ -53,7 +68,11 @@ parse() {
 import json, sys
 d = json.load(sys.stdin)
 ti = d.get("tool_input", {}) or {}
-print(ti.get("file_path") or ti.get("path") or "")
+keys = [ti.get("file_path"), ti.get("notebook_path"), ti.get("path")]
+target = next((k for k in keys if isinstance(k, str) and k), "")
+if "\n" in target or "\r" in target:
+    sys.exit("line break in the target path")
+print(target)
 print((ti.get("command") or "").replace("\n", " "))
 print((d.get("tool_name") or "").replace("\n", " "))
 '
@@ -63,7 +82,7 @@ print((d.get("tool_name") or "").replace("\n", " "))
 }
 
 if ! parsed=$(printf '%s' "$payload" | parse 2>/dev/null); then
-  echo "guard-paths: cannot parse payload (needs jq or python3). Blocking." >&2
+  echo "guard-paths: cannot parse payload (needs jq or python3, and a target path with no line break). Blocking." >&2
   exit 2
 fi
 
@@ -587,8 +606,11 @@ check_path() {
 # function also means no future addition to allow_names can reach it.
 #
 # Enforcement is an allow-list of exactly one tool rather than a deny-list of
-# four: an empty, unknown or future tool_name enforces by default, and
-# NotebookEdit is covered without naming it.
+# five: an empty, unknown or future tool_name enforces by default. That holds
+# only for a tool the matcher sends here and whose path key parse() reads.
+# NotebookEdit had neither until ADR 0030, which is why the registration test
+# in the matrix pins the matcher. See
+# docs/adr/0030-guard-paths-is-registered-for-and-reads-notebookedit.md.
 case "$tool" in
   Read) ;;
   *)    cp_check "$file" "write to the live control plane" ;;

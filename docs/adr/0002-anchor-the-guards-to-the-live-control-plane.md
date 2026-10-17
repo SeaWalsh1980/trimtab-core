@@ -5,7 +5,11 @@
 Accepted. Amended 2026-10-17 by
 [ADR 0029](0029-guard-paths-protects-the-config-dir-by-its-physical-path.md):
 the config directory's names are protected by their physical path too, when
-the directory or one above it is a link.
+the directory or one above it is a link. Corrected 2026-10-17 by
+[ADR 0030](0030-guard-paths-is-registered-for-and-reads-notebookedit.md): an
+unknown or future tool name is checked by default only once the guard's
+matcher sends it the tool; NotebookEdit was not sent, and its path was not
+read, until then.
 
 ## Context
 
