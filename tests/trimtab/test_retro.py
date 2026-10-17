@@ -516,6 +516,44 @@ class AnIssueListingThatCannotBeRead(RunsTheCli):
         self.assertNotIn("confirm: ", dry)
 
 
+class OneIdInBothScopes(RunsTheCli):
+    """An ID at threshold in both scopes renders two drafts; each takes only its own kind's marks."""
+
+    BOTH = AMBIGUOUS.replace('''  evidence: "in-memory fake vs mock is undecided for our own HTTP client"
+```''', '''  evidence: "in-memory fake vs mock is undecided for our own HTTP client"
+- id: TST-2
+  kind: gap
+  scope: project
+  evidence: "the project's rule is silent on it"
+```''')
+
+    def lines(self, open_issue):
+        self.write_pulls([{"number": n, "title": f"change {n}", "body": self.BOTH, "merged_at": at, "labels": []}
+                          for n, at in ((101, "2026-09-10T00:00:00Z"), (102, "2026-09-18T00:00:00Z"))]
+                         + [{"number": 104, "title": "[TST-2] in progress", "state": "open", "body": "",
+                             "labels": []}])
+        self.issues.write_text(json.dumps([{"title": "[TST-2] reported ambiguous", "labels": [ISSUE_LABEL],
+                                            "state": "open"}] if open_issue else []))
+        self.ingest(as_of="2026-09-20")
+        dry = self.propose("--check-open", as_of="2026-09-20")
+        heads = [line for line in dry.splitlines() if line.startswith("--- would open:")]
+        issue = next(line for line in heads if " issue on " in line)
+        project = next(line for line in heads if "draft PR in this project" in line)
+        return dry, issue, project
+
+    def test_each_draft_shows_only_its_own_kinds_mark(self):
+        _, issue, project = self.lines(open_issue=True)
+
+        self.assertEqual((("an issue for this ID is open" in issue), ("#104" in issue)), (True, False))
+        self.assertEqual((("SKIPPED: #104 for this ID is open" in project), ("an issue for this ID" in project)),
+                         (True, False))
+
+    def test_an_open_pr_leaves_the_issue_draft_unmarked_and_in_the_token(self):
+        dry, issue, _ = self.lines(open_issue=False)
+
+        self.assertEqual((issue.count(","), "to open 1 issue(s)" in dry), (0, True))
+
+
 class NoIssueDraft(RunsTheCli):
     """With no issue draft the issues are not read, so an issue listing that cannot be read holds nothing up."""
 

@@ -442,7 +442,9 @@ def cmd_propose(args) -> int:
     if not args.apply:
         print(f"propose --dry-run: {len(drafts)} proposal(s) at threshold {args.threshold}; nothing opened")
     # The issues and the project's PRs are read apart: a listing that cannot be read marks its own drafts NOT
-    # CHECKED and ends the run 2, but never hides what the other listing found.
+    # CHECKED and ends the run 2, but never hides what the other listing found. Every mark is keyed by the draft's
+    # kind as well as its ID: one ID can reach the threshold in both scopes, and each draft takes only its own marks.
+    marks: dict[tuple[str, str], str] = {}
     unreadable: list[SourceError] = []
     try:
         plan = (propose.plan_issues(drafts, _issues(args, issues_repo), closed_since=_since(args))
@@ -453,30 +455,27 @@ def cmd_propose(args) -> int:
             return 2
         plan = None
         unreadable.append(err)
-        issues_unread = {d.item_id: f"NOT CHECKED: the issue listing could not be read ({err})"
-                         for d in drafts if d.kind == "issue"}
-    else:
-        issues_unread = {}
+        marks.update({("issue", d.item_id): f"NOT CHECKED: the issue listing could not be read ({err})"
+                      for d in drafts if d.kind == "issue"})
+    if plan is not None:
+        marks.update({("issue", i): "SKIPPED: an issue for this ID is open or was closed within the window"
+                      for i in plan.already_open})
+    pr_error = None
     try:
         held = (propose.plan_project_prs(drafts, source, closed_since=_since(args), threshold=args.threshold)
                 if args.check_open and not args.apply else {})
     except SourceError as err:
-        held = {d.item_id: f"NOT CHECKED: the PR listing could not be read ({err})" for d in drafts if d.kind == "pr"}
+        pr_error = err
         unreadable.append(err)
-        prs_unread = True
-    else:
-        prs_unread = False
+        held = {d.item_id: f"NOT CHECKED: the PR listing could not be read ({err})" for d in drafts if d.kind == "pr"}
+    marks.update({("pr", i): mark for i, mark in held.items()})
     if not args.apply:
-        if args.check_open and _since(args) is None and any(d.kind == "pr" for d in drafts) and not prs_unread:
+        if args.check_open and _since(args) is None and any(d.kind == "pr" for d in drafts) and pr_error is None:
             print("no window: merged and closed [<ID>] PRs were not checked; only open ones")
         for d in drafts:
             where = f"issue on {issues_repo}" if d.kind == "issue" else "draft PR in this project (session step)"
-            if plan is not None and d.item_id in plan.already_open:
-                where += ", SKIPPED: an issue for this ID is open or was closed within the window"
-            if d.kind == "issue" and d.item_id in issues_unread:
-                where += f", {issues_unread[d.item_id]}"
-            if d.item_id in held:
-                where += f", {held[d.item_id]}"
+            if (d.kind, d.item_id) in marks:
+                where += f", {marks[(d.kind, d.item_id)]}"
             labels = f" [labels: {', '.join(d.labels)}]" if d.labels else ""
             print(f"\n--- would open: {where}{labels}\n# {d.title}\n\n{d.body}")
         if plan is not None and plan.to_open:
