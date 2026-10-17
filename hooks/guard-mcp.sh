@@ -15,9 +15,11 @@
 # a write, not lose the tool. Outside an interactive session an ask ends as a
 # denial (measured, ADR 0013).
 #
-# Classifies by tool name only, never by the call's arguments, with one
-# exception:
-#   mcp__ccd_pr__set_monitor (CCD_OWN_PR below)     -> pass when its url is a PR
+# Checks run in this order, and the first that answers wins. Every check is by
+# name only except the two marked [args], which also read the call's
+# arguments.
+#
+#   [args] mcp__ccd_pr__set_monitor (CCD_OWN_PR)    -> pass when its url is a PR
 #                                                      this session created, or
 #                                                      it is the auto-archive
 #                                                      switch alone; deny
@@ -25,6 +27,12 @@
 #                                                      (ADR 0028)
 #   a full name on the desktop app's exact-name list
 #   (CCD_ALLOW below, ADR 0027)                     -> pass
+#   [args] mcp__github__update_pull_request
+#   (PR_EDIT below, ADR 0034)                       -> pass when it sets only
+#                                                      title, body or reviewers;
+#                                                      ask otherwise
+#   a full name on the PR-workflow exact-name list
+#   (PR_WORKFLOW_ALLOW below, ADR 0034)             -> pass
 #   a <tool> part on the verb-last read list, on any
 #   server (TOOL_READ_ALLOW below, ADR 0013)        -> pass
 #   <tool> starting gtm_                           -> ask: its verb is in an
@@ -69,12 +77,16 @@ payload=$(cat)
 [[ -z "$payload" ]] && ask "empty hook payload, so the call cannot be classified. Approve it only if you intended it."
 
 # Emits tool_name when the payload is one JSON object whose tool_name is a
-# string, and nothing otherwise. A parse error or a second document fails.
+# string, and nothing otherwise. A parse error or a second value of any kind
+# fails: jq reads every value at once (-s) and accepts exactly one object, as
+# python3's json.load does, so the two parsers agree.
 if command -v jq >/dev/null 2>&1; then
-  name=$(printf '%s' "$payload" | jq -r 'if type == "object" then (.tool_name | strings) else empty end' 2>/dev/null)
+  name=$(printf '%s' "$payload" | jq -rs 'if length == 1 and (.[0] | type) == "object" then (.[0].tool_name | strings) else empty end' 2>/dev/null)
   rc=$?
 elif command -v python3 >/dev/null 2>&1; then
-  name=$(printf '%s' "$payload" | python3 -c '
+  # -I: isolated, so a json.py in the working directory (the repository under
+  # work) or a PYTHON* variable cannot stand in for the standard library.
+  name=$(printf '%s' "$payload" | python3 -I -c '
 import json, sys
 d = json.load(sys.stdin)
 n = d.get("tool_name") if isinstance(d, dict) else None
@@ -150,6 +162,62 @@ CCD_ALLOW=(
   mcp__ccd_connectors__session_connectors_status
 )
 for allowed in "${CCD_ALLOW[@]}"; do
+  # Quoted right-hand side: a literal string comparison, never a pattern.
+  [[ "$name" == "$allowed" ]] && exit 0
+done
+
+# A PR edit passes, by exact full name, only when it changes nothing but the
+# title, body or reviewers (ADR 0034). Any other argument, draft, state, base
+# or one this guard does not know, asks: marking a draft ready starts review,
+# so it stays the operator's. The check runs inside the parser, so a key is
+# never split or printed here, and nothing from the arguments reaches a reason.
+PR_EDIT=(
+  mcp__github__update_pull_request
+)
+pr_edit_args='["owner","repo","pullNumber","title","body","reviewers"]'
+for edit in "${PR_EDIT[@]}"; do
+  [[ "$name" == "$edit" ]] || continue
+  # pass, no-object (tool_input missing or not an object) or extra (a key off
+  # the list). Anything else, an empty answer included, means the parser did
+  # not finish, and asks as unreadable.
+  if command -v jq >/dev/null 2>&1; then
+    verdict=$(printf '%s' "$payload" | jq -r --argjson ok "$pr_edit_args" \
+      'if (.tool_input | type) != "object" then "no-object" elif ((.tool_input | keys) - $ok | length) == 0 then "pass" else "extra" end' 2>/dev/null)
+    rc=$?
+  else
+    verdict=$(printf '%s' "$payload" | python3 -I -c '
+import json, sys
+ok = set(json.loads(sys.argv[1]))
+a = json.load(sys.stdin).get("tool_input")
+sys.stdout.write("no-object" if not isinstance(a, dict) else "pass" if set(a) <= ok else "extra")
+' "$pr_edit_args" 2>/dev/null)
+    rc=$?
+  fi
+  # A verdict counts only from a parser that finished: one that printed and
+  # then failed has not checked the whole payload.
+  [[ $rc -eq 0 ]] || verdict="(failed)"
+  case "$verdict" in
+    pass)
+      exit 0 ;;
+    extra)
+      ask "$name sets an argument other than the title, body or reviewers (draft, state, base or another), so it asks (ADR 0034). Approve it only if you intended this change." ;;
+    no-object)
+      ask "$name carries no argument object, so its arguments cannot be checked and it asks (ADR 0034). Approve it only if you intended this call." ;;
+    *)
+      ask "$name could not have its arguments read, so it asks (fail closed, ADR 0034). This says nothing about what the call changes. Approve it only if you intended this call." ;;
+  esac
+done
+
+# Writes that drive a session's PR work pass by exact full name, server part
+# included (ADR 0034): a PR-activity subscription, for any PR, with no own-PR
+# limit like set_monitor's; and a message into a sibling desktop session.
+# Never by <tool> part alone: a server's name is set per deployment, and the
+# same name on another server is another tool.
+PR_WORKFLOW_ALLOW=(
+  mcp__claude-code-remote__subscribe_pr_activity
+  mcp__ccd_session_mgmt__send_message
+)
+for allowed in "${PR_WORKFLOW_ALLOW[@]}"; do
   # Quoted right-hand side: a literal string comparison, never a pattern.
   [[ "$name" == "$allowed" ]] && exit 0
 done

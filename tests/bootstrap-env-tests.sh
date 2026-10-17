@@ -433,6 +433,41 @@ check_set_monitor_probe_reports_green() {
   fi
 }
 
+# guard-mcp must ask on a PR edit that marks a draft ready (ADR 0034). A guard
+# that passes update_pull_request by name loses draft-until-final through the
+# MCP route: the install must refuse it. The stub passes that tool whole and
+# hands every other call to the real guard, as for set_monitor above.
+check_pr_edit_by_name_fails_the_install() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  mv "$snap_new/hooks/guard-mcp.sh" "$snap_new/hooks/guard-mcp-real.sh"
+  printf '#!/usr/bin/env bash\np=$(cat)\ncase "$p" in *mcp__github__update_pull_request*) exit 0 ;; esac\nprintf "%%s" "$p" | "${BASH_SOURCE[0]%%/*}/guard-mcp-real.sh"\n' \
+    > "$snap_new/hooks/guard-mcp.sh"
+  chmod +x "$snap_new/hooks/guard-mcp.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"guard-mcp asks about an MCP write"* \
+     && "$out" == *"without asking about a PR edit that marks a draft ready"* ]]; then
+    pass "a guard-mcp that passes update_pull_request by name fails the install"
+  else
+    fail "a guard-mcp that passes update_pull_request by name fails the install" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# ...and a correct install reports both: the ready-marking edit asks, a title
+# edit passes.
+check_pr_edit_probe_reports_green() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"guard-mcp asks about a PR edit that marks a draft ready"* \
+     && "$out" == *"guard-mcp passes a PR title edit"* ]]; then
+    pass "an install proves a PR edit passes only for title, body or reviewers"
+  else
+    fail "an install proves a PR edit passes only for title, body or reviewers" "rc=$rc"; echo "$out" | grep -i "PR edit\|title edit" | tail -6
+  fi
+}
+
 # pr-body-check fails open by design, so a broken one is silent: every PR would
 # open without the harness block. It is policy with CI as the gate, so the run
 # installs but ends NOT GREEN and deletes nothing, as for the observer.
@@ -1136,6 +1171,8 @@ check_observer_failure_records_but_withholds_retention
 check_silent_guard_mcp_fails_the_install
 check_set_monitor_by_name_fails_the_install
 check_set_monitor_probe_reports_green
+check_pr_edit_by_name_fails_the_install
+check_pr_edit_probe_reports_green
 check_silent_pr_body_check_ends_not_green
 check_silent_liveness_check_fails_the_install
 check_liveness_check_that_always_fires_fails_the_install
