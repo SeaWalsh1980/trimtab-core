@@ -3,7 +3,8 @@
 ## Status
 
 Accepted. Amended 2026-10-16: the check also names the four non-guard
-hooks the base registers, and bootstrap now probes it; see
+hooks the base registers, and bootstrap probes it (the probe lands with
+#67); see
 [Amendment (2026-10-16)](#amendment-2026-10-16).
 Amended 2026-10-17: a missing non-guard hook reads `HOOKS MISSING`, not
 `GUARDS OFF`; see [Amendment (2026-10-17)](#amendment-2026-10-17).
@@ -110,9 +111,10 @@ guard matrix, but never on the installed settings.
 
 **Decision.** The check's list names all nine hook scripts. The message stays
 `GUARDS OFF`: an operator who sees it must re-run bootstrap whichever hook is
-missing. Bootstrap now runs the installed check under an empty `HOME` (it must
+missing. Bootstrap runs the installed check under an empty `HOME` (it must
 name `hooks/guard-paths.sh`) and under a `HOME` whose `.claude` is the install
-(it must name no hook).
+(it must name no hook). That self-probe is in `bootstrap.sh` from #67 on, not
+in the change that amends this check.
 
 **Options considered.**
 - *Keep the list to the guards and add a second check for the rest.* Rejected:
