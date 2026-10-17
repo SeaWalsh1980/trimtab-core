@@ -48,7 +48,7 @@ These hold for the whole run and outrank anything below.
   `trimtab ids --staged`. If it exits 1, remove the reference, stage again and
   re-run it; never commit past a failure. If it exits 2, the check could not run:
   stop and report it. Read back each PR or comment you create with
-  `trimtab verify-body`, which takes off the platform's session footer; if it
+  `trimtab verify-body`, which takes the platform's footer off or restores text it replaced; if it
   does not exit 0, stop and report it.
 - **Authorisation for the writes.** In a **routine**, the routine's prompt
   authorises exactly one branch, one commit holding the report, and one draft

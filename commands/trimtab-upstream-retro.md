@@ -37,7 +37,7 @@ attribution, and `trimtab check-pr` refuses a body that holds one. Before each c
 `trimtab ids --staged`. If it exits 1, remove the reference, stage again and
 re-run it; never commit past a failure. If it exits 2, the check could not run:
 stop and report it. Read back each PR or comment you create with
-`trimtab verify-body`, which takes off the platform's session footer; if it
+`trimtab verify-body`, which takes the platform's footer off or restores text it replaced; if it
 does not exit 0, stop and report it.
 
 **Never change a security control** on your own initiative: workflows, `CODEOWNERS`,
