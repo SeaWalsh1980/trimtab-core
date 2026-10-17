@@ -163,6 +163,26 @@ def cmd_ids(args) -> int:
     return 0
 
 
+# What verify-body says for each outcome `verify_body` can return; DIFFERS raises instead. A test holds this to
+# every other outcome, so a new one cannot fall through to "the body is the one sent".
+VERIFY_BODY_REPORTS = {
+    Readback.SAME: "the body is the one sent",
+    Readback.FOOTER: "removed the platform's session footer; GitHub's edit history still holds it",
+    Readback.IN_PLACE: ("restored the attribution line the platform's session footer had replaced; "
+                        "GitHub's edit history still holds the session footer"),
+    Readback.IN_PLACE_GENERIC: ("restored the attribution line the platform's generic footer, linking no session, "
+                                "had replaced"),
+    Readback.IN_PLACE_REPLACED: ("restored the attribution line the platform's session footer had replaced; the "
+                                 "platform added its generic footer, linking no session, after it; GitHub's edit "
+                                 "history still holds the session footer"),
+    Readback.IN_PLACE_GENERIC_KEPT: ("restored the attribution line the platform's generic footer, linking no "
+                                     "session, had replaced; that footer follows it"),
+    Readback.REPLACED: ("removed the platform's session footer; the platform added its generic footer, linking no "
+                        "session, in its place; GitHub's edit history still holds the session footer"),
+    Readback.GENERIC: "the body is the one sent, then the platform's generic footer, linking no session; left as it is",
+}
+
+
 def cmd_verify_body(args) -> int:
     """A body a run created, read back (ADR 0024): 0 as sent, 1 changed otherwise, 2 could not tell."""
     sent = args.body if args.body is not None else _text_of(args.body_file)
@@ -178,29 +198,7 @@ def cmd_verify_body(args) -> int:
     except WrittenBodyError as err:
         print(f"verify-body: {err}. Stop and report it.", file=sys.stderr)
         return 1
-    if outcome is Readback.FOOTER:
-        print(f"{kind} {number}: removed the platform's session footer; GitHub's edit history still holds it")
-    elif outcome is Readback.IN_PLACE:
-        print(f"{kind} {number}: restored the attribution line the platform's session footer had replaced; "
-              "GitHub's edit history still holds the session footer")
-    elif outcome is Readback.IN_PLACE_GENERIC:
-        print(f"{kind} {number}: restored the attribution line the platform's generic footer, linking no session, "
-              "had replaced")
-    elif outcome is Readback.IN_PLACE_REPLACED:
-        print(f"{kind} {number}: restored the attribution line the platform's session footer had replaced; the "
-              "platform added its generic footer, linking no session, after it; GitHub's edit history still holds "
-              "the session footer")
-    elif outcome is Readback.IN_PLACE_GENERIC_KEPT:
-        print(f"{kind} {number}: restored the attribution line the platform's generic footer, linking no session, "
-              "had replaced; that footer follows it")
-    elif outcome is Readback.REPLACED:
-        print(f"{kind} {number}: removed the platform's session footer; the platform added its generic footer, "
-              "linking no session, in its place; GitHub's edit history still holds the session footer")
-    elif outcome is Readback.GENERIC:
-        print(f"{kind} {number}: the body is the one sent, then the platform's generic footer, linking no session; "
-              "left as it is")
-    else:
-        print(f"{kind} {number}: the body is the one sent")
+    print(f"{kind} {number}: {VERIFY_BODY_REPORTS[outcome]}")
     return 0
 
 
