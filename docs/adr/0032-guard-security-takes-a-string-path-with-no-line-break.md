@@ -37,6 +37,13 @@ with jq and 3 without (the python3 branch already skipped false-y keys).
   `notebook_path` and `path`, in both branches.
 - A path holding a newline or carriage return fails the parse, so the call
   blocks, whatever the tool.
+- A payload that names more than one of `file_path`, `notebook_path` and
+  `path` (any value but `null`) fails the parse too: ADR 0033's rule
+  (`docs/adr/0033-guards-refuse-a-payload-that-names-more-than-one-path.md`),
+  taken here for guard-security. A benign decoy `file_path` beside a
+  workflow `notebook_path` or a `.claude/hooks/` `path` was judged on the
+  decoy; 2 cases failed with exit 0, with and without jq, before this. Found
+  in review.
 
 ## Options considered
 

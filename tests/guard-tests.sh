@@ -899,6 +899,12 @@ t $SG 2 "a carriage return in the path fails closed"   "$(j Write '{"file_path":
 t $SG 2 "empty file_path does not hide notebook_path"  "$(j NotebookEdit '{"file_path":"","notebook_path":"/p/ct/.github/workflows/x.yml","new_source":"x"}')"
 t $SG 2 "an empty-list file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":[],"notebook_path":"/p/ct/.github/workflows/x.yml","new_source":"x"}')"
 t $SG 2 "a zero file_path does not hide notebook_path" "$(j NotebookEdit '{"file_path":0,"notebook_path":"/p/ct/.github/workflows/x.yml","new_source":"x"}')"
+# More than one of file_path, notebook_path and path (any value but null)
+# fails closed: a benign decoy file_path hid a workflow notebook_path or path
+# (ADR 0033).
+t $SG 2 "a decoy file_path beside a workflow notebook_path" "$(j NotebookEdit '{"file_path":"/p/ct/app/x.py","notebook_path":"/p/ct/.github/workflows/x.yml","new_source":"x"}')"
+t $SG 2 "a decoy file_path beside a hooks path"             "$(j Write '{"file_path":"/p/ct/app/x.py","path":"/p/ct/.claude/hooks/pre.sh","content":"x"}')"
+t $SG 0 "a null second key is not a second path"           "$(j NotebookEdit '{"file_path":null,"notebook_path":"/p/ct/app/analysis.ipynb","new_source":"x"}')"
 
 # -- bash writes ----------------------------------------------------------
 t $SG 2 "redirect into a workflow"                  "$(j Bash '{"command":"echo x > .github/workflows/a.yml"}')"
