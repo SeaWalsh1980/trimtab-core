@@ -349,10 +349,14 @@ pushd "$GS_REAL" >/dev/null
 t guard-paths.sh 2 "linked config: RELATIVE redirect to settings.json in its target" "$(j Bash '{"command":"echo x >settings.json"}')"
 t guard-paths.sh 2 "linked config: RELATIVE redirect into hooks in its target"      "$(j Bash '{"command":"echo x >hooks/x"}')"
 popd >/dev/null
-# ...while reads, and the agent's own state there, stay open. The target is in
-# the exact-match list only, never substring-scanned, or this cat would block.
+# ...while reads, and the agent's own state there, stay open. The Read case pins
+# that Read stays exempt; it passes whatever the roots are. The sibling cases
+# pin the physical roots' boundaries: a prefix ends at a `/`, a file is exact.
+# The target is in the exact-match list only, never substring-scanned, or the
+# cat below would block.
 t guard-paths.sh 0 "linked config: Read settings.json via its target" "$(j Read "{\"file_path\":\"$GS_REAL/settings.json\"}")"
-t guard-paths.sh 0 "linked config: Read a hook via its target" "$(j Read "{\"file_path\":\"$GS_REAL/hooks/x\"}")"
+t guard-paths.sh 0 "linked config: a sibling of hooks via its target stays writable" "$(j Write "{\"file_path\":\"$GS_REAL/hooks-old/x\",\"content\":\"x\"}")"
+t guard-paths.sh 0 "linked config: a sibling of settings.json via its target stays writable" "$(j Write "{\"file_path\":\"$GS_REAL/settings.json.bak\",\"content\":\"x\"}")"
 t guard-paths.sh 0 "linked config: todos stay writable"       "$(j Write "{\"file_path\":\"$GS_REAL/todos/t.json\",\"content\":\"x\"}")"
 t guard-paths.sh 0 "linked config: memory stays writable"     "$(j Write "{\"file_path\":\"$GS_REAL/projects/-a-project/memory/m.md\",\"content\":\"x\"}")"
 t guard-paths.sh 0 "linked config: bash reading a plan via its target" "$(j Bash "{\"command\":\"cat $GS_REAL/plans/p.md\"}")"

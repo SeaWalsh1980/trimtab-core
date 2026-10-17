@@ -86,9 +86,9 @@ behaviour: every call blocks except a Read.
   config directory adds 13 string comparisons per checked path, and an
   unlinked one adds none, so no timing was taken; ADR 0002's cost figure
   still stands.
-- Each new block case was shown to pass through the previous guard: run
-  against it, the 38 new block cases in `tests/guard-tests.sh` exit 0, and
-  every other case passes.
+- Each new block case was shown to be allowed by the previous guard: run
+  against it, all 38 new block cases in `tests/guard-tests.sh` fail with
+  exit 0 where 2 is expected, and every other case passes.
 - Gaps that remain:
   - `<symlink>/../<name>` is still collapsed as text (ADR 0002).
   - A `plugins/` or `guard-state/` that is itself a link: its target is

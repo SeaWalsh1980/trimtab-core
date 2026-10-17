@@ -115,8 +115,10 @@ EOF
 # repo, a local edit is live for the next session with no commit, no pull
 # request and no CI — a shorter route than anything through GitHub.
 #
-# Scope is the LIVE tree only: $cp_home, the realpath targets of its symlinks,
-# the exact repo-root files bootstrap consumes, and the base snapshot store
+# Scope is the LIVE tree only: $cp_home's config names (as spelt, and by their
+# physical path when $cp_home is or sits under a link), the realpath targets of
+# its symlinks, the exact repo-root files bootstrap consumes, and the base
+# snapshot store
 # (every snapshot in it, linked or not: the rollback snapshot is live the
 # moment a rollback re-points the links at it). The roots derive from
 # CLAUDE_HOME and never from this script's own location — a guard that
@@ -147,6 +149,8 @@ fi
 # installed on this host — only the config names below are protected, which is
 # what lets the matrix run in CI); it resolves (full root list); or it exists
 # and does not resolve (block, because the protected set cannot be established).
+# One exception: a config dir itself that does not resolve still lets a Read
+# through, since Read cannot write a config name (see below).
 #
 # $cp_home is NOT a prefix root. It was, and that was wrong: ~/.claude holds
 # this agent's own working state as well as its config — projects/*/memory,
@@ -159,9 +163,11 @@ cp_roots=()
 cp_files=()
 cp_exact=()
 
-# Config locations under $cp_home, as one list that every spelling below is
-# derived from. bootstrap.sh symlinks the first seven out of the checkout
-# (cp_linked; their realpaths are resolved below); plugins/ is Claude Code's
+# Config locations under $cp_home, as one list that every spelling in this file
+# is derived from. bootstrap.sh symlinks the first seven out of the checkout
+# (cp_linked; their realpaths are resolved below) from its own copy of these
+# names: a dir added there must be added here by hand, and no test compares
+# the two lists; plugins/ is Claude Code's
 # own, listed by name whether or not it exists on this host, because plugin
 # code executes. guard-state/ is written by hooks only, never by a session's
 # tools: it holds the list of PRs a session created, which decides what
