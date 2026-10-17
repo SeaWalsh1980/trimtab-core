@@ -215,6 +215,9 @@ class GhSource:
         fetched again. A PR closed unmerged counts by when it closed, not when it was last touched: a comment on an
         old decline does not bring it back into the window. A merged one counts by its last update."""
         what = "gh api pulls"
+        if closed_since is not None and not DATE.fullmatch(closed_since):
+            # The window is compared as a day against updated_at, closed_at and the scan's floor.
+            raise SourceError("closed_since must be a YYYY-MM-DD date")
         rows = self.api.all_pages(f"repos/{self.repo}/pulls", {"state": "open"}, SCAN_LIMIT, what)
         found = [PullTitle(r.number, r.title, "open") for r in map(_pull_row, rows)]
         if closed_since:

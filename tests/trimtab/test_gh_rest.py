@@ -231,6 +231,14 @@ class RecentPulls(unittest.TestCase):
 
         self.assertEqual([p.number for p in GhSource(REPO, run=gh).recent_pulls(SINCE)], [2])
 
+    def test_a_window_that_is_not_a_day_is_refused_before_gh_runs(self):
+        gh = FakeGh(default=page())
+
+        with self.assertRaises(SourceError):
+            GhSource(REPO, run=gh).recent_pulls("2026-09-01T00:00:00Z")
+
+        self.assertEqual(gh.calls, [])
+
     def test_with_no_window_only_open_prs_are_read(self):
         gh = FakeGh(answers={("GET", PULLS): [page(pull(3, merged_at=None, title="[X-1] open"))]})
 
