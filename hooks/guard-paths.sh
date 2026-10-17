@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse hook, matcher: Read|Edit|Write|MultiEdit|Bash
+# PreToolUse hook, matcher: Read|Edit|Write|MultiEdit|NotebookEdit|Bash
 #
 # Path policy: refuses to touch protected files by location or filename.
 # Exit 2 = blocked, stderr is fed back to Claude. Exit 0 = allowed.
@@ -33,7 +33,10 @@ if [[ -z "$payload" ]]; then
 fi
 
 # ---- parse -------------------------------------------------------------
-# Emits three lines: file_path, command, then tool_name (any may be empty).
+# Emits three lines: the target path, command, then tool_name (any may be
+# empty). The target path is file_path, or NotebookEdit's notebook_path, or
+# path, the same order guard-security reads them in: a key left out here is a
+# tool whose every path check passes on an empty string.
 # The command has newlines collapsed to spaces in BOTH branches — jq's raw
 # output would otherwise spread a multi-line command over several lines and
 # only the first would survive the line-2 extraction below.
@@ -45,7 +48,7 @@ fi
 # whole matrix twice, with jq and with jq removed, is what enforces it.
 parse() {
   if command -v jq >/dev/null 2>&1; then
-    jq -r '(.tool_input.file_path // .tool_input.path // ""),
+    jq -r '(.tool_input.file_path // .tool_input.notebook_path // .tool_input.path // ""),
            ((.tool_input.command // "") | gsub("\n"; " ")),
            ((.tool_name // "") | gsub("\n"; " "))'
   elif command -v python3 >/dev/null 2>&1; then
@@ -53,7 +56,7 @@ parse() {
 import json, sys
 d = json.load(sys.stdin)
 ti = d.get("tool_input", {}) or {}
-print(ti.get("file_path") or ti.get("path") or "")
+print(ti.get("file_path") or ti.get("notebook_path") or ti.get("path") or "")
 print((ti.get("command") or "").replace("\n", " "))
 print((d.get("tool_name") or "").replace("\n", " "))
 '
@@ -587,8 +590,11 @@ check_path() {
 # function also means no future addition to allow_names can reach it.
 #
 # Enforcement is an allow-list of exactly one tool rather than a deny-list of
-# four: an empty, unknown or future tool_name enforces by default, and
-# NotebookEdit is covered without naming it.
+# five: an empty, unknown or future tool_name enforces by default. That holds
+# only for a tool the matcher sends here and whose path key parse() reads.
+# NotebookEdit had neither until ADR 0030, which is why the registration test
+# in the matrix pins the matcher. See
+# docs/adr/0030-guard-paths-is-registered-for-and-reads-notebookedit.md.
 case "$tool" in
   Read) ;;
   *)    cp_check "$file" "write to the live control plane" ;;
