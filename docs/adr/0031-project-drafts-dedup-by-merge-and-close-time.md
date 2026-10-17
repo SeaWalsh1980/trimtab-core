@@ -47,9 +47,11 @@ one bounded REST listing of the project's PRs, and prints a mark beside each:
   ends 2, and the issue plan is still printed.
 - **Conformance candidates.** `--check-ids ID=<day>+<day>…`, every report
   day, gives an ID with no ledger draft the same marks, its reports counted
-  against the latest fix with the conformance threshold of 2. A report on the
-  day the fix merged counts as after it: a report has no time of day, so the
-  check errs towards proposing.
+  against the latest fix with the conformance threshold of 2, each day once. A
+  report on the day the fix merged counts as after it: a report has no time of
+  day, so the check errs towards proposing. An ID with a ledger draft as well
+  is counted on both: `RESOLVED` only while both counts stay below their
+  thresholds, `REOPENED` once either reaches its own.
 
 The session opens a draft only for an unmarked or `REOPENED` ID. Both kinds of
 draft read the open PR, the latest fix and any standing decline through one
@@ -71,6 +73,10 @@ helper, so the two cannot drift.
   and matched by hand, the rule drifted from the code that applies it to
   issues, and conformance candidates were never checked. The tool is
   deterministic and tested; the session reads its marks.
+- **Ignore the report days of an ID that also has a ledger draft.** Tried
+  first in this change and rejected in review: a draft its PR evidence
+  resolved stayed `RESOLVED` however many conformance reports came after the
+  fix, and the run printed nothing about them.
 - **Hold any ID with a merged `[<ID>]` PR in the window** (ADR 0006's effect).
   Rejected: it suppresses real evidence that arrives after an incomplete fix.
 

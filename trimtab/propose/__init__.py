@@ -188,10 +188,11 @@ def plan_project_prs(drafts: Sequence[Draft], sink: PullSink, closed_since: str 
     draft is RESOLVED while they stay below `threshold`, and proposed again, marked REOPENED with the reports since,
     once they reach it.
 
-    `check_ids` maps an ID with no draft (a conformance candidate: its evidence is reports, not PRs) to the days of
-    its reports. They are counted the same way against CONFORMANCE_THRESHOLD; a report on the day the fix merged
-    counts as after it, since a report has no time of day."""
-    check_ids = {i: tuple(days) for i, days in (check_ids or {}).items()}
+    `check_ids` maps an ID to the days of its conformance reports (step 3's candidates: their evidence is reports,
+    not PRs), each day counted once. They are counted the same way against CONFORMANCE_THRESHOLD; a report on the day
+    the fix merged counts as after it, since a report has no time of day. An ID with a draft as well is counted on
+    both: RESOLVED only while both counts stay below their thresholds, REOPENED once either reaches its own."""
+    check_ids = {i: tuple(sorted(set(days))) for i, days in (check_ids or {}).items()}
     if not any(d.kind == "pr" for d in drafts) and not check_ids:
         return {}
     # Grouped once by the ID a title opens with, so each draft is a lookup, not a scan of every PR (ENG-6.2).
@@ -199,44 +200,51 @@ def plan_project_prs(drafts: Sequence[Draft], sink: PullSink, closed_since: str 
     for p in sink.recent_pulls(closed_since):
         if (opening := LEADING_ID.match(p.title)) is not None:
             by_id.setdefault(opening.group(1), []).append(p)
+    drafted = {d.item_id: d for d in drafts if d.kind == "pr"}
     why: dict[str, str] = {}
-    for d in drafts:
-        if d.kind != "pr":
-            continue
-        st = _standing(by_id.get(d.item_id, ()))
-        if st.open is not None:
-            why[d.item_id] = f"SKIPPED: #{st.open.number} for this ID is open"
-            continue
-        since = _reports_since(st.fixes[-1], d) if st.fixes else None
-        if mark := _mark(st, since, threshold, [f"#{n}" for n in since or ()]):
-            why[d.item_id] = mark
-    drafted = {d.item_id for d in drafts if d.kind == "pr"}
-    for item_id, days in check_ids.items():
-        if item_id in drafted:
-            continue
+    for item_id in [*drafted, *(i for i in check_ids if i not in drafted)]:
         st = _standing(by_id.get(item_id, ()))
         if st.open is not None:
             why[item_id] = f"SKIPPED: #{st.open.number} for this ID is open"
             continue
-        reports = sorted(day for day in days if st.fixes and day >= st.fixes[-1].merged_at[:10])
-        if mark := _mark(st, reports if st.fixes else None, CONFORMANCE_THRESHOLD, reports):
+        counts = []
+        if (d := drafted.get(item_id)) is not None:
+            since = _reports_since(st.fixes[-1], d) if st.fixes else None
+            counts.append(_Since(None if since is None else [f"#{n}" for n in since], threshold, "report(s)"))
+        if item_id in check_ids:
+            days = [day for day in check_ids[item_id] if st.fixes and day >= st.fixes[-1].merged_at[:10]]
+            counts.append(_Since(days if st.fixes else None, CONFORMANCE_THRESHOLD,
+                                 "conformance report(s)" if d is not None else "report(s)"))
+        if mark := _mark(st, counts):
             why[item_id] = mark
     return why
 
 
-def _mark(st: _Standing, since: Sequence | None, threshold: int, named: Sequence[str]) -> str | None:
-    """The mark for an ID with no open PR, given the reports `since` its latest fix (None: no fix, or it cannot be
-    told), or None for no mark."""
-    if since is not None and not since:
-        return f"RESOLVED: #{st.fixes[-1].number} merged after the evidence"
-    if since is not None and len(since) < threshold:
-        return (f"RESOLVED: #{st.fixes[-1].number} merged after the earlier evidence; {len(since)} report(s) since, "
-                f"below the threshold of {threshold}")
+@dataclass(frozen=True)
+class _Since:
+    """One kind of evidence for an ID: the reports named since its latest fix (None: no fix, or it cannot be told),
+    the threshold they are counted against, and what they are called in the mark."""
+
+    reports: Sequence[str] | None
+    threshold: int
+    what: str
+
+
+def _mark(st: _Standing, counts: Sequence[_Since]) -> str | None:
+    """The mark for an ID with no open PR, given its evidence since the latest fix, or None for no mark. It is
+    RESOLVED only when every count can be told and is below its threshold, and REOPENED when any reaches its own."""
+    if all(c.reports is not None and len(c.reports) < c.threshold for c in counts):
+        fix = st.fixes[-1].number
+        if not any(c.reports for c in counts):
+            return f"RESOLVED: #{fix} merged after the evidence"
+        return f"RESOLVED: #{fix} merged after the earlier evidence; " + "; ".join(
+            f"{len(c.reports)} {c.what} since, below the threshold of {c.threshold}" for c in counts)
     if st.decline is not None:
         return f"SKIPPED: #{st.decline.number} for this ID was closed unmerged within the window"
-    if since:
+    if reached := [c for c in counts if c.reports and len(c.reports) >= c.threshold]:
         # Proposed again: say which reports are new, since the draft lists the fix's evidence too.
-        return f"REOPENED: #{st.fixes[-1].number} merged; {len(since)} report(s) since: " + ", ".join(named)
+        return f"REOPENED: #{st.fixes[-1].number} merged; " + "; ".join(
+            f"{len(c.reports)} {c.what} since: " + ", ".join(c.reports) for c in reached)
     return None
 
 

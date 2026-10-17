@@ -230,8 +230,9 @@ class ProjectDrafts(unittest.TestCase):
     AFTER_ALL = "2026-09-25T00:00:00Z"
     BETWEEN = "2026-09-10T00:00:00Z"
 
-    def held(self, *pulls, prs=EVIDENCE, merged_at=MERGED):
-        return plan_project_prs([draft("SCR-X-2", kind="pr", prs=prs, merged_at=merged_at)], FakePulls(*pulls))
+    def held(self, *pulls, prs=EVIDENCE, merged_at=MERGED, check_ids=None):
+        return plan_project_prs([draft("SCR-X-2", kind="pr", prs=prs, merged_at=merged_at)], FakePulls(*pulls),
+                                check_ids=check_ids)
 
     def test_an_id_with_no_pr_is_proposed(self):
         self.assertEqual(self.held(PullTitle(940, "[SCR-Y-1] other", "open")), {})
@@ -248,6 +249,23 @@ class ProjectDrafts(unittest.TestCase):
         self.assertEqual(self.held(PullTitle(946, "[SCR-X-2] fix", "merged", self.BETWEEN)),
                          {"SCR-X-2": "RESOLVED: #946 merged after the earlier evidence; 1 report(s) since, below the "
                                      "threshold of 2"})
+
+    def test_conformance_reports_since_the_fix_reopen_a_draft_its_pr_evidence_resolves(self):
+        fix = PullTitle(946, "[SCR-X-2] fix", "merged", self.AFTER_ALL)
+
+        found = self.held(fix, check_ids={"SCR-X-2": ("2026-09-26", "2026-09-30")})
+
+        self.assertEqual(found, {"SCR-X-2": "REOPENED: #946 merged; 2 conformance report(s) since: 2026-09-26, "
+                                            "2026-09-30"})
+
+    def test_conformance_reports_below_their_threshold_keep_the_draft_resolved_and_are_named(self):
+        fix = PullTitle(946, "[SCR-X-2] fix", "merged", self.AFTER_ALL)
+
+        found = self.held(fix, check_ids={"SCR-X-2": ("2026-09-20", "2026-09-26")})
+
+        self.assertEqual(found, {"SCR-X-2": "RESOLVED: #946 merged after the earlier evidence; 0 report(s) since, "
+                                            "below the threshold of 2; 1 conformance report(s) since, below the "
+                                            "threshold of 2"})
 
     def test_reports_since_the_fix_that_reach_the_threshold_propose_the_id_again(self):
         prs, merged_at = (10, 11, 12, 21, 22, 23), ("2026-09-01T00:00:00Z", "2026-09-02T00:00:00Z",
@@ -629,6 +647,12 @@ class ConformanceCandidates(RunsTheCli):
         dry = self.dry_run([self.fix("2026-10-14T08:00:00Z")])
 
         self.assertIn("1 report(s) since, below the threshold of 2", dry)
+
+    def test_a_report_day_given_twice_counts_once(self):
+        dry = self.dry_run([self.fix("2026-10-15T00:00:00Z")], "CT-X-1=2026-10-16+2026-10-16")
+
+        self.assertIn("--- also checked: CT-X-1, RESOLVED: #105 merged after the earlier evidence; 1 report(s) "
+                      "since, below the threshold of 2", dry)
 
     def test_a_candidate_with_nothing_has_no_mark(self):
         self.assertIn("--- also checked: CT-X-1, no mark", self.dry_run([]))

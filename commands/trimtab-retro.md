@@ -140,8 +140,11 @@ trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels \
   the evidence that merged before it. Once the reports since the latest fix
   reach the threshold, the ID is proposed again, marked `REOPENED` with the
   reports since the fix: put that line in the draft PR's evidence, so a
-  reviewer sees which reports are new. Open a draft only for an unmarked or
-  `REOPENED` ID, and report each other marked one as the dry run words it. If
+  reviewer sees which reports are new. A project draft whose ID is also a
+  step 3 candidate is counted on both: `RESOLVED` only while both counts stay
+  below their thresholds, `REOPENED` once either reaches its own; its mark is
+  on the draft, with no `--- also checked:` line. Open a draft only for an
+  unmarked or `REOPENED` ID, and report each other marked one as the dry run words it. If
   the dry run exits 2, a GitHub listing (the ledger, the issues or the PRs)
   could not be read whole: say which, from its error. A failed ledger read
   prints no drafts at all. A failed issue or PR listing marks only its own
