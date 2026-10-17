@@ -26,14 +26,19 @@ if ! [[ "$payload" =~ $porcelain ]]; then
   [[ "$payload" =~ $rest && "$payload" =~ $write ]] || exit 0
 fi
 command -v python3 >/dev/null 2>&1 || exit 0
-python3 -P -s -c '' >/dev/null 2>&1 || exit 0   # an interpreter without -P: fail open, CI is the gate
+# -P exists only from 3.11: an older interpreter, or one that rejects -I, fails
+# this probe, and the check fails open (CI is the gate).
+python3 -P -I -c '' >/dev/null 2>&1 || exit 0
 
 here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
-# -P: never put the working directory on sys.path, so a trimtab/ directory
-# there cannot shadow this checkout's package (it would run instead, silently).
+# -I: no working directory (a trimtab/ there cannot shadow this checkout's
+# package), no user site-packages (so no .pth the session wrote), no PYTHON*
+# variables. The package root goes on sys.path after the standard library, so
+# no sitecustomize.py or standard-library name at the root can stand in for it
+# (ADR 0035). No -S: the check needs PyYAML from system site-packages.
 # -B: write no bytecode beside the package; a snapshot is never written.
-# -s: user site-packages stay out, so a .pth the session wrote cannot run (ADR 0035).
-PYTHONPATH="$here/.." python3 -P -s -B -m trimtab.adapters.pr_body_check <<<"$payload"
+run_module='import runpy, sys; sys.path.append(sys.argv[1]); del sys.argv[:2]; runpy.run_module(sys.argv[0], run_name="__main__", alter_sys=True)'
+python3 -I -B -c "$run_module" "$here/.." trimtab.adapters.pr_body_check <<<"$payload"
 rc=$?
 [[ $rc -eq 2 ]] && exit 2
 exit 0

@@ -118,12 +118,16 @@ for owned in "${CCD_OWN_PR[@]}"; do
   # package even on a PATH with nothing but python3.
   here=$(cd -P "${BASH_SOURCE[0]%/*}" 2>/dev/null && pwd -P) \
     || deny "the set_monitor check could not locate itself, so it is denied (fail closed, ADR 0028). Carry on without Auto-fix and report it to the operator."
-  if ! command -v python3 >/dev/null 2>&1 || ! python3 -P -s -c '' >/dev/null 2>&1; then
+  # -P exists only from 3.11, so the probe is also the version check.
+  if ! command -v python3 >/dev/null 2>&1 || ! python3 -P -I -S -c '' >/dev/null 2>&1; then
     deny "the set_monitor check needs python3 3.11 or later, which is not available, so it is denied (fail closed, ADR 0028). Carry on without Auto-fix and report it to the operator."
   fi
-  # -P: not the working directory; -s: not user site-packages, where a .pth
-  # file the session wrote would run first and could print the verdict (ADR 0035).
-  verdict=$(printf '%s' "$payload" | PYTHONPATH="$here/.." python3 -P -s -B -m trimtab.adapters.pr_monitor check 2>/dev/null)
+  # -I -S: no working directory, no site-packages of any kind (so no .pth and
+  # no sitecustomize), no PYTHON* variables. The package root goes on sys.path
+  # after the standard library, so nothing at the root can stand in for it
+  # (ADR 0035).
+  run_module='import runpy, sys; sys.path.append(sys.argv[1]); del sys.argv[:2]; runpy.run_module(sys.argv[0], run_name="__main__", alter_sys=True)'
+  verdict=$(printf '%s' "$payload" | python3 -I -S -B -c "$run_module" "$here/.." trimtab.adapters.pr_monitor check 2>/dev/null)
   rc=$?
   # A verdict counts only from a check that ran to the end. A crash, an empty
   # answer or one this guard does not know says nothing about the url, so its

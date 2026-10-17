@@ -1615,58 +1615,74 @@ export HOOK_ALLOW_MCP=1
 tm pass "the exported override passes set_monitor"    "$(pm_fix gm-a 8)"
 unset HOOK_ALLOW_MCP
 
-# The adapter-backed hooks run `python3 -P` with PYTHONPATH pointing at the
-# package. -P drops the working directory, but not user site-packages, and a
-# .pth file there is executed by every interpreter that loads it. The default
-# user site (~/.local/lib/python3.X/site-packages) is writable by the session,
-# so each of these calls must also pass -s. PYTHONUSERBASE points the
-# interpreter at a plant under $CPTMP instead of the real one, so the cases
-# stay hermetic.
-US_BASE=$(mktemp -d "$CPTMP/usersite.XXXXXX")
-US_SITE=$(PYTHONUSERBASE="$US_BASE" python3 -c 'import site; print(site.getusersitepackages())')
-mkdir -p "$US_SITE"
-US_MARK="$US_BASE/ran"
-# Any interpreter that loads the plant leaves the mark. The set_monitor check
-# also gets a forged verdict: "pass", exit 0, which would let Auto-fix onto a
-# PR the session never created.
-printf '%s\n' 'import os, sys; open(os.environ["US_MARK"], "w").write("ran"); (os.environ.get("US_FORGE") and (sys.stdout.write("pass"), sys.stdout.flush(), os._exit(0)))' \
-  > "$US_SITE/plant.pth"
-us_ran() { # us_ran <label> <hook> <payload>  — run one hook with the plant and report whether it loaded
-  rm -f "$US_MARK"
-  printf '%s' "$3" | PYTHONUSERBASE="$US_BASE" US_MARK="$US_MARK" CLAUDE_CONFIG_DIR="$PM_CFG" \
-    bash "$HOOKS/$2" >/dev/null 2>&1
-  if [[ ! -e "$US_MARK" ]]; then
-    printf 'PASS  %-14s %-4s  %s\n' "$2" site "$1"
-  else
-    printf 'FAIL  %-14s %-4s  %s  -- the user-site .pth ran\n' "$2" site "$1"
-    fails=$((fails+1))
-  fi
+# The hooks that start python3 must not let anything the session can write run
+# inside it (ADR 0035): a .pth in user site-packages, or a sitecustomize.py or a
+# standard-library name (json.py) at the package root. The root used to be on
+# PYTHONPATH, ahead of the standard library. The cases run a copy of the hooks
+# and package under $CPTMP, so the plants never touch the checkout, and
+# PYTHONUSERBASE points user site at a plant there too.
+SC_ROOT=$(mktemp -d "$CPTMP/pkgroot.XXXXXX")
+cp -RL "$HOOKS" "$SC_ROOT/hooks"
+cp -RL "$HOOKS/../trimtab" "$SC_ROOT/trimtab"
+SC_BASE=$(mktemp -d "$CPTMP/usersite.XXXXXX")
+SC_SITE=$(PYTHONUSERBASE="$SC_BASE" python3 -c 'import site; print(site.getusersitepackages())')
+mkdir -p "$SC_SITE"
+SC_MARK="$SC_BASE/ran"
+# Each plant leaves the mark when it is loaded. With SC_FORGE set it also
+# prints "pass" and exits 0: a forged set_monitor verdict.
+sc_plant='import os, sys
+open(os.environ["SC_MARK"], "w").write("ran")
+if os.environ.get("SC_FORGE"):
+    sys.stdout.write("pass"); sys.stdout.flush(); os._exit(0)'
+printf 'import os, sys; exec(%s)\n' "$(python3 -c 'import sys; print(repr(sys.argv[1]))' "$sc_plant")" > "$SC_SITE/plant.pth"
+printf '%s\n' "$sc_plant" > "$SC_ROOT/sitecustomize.py"
+printf '%s\n' "$sc_plant" > "$SC_ROOT/json.py"
+SC_CFG=$(mktemp -d "$CPTMP/sc-config.XXXXXX")
+sc_run() { # sc_run <hooks dir> <hook> <payload> [extra env]...  — run with every plant in reach
+  local d="$1" h="$2" p="$3"; shift 3
+  rm -f "$SC_MARK"
+  printf '%s' "$p" | env PYTHONUSERBASE="$SC_BASE" SC_MARK="$SC_MARK" CLAUDE_CONFIG_DIR="$SC_CFG" \
+    CLAUDE_RULE_USAGE_LOG="$SC_CFG/rule-usage.jsonl" "$@" bash "$d/$h" 2>/dev/null
 }
-us_ran "a user-site .pth does not run in the set_monitor check" guard-mcp.sh "$(pm_fix gm-a 9)"
-us_ran "a user-site .pth does not run in the recorder" pr-monitor-record.sh "$(pm_post $PM_A 'gh pr create --fill' "$PR/16")"
-us_ran "a user-site .pth does not run in pr-body-check" pr-body-check.sh "$(j Bash '{"command":"gh pr create --title t --body b"}')"
-us_ran "a user-site .pth does not run in doctrine-drift" doctrine-drift.sh '{}'
-# The plant's variables go to the hook alone: the harness's own python3 (the
-# payload builder, tm's parser) would load the plant too and print its "pass".
-us_payload=$(pm_fix gm-a 9)
-us_out=$(printf '%s' "$us_payload" | PYTHONUSERBASE="$US_BASE" US_MARK="$US_MARK" US_FORGE=1 \
-  CLAUDE_CONFIG_DIR="$PM_CFG" bash "$HOOKS/guard-mcp.sh" 2>/dev/null)
-if [[ "$us_out" == *'"permissionDecision":"deny"'* ]]; then
-  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh deny "a user-site .pth cannot forge a set_monitor pass"
-else
-  printf 'FAIL  %-14s %-4s  %s  -- got %q\n' guard-mcp.sh deny "a user-site .pth cannot forge a set_monitor pass" "${us_out:0:120}"
-  fails=$((fails+1))
-fi
-# The plant is live: an interpreter run without -s does load it, so a pass
-# above is the flag's doing.
-rm -f "$US_MARK"
-PYTHONUSERBASE="$US_BASE" US_MARK="$US_MARK" python3 -P -c '' 2>/dev/null
-if [[ -e "$US_MARK" ]]; then
-  printf 'PASS  %-14s %-4s  %s\n' fixture site "the plant loads into python3 -P without -s"
-else
-  printf 'FAIL  %-14s %-4s  %s\n' fixture site "the plant did not load into python3 -P without -s (the cases above prove nothing)"
-  fails=$((fails+1))
-fi
+sc_report() { # sc_report <ok: 0|1> <hook> <label>
+  if [[ "$1" == 0 ]]; then printf 'PASS  %-14s %-4s  %s\n' "$2" site "$3"
+  else printf 'FAIL  %-14s %-4s  %s\n' "$2" site "$3"; fails=$((fails+1)); fi
+}
+SC_HOOKS=(guard-mcp.sh pr-monitor-record.sh pr-body-check.sh doctrine-drift.sh rule-usage.sh)
+sc_payload() { # sc_payload <hook>  — a payload that reaches the hook's python3
+  case "$1" in
+    guard-mcp.sh)         pm_fix sc-a 9 ;;
+    pr-monitor-record.sh) pm_post sc-a 'gh pr create --fill' "$PR/16" ;;
+    pr-body-check.sh)     j Bash '{"command":"gh pr create --title t --body b"}' ;;
+    *)                    j Read '{"file_path":"/p/app/main.py"}' ;;
+  esac
+}
+for h in "${SC_HOOKS[@]}"; do
+  pl=$(sc_payload "$h")
+  sc_run "$SC_ROOT/hooks" "$h" "$pl" >/dev/null
+  [[ ! -e "$SC_MARK" ]]; sc_report $? "$h" "no planted .pth, sitecustomize.py or json.py runs inside it"
+done
+# Positive control: the same hook with its isolation flags stripped does load
+# a plant, so each case above reached its python3 and the pass is the flags'.
+SC_BARE=$(mktemp -d "$CPTMP/barehooks.XXXXXX")
+cp -RL "$SC_ROOT/hooks" "$SC_BARE/hooks"
+ln -s "$SC_ROOT/trimtab" "$SC_BARE/trimtab"
+for h in "${SC_HOOKS[@]}"; do
+  sed -i 's/python3 -I -S /python3 /g; s/python3 -I /python3 /g' "$SC_BARE/hooks/$h"
+  pl=$(sc_payload "$h")
+  sc_run "$SC_BARE/hooks" "$h" "$pl" >/dev/null
+  [[ -e "$SC_MARK" ]]; sc_report $? "$h" "control: without its flags it does load a plant"
+done
+# The forged verdict: guard-mcp must still deny set_monitor on a foreign PR.
+# The plants' variables go to the hook alone; the harness's own python3 would
+# load the user-site plant too.
+pl=$(sc_payload guard-mcp.sh)
+sc_out=$(sc_run "$SC_ROOT/hooks" guard-mcp.sh "$pl" SC_FORGE=1)
+[[ "$sc_out" == *'"permissionDecision":"deny"'* ]]
+sc_report $? guard-mcp.sh "a plant cannot forge a set_monitor pass"
+# The recorder still records with the flags on: it ran, and it worked.
+sc_rec=$(find "$SC_CFG" -path '*pr-monitor*' -name '*.json' -type f -exec grep -l '"number":16' {} + 2>/dev/null)
+[[ -n "$sc_rec" ]]; sc_report $? pr-monitor-record.sh "the isolated recorder still records the session's PR"
 export CLAUDE_CONFIG_DIR="$GM_SAVED_CFG"
 
 echo "== fail-closed on an unrunnable dependency =="
