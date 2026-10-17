@@ -21,7 +21,7 @@
 payload=$(cat) || exit 1
 create='gh[[:space:]]+(pr[[:space:]]+create|api)'
 [[ "$payload" =~ $create ]] || exit 0
-if ! command -v python3 >/dev/null 2>&1 || ! python3 -P -c '' >/dev/null 2>&1; then
+if ! command -v python3 >/dev/null 2>&1 || ! python3 -P -s -c '' >/dev/null 2>&1; then
   echo "pr-monitor: python3 3.11 or later is not available; a PR create was not recorded" >&2
   exit 1
 fi
@@ -30,6 +30,8 @@ here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # -P: never put the working directory on sys.path, so a trimtab/ directory
 # there cannot shadow this checkout's package. -B: write no bytecode beside the
 # package; a snapshot is never written.
-PYTHONPATH="$here/.." python3 -P -B -m trimtab.adapters.pr_monitor record <<<"$payload" >/dev/null
+# -s: user site-packages stay out, so a .pth the session wrote cannot record a
+# PR the session never created (ADR 0035).
+PYTHONPATH="$here/.." python3 -P -s -B -m trimtab.adapters.pr_monitor record <<<"$payload" >/dev/null
 [[ $? -eq 0 ]] && exit 0
 exit 1

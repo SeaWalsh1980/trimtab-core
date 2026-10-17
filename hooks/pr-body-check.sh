@@ -26,13 +26,14 @@ if ! [[ "$payload" =~ $porcelain ]]; then
   [[ "$payload" =~ $rest && "$payload" =~ $write ]] || exit 0
 fi
 command -v python3 >/dev/null 2>&1 || exit 0
-python3 -P -c '' >/dev/null 2>&1 || exit 0   # an interpreter without -P: fail open, CI is the gate
+python3 -P -s -c '' >/dev/null 2>&1 || exit 0   # an interpreter without -P: fail open, CI is the gate
 
 here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # -P: never put the working directory on sys.path, so a trimtab/ directory
 # there cannot shadow this checkout's package (it would run instead, silently).
 # -B: write no bytecode beside the package; a snapshot is never written.
-PYTHONPATH="$here/.." python3 -P -B -m trimtab.adapters.pr_body_check <<<"$payload"
+# -s: user site-packages stay out, so a .pth the session wrote cannot run (ADR 0035).
+PYTHONPATH="$here/.." python3 -P -s -B -m trimtab.adapters.pr_body_check <<<"$payload"
 rc=$?
 [[ $rc -eq 2 ]] && exit 2
 exit 0

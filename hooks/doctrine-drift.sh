@@ -15,5 +15,6 @@ here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # -P: never put the working directory on sys.path, so a trimtab/ directory
 # there cannot shadow this checkout's package (it would run instead, silently).
 # -B: write no bytecode beside the package; a snapshot is never written.
-PYTHONPATH="$here/.." python3 -P -B -m trimtab.adapters.doctrine_drift <<<"$payload"
+# -s: user site-packages stay out, so a .pth the session wrote cannot run (ADR 0035).
+PYTHONPATH="$here/.." python3 -P -s -B -m trimtab.adapters.doctrine_drift <<<"$payload"
 exit 0

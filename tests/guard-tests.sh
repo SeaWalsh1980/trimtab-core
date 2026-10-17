@@ -1614,6 +1614,59 @@ fi
 export HOOK_ALLOW_MCP=1
 tm pass "the exported override passes set_monitor"    "$(pm_fix gm-a 8)"
 unset HOOK_ALLOW_MCP
+
+# The adapter-backed hooks run `python3 -P` with PYTHONPATH pointing at the
+# package. -P drops the working directory, but not user site-packages, and a
+# .pth file there is executed by every interpreter that loads it. The default
+# user site (~/.local/lib/python3.X/site-packages) is writable by the session,
+# so each of these calls must also pass -s. PYTHONUSERBASE points the
+# interpreter at a plant under $CPTMP instead of the real one, so the cases
+# stay hermetic.
+US_BASE=$(mktemp -d "$CPTMP/usersite.XXXXXX")
+US_SITE=$(PYTHONUSERBASE="$US_BASE" python3 -c 'import site; print(site.getusersitepackages())')
+mkdir -p "$US_SITE"
+US_MARK="$US_BASE/ran"
+# Any interpreter that loads the plant leaves the mark. The set_monitor check
+# also gets a forged verdict: "pass", exit 0, which would let Auto-fix onto a
+# PR the session never created.
+printf '%s\n' 'import os, sys; open(os.environ["US_MARK"], "w").write("ran"); (os.environ.get("US_FORGE") and (sys.stdout.write("pass"), sys.stdout.flush(), os._exit(0)))' \
+  > "$US_SITE/plant.pth"
+us_ran() { # us_ran <label> <hook> <payload>  — run one hook with the plant and report whether it loaded
+  rm -f "$US_MARK"
+  printf '%s' "$3" | PYTHONUSERBASE="$US_BASE" US_MARK="$US_MARK" CLAUDE_CONFIG_DIR="$PM_CFG" \
+    bash "$HOOKS/$2" >/dev/null 2>&1
+  if [[ ! -e "$US_MARK" ]]; then
+    printf 'PASS  %-14s %-4s  %s\n' "$2" site "$1"
+  else
+    printf 'FAIL  %-14s %-4s  %s  -- the user-site .pth ran\n' "$2" site "$1"
+    fails=$((fails+1))
+  fi
+}
+us_ran "a user-site .pth does not run in the set_monitor check" guard-mcp.sh "$(pm_fix gm-a 9)"
+us_ran "a user-site .pth does not run in the recorder" pr-monitor-record.sh "$(pm_post $PM_A 'gh pr create --fill' "$PR/16")"
+us_ran "a user-site .pth does not run in pr-body-check" pr-body-check.sh "$(j Bash '{"command":"gh pr create --title t --body b"}')"
+us_ran "a user-site .pth does not run in doctrine-drift" doctrine-drift.sh '{}'
+# The plant's variables go to the hook alone: the harness's own python3 (the
+# payload builder, tm's parser) would load the plant too and print its "pass".
+us_payload=$(pm_fix gm-a 9)
+us_out=$(printf '%s' "$us_payload" | PYTHONUSERBASE="$US_BASE" US_MARK="$US_MARK" US_FORGE=1 \
+  CLAUDE_CONFIG_DIR="$PM_CFG" bash "$HOOKS/guard-mcp.sh" 2>/dev/null)
+if [[ "$us_out" == *'"permissionDecision":"deny"'* ]]; then
+  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh deny "a user-site .pth cannot forge a set_monitor pass"
+else
+  printf 'FAIL  %-14s %-4s  %s  -- got %q\n' guard-mcp.sh deny "a user-site .pth cannot forge a set_monitor pass" "${us_out:0:120}"
+  fails=$((fails+1))
+fi
+# The plant is live: an interpreter run without -s does load it, so a pass
+# above is the flag's doing.
+rm -f "$US_MARK"
+PYTHONUSERBASE="$US_BASE" US_MARK="$US_MARK" python3 -P -c '' 2>/dev/null
+if [[ -e "$US_MARK" ]]; then
+  printf 'PASS  %-14s %-4s  %s\n' fixture site "the plant loads into python3 -P without -s"
+else
+  printf 'FAIL  %-14s %-4s  %s\n' fixture site "the plant did not load into python3 -P without -s (the cases above prove nothing)"
+  fails=$((fails+1))
+fi
 export CLAUDE_CONFIG_DIR="$GM_SAVED_CFG"
 
 echo "== fail-closed on an unrunnable dependency =="
