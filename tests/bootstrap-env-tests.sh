@@ -623,6 +623,22 @@ check_probe_without_a_temp_dir_stops_and_says_so() {
   fi
 }
 
+# The same for the liveness probe. Under --check a missing pr-body-check is
+# only noted, so the run reaches the liveness probe with no temp directory.
+check_liveness_probe_without_a_temp_dir_stops_and_says_so() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  rm "$snap_new/hooks/pr-body-check.sh"
+  TMPDIR="$h/no-such-dir" boot "$h" "$snap_new/bootstrap.sh" --instance "$inst" --check
+  if [[ $rc -ne 0 && "$out" == *"could not create a temp directory for the liveness-check probe"* ]]; then
+    pass "a liveness probe without a temp directory stops the run and names it"
+  else
+    fail "a liveness probe without a temp directory stops the run and names it" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
 # A complete install proves all three end to end.
 check_install_probes_the_unprobed_hooks() {
   local h inst
@@ -1058,6 +1074,7 @@ check_probes_accept_a_tmpdir_with_json_metacharacters
 check_probes_accept_a_tmpdir_with_a_colon
 check_probes_ignore_a_tmpdir_inside_an_adopted_project
 check_probe_without_a_temp_dir_stops_and_says_so
+check_liveness_probe_without_a_temp_dir_stops_and_says_so
 check_install_probes_the_unprobed_hooks
 check_cli_reaches_sessions_by_name
 check_cli_probe_accepts_a_config_dir_with_a_trailing_slash

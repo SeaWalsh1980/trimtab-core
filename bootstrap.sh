@@ -687,9 +687,12 @@ PY
     if [[ $CHECK_ONLY -eq 1 ]]; then note "no GUARDS OFF liveness check registered in settings.json"
     else die "no GUARDS OFF liveness check registered in settings.json — sessions would not be told their guards are off"; fi
   else
-    fake_empty=$(mktemp -d -t liveness-empty.XXXXXX)
-    fake_live=$(mktemp -d -t liveness-live.XXXXXX)
-    ln -s "$CLAUDE_HOME" "$fake_live/.claude"
+    fake_empty=$(probe_tmpdir liveness-empty) \
+      || die "could not create a temp directory for the liveness-check probe (TMPDIR=${TMPDIR:-/tmp})"
+    fake_live=$(probe_tmpdir liveness-live) \
+      || { rm -rf "$fake_empty"; die "could not create a temp directory for the liveness-check probe (TMPDIR=${TMPDIR:-/tmp})"; }
+    ln -s "$CLAUDE_HOME" "$fake_live/.claude" \
+      || { rm -rf "$fake_empty" "$fake_live"; die "could not link the install into the liveness-check probe's fake HOME"; }
     set +e
     out_off=$(HOME="$fake_empty" sh -c "$live_cmd" </dev/null 2>/dev/null)
     out_on=$(HOME="$fake_live" sh -c "$live_cmd" </dev/null 2>/dev/null)
