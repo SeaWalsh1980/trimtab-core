@@ -1283,7 +1283,8 @@ else:
     ctx = d.get("hookSpecificOutput", {})
     ok = ("GUARDS OFF" in d.get("systemMessage", "") and want in d["systemMessage"]
           and ctx.get("hookEventName") == "SessionStart"
-          and "unguarded" in ctx.get("additionalContext", ""))
+          and "unguarded" in ctx.get("additionalContext", "")
+          and want in ctx["additionalContext"])
     print("ok" if ok else "warning incomplete: %r" % out[:120])
 ' "$want" "$rc")
   if [[ "$verdict" == ok ]]; then
@@ -1315,13 +1316,19 @@ lv "guard and non-guard missing: guard named"     "$LV_HOME"  "hooks/guard-mcp.s
 lv "guard and non-guard missing: non-guard named" "$LV_HOME"  "hooks/rule-usage.sh"
 printf '#!/bin/sh\n' > "$LV_REPO/hooks/guard-mcp.sh"; chmod +x "$LV_REPO/hooks/guard-mcp.sh"
 
-# With every guard present, a missing non-guard hook leaves the session
-# guarded, so it gets its own message: telling the session it is unguarded,
-# or to stop work, would overstate it.
-lv_out=$(HOME="$LV_HOME" sh -c "$LIVENESS" 2>&1); lv_rc=$?
-lv_verdict=$(printf '%s' "$lv_out" | python3 -c '
+printf '#!/bin/sh\n' > "$LV_REPO/hooks/rule-usage.sh"; chmod +x "$LV_REPO/hooks/rule-usage.sh"
+
+# hm <label> <command> <hook>: with every guard present, <hook> missing reads
+# HOOKS MISSING. The session stays guarded, so telling it it is unguarded, or
+# to stop work, would overstate it.
+hm() {
+  local label="$1" cmd="$2" hook="$3" out rc verdict
+  rm "$LV_REPO/hooks/$hook.sh"
+  out=$(HOME="$LV_HOME" sh -c "$cmd" 2>&1); rc=$?
+  printf '#!/bin/sh\n' > "$LV_REPO/hooks/$hook.sh"; chmod +x "$LV_REPO/hooks/$hook.sh"
+  verdict=$(printf '%s' "$out" | python3 -c '
 import json, sys
-rc, out = int(sys.argv[1]), sys.stdin.read()
+want, rc, out = sys.argv[1], int(sys.argv[2]), sys.stdin.read()
 if rc != 0:
     sys.exit(print("exit %d: a SessionStart hook must never fail" % rc))
 try:
@@ -1331,21 +1338,40 @@ except ValueError:
 msg = d.get("systemMessage", "")
 ctx = d.get("hookSpecificOutput", {})
 note = ctx.get("additionalContext", "")
-ok = (msg.startswith("HOOKS MISSING") and "hooks/rule-usage.sh" in msg
+ok = (msg.startswith("HOOKS MISSING") and want in msg
       and "GUARDS OFF" not in out
       and ctx.get("hookEventName") == "SessionStart"
-      and "hooks/rule-usage.sh" in note
+      and want in note
       and "unguarded" not in note and "Do not run" not in note)
 print("ok" if ok else "warning incomplete: %r" % out[:120])
-' "$lv_rc")
-if [[ "$lv_verdict" == ok ]]; then
-  printf 'PASS  %-14s %s\n' "liveness" "a missing non-guard hook reads HOOKS MISSING, not GUARDS OFF"
-else
-  printf 'FAIL  %-14s %s  -- %s\n' "liveness" "a missing non-guard hook reads HOOKS MISSING, not GUARDS OFF" "$lv_verdict"
-  fails=$((fails+1))
-fi
-printf '#!/bin/sh\n' > "$LV_REPO/hooks/rule-usage.sh"; chmod +x "$LV_REPO/hooks/rule-usage.sh"
+' "hooks/$hook.sh" "$rc")
+  if [[ "$verdict" == ok ]]; then
+    printf 'PASS  %-14s %s\n' "liveness" "$label"
+  else
+    printf 'FAIL  %-14s %s  -- %s\n' "liveness" "$label" "$verdict"
+    fails=$((fails+1))
+  fi
+}
+for g in pr-body-check doctrine-drift session-path rule-usage; do
+  hm "a missing $g reads HOOKS MISSING, not GUARDS OFF" "$LIVENESS" "$g"
+done
 lv "restored again after HOOKS MISSING"           "$LV_HOME"  silent
+
+# Only the four hooks named above are soft. Any other name in the list, such
+# as a blocking hook added later without the guard- prefix, must fall through
+# to GUARDS OFF: an unknown hook missing fails closed.
+LV_EXTRA=$(printf '%s' "$LIVENESS" | sed 's/ rule-usage; do / rule-usage new-blocker; do /')
+if [[ "$LV_EXTRA" == "$LIVENESS" ]]; then
+  printf 'FAIL  %-14s %s\n' "liveness" "could not add a hook to the shipped list"
+  fails=$((fails+1))
+else
+  printf '#!/bin/sh\n' > "$LV_REPO/hooks/new-blocker.sh"; chmod +x "$LV_REPO/hooks/new-blocker.sh"
+  LIVENESS_SHIPPED="$LIVENESS"; LIVENESS="$LV_EXTRA"
+  lv "an added hook without the guard- prefix is silent when present" "$LV_HOME" silent
+  rm "$LV_REPO/hooks/new-blocker.sh"
+  lv "an added hook without the guard- prefix reads GUARDS OFF" "$LV_HOME" "hooks/new-blocker.sh"
+  LIVENESS="$LIVENESS_SHIPPED"
+fi
 
 echo
 if [[ $fails -eq 0 ]]; then echo "ALL PASS"; exit 0; else echo "$fails FAILURE(S)"; exit 1; fi

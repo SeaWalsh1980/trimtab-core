@@ -146,22 +146,26 @@ guard, or missing `rules`, `bin` or `CLAUDE.md`, still reads `GUARDS OFF` and
 names every missing path. When every guard is present and only
 `pr-body-check`, `doctrine-drift`, `session-path` or `rule-usage` is missing,
 the check reads `HOOKS MISSING`, names those, and asks for bootstrap to be
-re-run without telling the session to stop work. A hook counts as a guard by
-its `guard-` prefix. The check stays one inline POSIX command with one
-`for g in` loop, so the guard matrix still reads the list from it.
+re-run without telling the session to stop work. Those four are named in the
+check; any other name in its list, one added later included, counts as a
+guard. The check stays one inline POSIX command with one `for g in` loop, so
+the guard matrix still reads the list from it.
 
 **Options considered.**
 - *Keep one `GUARDS OFF` message for every hook* (the 2026-10-16 decision).
   Rejected: it tells a guarded session it is unguarded, which is the alarm
   fatigue this check exists to avoid.
+- *Count a hook as a guard by its `guard-` prefix.* Rejected: it fails open.
+  A blocking guard added later under another name would, when missing, tell
+  an unguarded session that its guards are installed.
 - *A second inline check for the non-guard hooks.* Rejected, as on
   2026-10-16: two commands to keep in step, and the guard matrix reads its
   list from one `for g in` loop.
 
 **Consequences.** Two messages to keep correct instead of one; the guard
-matrix tests both. Which message a missing hook gets depends on its name: a
-future blocking hook without the `guard-` prefix would get the softer one.
-When `GUARDS OFF` fires for another reason it still lists any missing
+matrix tests both, for each of the four soft hooks. A new non-guard hook must
+be added to the soft list too, or when missing it reads `GUARDS OFF`: the
+check can overstate a fault, never understate it. When `GUARDS OFF` fires for another reason it still lists any missing
 non-guard hooks with the guards.
 
 **Status.** Accepted. Supersedes the 2026-10-16 clause "The message stays
