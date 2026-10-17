@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse hook, matcher: Write|Edit|MultiEdit
+# PreToolUse hook, matcher: Write|Edit|MultiEdit|NotebookEdit
 #
 # Blocks writes to credential files, and writes whose *content* looks like a
 # live secret. Exit 2 = blocked, stderr is fed back to Claude.
@@ -56,14 +56,19 @@ if ! command -v grep >/dev/null 2>&1; then
   exit 2
 fi
 
-# Write -> .content, Edit -> .new_string, MultiEdit -> every edit's new_string.
-# Emits the path on line 1, then the concatenated new content.
+# Write -> .content, Edit -> .new_string, MultiEdit -> every edit's new_string,
+# NotebookEdit -> .new_source. The path is file_path, or NotebookEdit's
+# notebook_path. Emits the path on line 1, then the concatenated new content.
+# A tool whose keys are left out here passes every rule on empty input, and
+# one left out of the matcher never reaches this at all: see
+# docs/adr/0031-guard-secrets-is-registered-for-and-reads-notebookedit.md.
 extract() {
   if command -v jq >/dev/null 2>&1; then
     jq -r '
-      (.tool_input.file_path // ""),
+      (.tool_input.file_path // .tool_input.notebook_path // ""),
       ([ .tool_input.content?,
          .tool_input.new_string?,
+         .tool_input.new_source?,
          (.tool_input.edits? // [] | .[].new_string?)
        ] | map(select(. != null)) | join("\n"))
     '
@@ -71,9 +76,9 @@ extract() {
     python3 -c '
 import json, sys
 ti = json.load(sys.stdin).get("tool_input", {}) or {}
-parts = [ti.get("content"), ti.get("new_string")]
+parts = [ti.get("content"), ti.get("new_string"), ti.get("new_source")]
 parts += [e.get("new_string") for e in (ti.get("edits") or [])]
-print(ti.get("file_path", "") or "")
+print(ti.get("file_path") or ti.get("notebook_path") or "")
 print("\n".join(p for p in parts if p))
 '
   else
