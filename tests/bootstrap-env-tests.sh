@@ -505,6 +505,27 @@ check_check_reports_a_broken_doctrine_drift() {
   fi
 }
 
+check_check_reports_a_silent_liveness_check() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  boot "$h" "$live" --instance "$inst"
+  python3 - "$h/.claude/settings.json" <<'PY2'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+for e in d["hooks"]["SessionStart"]:
+    for h in e["hooks"]:
+        if "GUARDS OFF" in h["command"]:
+            h["command"] = "m=''; [ -z \"$m\" ] || echo 'GUARDS OFF'; exit 0"
+json.dump(d, open(p, "w"), indent=2)
+PY2
+  boot "$h" "$live" --instance "$inst" --check
+  if [[ $rc -eq 1 && "$out" == *"the liveness check stayed silent with no guards installed"* ]]; then
+    pass "--check reports a liveness check that never fires"
+  else
+    fail "--check reports a liveness check that never fires" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
 # The probe payloads carry the temp directory's path; a quote or a backslash in
 # it must not make them unparseable (pr-body-check would then fail open).
 check_probes_accept_a_tmpdir_with_json_metacharacters() {
@@ -531,6 +552,24 @@ check_probes_accept_a_tmpdir_with_a_colon() {
     pass "the hook probes accept a TMPDIR holding a colon"
   else
     fail "the hook probes accept a TMPDIR holding a colon" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# A TMPDIR inside an adopted project puts the probe directories under its
+# .claude/trimtab.json; without the git fence the probes would read that
+# project's harness instead of an empty one, and the install would end NOT GREEN.
+check_probes_ignore_a_tmpdir_inside_an_adopted_project() {
+  local h inst p
+  h=$(new_home); inst=$(inst_of "$h"); p="$h/adopted"
+  mkdir -p "$p/.claude" "$p/tmp"
+  git -C "$p" init -q
+  printf '{}\n' > "$p/.claude/trimtab.json"
+  TMPDIR="$p/tmp" boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"doctrine-drift runs cleanly through the symlink"* \
+        && "$out" == *"pr-body-check blocks a PR body"* && "$out" != *"NOT GREEN"* ]]; then
+    pass "the hook probes ignore a TMPDIR inside an adopted project"
+  else
+    fail "the hook probes ignore a TMPDIR inside an adopted project" "rc=$rc"; echo "$out" | tail -6
   fi
 }
 
@@ -962,8 +1001,10 @@ check_liveness_check_that_always_fires_fails_the_install
 check_broken_doctrine_drift_ends_not_green
 check_check_reports_a_silent_pr_body_check
 check_check_reports_a_broken_doctrine_drift
+check_check_reports_a_silent_liveness_check
 check_probes_accept_a_tmpdir_with_json_metacharacters
 check_probes_accept_a_tmpdir_with_a_colon
+check_probes_ignore_a_tmpdir_inside_an_adopted_project
 check_install_probes_the_unprobed_hooks
 check_cli_reaches_sessions_by_name
 check_cli_probe_accepts_a_config_dir_with_a_trailing_slash

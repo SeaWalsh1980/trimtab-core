@@ -124,3 +124,14 @@ overstates it; the named path says which hook it is. The guard matrix stubs
 every name the shipped command lists, so it follows the longer list unchanged.
 
 **Status.** Accepted. Amends the Decision's "each of the four guard scripts".
+
+Guards and the other hooks now get different messages. A missing guard, or
+missing rules, bin or CLAUDE.md, still reads `GUARDS OFF` and names every
+missing path. When every guard is present and only `pr-body-check`,
+`doctrine-drift`, `session-path` or `rule-usage` is missing, the check reads
+`HOOKS MISSING`, names those, and tells the session to have bootstrap re-run
+without telling it to stop work. The reason: a missing usage log must not tell
+the session it is unguarded. A warning that overstates the fault teaches the
+operator to ignore `GUARDS OFF`, which then loses its force on the day the
+guards really are gone. The one `for g in` loop and the single inline POSIX
+command stay, so the guard matrix still reads the list from it.

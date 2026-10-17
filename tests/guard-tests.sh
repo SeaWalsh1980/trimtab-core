@@ -1218,5 +1218,32 @@ mv "$LV/moved" "$LV_REPO"
 lv "no install at all warns"                 "$LV/nowhere"    "hooks/guard-paths.sh"
 lv "restored install is silent again"        "$LV_HOME"       silent
 
+# A missing non-guard hook leaves the session guarded, so it gets its own
+# message: telling the session it is unguarded would overstate it (ADR 0004).
+rm "$LV_REPO/hooks/rule-usage.sh"
+lv_out=$(HOME="$LV_HOME" sh -c "$LIVENESS" 2>&1); lv_rc=$?
+lv_verdict=$(printf '%s' "$lv_out" | python3 -c '
+import json, sys
+rc, out = int(sys.argv[1]), sys.stdin.read()
+if rc != 0:
+    sys.exit(print("exit %d: a SessionStart hook must never fail" % rc))
+try:
+    d = json.loads(out)
+except ValueError:
+    sys.exit(print("not valid JSON: %r" % out[:80]))
+msg = d.get("systemMessage", "")
+ok = (msg.startswith("HOOKS MISSING") and "hooks/rule-usage.sh" in msg
+      and "GUARDS OFF" not in out
+      and d.get("hookSpecificOutput", {}).get("hookEventName") == "SessionStart")
+print("ok" if ok else "warning incomplete: %r" % out[:120])
+' "$lv_rc")
+if [[ "$lv_verdict" == ok ]]; then
+  printf 'PASS  %-14s %s\n' "liveness" "a missing non-guard hook reads HOOKS MISSING, not GUARDS OFF"
+else
+  printf 'FAIL  %-14s %s  -- %s\n' "liveness" "a missing non-guard hook reads HOOKS MISSING, not GUARDS OFF" "$lv_verdict"
+  fails=$((fails+1))
+fi
+printf '#!/bin/sh\n' > "$LV_REPO/hooks/rule-usage.sh"; chmod +x "$LV_REPO/hooks/rule-usage.sh"
+
 echo
 if [[ $fails -eq 0 ]]; then echo "ALL PASS"; exit 0; else echo "$fails FAILURE(S)"; exit 1; fi
