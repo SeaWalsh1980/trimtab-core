@@ -1041,7 +1041,9 @@ done
 # would still be listed here as passing. Read from the shipped guard, not a
 # copy.
 guard_list() { # guard_list <array in guard-mcp.sh>  — its names, sorted
-  awk -v a="^$1=\\($" '$0 ~ a {f=1; next} f && /^\)$/{exit} f' \
+  # Exact line comparison, not a regex built from the name: gawk and mawk read
+  # an escaped parenthesis in a -v value differently.
+  awk -v open="$1=(" '$0 == open {f=1; next} f && $0 == ")" {exit} f' \
     "$HOOKS/guard-mcp.sh" | tr -s ' \t' '\n' | sed '/^$/d' | sort
 }
 pin_list() { # pin_list <array in guard-mcp.sh> <tested name>...
