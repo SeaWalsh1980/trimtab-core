@@ -25,7 +25,7 @@ def plant_decoy(root: Path) -> None:
     (pkg / "__init__.py").write_text("")
     (pkg / "__main__.py").write_text(say)
     (pkg / "adapters" / "__init__.py").write_text("")
-    for name in ("doctrine_drift", "pr_body_check"):
+    for name in ("doctrine_drift", "pr_body_check", "pr_monitor"):
         (pkg / "adapters" / f"{name}.py").write_text(say)
 
 
@@ -56,6 +56,18 @@ class Launchers(unittest.TestCase):
         # real adapter allows it: it checks bodies for `create` and `edit` only.
         payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr view 1"}, "cwd": str(self.cwd)})
         out = self.run_from_decoy([str(CHECKOUT / "hooks" / "pr-body-check.sh")], payload)
+        self.assertNotIn(DECOY, out.stdout + out.stderr)
+        self.assertEqual(out.returncode, 0, out.stderr)
+
+    def test_the_pr_monitor_recorder_runs_the_base_adapter_from_a_directory_with_a_decoy(self):
+        # `gh pr create` passes the recorder's gate, so Python runs; the empty stdout is not
+        # a PR URL, so the real adapter records nothing and exits 0. The decoy would exit 3.
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr create --fill"},
+                              "tool_response": {"stdout": "", "stderr": "", "interrupted": False},
+                              "cwd": str(self.cwd)})
+        env = {**os.environ, "CLAUDE_CONFIG_DIR": str(self.cwd / "config")}
+        out = subprocess.run([str(CHECKOUT / "hooks" / "pr-monitor-record.sh")], cwd=self.cwd, input=payload,
+                             env=env, capture_output=True, text=True, timeout=60)
         self.assertNotIn(DECOY, out.stdout + out.stderr)
         self.assertEqual(out.returncode, 0, out.stderr)
 
@@ -115,6 +127,14 @@ class NoBytecode(unittest.TestCase):
         payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr create --body x"}})
 
         self.run_launcher(["bash", str(self.tree / "hooks" / "pr-body-check.sh")], payload)
+
+        self.assertEqual(self.caches(), [])
+
+    def test_the_pr_monitor_recorder_writes_no_bytecode(self):
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr create --fill"},
+                              "tool_response": {"stdout": ""}})
+
+        self.run_launcher(["bash", str(self.tree / "hooks" / "pr-monitor-record.sh")], payload)
 
         self.assertEqual(self.caches(), [])
 

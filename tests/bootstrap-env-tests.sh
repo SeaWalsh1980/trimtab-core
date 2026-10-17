@@ -8,6 +8,9 @@ set -euo pipefail
 # self-probe expects guard-security to block, and an inherited HOOK_ALLOW_*
 # makes it return 0. Clear them all before bootstrap runs.
 for v in $(compgen -v HOOK_ALLOW_); do unset "$v"; done
+# The same for TRIMTAB_INSTANCE: a Claude session exports its own, and a probe
+# that leaned on it passed here while failing in CI, where nothing sets it.
+unset TRIMTAB_INSTANCE
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work=$(mktemp -d -t bootstrap-env.XXXXXX)
 trap 'rm -rf "$work"' EXIT
@@ -390,6 +393,338 @@ check_silent_guard_mcp_fails_the_install() {
     pass "a guard-mcp that does not ask fails the install"
   else
     fail "a guard-mcp that does not ask fails the install" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# guard-mcp must deny set_monitor for a PR the session did not create
+# (ADR 0028). A guard that passes it by name, as before that record, lets
+# Auto-fix reach any PR the app binds: the install must refuse it. The stub
+# passes set_monitor whole and hands every other call to the real guard, so the
+# earlier guard-mcp probes still see a guard that asks.
+check_set_monitor_by_name_fails_the_install() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  mv "$snap_new/hooks/guard-mcp.sh" "$snap_new/hooks/guard-mcp-real.sh"
+  printf '#!/usr/bin/env bash\np=$(cat)\ncase "$p" in *mcp__ccd_pr__set_monitor*) exit 0 ;; esac\nprintf "%%s" "$p" | "${BASH_SOURCE[0]%%/*}/guard-mcp-real.sh"\n' \
+    > "$snap_new/hooks/guard-mcp.sh"
+  chmod +x "$snap_new/hooks/guard-mcp.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"guard-mcp asks about an MCP write"* \
+     && "$out" == *"guard-mcp did not deny set_monitor for another PR"* ]]; then
+    pass "a guard-mcp that passes set_monitor by name fails the install"
+  else
+    fail "a guard-mcp that passes set_monitor by name fails the install" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# ...and a correct install proves the pair end to end: the recorder's create
+# passes, another PR and another session are denied.
+check_set_monitor_probe_reports_green() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"guard-mcp denies set_monitor for a PR the session did not create"* \
+     && "$out" == *"guard-mcp denies set_monitor for a PR another session created"* \
+     && "$out" == *"guard-mcp passes set_monitor for a PR the recorder saw the session create"* ]]; then
+    pass "an install proves set_monitor passes only for the session's own PR"
+  else
+    fail "an install proves set_monitor passes only for the session's own PR" "rc=$rc"; echo "$out" | grep -i set_monitor | tail -6
+  fi
+}
+
+# pr-body-check fails open by design, so a broken one is silent: every PR would
+# open without the harness block. It is policy with CI as the gate, so the run
+# installs but ends NOT GREEN and deletes nothing, as for the observer.
+check_silent_pr_body_check_ends_not_green() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n' > "$snap_new/hooks/pr-body-check.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -eq 0 && -d "$snap_mid" && "$out" == *"pr-body-check returned 0, expected 2"* \
+        && "$(printf '%s\n' "$out" | sed '/^$/d' | tail -1)" == "NOT GREEN: pr-body-check"* ]]; then
+    pass "a pr-body-check that never blocks installs but ends NOT GREEN and withholds retention"
+  else
+    fail "a pr-body-check that never blocks installs but ends NOT GREEN and withholds retention" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# The GUARDS OFF liveness check is the only warning a session gets that its
+# guards are missing (ADR 0004). A base whose check never fires must not install.
+check_silent_liveness_check_fails_the_install() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  python3 - "$snap_new/settings.base.json" <<'PY2'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+for e in d["hooks"]["SessionStart"]:
+    for h in e["hooks"]:
+        if "GUARDS OFF" in h["command"]:
+            h["command"] = "m=''; [ -z \"$m\" ] || echo 'GUARDS OFF'; exit 0"
+json.dump(d, open(p, "w"), indent=2)
+PY2
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"the liveness check stayed silent with no guards installed"* ]]; then
+    pass "a liveness check that never reports GUARDS OFF fails the install"
+  else
+    fail "a liveness check that never reports GUARDS OFF fails the install" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# The other half: a check that always fires would warn GUARDS OFF in every
+# session, and an operator learns to ignore it.
+check_liveness_check_that_always_fires_fails_the_install() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  python3 - "$snap_new/settings.base.json" <<'PY2'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+for e in d["hooks"]["SessionStart"]:
+    for h in e["hooks"]:
+        if "GUARDS OFF" in h["command"]:
+            h["command"] = "echo 'GUARDS OFF: missing hooks/guard-paths.sh'; exit 0"
+json.dump(d, open(p, "w"), indent=2)
+PY2
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"the liveness check names an installed hook as missing"* ]]; then
+    pass "a liveness check that fires on a complete install fails the install"
+  else
+    fail "a liveness check that fires on a complete install fails the install" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# A base without a non-guard hook leaves sessions guarded: the liveness check
+# reads HOOKS MISSING, and the install notes it rather than refusing.
+check_base_without_rule_usage_is_noted_not_refused() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  rm "$snap_new/hooks/rule-usage.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"names a non-guard hook as missing on this install"* \
+        && "$out" != *"names an installed hook as missing"* ]]; then
+    pass "a base without rule-usage.sh is noted by the liveness probe, not refused"
+  else
+    fail "a base without rule-usage.sh is noted by the liveness probe, not refused" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# Without a CLAUDE.md the check reads GUARDS OFF and names every missing path,
+# the non-guard hook among them; that is still not a guard named missing.
+check_base_without_rule_usage_and_no_claude_md_is_not_refused() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  rm "$snap_new/hooks/rule-usage.sh"
+  rm -f "$inst/CLAUDE.md"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"names a non-guard hook as missing on this install"* \
+        && "$out" != *"names an installed hook as missing"* ]]; then
+    pass "a base without rule-usage.sh and an instance without CLAUDE.md are not refused"
+  else
+    fail "a base without rule-usage.sh and an instance without CLAUDE.md are not refused" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# doctrine-drift cannot block and exits 0, so a broken one is silent. It is
+# informational: the run still installs, but ends NOT GREEN and deletes nothing.
+check_broken_doctrine_drift_ends_not_green() {
+  local h inst store
+  h=$(new_home); inst=$(inst_of "$h"); store="$h/share/trimtab/core"
+  make_store "$store"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\necho "Traceback (most recent call last):" >&2\nexit 0\n' \
+    > "$snap_new/hooks/doctrine-drift.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -eq 0 && -d "$snap_mid" && "$out" == *"retention withheld"* \
+        && "$(printf '%s\n' "$out" | sed '/^$/d' | tail -1)" == "NOT GREEN: doctrine-drift"* ]]; then
+    pass "a broken doctrine-drift installs but ends NOT GREEN and withholds retention"
+  else
+    fail "a broken doctrine-drift installs but ends NOT GREEN and withholds retention" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# --check is what a cloud setup script runs after the install, and it must fail
+# the session on the same faults. Each case installs clean, breaks one hook in
+# the snapshot the live links point into, and expects --check to exit 1 naming it.
+check_check_reports_a_silent_pr_body_check() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n' > "$snap_new/hooks/pr-body-check.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst" --check
+  if [[ $rc -eq 1 && "$out" == *"pr-body-check returned 0, expected 2"* ]]; then
+    pass "--check reports a pr-body-check that never blocks"
+  else
+    fail "--check reports a pr-body-check that never blocks" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+check_check_reports_a_broken_doctrine_drift() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\necho "Traceback (most recent call last):" >&2\nexit 0\n' \
+    > "$snap_new/hooks/doctrine-drift.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst" --check
+  if [[ $rc -eq 1 && "$out" == *"doctrine-drift exited 0 with output on a quiet payload"* ]]; then
+    pass "--check reports a broken doctrine-drift"
+  else
+    fail "--check reports a broken doctrine-drift" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+check_check_reports_a_silent_liveness_check() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  boot "$h" "$live" --instance "$inst"
+  python3 - "$h/.claude/settings.json" <<'PY2'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+for e in d["hooks"]["SessionStart"]:
+    for h in e["hooks"]:
+        if "GUARDS OFF" in h["command"]:
+            h["command"] = "m=''; [ -z \"$m\" ] || echo 'GUARDS OFF'; exit 0"
+json.dump(d, open(p, "w"), indent=2)
+PY2
+  boot "$h" "$live" --instance "$inst" --check
+  # Editing settings.json is drift on its own, so rc 1 does not prove the probe
+  # ran: the probe's own line does, and its pass line must be absent.
+  if [[ $rc -eq 1 && "$out" == *"the liveness check stayed silent with no guards installed"* \
+        && "$out" != *"the liveness check reports GUARDS OFF when the guards are missing"* ]]; then
+    pass "--check reports a liveness check that never fires"
+  else
+    fail "--check reports a liveness check that never fires" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# The probe payloads carry the temp directory's path; a quote or a backslash in
+# it must not make them unparseable (pr-body-check would then fail open).
+check_probes_accept_a_tmpdir_with_json_metacharacters() {
+  local h inst t
+  h=$(new_home); inst=$(inst_of "$h"); t="$h/tmp\"q\\b"
+  mkdir -p "$t"
+  TMPDIR="$t" boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"pr-body-check blocks a PR body"* && "$out" != *"NOT GREEN"* ]]; then
+    pass "the hook probes accept a TMPDIR holding a quote and a backslash"
+  else
+    fail "the hook probes accept a TMPDIR holding a quote and a backslash" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# GIT_CEILING_DIRECTORIES is colon-separated, so a TMPDIR holding a colon cannot
+# fence git; the probes then run under /tmp, and the install stays green.
+check_probes_accept_a_tmpdir_with_a_colon() {
+  local h inst t
+  h=$(new_home); inst=$(inst_of "$h"); t="$h/tmp:x"
+  mkdir -p "$t"
+  TMPDIR="$t" boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"pr-body-check blocks a PR body"* \
+        && "$out" == *"doctrine-drift runs cleanly"* && "$out" != *"NOT GREEN"* ]]; then
+    pass "the hook probes accept a TMPDIR holding a colon"
+  else
+    fail "the hook probes accept a TMPDIR holding a colon" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# A TMPDIR inside an adopted project puts the probe directories under its
+# .claude/trimtab.json; without the git fence the probes would read that
+# project's harness instead of an empty one, and the install would end NOT GREEN.
+check_probes_ignore_a_tmpdir_inside_an_adopted_project() {
+  local h inst p
+  h=$(new_home); inst=$(inst_of "$h"); p="$h/adopted"
+  mkdir -p "$p/.claude" "$p/tmp"
+  git -C "$p" init -q
+  printf '{}\n' > "$p/.claude/trimtab.json"
+  TMPDIR="$p/tmp" boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"doctrine-drift runs cleanly through the symlink"* \
+        && "$out" == *"pr-body-check blocks a PR body"* && "$out" != *"NOT GREEN"* ]]; then
+    pass "the hook probes ignore a TMPDIR inside an adopted project"
+  else
+    fail "the hook probes ignore a TMPDIR inside an adopted project" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# GIT_DIR overrides GIT_CEILING_DIRECTORIES, so an exported one (bootstrap run
+# from a git hook or alias) would hand the probes that repository's lock.
+check_probes_ignore_an_exported_git_dir() {
+  local h inst p
+  h=$(new_home); inst=$(inst_of "$h"); p="$h/adopted"
+  mkdir -p "$p/.claude"
+  git -C "$p" init -q
+  printf '{}\n' > "$p/.claude/trimtab.json"
+  GIT_DIR="$p/.git" GIT_WORK_TREE="$p" boot "$h" "$live" --instance "$inst"
+  if [[ "$out" == *"doctrine-drift runs cleanly through the symlink"* \
+        && "$out" == *"pr-body-check blocks a PR body"* ]]; then
+    pass "the hook probes ignore an exported GIT_DIR and GIT_WORK_TREE"
+  else
+    fail "the hook probes ignore an exported GIT_DIR and GIT_WORK_TREE" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# Stderr that is not the hook's fault must not make a working doctrine-drift
+# red; a traceback still does (check_broken_doctrine_drift_ends_not_green).
+check_doctrine_drift_with_benign_stderr_stays_green() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\necho "x.py:1: DeprecationWarning: y" >&2\nexit 0\n' \
+    > "$snap_new/hooks/doctrine-drift.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"doctrine-drift runs cleanly through the symlink"* && "$out" != *"NOT GREEN"* ]]; then
+    pass "a doctrine-drift that only warns on stderr stays green"
+  else
+    fail "a doctrine-drift that only warns on stderr stays green" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# A probe whose temp directory cannot be made would run the hook in the
+# checkout with git unfenced; the run must stop and say so, not probe there.
+check_probe_without_a_temp_dir_stops_and_says_so() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  TMPDIR="$h/no-such-dir" boot "$h" "$live" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"could not create a temp directory for the pr-body-check probe"* \
+        && "$out" != *"pr-body-check blocks a PR body"* ]]; then
+    pass "a probe without a temp directory stops the run and names it"
+  else
+    fail "a probe without a temp directory stops the run and names it" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# The same for the liveness probe. Under --check a missing pr-body-check is
+# only noted, so the run reaches the liveness probe with no temp directory.
+check_liveness_probe_without_a_temp_dir_stops_and_says_so() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  rm "$snap_new/hooks/pr-body-check.sh"
+  TMPDIR="$h/no-such-dir" boot "$h" "$snap_new/bootstrap.sh" --instance "$inst" --check
+  if [[ $rc -ne 0 && "$out" == *"could not create a temp directory for the liveness-check probe"* ]]; then
+    pass "a liveness probe without a temp directory stops the run and names it"
+  else
+    fail "a liveness probe without a temp directory stops the run and names it" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+# A complete install proves all three end to end.
+check_install_probes_the_unprobed_hooks() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 \
+     && "$out" == *"pr-body-check blocks a PR body without the harness block through the symlink"* \
+     && "$out" == *"the liveness check reports GUARDS OFF when the guards are missing"* \
+     && "$out" == *"the liveness check names no hook as missing on this install"* \
+     && "$out" == *"doctrine-drift runs cleanly through the symlink"* ]]; then
+    pass "an install probes pr-body-check, the liveness check and doctrine-drift"
+  else
+    fail "an install probes pr-body-check, the liveness check and doctrine-drift" "rc=$rc"; echo "$out" | tail -8
   fi
 }
 
@@ -799,6 +1134,25 @@ check_rerun_from_same_base_keeps_predecessor
 check_sandbox_without_own_store_leaves_store_alone
 check_observer_failure_records_but_withholds_retention
 check_silent_guard_mcp_fails_the_install
+check_set_monitor_by_name_fails_the_install
+check_set_monitor_probe_reports_green
+check_silent_pr_body_check_ends_not_green
+check_silent_liveness_check_fails_the_install
+check_liveness_check_that_always_fires_fails_the_install
+check_base_without_rule_usage_is_noted_not_refused
+check_base_without_rule_usage_and_no_claude_md_is_not_refused
+check_broken_doctrine_drift_ends_not_green
+check_check_reports_a_silent_pr_body_check
+check_check_reports_a_broken_doctrine_drift
+check_check_reports_a_silent_liveness_check
+check_probes_accept_a_tmpdir_with_json_metacharacters
+check_probes_accept_a_tmpdir_with_a_colon
+check_probes_ignore_a_tmpdir_inside_an_adopted_project
+check_probes_ignore_an_exported_git_dir
+check_doctrine_drift_with_benign_stderr_stays_green
+check_probe_without_a_temp_dir_stops_and_says_so
+check_liveness_probe_without_a_temp_dir_stops_and_says_so
+check_install_probes_the_unprobed_hooks
 check_cli_reaches_sessions_by_name
 check_cli_probe_accepts_a_config_dir_with_a_trailing_slash
 check_silent_session_path_fails_the_install

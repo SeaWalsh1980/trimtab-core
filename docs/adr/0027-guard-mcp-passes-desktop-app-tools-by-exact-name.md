@@ -7,6 +7,12 @@ stands. Departs from ADR 0020 for desktop sessions only; see "PR
 monitoring, and ADR 0020". Amended 2026-10-16: `mcp__ccd_turn__update_plan`
 joins the list. See [Amendment (2026-10-16)](#amendment-2026-10-16).
 
+2026-10-17: ADR 0028
+(`docs/adr/0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md`,
+proposed) takes `mcp__ccd_pr__set_monitor` off this list and passes it only
+for PRs the session created, denying it otherwise. That narrows the accepted
+risk below; the rest of this record stands.
+
 ## Context
 
 The Claude desktop app injects its own MCP tools into a session, on servers

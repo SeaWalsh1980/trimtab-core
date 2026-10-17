@@ -12,6 +12,10 @@ consequence that no PR event reaches a run after its work did not hold; see
 guard-mcp pass the app's `mcp__ccd_pr__set_monitor`, so PR events can reach
 a desktop session after its work. This record still governs cloud routines.
 
+2026-10-17: ADR 0028
+(`docs/adr/0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md`,
+proposed) narrows that desktop pass to PRs the session created.
+
 Was: proposed. Becomes accepted once a routine updated from these templates
 reads back with the tools listed in its session config, and one of its runs
 shows no call to them (see "Trial, still open" below).

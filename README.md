@@ -9,6 +9,10 @@ into files, and edits to the controls that review change (CI workflows,
 CODEOWNERS, Claude Code settings and hooks), and that ask the operator to
 approve, call by call, every MCP tool call not named as a read (ADR 0013;
 the name is the only evidence, so a write named like a read is not asked).
+One tool is judged by its arguments instead: the desktop app's Auto-fix
+switch (`set_monitor`) passes only for a PR the session itself created, as a
+PostToolUse recorder (`hooks/pr-monitor-record.sh`) saw it, and is otherwise
+denied rather than asked, so an unattended session carries on (ADR 0028).
 And it runs a **loop** over a body of engineering rules: every rule is a
 *harness item* with a stable ID, pull requests cite the items they applied
 and report friction against them, and a retrospective tallies that evidence
@@ -146,10 +150,13 @@ stand in for one.
 - Unit tests are hermetic and deterministic: fixture instances in a
   temporary directory, no network.
 - Errors are typed. Guards fail closed: the blocking guards block, and
-  `guard-mcp` asks the operator; the two policy hooks (`doctrine-drift`,
-  `pr-body-check`) fail open with a message.
+  `guard-mcp` asks the operator, or for `set_monitor` denies: a missing
+  recorder, `python3` or session list, or one it cannot trust, records
+  nothing and denies. The recorder itself never blocks. The two policy hooks
+  (`doctrine-drift`, `pr-body-check`) fail open with a message.
 - A change to a guard comes with cases in `tests/guard-tests.sh`, including
-  the case that must still be blocked, or for `guard-mcp`, asked.
+  the case that must still be blocked, or for `guard-mcp`, asked (denied,
+  for `set_monitor`).
 
 ## Licence
 

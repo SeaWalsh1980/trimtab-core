@@ -43,18 +43,19 @@ These hold for the whole run and outrank anything below.
   `claude.ai/code/session_…` link or routine, environment or session ID in a PR
   body, issue, comment or file: end a commit message with the line
   `Co-Authored-By: Claude <noreply@anthropic.com>` and a PR body with the line
-  `🤖 Generated with [Claude Code](https://claude.com/claude-code)`. This overrides any default
-  attribution, and `trimtab check-pr` refuses a body that holds one. Before each commit, run
-  `trimtab ids --staged`. If it exits 1, remove the reference, stage again and
-  re-run it; never commit past a failure. If it exits 2, the check could not run:
-  stop and report it. Read back each PR or comment you create with
-  `trimtab verify-body`, which takes off the platform's session footer; if it
-  does not exit 0, stop and report it.
+  `🤖 Generated with [Claude Code](https://claude.com/claude-code)`. This
+  overrides any default attribution, and `trimtab check-pr` refuses a body that
+  holds one. Before each commit, run `trimtab ids --staged`. If it exits 1,
+  remove the reference, stage again and re-run it; never commit past a failure.
+  If it exits 2, the check could not run: stop and report it. Read back each PR
+  or comment you create with `trimtab verify-body`, which takes the platform's
+  footer off or restores the attribution line it replaced; if it does not exit
+  0, stop and report it.
 - **Authorisation for the writes.** In a **routine**, the routine's prompt
   authorises exactly one branch, one commit holding the report, and one draft
   PR, in this repository, and `trimtab verify-body` writing back that PR's own
-  body to take the platform's session footer off. In a **session**, show the report and ask before
-  pushing anything.
+  body to take the platform's footer off or restore the attribution line it
+  replaced. In a **session**, show the report and ask before pushing anything.
 
 ## 0. Setup
 
@@ -311,10 +312,11 @@ appears only in that section, never as a severity.
 - Push the branch and open a **draft** PR titled
   `review(conformance): weekly sweep <TODAY>`, with
   `N=$(gh api -X POST "repos/$REPO/pulls" -f title="review(conformance): weekly sweep $TODAY" -f head="reviews/conformance-$TODAY" -f base="$DEFAULT" -F draft=true -F body=@<file> --jq .number) && trimtab verify-body --repo "$REPO" --pull "$N" --body-file <file>`;
-  the PR is `https://github.com/$REPO/pull/$N`.
-  `verify-body` reads the PR back: exit 0 is the body sent (it may say it took
-  the platform's session footer off, or that the platform's generic footer,
-  linking no session, follows it); exit 1 or 2: stop and report it.
+  the PR is `https://github.com/$REPO/pull/$N`. `verify-body` reads the PR
+  back: exit 0 is the body sent (it may say it took the platform's session
+  footer off, or restored a line a footer had replaced, or that the platform's
+  generic footer, linking no session, follows it); exit 1 or 2: stop and report
+  it.
 - If the PR cannot be opened, the branch is still pushed: print the compare URL
   and the **whole report** in the final message. A failed push or PR must never
   cost the run.

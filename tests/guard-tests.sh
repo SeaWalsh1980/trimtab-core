@@ -283,6 +283,107 @@ t guard-paths.sh 2 "write an output style"                    "$(j Write "{\"fil
 t guard-paths.sh 2 "write plugin code (plugins execute)"      "$(j Write "{\"file_path\":\"$CP_HOME/plugins/somplugin/index.js\",\"content\":\"x\"}")"
 t guard-paths.sh 2 "write settings.local.json"                "$(j Write "{\"file_path\":\"$CP_HOME/settings.local.json\",\"content\":\"{}\"}")"
 
+# -- guard state: written by hooks only (ADR 0028) ------------------------
+# The list of PRs a session created decides what guard-mcp passes for
+# set_monitor, so a session's own tools must not write it, by any spelling.
+# Hooks write it outside those tools. Read stays open, as for the rest.
+PM_LIST="$CP_HOME/guard-state/pr-monitor/$(printf 'a%.0s' $(seq 64)).json"
+t guard-paths.sh 2 "write a guard-state list"                 "$(j Write "{\"file_path\":\"$PM_LIST\",\"content\":\"{}\"}")"
+t guard-paths.sh 2 "edit a guard-state list"                  "$(j Edit "{\"file_path\":\"$PM_LIST\"}")"
+t guard-paths.sh 2 "MultiEdit a guard-state list"             "$(j MultiEdit "{\"file_path\":\"$PM_LIST\"}")"
+t guard-paths.sh 2 "NotebookEdit into guard-state"            "$(j NotebookEdit "{\"file_path\":\"$CP_HOME/guard-state/x.ipynb\"}")"
+t guard-paths.sh 2 "write a new file directly in guard-state" "$(j Write "{\"file_path\":\"$CP_HOME/guard-state/other\",\"content\":\"x\"}")"
+t guard-paths.sh 2 "dotdot into guard-state"                  "$(j Write "{\"file_path\":\"$CP_HOME/plans/../guard-state/pr-monitor/x.json\",\"content\":\"x\"}")"
+t guard-paths.sh 2 "bash redirect into a guard-state list"    "$(j Bash "{\"command\":\"echo x > $PM_LIST\"}")"
+t guard-paths.sh 2 "bash literal \$CLAUDE_CONFIG_DIR/guard-state" "$(j Bash '{"command":"rm $CLAUDE_CONFIG_DIR/guard-state/pr-monitor/x.json"}')"
+t guard-paths.sh 2 "bash python3 -c writing a guard-state list" "$(j Bash "{\"command\":\"python3 -c open('$PM_LIST','w')\"}")"
+t guard-paths.sh 2 "bash replacing guard-state with a link"   "$(j Bash "{\"command\":\"ln -sfn /tmp/x $CP_HOME/guard-state\"}")"
+pushd "$CP_HOME" >/dev/null
+t guard-paths.sh 2 "RELATIVE redirect into guard-state"       "$(j Bash '{"command":"echo x >guard-state/pr-monitor/x.json"}')"
+popd >/dev/null
+t guard-paths.sh 0 "Read of a guard-state list still allowed" "$(j Read "{\"file_path\":\"$PM_LIST\"}")"
+t guard-paths.sh 0 "a sibling name is not guard-state"        "$(j Write "{\"file_path\":\"$CP_HOME/guard-statement.md\",\"content\":\"x\"}")"
+
+# ...and by its physical path, when the config dir is a link: a Write spelt
+# through the link's target must block as the lexical spelling does, while
+# the agent's own state there stays writable.
+GS_REAL="$CPTMP/gs-real-config"
+GS_LINK="$CPTMP/gs-linked-config"
+mkdir -p "$GS_REAL/plans"
+ln -s "$GS_REAL" "$GS_LINK"
+GS_SAVED_CFG="$CLAUDE_CONFIG_DIR"
+export CLAUDE_CONFIG_DIR="$GS_LINK"
+t guard-paths.sh 2 "linked config: guard-state via the link"  "$(j Write "{\"file_path\":\"$GS_LINK/guard-state/pr-monitor/x.json\",\"content\":\"{}\"}")"
+t guard-paths.sh 2 "linked config: guard-state via its target" "$(j Write "{\"file_path\":\"$GS_REAL/guard-state/pr-monitor/x.json\",\"content\":\"{}\"}")"
+t guard-paths.sh 2 "linked config: Edit via its target"       "$(j Edit "{\"file_path\":\"$GS_REAL/guard-state/pr-monitor/x.json\"}")"
+t guard-paths.sh 2 "linked config: bash redirect via its target" "$(j Bash "{\"command\":\"echo x > $GS_REAL/guard-state/pr-monitor/x.json\"}")"
+t guard-paths.sh 0 "linked config: Read via its target"       "$(j Read "{\"file_path\":\"$GS_REAL/guard-state/pr-monitor/x.json\"}")"
+t guard-paths.sh 0 "linked config: plans stay writable"       "$(j Write "{\"file_path\":\"$GS_REAL/plans/p.md\",\"content\":\"x\"}")"
+
+# Every other config name is protected by its physical path too (ADR 0029),
+# not only guard-state. hooks/ and rules/ are links here, as bootstrap makes
+# them: <target>/hooks/x reaches the linked tree through the kernel, yet it
+# matches neither the lexical root nor the link's realpath. The rest are absent,
+# because a config name is protected whether or not it exists. guard-state's
+# own cases are above.
+GS_REPO="$CPTMP/gs-config-repo"
+mkdir -p "$GS_REPO/hooks" "$GS_REPO/rules" "$GS_REAL/todos" \
+         "$GS_REAL/projects/-a-project/memory"
+ln -s "$GS_REPO/hooks" "$GS_REAL/hooks"
+ln -s "$GS_REPO/rules" "$GS_REAL/rules"
+for gs_n in hooks rules bin commands agents skills output-styles plugins; do
+  t guard-paths.sh 2 "linked config: Write to $gs_n via its target" "$(j Write "{\"file_path\":\"$GS_REAL/$gs_n/x\",\"content\":\"x\"}")"
+  t guard-paths.sh 2 "linked config: Edit in $gs_n via its target"  "$(j Edit "{\"file_path\":\"$GS_REAL/$gs_n/x\"}")"
+  t guard-paths.sh 2 "linked config: bash redirect into $gs_n via its target" "$(j Bash "{\"command\":\"echo x > $GS_REAL/$gs_n/x\"}")"
+done
+for gs_f in settings.json settings.local.json CLAUDE.md; do
+  t guard-paths.sh 2 "linked config: Write $gs_f via its target" "$(j Write "{\"file_path\":\"$GS_REAL/$gs_f\",\"content\":\"x\"}")"
+  t guard-paths.sh 2 "linked config: Edit $gs_f via its target"  "$(j Edit "{\"file_path\":\"$GS_REAL/$gs_f\"}")"
+  t guard-paths.sh 2 "linked config: bash tee $gs_f via its target" "$(j Bash "{\"command\":\"echo x | tee $GS_REAL/$gs_f\"}")"
+done
+# The target dir itself, by equality, as the lexical config dir is: replacing
+# it replaces every name beneath it at once.
+t guard-paths.sh 2 "linked config: bash mv onto its target"   "$(j Bash "{\"command\":\"mv /tmp/x $GS_REAL\"}")"
+t guard-paths.sh 2 "linked config: bash rm -rf its target"    "$(j Bash "{\"command\":\"rm -rf $GS_REAL/\"}")"
+pushd "$GS_REAL" >/dev/null
+t guard-paths.sh 2 "linked config: RELATIVE redirect to settings.json in its target" "$(j Bash '{"command":"echo x >settings.json"}')"
+t guard-paths.sh 2 "linked config: RELATIVE redirect into hooks in its target"      "$(j Bash '{"command":"echo x >hooks/x"}')"
+popd >/dev/null
+# ...while reads, and the agent's own state there, stay open. The Read case pins
+# that Read stays exempt; it passes whatever the roots are. The sibling cases
+# pin the physical roots' boundaries: a prefix ends at a `/`, a file is exact.
+# The target is in the exact-match list only, never substring-scanned, or the
+# cat below would block.
+t guard-paths.sh 0 "linked config: Read settings.json via its target" "$(j Read "{\"file_path\":\"$GS_REAL/settings.json\"}")"
+t guard-paths.sh 0 "linked config: a sibling of hooks via its target stays writable" "$(j Write "{\"file_path\":\"$GS_REAL/hooks-old/x\",\"content\":\"x\"}")"
+t guard-paths.sh 0 "linked config: a sibling of settings.json via its target stays writable" "$(j Write "{\"file_path\":\"$GS_REAL/settings.json.bak\",\"content\":\"x\"}")"
+t guard-paths.sh 0 "linked config: todos stay writable"       "$(j Write "{\"file_path\":\"$GS_REAL/todos/t.json\",\"content\":\"x\"}")"
+t guard-paths.sh 0 "linked config: memory stays writable"     "$(j Write "{\"file_path\":\"$GS_REAL/projects/-a-project/memory/m.md\",\"content\":\"x\"}")"
+t guard-paths.sh 0 "linked config: bash reading a plan via its target" "$(j Bash "{\"command\":\"cat $GS_REAL/plans/p.md\"}")"
+# A link on a PARENT of the config dir is resolved the same way.
+PL_REAL="$CPTMP/pl-real"
+PL_LINK="$CPTMP/pl-link"
+mkdir -p "$PL_REAL/.claude"
+ln -s "$PL_REAL" "$PL_LINK"
+export CLAUDE_CONFIG_DIR="$PL_LINK/.claude"
+t guard-paths.sh 2 "linked parent: settings.json via the target" "$(j Write "{\"file_path\":\"$PL_REAL/.claude/settings.json\",\"content\":\"x\"}")"
+t guard-paths.sh 0 "linked parent: plans via the target stay writable" "$(j Write "{\"file_path\":\"$PL_REAL/.claude/plans/p.md\",\"content\":\"x\"}")"
+export CLAUDE_CONFIG_DIR="$GS_LINK"
+GS_DANGLING="$CPTMP/gs-dangling-config"
+ln -s "$CPTMP/gs-nowhere" "$GS_DANGLING"
+export CLAUDE_CONFIG_DIR="$GS_DANGLING"
+# A config dir that does not resolve blocks every call but a Read: reading
+# never reaches the list, and is how a session sees what is wrong.
+t guard-paths.sh 2 "unresolvable config dir: a Write blocks"   "$(j Write '{"file_path":"/p/app/main.py","content":"x"}')"
+t guard-paths.sh 2 "unresolvable config dir: a Bash call blocks" "$(j Bash '{"command":"ls"}')"
+t guard-paths.sh 2 "unresolvable config dir: no tool_name blocks" '{"tool_input":{"file_path":"/p/app/main.py"}}'
+t guard-paths.sh 0 "unresolvable config dir: a Read passes"    "$(j Read '{"file_path":"/p/app/main.py"}')"
+t guard-paths.sh 2 "unresolvable config dir: a Read of .env still blocks" "$(j Read '{"file_path":"/p/app/.env"}')"
+export CLAUDE_CONFIG_DIR="$GS_SAVED_CFG"
+t guard-paths.sh 0 "an unlinked config dir adds no second root" "$(j Write "{\"file_path\":\"$GS_REAL/guard-state/x.json\",\"content\":\"{}\"}")"
+t guard-paths.sh 0 "an unlinked config dir: another dir's settings.json is open" "$(j Write "{\"file_path\":\"$GS_REAL/settings.json\",\"content\":\"x\"}")"
+t guard-paths.sh 0 "an unlinked config dir: another dir is not the config dir" "$(j Bash "{\"command\":\"ls $GS_REAL\"}")"
+
 # -- the agent's own state under CLAUDE_HOME must stay WRITABLE -----------
 # These assert an allow, against the general rule that new cases assert a
 # block, and deliberately so: they are the regression that shipped. A blanket
@@ -827,7 +928,7 @@ echo "== guard-mcp =="
 # `t` cannot see it and `tm` checks the answer itself. A model's own account
 # of whether a call ran is not evidence (ADR 0013); the guard's output is. See
 # docs/adr/0013-guard-mcp-asks-before-mcp-tools-that-may-write.md.
-tm() { # tm <want: pass|ask> <label> <payload> [PATH for the guard]
+tm() { # tm <want: pass|ask|deny> <label> <payload> [PATH for the guard]
   local want="$1" label="$2" payload="$3" p="${4:-$PATH}" out rc verdict
   out=$(printf '%s' "$payload" | PATH="$p" "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null); rc=$?
   verdict=$(printf '%s' "$out" | python3 -c '
@@ -843,9 +944,9 @@ else:
     except ValueError:
         sys.exit(print("not valid JSON: %r" % out[:80]))
     h = d.get("hookSpecificOutput", {}) if isinstance(d, dict) else {}
-    ok = (h.get("hookEventName") == "PreToolUse" and h.get("permissionDecision") == "ask"
+    ok = (h.get("hookEventName") == "PreToolUse" and h.get("permissionDecision") == want
           and str(h.get("permissionDecisionReason", "")).startswith("guard-mcp: "))
-    print("ok" if ok else "not an ask: %r" % out[:120])
+    print("ok" if ok else "not a %s: %r" % (want, out[:120]))
 ' "$want" "$rc")
   if [[ "$verdict" == ok ]]; then
     printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh "$want" "$label"
@@ -919,7 +1020,7 @@ CCD_PASS=(
   mcp__ccd_window__get_window_layout mcp__ccd_window__open_session_in
   mcp__ccd_window__close_split mcp__ccd_window__set_sidebar_collapsed
   mcp__ccd_pr__get_status
-  mcp__ccd_pr__unbind_pr mcp__ccd_pr__set_monitor
+  mcp__ccd_pr__unbind_pr
   mcp__ccd_session_mgmt__get_session mcp__ccd_session_mgmt__list_sessions
   mcp__ccd_session_mgmt__list_events mcp__ccd_session_mgmt__get_usage
   mcp__ccd_session_mgmt__search_session_transcripts
@@ -928,6 +1029,9 @@ CCD_PASS=(
   mcp__ccd_session__list_start_targets mcp__ccd_session__dismiss_task
   mcp__ccd_connectors__session_connectors_status
 )
+# set_monitor passes only for a PR the session created (ADR 0028); its cases
+# are in the set_monitor section below, after the recorder's.
+CCD_OWN=( mcp__ccd_pr__set_monitor )
 for n in "${CCD_PASS[@]}"; do
   tm pass "app allowlist: ${n#mcp__}"         "$(j "$n" '{}')"
 done
@@ -942,6 +1046,23 @@ if [[ -n "$ccd_guard" && "$ccd_guard" == "$ccd_tests" ]]; then
 else
   printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_ALLOW differs from the tested names (or could not be read)"
   diff <(printf '%s\n' "$ccd_guard") <(printf '%s\n' "$ccd_tests") | sed 's/^/      /'
+  fails=$((fails+1))
+fi
+# The same for CCD_OWN_PR, and the two lists never share a name: one on both
+# would pass by name before its arguments were ever checked.
+own_guard=$(awk '/^CCD_OWN_PR=\($/{f=1; next} f && /^\)$/{exit} f' \
+  "$HOOKS/guard-mcp.sh" | tr -s ' \t' '\n' | sed '/^$/d' | sort)
+own_tests=$(printf '%s\n' "${CCD_OWN[@]}" | sort)
+if [[ -n "$own_guard" && "$own_guard" == "$own_tests" ]]; then
+  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_OWN_PR holds exactly the tested names"
+else
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_OWN_PR differs from the tested names (or could not be read)"
+  fails=$((fails+1))
+fi
+if [[ -n "$own_guard" && -z "$(comm -12 <(printf '%s\n' "$own_guard") <(printf '%s\n' "$ccd_guard"))" ]]; then
+  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_OWN_PR and CCD_ALLOW share no name"
+else
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "CCD_OWN_PR and CCD_ALLOW share a name"
   fails=$((fails+1))
 fi
 for n in \
@@ -1025,6 +1146,297 @@ tm pass "exported override passes a write"    "$MCP_WRITE"
 export HOOK_ALLOW_MCP=yes
 tm ask  "an override other than 1 is ignored" "$MCP_WRITE"
 unset HOOK_ALLOW_MCP
+
+echo "== pr-monitor recorder (ADR 0028) =="
+# The PostToolUse recorder keeps the list of PRs a session created, and
+# guard-mcp's set_monitor check reads it. Observed through the module's own
+# `check`, the entry guard-mcp calls, against a config directory of its own, so
+# nothing here touches the live-control-plane fixture. Lists are made by the
+# real recorder; only the corrupt, expired, symlinked and badly permissioned
+# ones are written by hand. See
+# docs/adr/0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md.
+PM_CFG="$CPTMP/pm-config"
+PM_DIR="$PM_CFG/guard-state/pr-monitor"
+mkdir -p "$PM_CFG"
+PM_A="pm-session-a"
+PM_B="pm-session-b"
+PR="https://github.com/owner/repo/pull"
+
+pm_py() { # pm_py <code> <args>...  — python3 with the checkout's package, as the hooks run it
+  PYTHONPATH="$HOOKS/.." python3 -P -B -c "$@"
+}
+pm_post() { # pm_post <session> <command> <stdout>  — a PostToolUse payload for Bash
+  python3 -c 'import json,sys; print(json.dumps({"hook_event_name":"PostToolUse","session_id":sys.argv[1],"tool_name":"Bash","tool_input":{"command":sys.argv[2]},"tool_response":{"stdout":sys.argv[3],"stderr":"","interrupted":False}}))' "$@"
+}
+pm_call() { # pm_call <session> <tool_input JSON>  — a PreToolUse payload for set_monitor
+  python3 -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","session_id":sys.argv[1],"tool_name":"mcp__ccd_pr__set_monitor","tool_input":json.loads(sys.argv[2])}))' "$@"
+}
+pm_fix() { # pm_fix <session> <n>  — set_monitor switching Auto-fix on for PR <n>
+  pm_call "$1" "{\"auto_fix\":true,\"url\":\"$PR/$2\"}"
+}
+pm_file() { # pm_file <session>  — the session's list path
+  printf '%s/%s' "$PM_DIR" "$(pm_py 'import sys; from trimtab.adapters import pr_monitor as pm; print(pm.list_name(sys.argv[1]))' "$1")"
+}
+pm_write() { # pm_write <session> <JSON>  — a hand-written list, 0600
+  local f; f=$(pm_file "$1"); rm -f "$f"; printf '%s' "$2" > "$f"; chmod 600 "$f"
+}
+pm_rec() { # pm_rec <payload> [config dir]  — run the recorder; sets PM_RC, PM_OUT, PM_ERR
+  local o e
+  o=$(mktemp); e=$(mktemp)
+  printf '%s' "$1" | CLAUDE_CONFIG_DIR="${2:-$PM_CFG}" bash "$HOOKS/pr-monitor-record.sh" >"$o" 2>"$e"
+  PM_RC=$?; PM_OUT=$(cat "$o"); PM_ERR=$(cat "$e"); rm -f "$o" "$e"
+}
+pm_check() { # pm_check <payload> [config dir]  — the verdict guard-mcp reads
+  printf '%s' "$1" | CLAUDE_CONFIG_DIR="${2:-$PM_CFG}" PYTHONPATH="$HOOKS/.." \
+    python3 -P -B -m trimtab.adapters.pr_monitor check 2>/dev/null
+}
+pm_report() { # pm_report <ok: 0|1> <tag> <label> [detail]
+  if [[ "$1" == 0 ]]; then
+    printf 'PASS  %-14s %-12s  %s\n' pr-monitor "$2" "$3"
+  else
+    printf 'FAIL  %-14s %-12s  %s  -- %s\n' pr-monitor "$2" "$3" "${4:-}"
+    fails=$((fails+1))
+  fi
+}
+pmv() { # pmv <want verdict> <label> <payload> [config dir]
+  local got; got=$(pm_check "$3" "${4:-$PM_CFG}")
+  [[ "$got" == "$1" ]]; pm_report $? "$1" "$2" "got '$got'"
+}
+pmr() { # pmr <want exit> <label> <payload> [config dir]  — stdout must stay empty
+  pm_rec "$3" "${4:-$PM_CFG}"
+  [[ "$PM_RC" == "$1" && -z "$PM_OUT" ]]; pm_report $? "exit=$1" "$2" "exit=$PM_RC stdout=${#PM_OUT}B"
+}
+pmt() { # pmt <label> <command>...  — any other state check
+  local label="$1"; shift
+  "$@"; pm_report $? state "$label"
+}
+
+pmv not-recorded "before any create, a PR url is denied"    "$(pm_fix $PM_A 7)"
+pmr 0 "a non-create Bash call is ignored"                   "$(pm_post $PM_A 'ls -la' "$PR/7")"
+pmt "a non-create call makes no list directory"             test ! -e "$PM_CFG/guard-state"
+pmr 0 "a lone gh pr create is recorded"                     "$(pm_post $PM_A 'gh pr create --draft --title t --body-file b.md' "$PR/7"$'\n')"
+pmv pass "set_monitor on the PR the session created"        "$(pm_fix $PM_A 7)"
+pmv pass "the same PR, upper case and a trailing slash"     "$(pm_call $PM_A '{"auto_fix":true,"url":"https://github.com/OWNER/repo/pull/7/"}')"
+pmv pass "turning Auto-fix off on the session's PR"         "$(pm_call $PM_A "{\"auto_fix\":false,\"url\":\"$PR/7\"}")"
+pmv not-recorded "another PR number is denied"              "$(pm_fix $PM_A 8)"
+pmv not-recorded "another repository is denied"             "$(pm_call $PM_A '{"auto_fix":true,"url":"https://github.com/owner/other/pull/7"}')"
+pmv not-recorded "another host is denied"                   "$(pm_call $PM_A '{"auto_fix":true,"url":"https://ghe.example.com/owner/repo/pull/7"}')"
+pmv not-recorded "the same PR from another session"         "$(pm_fix $PM_B 7)"
+pmr 0 "git push && gh pr create is recorded"                "$(pm_post $PM_A 'git push -u origin feature && gh pr create --fill' "$PR/9")"
+pmv pass "a PR created after git push"                      "$(pm_fix $PM_A 9)"
+pmr 0 "cd && gh pr create is recorded"                      "$(pm_post $PM_A 'cd /work/repo && gh pr create --fill' "$PR/10")"
+pmv pass "a PR created after cd"                            "$(pm_fix $PM_A 10)"
+pmr 0 "a REST create is recorded"                           "$(pm_post $PM_A 'gh api -X POST repos/owner/repo/pulls --input b.json' "{\"html_url\":\"$PR/11\",\"number\":11,\"base\":{\"repo\":{\"full_name\":\"owner/repo\"}}}")"
+pmv pass "a PR created through REST"                        "$(pm_fix $PM_A 11)"
+pmr 0 "an echoed URL is not recorded"                       "$(pm_post $PM_A "echo $PR/50" "$PR/50")"
+pmv not-recorded "an echoed URL is denied"                  "$(pm_fix $PM_A 50)"
+pmr 0 "a create then an echo is not recorded"               "$(pm_post $PM_A "gh pr create --fill; echo $PR/51" "$PR/51")"
+pmv not-recorded "a URL echoed after a create is denied"    "$(pm_fix $PM_A 51)"
+pmr 0 "a heredoc body create is not recorded"               "$(pm_post $PM_A 'gh pr create --body "$(cat b.md)"' "$PR/52")"
+pmv not-recorded "a heredoc-body PR is denied"              "$(pm_fix $PM_A 52)"
+pmr 0 "a URL only on stderr is not recorded"                "$(python3 -c 'import json,sys; print(json.dumps({"session_id":sys.argv[1],"tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"","stderr":sys.argv[2]}}))' $PM_A "$PR/53")"
+pmv not-recorded "a URL seen only on stderr is denied"      "$(pm_fix $PM_A 53)"
+pmr 0 "a cd that prints its directory is not recorded"      "$(pm_post $PM_A 'cd /work/repo && gh pr create --fill' "/work/repo"$'\n'"$PR/54")"
+pmv not-recorded "a create whose stdout has two lines"      "$(pm_fix $PM_A 54)"
+pmr 0 "a garbage payload naming gh pr create exits 0"       'NOT JSON gh pr create'
+pmr 0 "a replayed create is recorded again"                 "$(pm_post $PM_A 'gh pr create --fill' "$PR/7")"
+pmt "a replayed create leaves one entry per PR"             test "$(pm_py 'import sys; from pathlib import Path; from trimtab.adapters import pr_monitor as pm; print(len(pm.read_list(Path(sys.argv[1]))))' "$(pm_file $PM_A)")" = 4
+pmt "the list directories are 0700"                         test "$(pm_py 'import os,sys; print(" ".join(oct(os.stat(p).st_mode & 0o777) for p in sys.argv[1:]))' "$PM_CFG/guard-state" "$PM_DIR")" = "0o700 0o700"
+pmt "the list file is 0600"                                 test "$(pm_py 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$(pm_file $PM_A)")" = 0o600
+pmt "the list file is named by a hash, not the session"     test -z "$(find "$PM_DIR" -name '*.json' | grep -v -E '/[0-9a-f]{64}\.json$')"
+
+# The PR must be on the host the create went to, and in the repository the
+# command names: a server only vouches for its own PRs.
+GHE="https://ghe.example.com/owner/repo/pull"
+pmr 0 "a REST create to another host is not recorded"       "$(pm_post $PM_A 'gh api --hostname evil.example.com -X POST repos/owner/repo/pulls --input b.json' "{\"html_url\":\"$PR/16\",\"number\":16,\"base\":{\"repo\":{\"full_name\":\"owner/repo\"}}}")"
+pmv not-recorded "a PR another host vouched for is denied"   "$(pm_fix $PM_A 16)"
+pmr 0 "an enterprise create naming its host is recorded"    "$(pm_post $PM_A 'gh pr create --fill -R ghe.example.com/owner/repo' "$GHE/17")"
+pmv pass "an enterprise PR created with -R"                  "$(pm_call $PM_A "{\"auto_fix\":true,\"url\":\"$GHE/17\"}")"
+pmr 0 "a bare create printing an enterprise URL"            "$(pm_post $PM_A 'gh pr create --fill' "$GHE/18")"
+pmv not-recorded "an enterprise PR from a bare create"      "$(pm_call $PM_A "{\"auto_fix\":true,\"url\":\"$GHE/18\"}")"
+pmr 0 "a create naming one repo, printing another"          "$(pm_post $PM_A 'gh pr create --fill -R owner/elsewhere' "$PR/19")"
+pmv not-recorded "a PR outside the named repository"        "$(pm_fix $PM_A 19)"
+
+pmv pass "auto-archive alone passes, with no list"          "$(pm_call pm-session-none '{"auto_archive_on_close":true}')"
+pmv no-url "auto_fix without url"                           "$(pm_call $PM_A '{"auto_fix":true}')"
+pmv bad-arguments "an argument this version does not read"  "$(pm_call $PM_A "{\"auto_fix\":true,\"url\":\"$PR/7\",\"pr\":8}")"
+pmv bad-arguments "another tool name"                       "$(python3 -c 'import json; print(json.dumps({"session_id":"pm-session-a","tool_name":"mcp__ccd_pr__set_auto_merge","tool_input":{"enabled":True,"url":"https://github.com/owner/repo/pull/7"}}))')"
+pmv not-recorded "a missing session ID"                     "$(j mcp__ccd_pr__set_monitor "{\"auto_fix\":true,\"url\":\"$PR/7\"}")"
+pmv not-recorded "a malformed session ID"                   "$(pm_fix '../pm-session-a' 7)"
+
+pmr 1 "a create with a malformed session ID: exit 1"        "$(pm_post 'bad session' 'gh pr create --fill' "$PR/60")"
+
+# Fail closed on the list itself.
+pm_write pm-session-c '{"v":1,"entries":[{"host":"github.com","owner":"owner","repo":"repo","number":70,"at":0}]}'
+pmv not-recorded "an entry older than two days"             "$(pm_fix pm-session-c 70)"
+pm_write pm-session-d 'NOT JSON'
+pmv not-recorded "a corrupt list"                           "$(pm_fix pm-session-d 7)"
+pmr 0 "a corrupt list is replaced on the next create"       "$(pm_post pm-session-d 'gh pr create --fill' "$PR/71")"
+pmv pass "a PR recorded over a corrupt list"                "$(pm_fix pm-session-d 71)"
+pm_write pm-session-e "{\"v\":2,\"entries\":[{\"host\":\"github.com\",\"owner\":\"owner\",\"repo\":\"repo\",\"number\":72,\"at\":$(date +%s)}]}"
+pmv not-recorded "a list of an unknown version"             "$(pm_fix pm-session-e 72)"
+# Another version of the module wrote this one and stopped: its file is older
+# than the TTL, so it may be pruned; the fresh one above must be kept.
+pm_write pm-session-h "{\"v\":2,\"entries\":[]}"
+touch -d '3 days ago' "$(pm_file pm-session-h)"
+pm_write pm-session-f "{\"v\":1,\"entries\":[{\"host\":\"github.com\",\"owner\":\"owner\",\"repo\":\"repo\",\"number\":73,\"at\":$(date +%s)}]}"
+chmod 644 "$(pm_file pm-session-f)"
+pmv not-recorded "a list file other users can read"         "$(pm_fix pm-session-f 73)"
+PM_TARGET="$CPTMP/pm-target.json"
+printf '{"v":1,"entries":[{"host":"github.com","owner":"owner","repo":"repo","number":74,"at":%s}]}' "$(date +%s)" > "$PM_TARGET"
+chmod 600 "$PM_TARGET"
+ln -s "$PM_TARGET" "$(pm_file pm-session-g)"
+pmv not-recorded "a symlinked list file"                    "$(pm_fix pm-session-g 74)"
+pmr 0 "a create replaces a symlinked list, not its target"  "$(pm_post pm-session-g 'gh pr create --fill' "$PR/75")"
+pmt "the symlink is gone and its target unchanged"          test ! -L "$(pm_file pm-session-g)" -a "$(grep -c '"number":74' "$PM_TARGET")" = 1
+pmr 0 "any create prunes another session's expired list"    "$(pm_post $PM_A 'gh pr create --fill' "$PR/12")"
+pmt "the expired list is gone"                              test ! -e "$(pm_file pm-session-c)"
+pmt "the live lists stay"                                   test -e "$(pm_file pm-session-d)" -a -e "$(pm_file $PM_A)"
+pmt "a fresh list another version wrote stays"              test -e "$(pm_file pm-session-e)"
+pmt "an untouched list another version wrote is pruned"     test ! -e "$(pm_file pm-session-h)"
+chmod 770 "$PM_DIR"
+pmv not-recorded "a group-writable list directory"          "$(pm_fix $PM_A 7)"
+pmr 1 "a create into a group-writable directory: exit 1"   "$(pm_post $PM_A 'gh pr create --fill' "$PR/13")"
+chmod 700 "$PM_DIR"
+pmv not-recorded "nothing was written there"                "$(pm_fix $PM_A 13)"
+PM_LINKED="$CPTMP/pm-linked"
+mkdir -p "$PM_LINKED/guard-state" "$CPTMP/pm-elsewhere"
+chmod 700 "$PM_LINKED/guard-state" "$CPTMP/pm-elsewhere"
+ln -s "$CPTMP/pm-elsewhere" "$PM_LINKED/guard-state/pr-monitor"
+pmr 1 "a symlinked list directory: exit 1"                  "$(pm_post $PM_A 'gh pr create --fill' "$PR/14")" "$PM_LINKED"
+pmt "nothing is written through the symlink"                test -z "$(ls -A "$CPTMP/pm-elsewhere")"
+pmv not-recorded "a symlinked list directory is denied"     "$(pm_fix $PM_A 7)" "$PM_LINKED"
+
+# No output names a URL, a session or its hash: not the recorder's on an
+# error, and not the check's.
+PM_MARK="pm-mark-$$"
+PM_HASH=$(pm_py 'import sys; from trimtab.adapters import pr_monitor as pm; print(pm.list_name(sys.argv[1])[:64])' "$PM_MARK")
+chmod 770 "$PM_DIR"
+pm_rec "$(pm_post "$PM_MARK" 'gh pr create --fill' "$PR/919191")"
+chmod 700 "$PM_DIR"
+pm_leak="$PM_OUT$PM_ERR$(pm_check "$(pm_fix "$PM_MARK" 919191)")"
+[[ -n "$PM_ERR" && "$pm_leak" != *"$PM_MARK"* && "$pm_leak" != *919191* && "$pm_leak" != *"$PM_HASH"* ]]
+pm_report $? state "no output names the URL, the session or its hash"
+
+# With python3 unavailable the recorder records nothing and says so; the check
+# then denies, which is the fail-closed answer.
+PM_STUB="$CPTMP/pm-stub"
+mkdir -p "$PM_STUB"
+for c in bash cat readlink dirname; do ln -sf "$(command -v "$c")" "$PM_STUB/$c"; done
+pm_o=$(printf '%s' "$(pm_post $PM_A 'gh pr create --fill' "$PR/15")" | PATH="$PM_STUB" CLAUDE_CONFIG_DIR="$PM_CFG" "$BASH" "$HOOKS/pr-monitor-record.sh" 2>&1 >/dev/null); pm_rc=$?
+[[ $pm_rc == 1 && "$pm_o" == *python3* ]]; pm_report $? exit=1 "no python3: exit 1 and says so"
+pmv not-recorded "a create made without python3 is denied"  "$(pm_fix $PM_A 15)"
+
+echo "== guard-mcp: set_monitor (ADR 0028) =="
+# set_monitor passes only for a PR the session created, recorded by the real
+# recorder above, or as the auto-archive switch alone. Everything else is a
+# deny, never an ask: an ask waits for a person, and this tool is passed so a
+# session can run unattended. Its own config directory, exported for this
+# section only, so the guard reads these lists and no others.
+GM_CFG="$CPTMP/gm-config"
+mkdir -p "$GM_CFG"
+GM_SAVED_CFG="$CLAUDE_CONFIG_DIR"
+export CLAUDE_CONFIG_DIR="$GM_CFG"
+pm_rec "$(pm_post gm-a 'git push -u origin feature && gh pr create --fill' "$PR/7")" "$GM_CFG"
+pm_report "$PM_RC" state "fixture: the recorder records PR 7 for one session"
+
+tm pass "a PR the session created"                    "$(pm_fix gm-a 7)"
+tm pass "the same PR, spelled differently"            "$(pm_call gm-a '{"auto_fix":true,"url":"https://github.com/Owner/Repo/pull/7/"}')"
+tm pass "turning Auto-fix off on it"                  "$(pm_call gm-a "{\"auto_fix\":false,\"address_comments\":false,\"url\":\"$PR/7\"}")"
+tm pass "the auto-archive switch alone, no list"      "$(pm_call gm-none '{"auto_archive_on_close":true}')"
+tm deny "another PR number"                           "$(pm_fix gm-a 8)"
+tm deny "another repository"                          "$(pm_call gm-a '{"auto_fix":true,"url":"https://github.com/owner/other/pull/7"}')"
+tm deny "another host"                                "$(pm_call gm-a '{"auto_fix":true,"url":"https://ghe.example.com/owner/repo/pull/7"}')"
+tm deny "the same PR from another session"            "$(pm_fix gm-b 7)"
+tm deny "a session with no list"                      "$(pm_fix gm-none 7)"
+tm deny "auto_fix without url"                        "$(pm_call gm-a '{"auto_fix":true}')"
+tm deny "address_comments without url"               "$(pm_call gm-a '{"address_comments":true}')"
+tm deny "auto-archive with a foreign url"             "$(pm_call gm-a "{\"auto_archive_on_close\":true,\"url\":\"$PR/8\"}")"
+tm deny "an argument the guard does not read"         "$(pm_call gm-a "{\"auto_fix\":true,\"url\":\"$PR/7\",\"pr\":8}")"
+tm deny "a non-string url"                            "$(pm_call gm-a '{"auto_fix":true,"url":7}')"
+tm deny "a PR page sub-path"                          "$(pm_call gm-a "{\"auto_fix\":true,\"url\":\"$PR/7/files\"}")"
+tm deny "an http url"                                 "$(pm_call gm-a '{"auto_fix":true,"url":"http://github.com/owner/repo/pull/7"}')"
+tm deny "no session_id"                               "$(j mcp__ccd_pr__set_monitor "{\"auto_fix\":true,\"url\":\"$PR/7\"}")"
+tm deny "a malformed session_id"                      "$(pm_fix '../gm-a' 7)"
+tm deny "no tool_input"                               '{"tool_name":"mcp__ccd_pr__set_monitor","session_id":"gm-a"}'
+pm_write gm-c 'NOT JSON'
+tm deny "a corrupt list"                              "$(pm_fix gm-c 7)"
+pm_write gm-d "{\"v\":1,\"entries\":[{\"host\":\"github.com\",\"owner\":\"owner\",\"repo\":\"repo\",\"number\":7,\"at\":0}]}"
+tm deny "an expired entry"                            "$(pm_fix gm-d 7)"
+chmod 770 "$GM_CFG/guard-state/pr-monitor"
+tm deny "a group-writable list directory"             "$(pm_fix gm-a 7)"
+chmod 700 "$GM_CFG/guard-state/pr-monitor"
+
+# The reasons say what to do next: a url-less call is told to pass its url.
+gm_reason() { printf '%s' "$1" | "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null; }
+[[ "$(gm_reason "$(pm_call gm-a '{"auto_fix":true}')")" == *"call it again with url"* ]]
+pm_report $? deny "a url-less call is told to pass its url"
+[[ "$(gm_reason "$(pm_fix gm-a 8)")" == *"Do not retry with another PR"* ]]
+pm_report $? deny "a foreign url is told not to retry"
+
+# No answer names the url, the session or the session's hash.
+GM_MARK="gm-mark-$$"
+GM_HASH=$(pm_py 'import sys; from trimtab.adapters import pr_monitor as pm; print(pm.list_name(sys.argv[1])[:64])' "$GM_MARK")
+gm_out="$(gm_reason "$(pm_fix "$GM_MARK" 828282)" 2>&1)$(gm_reason "$(pm_call "$GM_MARK" '{"auto_fix":true,"pr":828282}')" 2>&1)"
+[[ "$gm_out" == *deny* && "$gm_out" != *"$GM_MARK"* && "$gm_out" != *828282* && "$gm_out" != *"$GM_HASH"* ]]
+pm_report $? deny "no answer names the url, the session or its hash"
+
+# Installed, hooks/ is a link into the base snapshot: the guard must resolve it
+# to find the package beside it.
+ln -s "$HOOKS" "$CPTMP/gm-hooks-link"
+HOOKS="$CPTMP/gm-hooks-link" tm pass "through a linked hooks directory" "$(pm_fix gm-a 7)"
+
+# Parsers: the name needs jq or python3; the check itself needs python3.
+GM_STUB="$CPTMP/gm-stub"
+mkdir -p "$GM_STUB"
+ln -sf "$(command -v cat)" "$GM_STUB/cat"
+ln -sf "$(command -v python3)" "$GM_STUB/python3"
+tm pass "python3 only: a recorded PR passes"          "$(pm_fix gm-a 7)" "$GM_STUB"
+tm deny "python3 only: a foreign PR is denied"        "$(pm_fix gm-a 8)" "$GM_STUB"
+# A pass needs both exit 0 and `pass`: a check that prints pass and then
+# fails is denied. The stub runs the real python3 for everything but the check.
+GM_FAKE="$CPTMP/gm-fake"
+mkdir -p "$GM_FAKE"
+ln -sf "$(command -v cat)" "$GM_FAKE/cat"
+printf '#!/bin/sh\ncase "$*" in *pr_monitor*) echo pass; exit 1 ;; esac\nexec %s "$@"\n' "$(command -v python3)" > "$GM_FAKE/python3"
+chmod +x "$GM_FAKE/python3"
+tm deny "a check that prints pass but exits 1"        "$(pm_fix gm-a 7)" "$GM_FAKE"
+
+# A check that does not run to a verdict says nothing about the url, so its
+# deny must say so and must not blame the url. Each fake replaces only the
+# check: <case body> runs for it, the real python3 for everything else.
+gm_fake() { # gm_fake <case body>: point $GM_FAKE/python3 at a check that does <case body>
+  printf '#!/bin/sh\ncase "$*" in *pr_monitor*) %s ;; esac\nexec %s "$@"\n' "$1" "$(command -v python3)" > "$GM_FAKE/python3"
+  chmod +x "$GM_FAKE/python3"
+}
+gm_failed() { # gm_failed <label>: the call is denied with the could-not-run reason
+  local out; out=$(printf '%s' "$(pm_fix gm-a 7)" | PATH="$GM_FAKE" "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null)
+  [[ "$out" == *'"permissionDecision":"deny"'* && "$out" == *"could not run to a verdict"* \
+     && "$out" != *"not on the session's list"* ]]
+  pm_report $? deny "$1"
+}
+gm_failed "a check that prints pass but exits 1 is not blamed on the url"
+gm_fake 'echo "Traceback" >&2; exit 1'
+gm_failed "a check that crashes is denied as could-not-run"
+gm_fake 'exit 0'
+gm_failed "a check that prints nothing is denied as could-not-run"
+gm_fake 'echo maybe; exit 0'
+gm_failed "a verdict the guard does not know is denied as could-not-run"
+gm_fake 'echo not-recorded; exit 0'
+out=$(printf '%s' "$(pm_fix gm-a 7)" | PATH="$GM_FAKE" "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null)
+[[ "$out" == *"not on the session's list"* && "$out" != *"could not run"* ]]
+pm_report $? deny "a not-recorded verdict keeps the url reason"
+if command -v jq >/dev/null 2>&1; then
+  rm -f "$GM_STUB/python3"; ln -sf "$(command -v jq)" "$GM_STUB/jq"
+  tm deny "jq only: no python3 for the check, denied" "$(pm_fix gm-a 7)" "$GM_STUB"
+else
+  echo "SKIP  guard-mcp.sh   jq only: jq is not installed in this run"
+fi
+
+export HOOK_ALLOW_MCP=1
+tm pass "the exported override passes set_monitor"    "$(pm_fix gm-a 8)"
+unset HOOK_ALLOW_MCP
+export CLAUDE_CONFIG_DIR="$GM_SAVED_CFG"
 
 echo "== fail-closed on an unrunnable dependency =="
 # A guard that cannot run its own scanner must BLOCK. It could not: with `grep`
@@ -1209,6 +1621,37 @@ if len(found) == 1:
 sys.exit(fails)
 PY
 fails=$((fails + $?))
+
+echo "== pr-monitor recorder registration (settings.base.json) =="
+# Without the recorder nothing is recorded and guard-mcp denies every
+# set_monitor: safe, but Auto-fix never turns on. Checked as the file ships:
+# registered once across every event, as a PostToolUse hook on Bash alone.
+# PostToolUse fires only on a successful call (a failure raises
+# PostToolUseFailure), which is part of what makes a recorded create real
+# (ADR 0028).
+python3 - "$REPO/settings.base.json" <<'PY'
+import json, re, sys
+events = json.load(open(sys.argv[1]))["hooks"]
+want = '"$HOME/.claude/hooks/pr-monitor-record.sh"'
+found = [(event, g.get("matcher"), h) for event, groups in events.items() for g in groups
+         for h in g["hooks"] if h.get("command") == want]
+def case(ok, label):
+    print("%s  %-14s %s" % ("PASS" if ok else "FAIL", "registration", label))
+    return 0 if ok else 1
+fails = case(len(found) == 1, "the recorder is registered exactly once, across every event")
+if len(found) == 1:
+    event, matcher, hook = found[0]
+    fails += case(event == "PostToolUse", "the recorder runs on PostToolUse")
+    fails += case(hook.get("timeout") == 10, "the recorder has the 10 s timeout")
+    m = re.compile(matcher or "")
+    fails += case(bool(m.fullmatch("Bash")), "its matcher catches Bash")
+    fails += case(not any(m.fullmatch(t) for t in ("Edit", "Write", "Read", "Skill", "mcp__srv__get_x", "BashX")),
+                  "its matcher catches nothing else")
+sys.exit(fails)
+PY
+fails=$((fails + $?))
+[[ -x "$REPO/hooks/pr-monitor-record.sh" ]]
+pm_report $? state "the registered recorder ships executable"
 
 echo "== guard liveness check (SessionStart, settings.base.json) =="
 # The guards fail open when they cannot be found: move the checkout and every
