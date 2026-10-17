@@ -14,7 +14,8 @@ re-filed next week from the same evidence. Once that evidence decays, new
 reports can file it again.
 
 A project draft is checked against the project's PRs the same way (`plan_project_prs`):
-skipped while a `[<ID>]` PR is open or was closed unmerged within the window, and
+skipped while a `[<ID>]` PR is open or was closed unmerged within the window (unless it
+closed before the latest merged fix, which supersedes it), and
 resolved by a merged one (by merge time, not PR number): the fix saw the evidence
 that merged before it, so only reports since the latest fix count, and the ID is
 proposed again once those reach the threshold. Merged within the window was not
@@ -125,6 +126,7 @@ class PullTitle:
     title: str
     state: str  # open | merged | closed (closed without merging)
     merged_at: str = ""  # set when state is merged
+    closed_at: str = ""  # set when state is closed or merged
 
 
 class PullSink(Protocol):
@@ -177,7 +179,10 @@ def plan_project_prs(drafts: Sequence[Draft], sink: PullSink, closed_since: str 
         elif since is not None and len(since) < threshold:
             why[d.item_id] = (f"RESOLVED: #{fixes[-1].number} merged after the earlier evidence; {len(since)} "
                               f"report(s) since, below the threshold of {threshold}")
-        elif (found := next((p for p in mine if p.state == "closed"), None)) is not None:
+        # A decline closed before the latest fix merged is no longer the last word on the ID; one with no close time
+        # still holds the draft.
+        elif (found := next((p for p in mine if p.state == "closed"
+                             and not (fixes and p.closed_at and p.closed_at < fixes[-1].merged_at)), None)):
             why[d.item_id] = f"SKIPPED: #{found.number} for this ID was closed unmerged within the window"
     return why
 

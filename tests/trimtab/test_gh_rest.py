@@ -204,6 +204,14 @@ class RecentPulls(unittest.TestCase):
 
         self.assertEqual([query_of(a)["page"] for a in gh.argvs()], ["1", "2"])
 
+    def test_a_closed_prs_close_time_is_carried(self):
+        gh = FakeGh(answers={("GET", PULLS): [page(), page({**pull(2, merged_at=None, title="[X-1] declined"),
+                                                            "closed_at": AFTER_SINCE})]})
+
+        found = GhSource(REPO, run=gh).recent_pulls(SINCE)
+
+        self.assertEqual([(p.number, p.closed_at) for p in found], [(2, AFTER_SINCE)])
+
     def test_with_no_window_only_open_prs_are_read(self):
         gh = FakeGh(answers={("GET", PULLS): [page({"number": 3, "title": "[X-1] open"})]})
 

@@ -142,6 +142,7 @@ class _ClosedPull:
     updated_at: str
     labels: frozenset[str]
     title: str = ""
+    closed_at: str = ""
 
     def pull(self) -> PullRequest:
         return PullRequest(self.number, self.body, self.merged_at)
@@ -152,12 +153,12 @@ def _closed_pull(r) -> _ClosedPull:
     try:
         row = _ClosedPull(number=r["number"], body=r.get("body") or "", merged_at=r["merged_at"] or "",
                           updated_at=r["updated_at"], labels=frozenset(label["name"] for label in r["labels"]),
-                          title=r["title"])
+                          title=r["title"], closed_at=r.get("closed_at") or "")
     except (KeyError, TypeError, AttributeError) as err:
         raise SourceError(f"{what} returned unexpected JSON") from err
     if not (_is_int(row.number) and isinstance(row.body, str) and isinstance(row.merged_at, str)
             and isinstance(row.updated_at, str) and all(isinstance(n, str) for n in row.labels)
-            and isinstance(row.title, str)):
+            and isinstance(row.title, str) and isinstance(row.closed_at, str)):
         raise SourceError(f"{what} returned unexpected JSON")
     return row
 
@@ -220,7 +221,7 @@ class GhSource:
         if not all(_is_int(p.number) and isinstance(p.title, str) for p in found):
             raise SourceError(f"{what} returned unexpected JSON")
         if closed_since:
-            found += [PullTitle(r.number, r.title, "merged" if r.merged_at else "closed", r.merged_at)
+            found += [PullTitle(r.number, r.title, "merged" if r.merged_at else "closed", r.merged_at, r.closed_at)
                       for r in self._closed_since(closed_since) if r.updated_at[:10] >= closed_since]
         return found
 
@@ -325,7 +326,8 @@ class FixtureSource:
         rows = [r for r in self._rows() if recent(r)]
         if not all(isinstance(r.get("title"), str) for r in rows):
             raise SourceError("fixture pulls: a PR row has no title")  # GitHub's rows always carry one
-        return [PullTitle(r["number"], r["title"], state(r), r["merged_at"] if self._merged(r) else "") for r in rows]
+        return [PullTitle(r["number"], r["title"], state(r), r["merged_at"] if self._merged(r) else "",
+                          r.get("closed_at") or "") for r in rows]
 
     def add_label(self, number: int, label: str) -> None:
         rows = self._rows()

@@ -132,7 +132,7 @@ trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels
 - **Project** proposals are drafts you write, one draft PR per ID. The dry
   run reads this project's PRs and marks each project draft it holds back:
   `SKIPPED` when a PR titled `[<ID>]` is open, or was closed unmerged within
-  the window; `RESOLVED` when one merged and the reports since it are below
+  the window and not before the latest merged `[<ID>]` fix; `RESOLVED` when one merged and the reports since it are below
   the threshold, since the fix saw the evidence that merged before it. Once
   the reports since the latest fix reach the threshold, the ID is proposed
   again. Open a draft only for an unmarked

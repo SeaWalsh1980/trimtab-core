@@ -281,6 +281,24 @@ class ProjectDrafts(unittest.TestCase):
 
         self.assertEqual(found, {"SCR-X-2": "RESOLVED: #946 merged after the evidence"})
 
+    def test_a_decline_older_than_the_latest_fix_does_not_hold_new_evidence_back(self):
+        prs, merged_at = (21, 22), ("2026-09-11T00:00:00Z", "2026-09-12T00:00:00Z")
+        decline = PullTitle(10, "[SCR-X-2] first try", "closed", closed_at="2026-09-02T00:00:00Z")
+        fix = PullTitle(20, "[SCR-X-2] fix", "merged", "2026-09-10T00:00:00Z", "2026-09-10T00:00:00Z")
+
+        found = plan_project_prs([draft("SCR-X-2", kind="pr", prs=prs, merged_at=merged_at)], FakePulls(decline, fix))
+
+        self.assertEqual(found, {})
+
+    def test_a_decline_after_the_latest_fix_still_holds_the_draft(self):
+        prs, merged_at = (21, 22), ("2026-09-11T00:00:00Z", "2026-09-12T00:00:00Z")
+        decline = PullTitle(30, "[SCR-X-2] second try", "closed", closed_at="2026-09-13T00:00:00Z")
+        fix = PullTitle(20, "[SCR-X-2] fix", "merged", "2026-09-10T00:00:00Z", "2026-09-10T00:00:00Z")
+
+        found = plan_project_prs([draft("SCR-X-2", kind="pr", prs=prs, merged_at=merged_at)], FakePulls(decline, fix))
+
+        self.assertEqual(found, {"SCR-X-2": "SKIPPED: #30 for this ID was closed unmerged within the window"})
+
     def test_a_draft_with_no_evidence_or_no_merge_times_is_never_resolved(self):
         fix = PullTitle(946, "[SCR-X-2] fix", "merged", self.AFTER_ALL)
 
