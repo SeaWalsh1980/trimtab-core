@@ -78,6 +78,18 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$HOME/.claude/hooks/pr-monitor-record.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "InstructionsLoaded": [
       {
         "matcher": "*",

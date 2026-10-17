@@ -1463,6 +1463,37 @@ sys.exit(fails)
 PY
 fails=$((fails + $?))
 
+echo "== pr-monitor recorder registration (settings.base.json) =="
+# Without the recorder nothing is recorded and guard-mcp denies every
+# set_monitor: safe, but Auto-fix never turns on. Checked as the file ships:
+# registered once across every event, as a PostToolUse hook on Bash alone.
+# PostToolUse fires only on a successful call (a failure raises
+# PostToolUseFailure), which is part of what makes a recorded create real
+# (ADR 0028).
+python3 - "$REPO/settings.base.json" <<'PY'
+import json, re, sys
+events = json.load(open(sys.argv[1]))["hooks"]
+want = '"$HOME/.claude/hooks/pr-monitor-record.sh"'
+found = [(event, g.get("matcher"), h) for event, groups in events.items() for g in groups
+         for h in g["hooks"] if h.get("command") == want]
+def case(ok, label):
+    print("%s  %-14s %s" % ("PASS" if ok else "FAIL", "registration", label))
+    return 0 if ok else 1
+fails = case(len(found) == 1, "the recorder is registered exactly once, across every event")
+if len(found) == 1:
+    event, matcher, hook = found[0]
+    fails += case(event == "PostToolUse", "the recorder runs on PostToolUse")
+    fails += case(hook.get("timeout") == 10, "the recorder has the 10 s timeout")
+    m = re.compile(matcher or "")
+    fails += case(bool(m.fullmatch("Bash")), "its matcher catches Bash")
+    fails += case(not any(m.fullmatch(t) for t in ("Edit", "Write", "Read", "Skill", "mcp__srv__get_x", "BashX")),
+                  "its matcher catches nothing else")
+sys.exit(fails)
+PY
+fails=$((fails + $?))
+[[ -x "$REPO/hooks/pr-monitor-record.sh" ]]
+pm_report $? state "the registered recorder ships executable"
+
 echo "== guard liveness check (SessionStart, settings.base.json) =="
 # The guards fail open when they cannot be found: move the checkout and every
 # link in ~/.claude dangles, and a session starts with no guards and no
