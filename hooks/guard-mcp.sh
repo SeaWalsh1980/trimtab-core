@@ -28,11 +28,11 @@
 #   a full name on the desktop app's exact-name list
 #   (CCD_ALLOW below, ADR 0027)                     -> pass
 #   [args] mcp__github__update_pull_request
-#   (PR_EDIT below, ADR 0031)                       -> pass when it sets only
+#   (PR_EDIT below, ADR 0034)                       -> pass when it sets only
 #                                                      title, body or reviewers;
 #                                                      ask otherwise
 #   a full name on the PR-workflow exact-name list
-#   (PR_WORKFLOW_ALLOW below, ADR 0031)             -> pass
+#   (PR_WORKFLOW_ALLOW below, ADR 0034)             -> pass
 #   a <tool> part on the verb-last read list, on any
 #   server (TOOL_READ_ALLOW below, ADR 0013)        -> pass
 #   <tool> starting gtm_                           -> ask: its verb is in an
@@ -167,7 +167,7 @@ for allowed in "${CCD_ALLOW[@]}"; do
 done
 
 # A PR edit passes, by exact full name, only when it changes nothing but the
-# title, body or reviewers (ADR 0031). Any other argument, draft, state, base
+# title, body or reviewers (ADR 0034). Any other argument, draft, state, base
 # or one this guard does not know, asks: marking a draft ready starts review,
 # so it stays the operator's. The check runs inside the parser, so a key is
 # never split or printed here, and nothing from the arguments reaches a reason.
@@ -200,16 +200,16 @@ sys.stdout.write("no-object" if not isinstance(a, dict) else "pass" if set(a) <=
     pass)
       exit 0 ;;
     extra)
-      ask "$name sets an argument other than the title, body or reviewers (draft, state, base or another), so it asks (ADR 0031). Approve it only if you intended this change." ;;
+      ask "$name sets an argument other than the title, body or reviewers (draft, state, base or another), so it asks (ADR 0034). Approve it only if you intended this change." ;;
     no-object)
-      ask "$name carries no argument object, so its arguments cannot be checked and it asks (ADR 0031). Approve it only if you intended this call." ;;
+      ask "$name carries no argument object, so its arguments cannot be checked and it asks (ADR 0034). Approve it only if you intended this call." ;;
     *)
-      ask "$name could not have its arguments read, so it asks (fail closed, ADR 0031). This says nothing about what the call changes. Approve it only if you intended this call." ;;
+      ask "$name could not have its arguments read, so it asks (fail closed, ADR 0034). This says nothing about what the call changes. Approve it only if you intended this call." ;;
   esac
 done
 
 # Writes that drive a session's PR work pass by exact full name, server part
-# included (ADR 0031): a PR-activity subscription, for any PR, with no own-PR
+# included (ADR 0034): a PR-activity subscription, for any PR, with no own-PR
 # limit like set_monitor's; and a message into a sibling desktop session.
 # Never by <tool> part alone: a server's name is set per deployment, and the
 # same name on another server is another tool.

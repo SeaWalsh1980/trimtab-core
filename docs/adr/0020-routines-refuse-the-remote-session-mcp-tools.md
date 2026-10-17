@@ -16,8 +16,8 @@ a desktop session after its work. This record still governs cloud routines.
 (`docs/adr/0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md`,
 proposed) narrows that desktop pass to PRs the session created.
 
-2026-10-17: ADR 0031
-(`docs/adr/0031-guard-mcp-passes-pr-workflow-writes-by-exact-name.md`) lets
+2026-10-17: ADR 0034
+(`docs/adr/0034-guard-mcp-passes-pr-workflow-writes-by-exact-name.md`) lets
 guard-mcp pass `mcp__claude-code-remote__subscribe_pr_activity` outside
 routines. The templates still refuse it, so this record still governs
 routines.

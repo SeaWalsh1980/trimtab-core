@@ -13,8 +13,8 @@ proposed) takes `mcp__ccd_pr__set_monitor` off this list and passes it only
 for PRs the session created, denying it otherwise. That narrows the accepted
 risk below; the rest of this record stands.
 
-2026-10-17: ADR 0031
-(`docs/adr/0031-guard-mcp-passes-pr-workflow-writes-by-exact-name.md`) lets
+2026-10-17: ADR 0034
+(`docs/adr/0034-guard-mcp-passes-pr-workflow-writes-by-exact-name.md`) lets
 `mcp__ccd_session_mgmt__send_message` pass, which the Decision below kept
 off. It passes on that record's own list, not this one, so this list still
 holds only tools that drive the app's UI or read its state. The rest of this

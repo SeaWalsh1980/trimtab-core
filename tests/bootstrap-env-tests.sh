@@ -433,7 +433,7 @@ check_set_monitor_probe_reports_green() {
   fi
 }
 
-# guard-mcp must ask on a PR edit that marks a draft ready (ADR 0031). A guard
+# guard-mcp must ask on a PR edit that marks a draft ready (ADR 0034). A guard
 # that passes update_pull_request by name loses draft-until-final through the
 # MCP route: the install must refuse it. The stub passes that tool whole and
 # hands every other call to the real guard, as for set_monitor above.

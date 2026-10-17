@@ -1177,7 +1177,7 @@ tm ask  "app list is exact: a run-on suffix"  "$(j mcp__ccd_turn__wrap_upX '{}')
 tm ask  "app list is exact: a server prefix"  "$(j mcp__xccd_turn__wrap_up '{}')"
 
 # A PR-activity subscription, for any PR, and a message into a sibling desktop
-# session pass by exact full name, server part included (ADR 0031).
+# session pass by exact full name, server part included (ADR 0034).
 PR_WORKFLOW_PASS=(
   mcp__claude-code-remote__subscribe_pr_activity
   mcp__ccd_session_mgmt__send_message
@@ -1200,7 +1200,7 @@ tm ask  "PR-workflow: a remote send_message still asks" "$(j mcp__claude-code-re
 tm ask  "PR-workflow: a remote create_session still asks" "$(j mcp__claude-code-remote__create_session '{}')"
 
 # A PR edit passes by exact full name only when it sets nothing but the title,
-# body or reviewers; anything else asks (ADR 0031). The tool name is not on any
+# body or reviewers; anything else asks (ADR 0034). The tool name is not on any
 # pass list, so these also fail if the arguments stop being read.
 PR_EDIT_NAME=mcp__github__update_pull_request
 PR_REF='"owner":"o","repo":"r","pullNumber":7'

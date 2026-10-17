@@ -1,4 +1,4 @@
-# 0031. guard-mcp passes two PR-workflow writes by exact full name, and PR edits by their arguments
+# 0034. guard-mcp passes two PR-workflow writes by exact full name, and PR edits by their arguments
 
 ## Status
 
