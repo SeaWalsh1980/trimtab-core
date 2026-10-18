@@ -12,6 +12,10 @@ stands. Departs from ADR 0020
 routines only; routines still refuse the subscription. See "PR activity, and
 ADRs 0020 and 0028".
 
+Amended 2026-10-18: `mcp__ccd_session_mgmt__send_message` asks again; the
+subscription and the PR-edit rule stand. See
+[Amendment (2026-10-18)](#amendment-2026-10-18).
+
 ## Context
 
 A session that opens a pull request then drives it: it edits the PR's title
@@ -241,3 +245,35 @@ with jq off the PATH.
 - CI steps that run the base branch's guard matrix against this branch's
   hooks go red on the pull request that makes this change, because the
   base's matrix expects `send_message` to ask. That is by design.
+
+## Amendment (2026-10-18)
+
+**Context.** The operator reviewed what a pass on
+`mcp__ccd_session_mgmt__send_message` makes possible. A session that has read
+hostile content (a PR comment, a web page, a vendor payload) can relay
+instructions into a sibling desktop session without the operator seeing them.
+The receiving session is told the message is not from the operator, but the
+worst receiver is one the operator launched elevated (a `HOOK_ALLOW_*`
+override exported) or in a higher permission mode: a normal session could ask
+it to change a control. Nothing leaves the machine, and the tool exists only in
+the desktop app, so unattended automation, which runs in the cloud, never
+needed the pass. Its only benefit was one fewer prompt per sibling message.
+
+**Decision.** `send_message` leaves `PR_WORKFLOW_ALLOW` and asks, as ADR 0027
+decided. `subscribe_pr_activity` and the `update_pull_request` argument rule
+are unchanged.
+
+**Options considered.**
+- *Keep the pass and forbid running other sessions while an elevated one is
+  open.* Rejected: a rule held by instruction text alone, with nothing to
+  enforce it.
+- *Pass it only to sessions the sender started.* Rejected: the receiving
+  session's elevation is what matters, and guard-mcp cannot see it.
+
+**Consequences.** Every sibling message prompts in an attended desktop session
+and is refused in an unattended one. The tests pin `send_message` among the
+off-list app tools again. CI's base-matrix steps go red on the pull request
+that makes this change, because the base's matrix expects it to pass; that is
+by design, and a human merges over it.
+
+**Status.** Accepted (2026-10-18), by the operator.

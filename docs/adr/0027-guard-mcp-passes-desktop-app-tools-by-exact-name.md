@@ -20,6 +20,9 @@ off. It passes on that record's own list, not this one, so this list still
 holds only tools that drive the app's UI or read its state. The rest of this
 record stands.
 
+2026-10-18: ADR 0034's amendment of that date takes `send_message` off its
+list again, so it asks, as the Decision below decided.
+
 ## Context
 
 The Claude desktop app injects its own MCP tools into a session, on servers

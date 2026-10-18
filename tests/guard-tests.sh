@@ -1166,6 +1166,7 @@ for n in \
   mcp__ccd_session_mgmt__set_session_permission_mode \
   mcp__ccd_host__sync_with_base_branch \
   mcp__ccd_session_mgmt__delete_session \
+  mcp__ccd_session_mgmt__send_message \
   mcp__ccd_session_mgmt__set_session_model \
   mcp__ccd_session_mgmt__set_session_effort \
   mcp__ccd_session_mgmt__set_session_fast_mode \
@@ -1176,11 +1177,11 @@ tm ask  "app list is exact: a suffix"         "$(j mcp__ccd_turn__wrap_up_x '{}'
 tm ask  "app list is exact: a run-on suffix"  "$(j mcp__ccd_turn__wrap_upX '{}')"
 tm ask  "app list is exact: a server prefix"  "$(j mcp__xccd_turn__wrap_up '{}')"
 
-# A PR-activity subscription, for any PR, and a message into a sibling desktop
-# session pass by exact full name, server part included (ADR 0034).
+# A PR-activity subscription, for any PR, passes by exact full name, server
+# part included (ADR 0034). A message into a sibling desktop session asks
+# (amendment 2026-10-18); it is pinned among the off-list app tools above.
 PR_WORKFLOW_PASS=(
   mcp__claude-code-remote__subscribe_pr_activity
-  mcp__ccd_session_mgmt__send_message
 )
 for n in "${PR_WORKFLOW_PASS[@]}"; do
   tm pass "PR-workflow allowlist: ${n#mcp__}" "$(j "$n" '{}')"
