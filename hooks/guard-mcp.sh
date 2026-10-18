@@ -215,12 +215,13 @@ done
 
 # Writes that drive a session's PR work pass by exact full name, server part
 # included (ADR 0034): a PR-activity subscription, for any PR, with no own-PR
-# limit like set_monitor's; and a message into a sibling desktop session.
+# limit like set_monitor's. A message into a sibling desktop session is not on
+# it and asks: it can carry instructions into another session the operator
+# never sees (ADR 0034, amendment 2026-10-18).
 # Never by <tool> part alone: a server's name is set per deployment, and the
 # same name on another server is another tool.
 PR_WORKFLOW_ALLOW=(
   mcp__claude-code-remote__subscribe_pr_activity
-  mcp__ccd_session_mgmt__send_message
 )
 for allowed in "${PR_WORKFLOW_ALLOW[@]}"; do
   # Quoted right-hand side: a literal string comparison, never a pattern.
