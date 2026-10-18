@@ -131,7 +131,9 @@ reports one failure. Every guard case passes.
 `tests/bootstrap-env-tests.sh` runs bootstrap into a temporary config
 directory and checks the environment it writes.
 
-The package needs Python 3.11 or later (the installer refuses older) and PyYAML; the guards need bash 4 or later,
+The package needs Python 3.11 or later (the installer refuses older) and PyYAML installed system-wide (for
+example `apt install python3-yaml`): the CLI and the hooks run `python3 -I`, which ignores user site-packages and
+`PYTHONPATH`, and the installer refuses a PyYAML it can reach only there. The guards need bash 4 or later,
 `grep`, and `jq` or `python3`.
 
 ## Contributing

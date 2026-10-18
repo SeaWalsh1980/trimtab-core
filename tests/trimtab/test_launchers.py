@@ -164,7 +164,8 @@ class LaunchersRunIsolated(unittest.TestCase):
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("PYTHON")}
         self.env.update({"PYTHONDONTWRITEBYTECODE": "1", "HOME": str(self.base / "home"),
                          "CLAUDE_RULE_USAGE_DIR": str(self.base / "logs"),
-                         "CLAUDE_RULE_USAGE_LOG": str(self.base / "no-such.jsonl")})
+                         "CLAUDE_RULE_USAGE_LOG": str(self.base / "usage.jsonl")})
+        (self.base / "usage.jsonl").write_text("")
 
     def user_site(self) -> Path:
         """The user site-packages directory a PYTHONUSERBASE under the temp dir gives."""
@@ -194,48 +195,49 @@ class LaunchersRunIsolated(unittest.TestCase):
     def test_the_cli_does_not_run_a_sitecustomize_planted_at_the_root(self):
         plant(self.root / "sitecustomize.py", self.mark)
 
-        self.cli()
+        out = self.cli()
 
         self.assertFalse(self.mark.exists())
+        self.assertEqual(out.returncode, 0, out.stderr)
 
     def test_the_cli_does_not_run_a_pth_file_in_user_site_packages(self):
         site_dir = self.user_site()
         site_dir.mkdir(parents=True)
         (site_dir / "plant.pth").write_text(f"import os; open({str(self.mark)!r}, 'w').close()\n")
 
-        self.cli()
+        out = self.cli()
 
         self.assertFalse(self.mark.exists())
+        self.assertEqual(out.returncode, 0, out.stderr)
 
     def test_the_cli_ignores_a_pythonpath_the_caller_set(self):
         plant(self.base / "pp" / "json.py", self.mark)
         self.env["PYTHONPATH"] = str(self.base / "pp")
 
-        self.cli()
+        out = self.cli()
 
         self.assertFalse(self.mark.exists())
+        self.assertEqual(out.returncode, 0, out.stderr)
 
     def test_the_weekly_report_does_not_import_a_name_planted_beside_its_script(self):
         plant(self.root / "bin" / "json.py", self.mark)
 
-        self.weekly()
+        out = self.weekly()
 
         self.assertFalse(self.mark.exists())
+        self.assertEqual(out.returncode, 0, out.stderr)
 
     def test_the_weekly_report_does_not_run_a_pth_file_in_user_site_packages(self):
         site_dir = self.user_site()
         site_dir.mkdir(parents=True)
         (site_dir / "plant.pth").write_text(f"import os; open({str(self.mark)!r}, 'w').close()\n")
 
-        self.weekly()
+        out = self.weekly()
 
         self.assertFalse(self.mark.exists())
+        self.assertEqual(out.returncode, 0, out.stderr)
 
     def test_the_weekly_report_still_writes_its_report(self):
-        log = self.base / "usage.jsonl"
-        log.write_text("")
-        self.env["CLAUDE_RULE_USAGE_LOG"] = str(log)
-
         out = self.weekly()
 
         self.assertEqual(out.returncode, 0, out.stderr)
