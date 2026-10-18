@@ -139,5 +139,108 @@ class NoBytecode(unittest.TestCase):
         self.assertEqual(self.caches(), [])
 
 
+def plant(path: Path, mark: Path) -> None:
+    """A module that, if anything imports it, leaves `mark` behind."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"open({str(mark)!r}, 'w').close()\n")
+
+
+class LaunchersRunIsolated(unittest.TestCase):
+    """The launchers in bin/ run python3 isolated, as the hooks do (ADR 0035).
+
+    Each case copies bin/, hooks/ and trimtab/ to a temporary root, plants code
+    where the old launchers would have run it, runs the launcher, and requires
+    the plant's mark to be absent.
+    """
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(tmp.name)
+        self.root = self.base / "root"
+        for name in ("bin", "hooks", "trimtab"):
+            shutil.copytree(CHECKOUT / name, self.root / name, ignore=shutil.ignore_patterns("__pycache__"))
+        self.mark = self.base / "PLANT-RAN"
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith("PYTHON")}
+        self.env.update({"PYTHONDONTWRITEBYTECODE": "1", "HOME": str(self.base / "home"),
+                         "CLAUDE_RULE_USAGE_DIR": str(self.base / "logs"),
+                         "CLAUDE_RULE_USAGE_LOG": str(self.base / "no-such.jsonl")})
+
+    def user_site(self) -> Path:
+        """The user site-packages directory a PYTHONUSERBASE under the temp dir gives."""
+        userbase = self.base / "userbase"
+        out = subprocess.run([sys.executable, "-c", "import site; print(site.getusersitepackages())"],
+                             env={**self.env, "PYTHONUSERBASE": str(userbase)},
+                             capture_output=True, text=True, check=True)
+        self.env["PYTHONUSERBASE"] = str(userbase)
+        return Path(out.stdout.strip())
+
+    def cli(self):
+        return subprocess.run([str(self.root / "bin" / "trimtab"), "--help"], cwd=self.base, env=self.env,
+                              capture_output=True, text=True, timeout=60)
+
+    def weekly(self):
+        return subprocess.run(["bash", str(self.root / "bin" / "rule-usage-weekly.sh")], cwd=self.base,
+                              env=self.env, capture_output=True, text=True, timeout=60)
+
+    def test_the_cli_does_not_import_a_standard_library_name_planted_at_the_root(self):
+        plant(self.root / "json.py", self.mark)
+
+        out = self.cli()
+
+        self.assertFalse(self.mark.exists())
+        self.assertEqual(out.returncode, 0, out.stderr)
+
+    def test_the_cli_does_not_run_a_sitecustomize_planted_at_the_root(self):
+        plant(self.root / "sitecustomize.py", self.mark)
+
+        self.cli()
+
+        self.assertFalse(self.mark.exists())
+
+    def test_the_cli_does_not_run_a_pth_file_in_user_site_packages(self):
+        site_dir = self.user_site()
+        site_dir.mkdir(parents=True)
+        (site_dir / "plant.pth").write_text(f"import os; open({str(self.mark)!r}, 'w').close()\n")
+
+        self.cli()
+
+        self.assertFalse(self.mark.exists())
+
+    def test_the_cli_ignores_a_pythonpath_the_caller_set(self):
+        plant(self.base / "pp" / "json.py", self.mark)
+        self.env["PYTHONPATH"] = str(self.base / "pp")
+
+        self.cli()
+
+        self.assertFalse(self.mark.exists())
+
+    def test_the_weekly_report_does_not_import_a_name_planted_beside_its_script(self):
+        plant(self.root / "bin" / "json.py", self.mark)
+
+        self.weekly()
+
+        self.assertFalse(self.mark.exists())
+
+    def test_the_weekly_report_does_not_run_a_pth_file_in_user_site_packages(self):
+        site_dir = self.user_site()
+        site_dir.mkdir(parents=True)
+        (site_dir / "plant.pth").write_text(f"import os; open({str(self.mark)!r}, 'w').close()\n")
+
+        self.weekly()
+
+        self.assertFalse(self.mark.exists())
+
+    def test_the_weekly_report_still_writes_its_report(self):
+        log = self.base / "usage.jsonl"
+        log.write_text("")
+        self.env["CLAUDE_RULE_USAGE_LOG"] = str(log)
+
+        out = self.weekly()
+
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertTrue(list((self.base / "logs").glob("rule-usage-*.md")), out.stdout + out.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

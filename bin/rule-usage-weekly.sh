@@ -24,8 +24,11 @@ days=7
 [[ "${1:-}" == "--days" ]] && days="${2:?--days needs a number}"
 
 out="$logdir/rule-usage-$(date -u +%G-W%V).md"
+# -I -S: isolated, as the observer hook runs (ADR 0035): no script directory or
+# working directory on sys.path, no user site-packages, no PYTHON* variables,
+# no site-packages at all (the report is standard library only).
 # -B: write no bytecode beside the script; a snapshot is never written.
-python3 -B "$here/rule-usage-report.py" --days "$days" --out "$out"
+python3 -I -S -B "$here/rule-usage-report.py" --days "$days" --out "$out"
 rc=$?
 
 case $rc in

@@ -129,12 +129,13 @@ unreadable() {
   if [[ $CHECK_ONLY -eq 1 ]]; then note "$1 cannot be read as settings"; else die "$1 cannot be read as settings"; fi
 }
 
-# The python3 floor. bin/trimtab runs `python3 -P`, and the hooks that start
-# python3 probe for it with `python3 -P` (ADR 0035), which needs 3.11: on anything
-# older bin/trimtab fails, the drift hook goes quiet and pr-body-check.sh fails
-# open through its probe. So the installer refuses first, before it writes,
-# links or switches anything, --check included. The version test is `sys.version_info`, not `-P`, so it also runs on
-# the interpreters it is there to refuse.
+# The python3 floor. bin/trimtab and the hooks that start python3 run it with
+# -I, and the hooks probe for it with `python3 -P` (ADR 0035), which needs 3.11:
+# on anything older bin/trimtab fails, the drift hook goes quiet and
+# pr-body-check.sh fails open through its probe. So the installer refuses first,
+# before it writes, links or switches anything, --check included. The version
+# test is `sys.version_info`, not `-P`, so it also runs on the interpreters it
+# is there to refuse.
 # See docs/adr/0014-the-installer-refuses-python-older-than-3-11.md.
 command -v python3 >/dev/null 2>&1 || die "python3 is required (3.11 or newer: the launchers need python3 -P)"
 py_rc=0

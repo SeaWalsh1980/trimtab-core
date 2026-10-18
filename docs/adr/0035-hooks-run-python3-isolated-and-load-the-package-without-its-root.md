@@ -9,6 +9,9 @@ of this package and to the rule-usage observer. Strengthens ADR 0028
 (`docs/adr/0028-guard-mcp-passes-set-monitor-only-for-prs-the-session-opened.md`),
 whose `set_monitor` deny check is one of them.
 
+Amended 2026-10-18: the CLI launcher and the weekly report launcher in `bin/`
+run isolated too; see [Amendment (2026-10-18)](#amendment-2026-10-18).
+
 ## Context
 
 Four hooks ran a module of this package with
@@ -186,3 +189,33 @@ prints `pass` and exits 0.
   (`python3 -`), which puts the working directory first on `sys.path`. The
   same review found it. guard-paths blocks every read of that file, which is
   the right policy for the inspector, so its fix is left to the operator.
+
+## Amendment (2026-10-18)
+
+**Context.** The review that found the hooks' flaw left the two launchers in
+`bin/` with it. `bin/trimtab` ran `PYTHONPATH="$here/.." python3 -P -B -m
+trimtab`: the checkout root first on `sys.path`, the caller's `PYTHONPATH`
+after it, user site-packages on. `bin/rule-usage-weekly.sh` ran `python3 -B
+rule-usage-report.py`: the script's directory first on `sys.path`, user site
+on, `PYTHON*` variables honoured. Every `/trimtab-*` method and routine calls
+`bin/trimtab`, and the weekly timer runs the other, so the same three plants
+(a user-site `.pth`, a root `sitecustomize.py`, a root standard-library name)
+ran inside them.
+
+**Decision.** `bin/trimtab` runs `python3 -I -B hooks/run_module.py <root>
+trimtab.__main__`, the hooks' own loader, so the package loads from the
+checkout and nothing else does. `bin/rule-usage-weekly.sh` runs the report
+with `-I -S -B`, as the observer hook runs its recorder.
+
+**Options considered.**
+- *Keep `-P` and drop the caller's `PYTHONPATH`.* Rejected: user site stays
+  on, and the root is still on `sys.path`.
+- *Copy the loader into `bin/`.* Rejected: two loaders to keep in step, and
+  `bin/` and `hooks/` ship together in every snapshot.
+
+**Consequences.** `PYTHONPATH` no longer reaches the CLI, so PyYAML must be
+installed system-wide, as the hooks already require. A caller that relied on
+`PYTHONPATH` to point the CLI at another package can no longer do so. The
+stdin-script inspector noted above is still left to the operator.
+
+**Status.** Accepted (2026-10-18), by the operator.
