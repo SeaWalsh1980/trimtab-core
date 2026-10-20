@@ -45,22 +45,30 @@ configuration. Each was confirmed against git 2.47 and is now covered below.
 
 ## Decision
 
-A command that names `push` (once quotes are removed) is judged twice, and
-either pass refuses on its own:
+A command that names `push`, or names `git` beside a shell expansion that
+could build the word (`git pu${x}sh`), once quotes are removed, is judged
+twice, and either pass refuses on its own:
 
 - a **naive pass** splits on `; & | ( )` and backquotes without respecting
   quotes, so it sees inside a quoted substitution (`echo "$(git push …)"`)
   and a here-document's lines;
 - a **quote-aware pass** tokenises as the shell does: a quoted `>` is an
   ordinary character rather than a redirection, a quoted `;` does not end
-  the command, and a quoted string that spans spaces is one word. Its cost
-  grows with length times words, so a command over 8192 characters that
-  names `push` is refused instead (measured: about 0.7 s at the cap against
-  the 10 s hook timeout, 2 ms on an ordinary push).
+  the command, a quoted string that spans spaces is one word, and a `#` at
+  the start of a word begins a comment. The tokeniser is one
+  regular-expression scan in python3 (the same pattern in jq when python3
+  is absent), so its cost is linear in the command; the shell assembles
+  words from its pieces. A failing tokeniser refuses the push.
 
 Earlier drafts handled quoting token by token in the naive pass alone, and
 every review round found another quoting edge (glued redirects, a quoted
-`>`, quotes spanning spaces); the second pass replaces those patches.
+`>`, quotes spanning spaces); the second pass replaces those patches. A
+quote-aware tokeniser written in bash was tried next and rejected: re-slicing
+the rest of the command per piece made it quadratic (0.7 s at 8 KB, 2.2 s at
+16 KB), and the length cap it needed refused ordinary long PR bodies that
+mention push. jq's scan is superlinear too (0.3 s at 16 KB, 0.9 s at 32 KB,
+5.9 s at 100 KB), so on the jq fallback a command over 32768 characters that
+names push is refused rather than risk the hook timeout.
 
 Within each pass guard-bash parses each simple command: the command
 (backslash-newlines joined) split on its separators, with each separator
@@ -162,10 +170,14 @@ allowed: it is the sanctioned rewrite of a pull-request branch.
 - Two refusals of the old regex go away: a later command's `-f` after a push
   (`&& npm ci -f`, a next-line `sed -f`) is no longer read as the push's.
 - Measured on the workstation, 50 runs each: about 5 ms per call before; after,
-  about 7 ms for an ordinary command and 9 ms for a push. The worst case under
-  the length cap is about 0.7 s.
-- A command over 8192 characters that names `push` is refused. Write long
-  content with a file-writing tool rather than a heredoc that mentions push.
+  about 7 ms for an ordinary command and 26 ms for one that names push (the
+  second python3 start). The worst case, 100 KB of short quoted words naming
+  push, is about 2 s against the 10 s hook timeout; guard-security already
+  refuses any command over 100000 characters.
+- On a machine with jq but no python3, a command over 32768 characters that
+  names push is refused.
+- `git` with a subcommand the shell builds (`git $(echo push)`, `git $sub`)
+  is refused whatever the subcommand turns out to be.
 - A here-document or commit message containing a line that begins
   `git push origin main` blocks, as quoted `rm -rf` already did. It is the
   same known limitation (matching does not tell code from data); write such
@@ -190,8 +202,10 @@ What a text hook cannot see:
   inline with `-c` or a `GIT_CONFIG*` assignment are refused.)
 - State set by an earlier command: `git config push.default matching`, or
   `export GIT_DIR=…` / `export GIT_CONFIG_COUNT=…`, then a plain `git push`
-  in a later command or a later call. The guard judges each command on what
-  it says, not on what the shell or the repository was told before.
+  in a later command or a later call; likewise a variable set earlier that
+  names git or push (`G=git` in one call, `$G pu$X origin main` in the next).
+  The guard judges each command on what it says, not on what the shell or
+  the repository was told before.
 - A shell function or alias named `git`, and a `git` planted earlier on PATH.
 - `find … -exec git push` and other runners that pass operands at run time
   without being named here.

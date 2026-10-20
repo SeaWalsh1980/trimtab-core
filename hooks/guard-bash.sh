@@ -35,8 +35,9 @@ payload=$(cat)
 # An empty payload is not an empty command. jq reports empty stdin as a
 # successful parse of nothing, which the empty-command allow below then waves
 # through; only the python3 branch raised. Truncated stdin and a missing `cat`
-# both land here. Everything after this point is a bash builtin, so jq/python3
-# and cat are this guard's entire external surface.
+# both land here. Everything after this point is a bash builtin, except that
+# the push rules' quote-aware tokeniser runs python3 (or jq) again, so
+# jq/python3 and cat are still this guard's entire external surface.
 if [[ -z "$payload" ]]; then
   echo "guard-bash: empty hook payload. Blocking (fail closed)." >&2
   exit 2
@@ -122,7 +123,7 @@ EOF
 }
 
 # The default branch is taken as main or master. Reading origin/HEAD would
-# need git itself, and everything after the parse above is a bash builtin.
+# need git itself, an external command this guard otherwise never runs.
 # git also guesses a destination's namespace (`heads/main`, `refs/main` both
 # land on refs/heads/main), so those prefixes are peeled off first. Compared
 # without case: on a case-insensitive filesystem `Main` is the same ref.
@@ -374,7 +375,13 @@ judge() {
     esac
     (( i++ ))
   done
-  [[ "${tk[i]:-}" == push ]] || return 0
+  # A subcommand the shell builds (`git $(echo push)`, `git $sub`, a glob)
+  # cannot be told from push, so it is refused (fail closed).
+  v=${tk[i]:-}
+  if (( i < n )) && [[ -z "$v" || "$v" == *[\$\`\*\?\[\{]* ]]; then
+    block_push "git with a subcommand the guard cannot read ($v; fail closed)"
+  fi
+  [[ "$v" == push ]] || return 0
   (( i++ ))
   (( cont )) && block_push "git push with a command substitution in its operands (fail closed)"
   (( xa ))   && block_push "git push under xargs (its operands arrive at run time; fail closed)"
@@ -479,6 +486,7 @@ naive_words() {
   read -ra raw <<<"$1"
   TK=()
   for a in "${raw[@]}"; do
+    [[ "$a" == '#'* ]] && break               # a comment runs to the end
     a=${a//[\"\'\\]/}
     if (( drop )); then drop=0; continue; fi
     if [[ "$a" == *[\<\>]* ]]; then
@@ -527,72 +535,98 @@ naive_pass() {
   done
 }
 
-# The quote-aware tokeniser's pieces, each anchored at the start of what is
-# left. An unterminated quote runs to the end, as the shell would wait for it.
-# A redirection carrying `&` (`2>&1`, `&>file`, `>&2`) or `|` (`>|file`) is
-# one operator, tried before the separators so its `&` is not a background
-# job; `|&` is a pipe.
-Q_WS=$'^[ \t]+'
-Q_RD='^(&>>?|[<>]+[&|]?)'
-Q_OP=$'^(&&|\\|\\||\\|&|;;|[;&|()`\n])'
-Q_SQ="^'([^']*)'?"
-Q_DQ='^"(([^"\\]|\\.)*)"?'
-Q_BS='^\\(.?)'
-Q_LIT=$'^[^ \t\n;&|()`<>\'"\\\\]+'
+# The quote-aware tokeniser. One regular-expression scan over the command
+# (backslash-newlines joined), so its cost is linear: a shell loop that
+# re-sliced the rest of the command per piece was quadratic, and needed a
+# length cap that refused long PR bodies. Each piece is printed on its own
+# line as a tag and its text, newlines in quoted text flattened to spaces:
+#   W  whitespace          C  a comment (`#` at the start of a word)
+#   R  a redirection       O  an operator (a newline is printed as `;`)
+#   Q  quoted text, quotes and escapes removed
+#   L  unquoted literal text
+# python3 is preferred; jq, the fallback when it is absent, is superlinear in
+# the number of pieces, so past TOK_JQ_MAX it is not trusted to finish within
+# the hook timeout and a command naming push is refused instead.
+read -r -d '' TOK_PY <<'PY' || true
+import re, sys
+s = sys.stdin.read().replace("\\\n", " ")
+P = re.compile(
+    r"(?P<W>[ \t]+)|(?P<C>(?<![^ \t\n;&|()`])#[^\n]*)|(?P<R>&>>?|[0-9]*[<>]+[&|]?)"
+    r"|(?P<O>&&|\|\||\|&|;;|[;&|()`\n])|(?P<S>'[^']*'?)|(?P<D>\"(?:[^\"\\]|\\[\s\S])*\"?)"
+    r"|(?P<B>\\[\s\S]?)|(?P<L>[^ \t\n;&|()`<>'\"\\]+)|(?P<A>[\s\S])")
+DQ = re.compile(r'(?:[^"\\]|\\[\s\S])*')
+out = []
+for m in P.finditer(s):
+    k, v = m.lastgroup, m.group()
+    if k == "S":
+        v = v[1:]
+        k, v = "Q", v[:-1] if v.endswith("'") else v
+    elif k == "D":
+        k, v = "Q", re.sub(r'\\([\\"$`])', r"\1", DQ.match(v, 1).group())
+    elif k == "B":
+        k, v = "Q", v[1:]
+    elif k == "O":
+        v = ";" if v == "\n" else v
+    elif k == "A":
+        k = "L"
+    out.append((k + v).replace("\n", " "))
+sys.stdout.write("\n".join(out) + ("\n" if out else ""))
+PY
+read -r -d '' TOK_JQ <<'JQ' || true
+gsub("\\\\\n"; " ")
+| [ match("(?<W>[ \\t]+)|(?<C>(?<![^ \\t\\n;&|()`])#[^\\n]*)|(?<R>&>>?|[0-9]*[<>]+[&|]?)|(?<O>&&|\\|\\||\\|&|;;|[;&|()`\\n])|(?<S>'[^']*'?)|(?<D>\"(?:[^\"\\\\]|\\\\[\\s\\S])*\"?)|(?<B>\\\\[\\s\\S]?)|(?<L>[^ \\t\\n;&|()`<>'\"\\\\]+)|(?<A>[\\s\\S])"; "g")
+    | .captures | map(select(.string != null)) | .[0] ]
+| .[]
+| .name as $k | .string as $v
+| if $k == "S" then "Q" + ($v[1:] | if endswith("'") then .[:-1] else . end)
+  elif $k == "D" then "Q" + ($v[1:] | capture("^(?<c>(?:[^\"\\\\]|\\\\[\\s\\S])*)").c
+                            | gsub("\\\\(?<x>[\\\\\"$`])"; .x))
+  elif $k == "B" then "Q" + $v[1:]
+  elif $k == "O" then "O" + (if $v == "\n" then ";" else $v end)
+  elif $k == "A" then "L" + $v
+  else $k + $v end
+| gsub("\n"; " ")
+JQ
+TOK_JQ_MAX=32768
 
 # qtokens <command>: the command as shell words and operators, quote-aware.
-# Sets QT to items "W<word>" and "O<operator>". An unquoted < or > starts a
-# redirection: a plain-digit word before it is its file descriptor, and the
-# next word is its target; both are dropped.
+# Sets QT to items "W<word>" and "O<operator>". A redirection's target (the
+# next word) is dropped with it; a comment is dropped. A tokeniser that fails
+# refuses the push (fail closed).
 qtokens() {
-  local s="$1" w="" m v have=0 wq=0 skip=0
+  local out line v w="" have=0 skip=0
   QT=()
+  if command -v python3 >/dev/null 2>&1; then
+    out=$(printf '%s' "$1" | python3 -I -c "$TOK_PY" 2>/dev/null) \
+      || block_push "the quote-aware tokeniser failed on a command that names push (fail closed)"
+  elif (( ${#1} <= TOK_JQ_MAX )); then
+    out=$(printf '%s' "$1" | jq -Rsr "$TOK_JQ" 2>/dev/null) \
+      || block_push "the quote-aware tokeniser failed on a command that names push (fail closed)"
+  else
+    block_push "a command over $TOK_JQ_MAX characters that names push needs python3 to be judged (fail closed)"
+  fi
   q_end() {
     if (( have )); then
       if (( skip )); then skip=0; else QT+=( "W$w" ); fi
     fi
-    w=""; have=0; wq=0
+    w=""; have=0
   }
-  while [[ -n "$s" ]]; do
-    if [[ "$s" =~ $Q_WS ]]; then
-      m=${BASH_REMATCH[0]}; q_end
-    elif [[ "$s" =~ $Q_RD ]]; then
-      m=${BASH_REMATCH[0]}
-      if (( have && !wq )) && [[ "$w" =~ ^[0-9]+$ ]]; then
-        w=""; have=0
-      else
-        q_end
-      fi
-      skip=1
-    elif [[ "$s" =~ $Q_OP ]]; then
-      m=${BASH_REMATCH[0]}; q_end; skip=0; QT+=( "O$m" )
-    elif [[ "$s" =~ $Q_SQ ]]; then
-      m=${BASH_REMATCH[0]}; w+=${BASH_REMATCH[1]}; have=1; wq=1
-    elif [[ "$s" =~ $Q_DQ ]]; then
-      m=${BASH_REMATCH[0]}; v=${BASH_REMATCH[1]}; w+=${v//\\\"/\"}; have=1; wq=1
-    elif [[ "$s" =~ $Q_BS ]]; then
-      m=${BASH_REMATCH[0]}; w+=${BASH_REMATCH[1]}; have=1; wq=1
-    elif [[ "$s" =~ $Q_LIT ]]; then
-      m=${BASH_REMATCH[0]}; w+=$m; have=1
-    else
-      m=${s:0:1}; w+=$m; have=1
-    fi
-    s=${s:${#m}}
-  done
+  while IFS= read -r line; do
+    v=${line:1}
+    case "${line:0:1}" in
+      W) q_end ;;
+      C) ;;
+      R) q_end; skip=1 ;;
+      O) q_end; skip=0; QT+=( "O$v" ) ;;
+      Q|L) w+=$v; have=1 ;;
+    esac
+  done <<<"$out"
   q_end
 }
-
-# The quote-aware pass costs time in proportion to the command's length times
-# its words; past this a command that names push is refused rather than left
-# unjudged, since a hook that overruns its timeout does not block.
-Q_MAX=8192
 
 # quote_pass <command>: judge each simple command between unquoted operators.
 quote_pass() {
   local -a items=(); local it op k cont
-  if (( ${#1} > Q_MAX )); then
-    block_push "a command over $Q_MAX characters that names push is too long to judge (write long content with a file tool)"
-  fi
   qtokens "$1"
   items=( "${QT[@]}" "O" )
   TK=()
@@ -605,24 +639,27 @@ quote_pass() {
     (( ${#TK[@]} )) && judge "$cont"
     TK=()
     case "$op" in
-      '(')          (( sub++ )) ;;
-      ')')          (( sub > 0 )) && (( sub-- )) ;;
-      '|'|'||'|'&') (( last_cd )) && vcwd="" ;;
+      '(')               (( sub++ )) ;;
+      ')')               (( sub > 0 )) && (( sub-- )) ;;
+      '|'|'||'|'|&'|'&') (( last_cd )) && vcwd="" ;;
     esac
   done
 }
 
-# scan_command <command>: both passes, each from the same starting directory.
-# A command that does not name push at all, once quotes are gone, has nothing
-# for these rules to judge.
+# scan_command <command>: both passes, each from the same starting directory;
+# the directory and the walk's state are put back after (a `bash -c` code
+# string runs in a child shell, so nothing in it moves this one).
+# A command with nothing for these rules to judge is skipped: one that, once
+# quotes are gone, names neither push nor git beside a shell expansion (which
+# could build the word push, as `git pu${x}sh` does).
 scan_command() {
-  local start=$vcwd s0=$sub t=${1//[\"\'\\]/}
-  [[ "$t" == *push* ]] || return 0
+  local start=$vcwd s0=$sub l0=$last_cd t=${1//[\"\'\\]/}
+  [[ "$t" == *push* || ( "$t" == *git* && "$t" == *[\$\`\*\?\[\{]* ) ]] || return 0
   sub=0; last_cd=0
   naive_pass "$1"
   vcwd=$start; sub=0; last_cd=0
   quote_pass "$1"
-  vcwd=$start; sub=$s0
+  vcwd=$start; sub=$s0; last_cd=$l0
 }
 
 # A backslash-newline continues the line, as the shell would join it.

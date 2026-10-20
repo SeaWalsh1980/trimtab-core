@@ -347,13 +347,24 @@ pb 0 "$GP/onfeat" "git push -o 'ci.message=a>b' origin feat"
 pb 0 "$GP/onfeat" '[ "$mode" = push ] && git push origin feat'
 # A command that does not name push is not parsed at all.
 pb 0 "$GP/onmain" 'cat notes.txt | grep -c main'
-# Past the quote-aware pass's length cap, a command naming push is refused
-# rather than left unjudged; one that does not name push is unaffected.
-GP_PAD=$(printf 'x%.0s' $(seq 9000))
-t guard-bash.sh 2 "push: over the length cap, names push" \
-  "$(j Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1]}))' "git commit -m 'push $GP_PAD'")")" "$GP/onfeat"
-t guard-bash.sh 0 "push: over the length cap, no push" \
-  "$(j Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1]}))' "echo '$GP_PAD'")")" "$GP/onfeat"
+# A long command that only mentions push (a PR body) is judged, not capped;
+# a long one that really pushes main is still refused.
+GP_PAD=$(printf 'x%.0s' $(seq 40000))
+t guard-bash.sh 0 "push: 40 KB PR body mentioning git push origin main" \
+  "$(j Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1]}))' "gh pr create --draft --body \"then git push origin main; $GP_PAD\"")")" "$GP/onfeat"
+t guard-bash.sh 2 "push: 40 KB command that pushes main" \
+  "$(j Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1]}))' "echo '$GP_PAD' && git push origin main")")" "$GP/onfeat"
+
+# A git subcommand the shell builds cannot be told from push.
+pb 2 "$GP/onfeat" 'git $(echo push) origin main'
+pb 2 "$GP/onfeat" 'sub=push; git $sub origin main'
+pb 2 "$GP/onfeat" 'git pu${x}sh origin main'
+# A comment is not an operand.
+pb 0 "$GP/onfeat" 'git push origin feat  # not main'
+pb 2 "$GP/onfeat" 'git push origin main  # feat'
+# A cd inside bash -c does not move this shell, before or after a pipe.
+pb 0 "$GP/onfeat" "bash -c 'cd $GP/onmain' | tee push.log; git push"
+pb 2 "$GP/onmain" "bash -c 'cd $GP/onfeat'; git push"
 # A later command's -f is not the push's (the old regex blocked these).
 pb 0 "$GP/onfeat" 'git push origin feat && rm -f /tmp/x'
 pb 0 "$GP/onfeat" $'git push origin feat\nsed -f script.sed notes.txt'
@@ -2083,6 +2094,22 @@ PUSH_REDIR_PAYLOAD="$(j Bash '{"command":"git push origin main>/dev/null"}')"
 PUSH_ENV_PAYLOAD="$(j Bash '{"command":"env -u FOO GIT_CONFIG_COUNT=1 git push"}')"
 tp "$STUB" guard-bash.sh    2 "python3 only: redirect glued to main"  "$PUSH_REDIR_PAYLOAD" "$GP/onfeat"
 tp "$STUB" guard-bash.sh    2 "python3 only: GIT_CONFIG behind env"   "$PUSH_ENV_PAYLOAD"   "$GP/onfeat"
+
+# The quote-aware tokeniser runs python3 when present, else jq: each alone
+# must read a quoted string spanning spaces as one word, and a comment as none.
+PUSH_SPAN_PAYLOAD="$(j Bash '{"command":"git push \"/tmp/r >\" main"}')"
+PUSH_COMMENT_PAYLOAD="$(j Bash '{"command":"git push origin feat  # not main"}')"
+tp "$STUB" guard-bash.sh    2 "python3 only: quoted span is one word" "$PUSH_SPAN_PAYLOAD"    "$GP/onfeat"
+tp "$STUB" guard-bash.sh    0 "python3 only: a comment is not operands" "$PUSH_COMMENT_PAYLOAD" "$GP/onfeat"
+if command -v jq >/dev/null 2>&1; then
+  stub_bin bash cat jq
+  tp "$STUB" guard-bash.sh  2 "jq only: quoted span is one word"      "$PUSH_SPAN_PAYLOAD"    "$GP/onfeat"
+  tp "$STUB" guard-bash.sh  0 "jq only: a comment is not operands"    "$PUSH_COMMENT_PAYLOAD" "$GP/onfeat"
+  tp "$STUB" guard-bash.sh  2 "jq only: push to main"                 "$PUSH_MAIN_PAYLOAD"    "$GP/onfeat"
+  tp "$STUB" guard-bash.sh  0 "jq only: push a feature branch"        "$PUSH_FEAT_PAYLOAD"    "$GP/onfeat"
+fi
+# Back to neither parser, which the next case is about.
+stub_bin bash cat grep sed head tail basename
 tp "$STUB" guard-security.sh 2 "no jq and no python3"    "$(j Edit '{"file_path":"/p/.github/workflows/ci.yml"}')"
 
 # An empty payload is not a clean payload. jq reports empty stdin as a
