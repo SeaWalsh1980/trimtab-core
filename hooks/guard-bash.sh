@@ -215,6 +215,20 @@ vcwd="$pcwd"
 sub=0            # depth of ( … ) subshells the walk is inside
 last_cd=0        # the previous segment was a cd
 
+# A prefix assignment: NAME=, NAME+= or NAME[i]=.
+ASSIGN='^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?='
+
+# git reads its repository and configuration from the environment too, so an
+# assignment naming one is remembered for a push. Sets check_push's own
+# env_dir / env_cfg (bash locals are visible to the functions they call).
+note_assignment() {
+  local name="${1%%[+=[]*}"
+  case "$name" in
+    GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR) env_dir=1 ;;
+    GIT_CONFIG*)                          env_cfg=$name ;;
+  esac
+}
+
 # check_push <segment> <continued>: tokenise one simple command; when it is a
 # git push, refuse a force spelling or a destination that is the default
 # branch. <continued> is 1 when the segment runs on into a backquoted
@@ -234,8 +248,7 @@ check_push() {
     if [[ "$a" == *[\<\>]* ]]; then
       pre=${a%%[<>]*}
       tgt=${a#*[<>]}
-      tgt=${tgt##[<>&|]}
-      tgt=${tgt##[<>&|]}
+      tgt=${tgt#"${tgt%%[!<>&|]*}"}       # the rest of the operator, any length
       [[ -z "$tgt" ]] && drop=1
       [[ -z "$pre" || "$pre" =~ ^[0-9]+$ || "$pre" == '&' ]] && continue
       a=$pre
@@ -246,16 +259,12 @@ check_push() {
   i=0
   last_cd=0
 
-  # Skip assignments, shell keywords and wrappers to reach the command word.
-  # git reads its repository and configuration from the environment too, so
-  # an assignment naming one is remembered for a push below.
+  # Skip assignments (each noted by note_assignment; a `+=` is one too, never
+  # the command word), shell keywords and wrappers to reach the command word.
   while (( i < n )); do
     w=${tk[i]}
-    if [[ "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
-      case "${w%%=*}" in
-        GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR) env_dir=1 ;;
-        GIT_CONFIG*)                          env_cfg=${w%%=*} ;;
-      esac
+    if [[ "$w" =~ $ASSIGN ]]; then
+      note_assignment "$w"
       (( i++ )); continue
     fi
     case "$w" in
@@ -278,6 +287,7 @@ check_push() {
   if (( wrapped )) && [[ "${tk[i]##*/}" != git ]]; then
     while (( i < n )) && [[ "${tk[i]##*/}" != git ]]; do
       [[ "${tk[i]}" == -C* || "${tk[i]}" == --chdir* ]] && wrap_cd=1
+      [[ "${tk[i]}" =~ $ASSIGN ]] && note_assignment "${tk[i]}"
       (( i++ ))
     done
   fi
@@ -392,12 +402,18 @@ check_push() {
           delete)          del=1 ;;
           repo|arg)        [[ "$a" == *=* ]] || (( i++ )) ;;
         esac ;;
-      -o)
-        (( i++ )) ;;
       -*)
-        [[ "$a" == *f* ]] && force=1
-        [[ "$a" == *d* ]] && del=1
-        [[ "$a" == *o ]] && (( i++ )) ;;
+        # A short cluster, read letter by letter: `o` takes a value, the
+        # rest of the token (`-oci.skip`) or else the next token (`-uo x`).
+        v=${a#-}
+        while [[ -n "$v" ]]; do
+          case "${v:0:1}" in
+            f) force=1 ;;
+            d) del=1 ;;
+            o) [[ -z "${v:1}" ]] && (( i++ )); break ;;
+          esac
+          v=${v:1}
+        done ;;
       *)
         if (( seen_remote )); then refs+=( "$a" ); else seen_remote=1; fi ;;
     esac
@@ -449,8 +465,15 @@ pcmd=${cmd//$'\\\n'/ }
 # kept at the start of the segment it opens, so the walk can tell what a `cd`
 # was joined to: `&&` and `;` move the shell; a pipe, `||`, a background `&`
 # or a subshell leave its directory unknown.
+# A redirection that carries an `&` (`2>&1`, `&>file`, `>&2`, `|&`) is not a
+# background job or a separator; it is folded to its plain form first, so
+# `cd repo 2>&1 && git push` still moves the shell.
 segs=()
 s=$pcmd
+s=${s//'&>'/'>'}
+s=${s//'>&'/'>'}
+s=${s//'<&'/'<'}
+s=${s//'|&'/'|'}
 for x in ';' '&' '|' '(' ')' '`'; do s=${s//"$x"/$'\n'"$x"}; done
 while IFS= read -r line; do segs+=( "$line" ); done <<<"$s"
 for (( k=0; k<${#segs[@]}; k++ )); do
@@ -474,9 +497,10 @@ done
 
 # Backstop over the whole string for spellings the segment parser cannot
 # reach (an interpreter's inline code, a here-document): a bare --force or a
-# short-flag cluster with f, after `git push` (or `git -C x push`) and before
+# short-flag cluster with an f before any o (after o the rest is -o's value),
+# after `git push` (or `git -C x push`) and before
 # the next separator or line, so a later command's -f is not read as the push's.
-BACKSTOP='git[[:space:]]+((-C|-c)[[:space:]]*[^[:space:]]+[[:space:]]+)*push([[:space:]][^;&|'$'\n'']*)?[[:space:]](--force|-[a-zA-Z]*f[a-zA-Z]*)([[:space:]]|$)'
+BACKSTOP='git[[:space:]]+((-C|-c)[[:space:]]*[^[:space:]]+[[:space:]]+)*push([[:space:]][^;&|'$'\n'']*)?[[:space:]](--force|-[a-np-zA-Z]*f[a-zA-Z]*)([[:space:]]|$)'
 [[ "$pcmd" =~ $BACKSTOP ]] \
   && block_push "git push --force (use --force-with-lease on a pull-request branch)"
 

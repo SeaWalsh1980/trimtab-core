@@ -47,8 +47,10 @@ configuration. Each was confirmed against git 2.47 and is now covered below.
 
 guard-bash parses each simple command: the command (backslash-newlines
 joined) split on `; & | ( )` and backquotes, with each separator kept so the
-walk knows what joined two commands. Assignments and shell keywords are
-skipped; after `sudo`, `env`, `exec`, `nice`, `ionice`, `stdbuf`, `xargs`,
+walk knows what joined two commands; a redirection carrying `&` (`2>&1`,
+`&>file`, `|&`) is folded to its plain form first, so it is not read as a
+background job. Assignments (`NAME=`, `NAME+=`, `NAME[i]=`, all of which bash
+takes as a prefix) and shell keywords are skipped; after `sudo`, `env`, `exec`, `nice`, `ionice`, `stdbuf`, `xargs`,
 `timeout` or `time` the command word is the first token named git, wherever
 it is, so a wrapper option's value cannot hide it. The code of `bash -c` /
 `sh -c` is parsed as a command of its own.
@@ -59,7 +61,8 @@ repository unknown; `--attr-source` and the other value options skipped), it
 refuses:
 
 - any force spelling: `--force` (beside `--force-with-lease` too), a short
-  cluster containing `f`, a `+refspec`, `--mirror`, `--prune`;
+  cluster with `f` before any `o` (what follows `o` is the push option's
+  value, so `-ofast` is not a force), a `+refspec`, `--mirror`, `--prune`;
 - `--all` / `--branches`;
 - each of those long options by any prefix git would accept (`--mirr`,
   `--al`, `--pru`, `--forc`, `--del`); a prefix git finds ambiguous is an
@@ -75,7 +78,8 @@ refuses:
   will be pushed;
 - `-c` / `--config-env` naming `push.*`, `remote.*` or `alias.*`, and a
   `GIT_CONFIG*` assignment on the push (`GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n`,
-  `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_GLOBAL`): configuration can map a bare
+  `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_GLOBAL`), including one behind a
+  wrapper's option values (`env -u X GIT_CONFIG_COUNT=…`): configuration can map a bare
   push onto the default branch, force it, or rename `push`, and when it is
   typed in the command it is the model's to choose;
 - `HEAD` / `@` as the destination, or no refspec at all, when the current

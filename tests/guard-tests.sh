@@ -252,6 +252,18 @@ pb 2 "$GP/onfeat" "GIT_WORK_TREE=$GP/onmain git push"
 pb 2 "$GP/onfeat" 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=matching git push'
 pb 2 "$GP/onfeat" "GIT_CONFIG_PARAMETERS='push.default=matching' git push"
 
+# A `+=` or subscripted assignment is a prefix too, never the command word;
+# and assignments behind a wrapper's option values are still read.
+pb 2 "$GP/onfeat" 'A+=1 git push origin main'
+pb 2 "$GP/onfeat" 'a[0]=x git push origin main'
+pb 2 "$GP/onfeat" "GIT_DIR+=$GP/onmain/.git git push"
+pb 2 "$GP/onfeat" 'env -u FOO GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=matching git push'
+pb 2 "$GP/onfeat" "env -u FOO GIT_DIR=$GP/onmain/.git git push"
+
+# A short cluster's `o` takes the rest of the token as its value.
+pb 2 "$GP/onfeat" 'git push -fofoo origin feat'
+pb 2 "$GP/onfeat" 'git push -uo ci.skip origin main'
+
 # The default branch's name, in any case.
 pb 2 "$GP/onfeat" 'git push origin Main'
 pb 2 "$GP/onfeat" 'git push origin feat:MASTER'
@@ -290,6 +302,13 @@ pb 0 "$GP/onfeat" 'git push -u origin feat >push.log 2>&1'
 pb 0 "$GP/onfeat" 'git push origin feat > /dev/null'
 pb 0 "$GP/onfeat" 'GIT_TRACE=1 git push origin feat'
 pb 0 "$GP/onfeat" 'GIT_SSH_COMMAND=ssh git push origin feat'
+# A redirection carrying `&` is not a background job: the cd still moved.
+pb 0 "$GP/onmain" "cd $GP/onfeat 2>&1 && git push"
+pb 0 "$GP/onmain" "cd $GP/onfeat &>/dev/null && git push"
+pb 0 "$GP/onmain" "cd $GP/onfeat >&2 && git push"
+# An `o` value holding f or d is not --force or --delete.
+pb 0 "$GP/onfeat" 'git push -ofast origin feat'
+pb 0 "$GP/onfeat" 'git push -odeploy origin feat'
 # A later command's -f is not the push's (the old regex blocked these).
 pb 0 "$GP/onfeat" 'git push origin feat && rm -f /tmp/x'
 pb 0 "$GP/onfeat" $'git push origin feat\nsed -f script.sed notes.txt'
@@ -2015,6 +2034,10 @@ stub_bin bash cat python3
 tp "$STUB" guard-bash.sh    2 "python3 only: push to main"            "$PUSH_MAIN_PAYLOAD" "$GP/onfeat"
 tp "$STUB" guard-bash.sh    0 "python3 only: push a feature branch"   "$PUSH_FEAT_PAYLOAD" "$GP/onfeat"
 tp "$STUB" guard-bash.sh    2 "python3 only: bare push, payload cwd"  "$PUSH_CWD_PAYLOAD"  "$GP/onfeat"
+PUSH_REDIR_PAYLOAD="$(j Bash '{"command":"git push origin main>/dev/null"}')"
+PUSH_ENV_PAYLOAD="$(j Bash '{"command":"env -u FOO GIT_CONFIG_COUNT=1 git push"}')"
+tp "$STUB" guard-bash.sh    2 "python3 only: redirect glued to main"  "$PUSH_REDIR_PAYLOAD" "$GP/onfeat"
+tp "$STUB" guard-bash.sh    2 "python3 only: GIT_CONFIG behind env"   "$PUSH_ENV_PAYLOAD"   "$GP/onfeat"
 tp "$STUB" guard-security.sh 2 "no jq and no python3"    "$(j Edit '{"file_path":"/p/.github/workflows/ci.yml"}')"
 
 # An empty payload is not a clean payload. jq reports empty stdin as a
