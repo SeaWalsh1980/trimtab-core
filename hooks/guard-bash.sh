@@ -35,34 +35,107 @@ payload=$(cat)
 # An empty payload is not an empty command. jq reports empty stdin as a
 # successful parse of nothing, which the empty-command allow below then waves
 # through; only the python3 branch raised. Truncated stdin and a missing `cat`
-# both land here. Everything after this point is a bash builtin, except that
-# the push rules' quote-aware tokeniser runs python3 (or jq) again, so
-# jq/python3 and cat are still this guard's entire external surface.
+# both land here. Everything after the parse is a bash builtin, except that
+# the push rules' tokeniser runs python3 (or jq) again for a `bash -c` code
+# string, so jq/python3 and cat are still this guard's whole external surface.
 if [[ -z "$payload" ]]; then
   echo "guard-bash: empty hook payload. Blocking (fail closed)." >&2
   exit 2
 fi
 
-# Extract .cwd (first line, newlines flattened) and .tool_input.command (the
-# rest) using jq if present, else python3. The cwd is the Bash tool's working
-# directory, which a bare `git push` pushes from; the hook process's own $PWD
-# is the fallback when the payload carries none.
+# The push rules' quote-aware tokeniser, defined here so the payload parse
+# below can run it in the same interpreter. One regular-expression scan over
+# a command (backslash-newlines joined), so its cost is linear. Each piece is
+# one line, a tag and its text, newlines in quoted text flattened to spaces:
+#   W  whitespace          C  a comment (`#` at the start of a word)
+#   R  a redirection       O  an operator (a newline is printed as `;`)
+#   Q  quoted text, quotes and escapes removed
+#   L  unquoted literal text
+# The same pattern is written for python3 and for jq; the guard matrix checks
+# that the two agree. jq's scan is superlinear in the number of pieces, so
+# past TOK_JQ_MAX characters it is not trusted to finish within the hook
+# timeout: the parse leaves such a command untokenised, and the push rules
+# then need python3 for it.
+read -r -d '' TOK_PY <<'PY' || true
+import re
+_TOK = re.compile(
+    r"(?P<W>[ \t]+)|(?P<C>(?<![^ \t\n;&|()`])#[^\n]*)|(?P<R>&>>?|[0-9]*[<>]+[&|]?)"
+    r"|(?P<O>&&|\|\||\|&|;;|[;&|()`\n])|(?P<S>'[^']*'?)|(?P<D>\"(?:[^\"\\]|\\[\s\S])*\"?)"
+    r"|(?P<B>\\[\s\S]?)|(?P<L>[^ \t\n;&|()`<>'\"\\]+)|(?P<A>[\s\S])")
+_DQ = re.compile(r'(?:[^"\\]|\\[\s\S])*')
+def tok(s):
+    out = []
+    for m in _TOK.finditer(s.replace("\\\n", " ")):
+        k, v = m.lastgroup, m.group()
+        if k == "S":
+            v = v[1:]
+            k, v = "Q", v[:-1] if v.endswith("'") else v
+        elif k == "D":
+            k, v = "Q", re.sub(r'\\([\\"$`])', r"\1", _DQ.match(v, 1).group())
+        elif k == "B":
+            k, v = "Q", v[1:]
+        elif k == "O":
+            v = ";" if v == "\n" else v
+        elif k == "A":
+            k = "L"
+        out.append((k + v).replace("\n", " "))
+    return out
+PY
+read -r -d '' TOK_JQ <<'JQ' || true
+gsub("\\\\\n"; " ")
+| [ match("(?<W>[ \\t]+)|(?<C>(?<![^ \\t\\n;&|()`])#[^\\n]*)|(?<R>&>>?|[0-9]*[<>]+[&|]?)|(?<O>&&|\\|\\||\\|&|;;|[;&|()`\\n])|(?<S>'[^']*'?)|(?<D>\"(?:[^\"\\\\]|\\\\[\\s\\S])*\"?)|(?<B>\\\\[\\s\\S]?)|(?<L>[^ \\t\\n;&|()`<>'\"\\\\]+)|(?<A>[\\s\\S])"; "g")
+    | .captures | map(select(.string != null)) | .[0] ]
+| .[]
+| .name as $k | .string as $v
+| if $k == "S" then "Q" + ($v[1:] | if endswith("'") then .[:-1] else . end)
+  elif $k == "D" then "Q" + ($v[1:] | capture("^(?<c>(?:[^\"\\\\]|\\\\[\\s\\S])*)").c
+                            | gsub("\\\\(?<x>[\\\\\"$`])"; .x))
+  elif $k == "B" then "Q" + $v[1:]
+  elif $k == "O" then "O" + (if $v == "\n" then ";" else $v end)
+  elif $k == "A" then "L" + $v
+  else $k + $v end
+| gsub("\n"; " ")
+JQ
+TOK_JQ_MAX=32768
+
+# Extract .cwd (first line, newlines flattened), the command's tokens (a count
+# line, then that many piece lines; -1 when not tokenised) and
+# .tool_input.command (the rest), using jq if present, else python3. Only a
+# command that names push or git, once quotes are removed, is tokenised here.
+# The cwd is the Bash tool's working directory, which a bare `git push`
+# pushes from; the hook process's own $PWD is the fallback when the payload
+# carries none.
 # A parse failure must be distinguishable from an empty command: the former
 # blocks, the latter is allowed. Trusting the output alone conflates them.
 if command -v jq >/dev/null 2>&1; then
-  if ! out=$(printf '%s' "$payload" | jq -r \
-      '((.cwd // "") | tostring | gsub("\n"; " ")), (.tool_input.command // "")' 2>/dev/null); then
+  if ! out=$(printf '%s' "$payload" | jq -r --argjson max "$TOK_JQ_MAX" "def tok: $TOK_JQ;"'
+      ((.cwd // "") | tostring | gsub("\n"; " ")),
+      ( (.tool_input.command // "") as $raw
+        | ($raw | if type == "string" then . else tojson end) as $c
+        | ( if ($c | length) <= $max and ($c | gsub("[\"'"'"'\\\\]"; "") | test("push|git"))
+            then [ $c | tok ] | length, .[]
+            else -1 end ),
+          $raw )' 2>/dev/null); then
     echo "guard-bash: cannot parse hook payload. Blocking (fail closed)." >&2
     exit 2
   fi
 elif command -v python3 >/dev/null 2>&1; then
   # -I: isolated, so a json.py in the working directory (the repository under
   # work) or a PYTHON* variable cannot stand in for the standard library.
-  if ! out=$(printf '%s' "$payload" | python3 -I -c '
+  if ! out=$(printf '%s' "$payload" | python3 -I -c "$TOK_PY"'
 import json, sys
 d = json.load(sys.stdin)
 print(str(d.get("cwd") or "").replace("\n", " "))
-print((d.get("tool_input") or {}).get("command") or "")' 2>/dev/null); then
+c = (d.get("tool_input") or {}).get("command") or ""
+t = re.sub(r"[\"'"'"'\\]", "", c if isinstance(c, str) else "")
+if isinstance(c, str) and ("push" in t or "git" in t):
+    pieces = tok(c)
+    print(len(pieces))
+    for p in pieces:
+        print(p)
+else:
+    print(-1)
+print(c)' 2>/dev/null); then
     echo "guard-bash: cannot parse hook payload. Blocking (fail closed)." >&2
     exit 2
   fi
@@ -70,14 +143,29 @@ else
   echo "guard-bash: needs jq or python3. Run: sudo apt install jq" >&2
   exit 2
 fi
-# $(...) strips trailing newlines, so an empty command leaves no separator.
-if [[ "$out" == *$'\n'* ]]; then
-  pcwd=${out%%$'\n'*}
-  cmd=${out#*$'\n'}
+# Split the output into lines: cwd, count, pieces, then the command (which
+# may itself span lines). A malformed count is a parse failure.
+mapfile -t lines <<<"$out"
+pcwd=${lines[0]:-}
+ntok=${lines[1]:-}
+if ! [[ "$ntok" =~ ^(-1|[0-9]+)$ ]] || (( ${#lines[@]} < 2 + (ntok > 0 ? ntok : 0) )); then
+  echo "guard-bash: cannot parse hook payload. Blocking (fail closed)." >&2
+  exit 2
+fi
+PRE_PIECES=()
+if (( ntok >= 0 )); then
+  PRE_PIECES=( "${lines[@]:2:ntok}" )
+  rest=$(( 2 + ntok ))
 else
-  pcwd=$out
+  rest=2
+fi
+if (( ${#lines[@]} > rest )); then
+  printf -v cmd '%s\n' "${lines[@]:rest}"
+  cmd=${cmd%$'\n'}
+else
   cmd=""
 fi
+unset lines out
 [[ "$pcwd" == /* ]] || pcwd="$PWD"
 
 [[ -z "$cmd" ]] && exit 0
@@ -486,7 +574,6 @@ naive_words() {
   read -ra raw <<<"$1"
   TK=()
   for a in "${raw[@]}"; do
-    [[ "$a" == '#'* ]] && break               # a comment runs to the end
     a=${a//[\"\'\\]/}
     if (( drop )); then drop=0; continue; fi
     if [[ "$a" == *[\<\>]* ]]; then
@@ -535,100 +622,68 @@ naive_pass() {
   done
 }
 
-# The quote-aware tokeniser. One regular-expression scan over the command
-# (backslash-newlines joined), so its cost is linear: a shell loop that
-# re-sliced the rest of the command per piece was quadratic, and needed a
-# length cap that refused long PR bodies. Each piece is printed on its own
-# line as a tag and its text, newlines in quoted text flattened to spaces:
-#   W  whitespace          C  a comment (`#` at the start of a word)
-#   R  a redirection       O  an operator (a newline is printed as `;`)
-#   Q  quoted text, quotes and escapes removed
-#   L  unquoted literal text
-# python3 is preferred; jq, the fallback when it is absent, is superlinear in
-# the number of pieces, so past TOK_JQ_MAX it is not trusted to finish within
-# the hook timeout and a command naming push is refused instead.
-read -r -d '' TOK_PY <<'PY' || true
-import re, sys
-s = sys.stdin.read().replace("\\\n", " ")
-P = re.compile(
-    r"(?P<W>[ \t]+)|(?P<C>(?<![^ \t\n;&|()`])#[^\n]*)|(?P<R>&>>?|[0-9]*[<>]+[&|]?)"
-    r"|(?P<O>&&|\|\||\|&|;;|[;&|()`\n])|(?P<S>'[^']*'?)|(?P<D>\"(?:[^\"\\]|\\[\s\S])*\"?)"
-    r"|(?P<B>\\[\s\S]?)|(?P<L>[^ \t\n;&|()`<>'\"\\]+)|(?P<A>[\s\S])")
-DQ = re.compile(r'(?:[^"\\]|\\[\s\S])*')
-out = []
-for m in P.finditer(s):
-    k, v = m.lastgroup, m.group()
-    if k == "S":
-        v = v[1:]
-        k, v = "Q", v[:-1] if v.endswith("'") else v
-    elif k == "D":
-        k, v = "Q", re.sub(r'\\([\\"$`])', r"\1", DQ.match(v, 1).group())
-    elif k == "B":
-        k, v = "Q", v[1:]
-    elif k == "O":
-        v = ";" if v == "\n" else v
-    elif k == "A":
-        k = "L"
-    out.append((k + v).replace("\n", " "))
-sys.stdout.write("\n".join(out) + ("\n" if out else ""))
-PY
-read -r -d '' TOK_JQ <<'JQ' || true
-gsub("\\\\\n"; " ")
-| [ match("(?<W>[ \\t]+)|(?<C>(?<![^ \\t\\n;&|()`])#[^\\n]*)|(?<R>&>>?|[0-9]*[<>]+[&|]?)|(?<O>&&|\\|\\||\\|&|;;|[;&|()`\\n])|(?<S>'[^']*'?)|(?<D>\"(?:[^\"\\\\]|\\\\[\\s\\S])*\"?)|(?<B>\\\\[\\s\\S]?)|(?<L>[^ \\t\\n;&|()`<>'\"\\\\]+)|(?<A>[\\s\\S])"; "g")
-    | .captures | map(select(.string != null)) | .[0] ]
-| .[]
-| .name as $k | .string as $v
-| if $k == "S" then "Q" + ($v[1:] | if endswith("'") then .[:-1] else . end)
-  elif $k == "D" then "Q" + ($v[1:] | capture("^(?<c>(?:[^\"\\\\]|\\\\[\\s\\S])*)").c
-                            | gsub("\\\\(?<x>[\\\\\"$`])"; .x))
-  elif $k == "B" then "Q" + $v[1:]
-  elif $k == "O" then "O" + (if $v == "\n" then ";" else $v end)
-  elif $k == "A" then "L" + $v
-  else $k + $v end
-| gsub("\n"; " ")
-JQ
-TOK_JQ_MAX=32768
-
-# qtokens <command>: the command as shell words and operators, quote-aware.
-# Sets QT to items "W<word>" and "O<operator>". A redirection's target (the
-# next word) is dropped with it; a comment is dropped. A tokeniser that fails
-# refuses the push (fail closed).
-qtokens() {
-  local out line v w="" have=0 skip=0
-  QT=()
+# get_pieces <command> <pre>: the command's tokeniser pieces, into PIECES.
+# With <pre> 1 the payload parse already tokenised it (PRE_PIECES); otherwise,
+# a `bash -c` code string or a command the parse left untokenised, the
+# tokeniser runs here, python3 preferred. A tokeniser that fails, or jq past
+# its limit with no python3, refuses the push (fail closed).
+get_pieces() {
+  local out
+  if (( $2 )); then
+    PIECES=( "${PRE_PIECES[@]}" )
+    return 0
+  fi
   if command -v python3 >/dev/null 2>&1; then
-    out=$(printf '%s' "$1" | python3 -I -c "$TOK_PY" 2>/dev/null) \
+    out=$(printf '%s' "$1" | python3 -I -c "$TOK_PY"'
+import sys
+sys.stdout.write("".join(p + "\n" for p in tok(sys.stdin.read())))' 2>/dev/null) \
       || block_push "the quote-aware tokeniser failed on a command that names push (fail closed)"
   elif (( ${#1} <= TOK_JQ_MAX )); then
-    out=$(printf '%s' "$1" | jq -Rsr "$TOK_JQ" 2>/dev/null) \
+    out=$(printf '%s' "$1" | jq -Rsr "def tok: $TOK_JQ; tok" 2>/dev/null) \
       || block_push "the quote-aware tokeniser failed on a command that names push (fail closed)"
   else
     block_push "a command over $TOK_JQ_MAX characters that names push needs python3 to be judged (fail closed)"
   fi
-  q_end() {
-    if (( have )); then
-      if (( skip )); then skip=0; else QT+=( "W$w" ); fi
-    fi
-    w=""; have=0
-  }
-  while IFS= read -r line; do
-    v=${line:1}
-    case "${line:0:1}" in
-      W) q_end ;;
-      C) ;;
-      R) q_end; skip=1 ;;
-      O) q_end; skip=0; QT+=( "O$v" ) ;;
-      Q|L) w+=$v; have=1 ;;
-    esac
-  done <<<"$out"
-  q_end
+  PIECES=()
+  [[ -n "$out" ]] && mapfile -t PIECES <<<"$out"
 }
 
-# quote_pass <command>: judge each simple command between unquoted operators.
+# assemble: from PIECES, set QT to the shell words and operators ("W<word>",
+# "O<operator>"), a redirection's target and any comment dropped; and set
+# NAIVE_TEXT to the command with its comments removed and its quotes gone,
+# which is what the naive pass splits. Taking the naive pass's text from the
+# pieces is what lets it skip a comment (`echo done #; git push origin main`
+# runs no push) while still seeing inside a quoted substitution, whose text
+# stays in the Q piece.
+assemble() {
+  local p v w="" have=0 skip=0
+  QT=()
+  NAIVE_TEXT=""
+  for p in "${PIECES[@]}"; do
+    v=${p:1}
+    case "${p:0:1}" in
+      W) NAIVE_TEXT+=" "
+         if (( have )); then
+           if (( skip )); then skip=0; else QT+=( "W$w" ); fi
+         fi
+         w=""; have=0 ;;
+      C) ;;
+      R|O)
+         NAIVE_TEXT+=" $v "
+         if (( have )); then
+           if (( skip )); then skip=0; else QT+=( "W$w" ); fi
+         fi
+         w=""; have=0
+         if [[ "${p:0:1}" == R ]]; then skip=1; else skip=0; QT+=( "O$v" ); fi ;;
+      Q|L) NAIVE_TEXT+=$v; w+=$v; have=1 ;;
+    esac
+  done
+  if (( have && !skip )); then QT+=( "W$w" ); fi
+}
+
+# quote_pass: judge each simple command in QT between unquoted operators.
 quote_pass() {
-  local -a items=(); local it op k cont
-  qtokens "$1"
-  items=( "${QT[@]}" "O" )
+  local -a items=( "${QT[@]}" "O" ); local it op k cont
   TK=()
   for (( k=0; k<${#items[@]}; k++ )); do
     it=${items[k]}
@@ -646,25 +701,41 @@ quote_pass() {
   done
 }
 
-# scan_command <command>: both passes, each from the same starting directory;
-# the directory and the walk's state are put back after (a `bash -c` code
-# string runs in a child shell, so nothing in it moves this one).
-# A command with nothing for these rules to judge is skipped: one that, once
-# quotes are gone, names neither push nor git beside a shell expansion (which
-# could build the word push, as `git pu${x}sh` does).
+# What makes a command worth judging, once quotes are removed: it names push,
+# or it runs git with a subcommand the shell builds (an expansion in the first
+# word after git's options and their values), which could be push
+# (`git pu${x}sh`, `git -C dir $sub`). Anything else has nothing for these
+# rules to judge, and costs no tokeniser run.
+GIT_BUILT='(^|[^[:alnum:]_])git([[:space:]]+-[^[:space:]]*([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+[^[:space:]]*[$`*?[{]'
+
+# scan_command <command> <pre>: both passes, each from the same starting
+# directory; the directory and the walk's state are put back after (a `bash
+# -c` code string runs in a child shell, so nothing in it moves this one).
+# <pre> 1 means the payload parse tokenised this command already.
 scan_command() {
-  local start=$vcwd s0=$sub l0=$last_cd t=${1//[\"\'\\]/}
-  [[ "$t" == *push* || ( "$t" == *git* && "$t" == *[\$\`\*\?\[\{]* ) ]] || return 0
+  local start=$vcwd s0=$sub l0=$last_cd t nt
+  local -a qt=()
+  # The quote-stripping substitution is slow on a long command, so it runs
+  # only when the plain text does not already name push.
+  if [[ "$1" != *push* ]]; then
+    t=${1//[\"\'\\]/}
+    [[ "$t" == *push* || "$t" =~ $GIT_BUILT ]] || return 0
+  fi
+  get_pieces "$1" "${2:-0}"
+  assemble
+  qt=( "${QT[@]}" ); nt=$NAIVE_TEXT
   sub=0; last_cd=0
-  naive_pass "$1"
+  naive_pass "$nt"
   vcwd=$start; sub=0; last_cd=0
-  quote_pass "$1"
+  QT=( "${qt[@]}" )
+  quote_pass
   vcwd=$start; sub=$s0; last_cd=$l0
 }
 
-# A backslash-newline continues the line, as the shell would join it.
+# A backslash-newline continues the line, as the shell would join it. The
+# top-level command uses the parse's pieces when it produced them.
 pcmd=${cmd//$'\\\n'/ }
-scan_command "$pcmd"
+if (( ntok >= 0 )); then scan_command "$pcmd" 1; else scan_command "$pcmd" 0; fi
 
 # Backstop over the whole string for spellings the segment parser cannot
 # reach (an interpreter's inline code, a here-document): a bare --force or a

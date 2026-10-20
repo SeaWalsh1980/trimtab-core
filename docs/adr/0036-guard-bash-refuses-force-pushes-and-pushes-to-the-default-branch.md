@@ -45,20 +45,24 @@ configuration. Each was confirmed against git 2.47 and is now covered below.
 
 ## Decision
 
-A command that names `push`, or names `git` beside a shell expansion that
-could build the word (`git pu${x}sh`), once quotes are removed, is judged
-twice, and either pass refuses on its own:
+A command that, once quotes are removed, names `push`, or runs git with an
+expansion in its subcommand position that could build the word
+(`git pu${x}sh`, `git -C dir $sub`), is judged twice, and either pass
+refuses on its own. Both start from one tokenisation: a regular-expression
+scan that reads quotes as the shell does, run inside the payload parse (the
+same jq or python3 process, so a push costs no second interpreter start; a
+`bash -c` code string is tokenised in a process of its own). The pattern is
+written once for python3 and once for jq, and the guard matrix reads both out
+of the hook and checks they agree. A failing tokeniser refuses the push.
 
-- a **naive pass** splits on `; & | ( )` and backquotes without respecting
-  quotes, so it sees inside a quoted substitution (`echo "$(git push …)"`)
+- a **naive pass** splits the command, its comments removed and its quotes
+  dropped, on `; & | ( )` and backquotes without regard to where the quotes
+  were, so it sees inside a quoted substitution (`echo "$(git push …)"`)
   and a here-document's lines;
-- a **quote-aware pass** tokenises as the shell does: a quoted `>` is an
-  ordinary character rather than a redirection, a quoted `;` does not end
-  the command, a quoted string that spans spaces is one word, and a `#` at
-  the start of a word begins a comment. The tokeniser is one
-  regular-expression scan in python3 (the same pattern in jq when python3
-  is absent), so its cost is linear in the command; the shell assembles
-  words from its pieces. A failing tokeniser refuses the push.
+- a **quote-aware pass** splits on the operators the shell sees: a quoted
+  `>` is an ordinary character rather than a redirection, a quoted `;` does
+  not end the command, a quoted string that spans spaces is one word, and a
+  `#` at the start of a word begins a comment.
 
 Earlier drafts handled quoting token by token in the naive pass alone, and
 every review round found another quoting edge (glued redirects, a quoted
@@ -67,7 +71,8 @@ quote-aware tokeniser written in bash was tried next and rejected: re-slicing
 the rest of the command per piece made it quadratic (0.7 s at 8 KB, 2.2 s at
 16 KB), and the length cap it needed refused ordinary long PR bodies that
 mention push. jq's scan is superlinear too (0.3 s at 16 KB, 0.9 s at 32 KB,
-5.9 s at 100 KB), so on the jq fallback a command over 32768 characters that
+5.9 s at 100 KB), so the jq parse tokenises only up to 32768 characters;
+past that python3 tokenises the command, and with no python3 a command that
 names push is refused rather than risk the hook timeout.
 
 Within each pass guard-bash parses each simple command: the command
@@ -169,15 +174,20 @@ allowed: it is the sanctioned rewrite of a pull-request branch.
   CI step goes red on that one case, by design.
 - Two refusals of the old regex go away: a later command's `-f` after a push
   (`&& npm ci -f`, a next-line `sed -f`) is no longer read as the push's.
-- Measured on the workstation, 50 runs each: about 5 ms per call before; after,
-  about 7 ms for an ordinary command and 26 ms for one that names push (the
-  second python3 start). The worst case, 100 KB of short quoted words naming
-  push, is about 2 s against the 10 s hook timeout; guard-security already
-  refuses any command over 100000 characters.
+- Measured on the workstation, 50 runs each: about 6 ms per call before; after,
+  about 8 ms for an ordinary command and 10 ms for one that names push. A
+  100 KB command takes about 1 s, whether or not it names push, against the
+  10 s hook timeout; guard-security already refuses any command over 100000
+  characters.
 - On a machine with jq but no python3, a command over 32768 characters that
   names push is refused.
-- `git` with a subcommand the shell builds (`git $(echo push)`, `git $sub`)
-  is refused whatever the subcommand turns out to be.
+- `git` with a subcommand the shell builds is refused whatever the subcommand
+  turns out to be: `git $(echo push)` and `git $sub origin main`, but also a
+  read-only `git "$@"` or `git $cmd status` in a script-style command. This
+  false positive is accepted: the guard cannot tell `$cmd` from push, and a
+  plain subcommand spelling always passes.
+- A comment hides what follows it, as in the shell: `echo done #; git push
+  origin main` runs no push and passes.
 - A here-document or commit message containing a line that begins
   `git push origin main` blocks, as quoted `rm -rf` already did. It is the
   same known limitation (matching does not tell code from data); write such

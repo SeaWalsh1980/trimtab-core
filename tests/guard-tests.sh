@@ -294,6 +294,62 @@ pb 2 "$GP/onfeat" "git push origin 'x;' main"
 pb 2 "$GP/onfeat" 'git push origin Main'
 pb 2 "$GP/onfeat" 'git push origin feat:MASTER'
 
+# The quote-aware tokeniser is one pattern written twice, for python3 and for
+# jq. Both are read out of the hook as it ships and must agree piece for
+# piece, or a jq-only machine would judge pushes with a different tokeniser.
+TOK_JQ_SRC=$(python3 -c '
+import re, sys
+s = open(sys.argv[1]).read()
+m = re.search(r"<<\x27JQ\x27 \|\| true\n(.*?)\nJQ\n", s, re.S)
+sys.stdout.write(m.group(1) if m else "")
+' "$HOOKS/guard-bash.sh")
+TOK_PY_SRC=$(python3 -c '
+import re, sys
+s = open(sys.argv[1]).read()
+m = re.search(r"<<\x27PY\x27 \|\| true\n(.*?)\nPY\n", s, re.S)
+sys.stdout.write(m.group(1) if m else "")
+' "$HOOKS/guard-bash.sh")
+tok_cases=(
+  'git push origin main'
+  'git push "/tmp/r >" main'
+  "git push origin '>' main"
+  'git push origin \> main'
+  'git push origin feat 2>&1 | tail -3'
+  'cd x &>/dev/null && git push'
+  'git push origin feat  # not main'
+  "echo 'x'#y a#b \$# z"
+  'echo "$(git push origin main)"'
+  'git commit -m "a \"q\" \$x \\ b" && ls'
+  $'cat <<EOF\ngit push origin main\nEOF'
+  "unterminated 'quote here"
+  'unterminated "dq \" here'
+  'trailing\'
+  'a||b|&c;;d&e'
+  'git -C ~ push 3>x <y >>z >|w'
+  $'line1\\\nline2'
+  'héllo wörld "ü"'
+  "echo \`git push\` \$'x' {a,b} *.md"
+)
+if [[ -z "$TOK_PY_SRC" || -z "$TOK_JQ_SRC" ]]; then
+  printf 'FAIL  %-14s  %s\n' tokeniser "could not read both tokenisers out of the hook"
+  fails=$((fails+1))
+elif ! command -v jq >/dev/null 2>&1; then
+  printf 'SKIP  %-14s  %s\n' tokeniser "jq absent: python3/jq parity not checked"
+else
+  tok_diff=0
+  for c in "${tok_cases[@]}"; do
+    a=$(printf '%s' "$c" | python3 -I -c "$TOK_PY_SRC"$'\nimport sys\nsys.stdout.write("".join(p + "\\n" for p in tok(sys.stdin.read())))')
+    b=$(printf '%s' "$c" | jq -Rsr "def tok: $TOK_JQ_SRC; tok")
+    [[ "$a" == "$b" && -n "$a" ]] || { tok_diff=1; printf '      tokenisers differ on: %q\n' "$c"; }
+  done
+  if (( tok_diff )); then
+    printf 'FAIL  %-14s  %s\n' tokeniser "python3 and jq tokenisers agree on ${#tok_cases[@]} commands"
+    fails=$((fails+1))
+  else
+    printf 'PASS  %-14s  %s\n' tokeniser "python3 and jq tokenisers agree on ${#tok_cases[@]} commands"
+  fi
+fi
+
 # The payload's cwd, not the hook process's, is where a bare push runs.
 t guard-bash.sh 2 "push: payload cwd on main, process cwd on feat" \
   "$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","cwd":sys.argv[1],"tool_input":{"command":"git push"}}))' "$GP/onmain")" "$GP/onfeat"
@@ -359,9 +415,17 @@ t guard-bash.sh 2 "push: 40 KB command that pushes main" \
 pb 2 "$GP/onfeat" 'git $(echo push) origin main'
 pb 2 "$GP/onfeat" 'sub=push; git $sub origin main'
 pb 2 "$GP/onfeat" 'git pu${x}sh origin main'
-# A comment is not an operand.
+# A comment is not an operand, and a push behind one never runs.
 pb 0 "$GP/onfeat" 'git push origin feat  # not main'
 pb 2 "$GP/onfeat" 'git push origin main  # feat'
+pb 0 "$GP/onfeat" 'echo done #; git push origin main'
+pb 2 "$GP/onfeat" $'echo done # comment\ngit push origin main'
+# A quoted multi-line message is data, but a quoted substitution still runs.
+pb 0 "$GP/onfeat" $'git commit -m "line one\ngit push origin main"'
+pb 2 "$GP/onfeat" 'echo "a #$(git push origin main)"'
+# git with an expansion that is not its subcommand is not refused.
+pb 0 "$GP/onfeat" 'git add src/*.py'
+pb 0 "$GP/onfeat" 'git -C "$PWD" status'
 # A cd inside bash -c does not move this shell, before or after a pipe.
 pb 0 "$GP/onfeat" "bash -c 'cd $GP/onmain' | tee push.log; git push"
 pb 2 "$GP/onmain" "bash -c 'cd $GP/onfeat'; git push"
