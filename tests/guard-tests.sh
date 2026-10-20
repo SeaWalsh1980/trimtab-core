@@ -192,6 +192,53 @@ pb 2 "$GP/norepo" 'git push'
 pb 2 "$GP/onfeat" 'cd - && git push'
 pb 2 "$GP/onfeat" 'git --git-dir=elsewhere push'
 
+# git accepts any unique prefix of a long option, and git itself confirmed
+# each of these pushes main (--mirr also forces and prunes).
+pb 2 "$GP/onfeat" 'git push --mirr origin'
+pb 2 "$GP/onfeat" 'git push --al origin'
+pb 2 "$GP/onfeat" 'git push --bran origin'
+pb 2 "$GP/onfeat" 'git push --pru origin feat'
+pb 2 "$GP/onfeat" 'git push --forc origin feat'
+pb 2 "$GP/onfeat" 'git push --del origin main'
+
+# A refspec the shell would still expand is not the text the guard sees.
+pb 2 "$GP/onfeat" 'B=main; git push origin $B'
+pb 2 "$GP/onfeat" 'git push origin "$(echo main)"'
+pb 2 "$GP/onfeat" 'git push origin $(git branch --show-current)'
+pb 2 "$GP/onfeat" 'git push origin ma`true`in'
+pb 2 "$GP/onfeat" 'git push origin {main,x}'
+pb 2 "$GP/onfeat" 'git push origin "refs/heads/*"'
+pb 2 "$GP/onfeat" 'echo main | xargs git push origin'
+pb 2 "$GP/onfeat" $'git push origin \\\nmain'
+
+# git guesses a destination's namespace: heads/main and refs/main are main.
+pb 2 "$GP/onfeat" 'git push origin feat:heads/main'
+pb 2 "$GP/onfeat" 'git push origin feat:refs/main'
+
+# Wrappers whose options take values; the command word is still git.
+pb 2 "$GP/onfeat" 'nice -n 5 git push origin main'
+pb 2 "$GP/onfeat" 'timeout -s KILL 5 git push origin main'
+pb 2 "$GP/onfeat" 'sudo -u me git push origin main'
+pb 2 "$GP/onfeat" 'stdbuf -o L git push origin main'
+pb 2 "$GP/onfeat" "env -C $GP/onmain git push"
+
+# The first operand is the repository even beside --repo.
+pb 2 "$GP/onmain" 'git push --repo=nosuch origin'
+pb 2 "$GP/onmain" 'git push --repo nosuch origin'
+
+# Inline configuration that can redirect or rename a push.
+pb 2 "$GP/onfeat" 'git -c push.default=matching push'
+pb 2 "$GP/onfeat" 'git -c remote.origin.push=refs/heads/main:refs/heads/main push'
+pb 2 "$GP/onfeat" 'git -c alias.p=push p origin main'
+pb 2 "$GP/onfeat" 'git --attr-source x push origin main'
+
+# A cd that does not move this shell leaves the directory unknown.
+pb 2 "$GP/onmain" "(cd $GP/onfeat); git push"
+pb 2 "$GP/onmain" "cd $GP/onfeat | true; git push"
+pb 2 "$GP/onmain" "cd $GP/onfeat || true; git push"
+pb 2 "$GP/onmain" "pushd $GP/onfeat; popd; git push"
+pb 2 "$GP/onmain" "bash -c 'cd $GP/onfeat'; git push"
+
 # The payload's cwd, not the hook process's, is where a bare push runs.
 t guard-bash.sh 2 "push: payload cwd on main, process cwd on feat" \
   "$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","cwd":sys.argv[1],"tool_input":{"command":"git push"}}))' "$GP/onmain")" "$GP/onfeat"
@@ -214,6 +261,18 @@ pb 0 "$GP/onfeat" 'git commit -m "fix push logic" && cp -f a b'
 pb 0 "$GP/onfeat" 'git pull origin main'
 pb 0 "$GP/onfeat" 'git fetch origin main'
 pb 0 "$GP/norepo" 'echo git push'
+pb 0 "$GP/onfeat" "cd $GP/onfeat && git push"
+pb 0 "$GP/onmain" "git -C $GP/onfeat push"
+pb 0 "$GP/onfeat" 'git push --dry-run origin feat'
+pb 0 "$GP/onfeat" 'git push --follow-tags origin feat'
+pb 0 "$GP/onfeat" 'git push --tags origin'
+pb 0 "$GP/onfeat" 'git push -o ci.skip origin feat'
+pb 0 "$GP/onfeat" 'git push --force-with-lease -u origin HEAD'
+pb 0 "$GP/onfeat" 'git push origin feat 2>&1 | tail -5'
+# A later command's -f is not the push's (the old regex blocked these).
+pb 0 "$GP/onfeat" 'git push origin feat && rm -f /tmp/x'
+pb 0 "$GP/onfeat" $'git push origin feat\nsed -f script.sed notes.txt'
+pb 0 "$GP/onfeat" 'git commit -m "docs: never git push --force"'
 
 # --- word-boundary regressions ------------------------------------------
 # Every keyword below must begin a command word. Unanchored, `rm` matched

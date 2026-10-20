@@ -123,15 +123,30 @@ EOF
 
 # The default branch is taken as main or master. Reading origin/HEAD would
 # need git itself, and everything after the parse above is a bash builtin.
+# git also guesses a destination's namespace (`heads/main`, `refs/main` both
+# land on refs/heads/main), so those prefixes are peeled off first.
 is_default_branch() {
-  local n="${1#refs/heads/}"
+  local n="$1" p
+  while :; do
+    p=$n
+    n=${n#refs/}
+    n=${n#heads/}
+    [[ "$n" == "$p" ]] && break
+  done
   [[ "$n" == main || "$n" == master ]]
 }
 
 # Resolve directory $2 against $1 with builtins only (cd and pwd in a
-# subshell). Prints nothing and fails when it does not exist.
+# subshell). A leading ~ is the shell's, so it is expanded here too. Prints
+# nothing and fails when the directory does not exist.
 resolve_dir() {
   local d="$2"
+  # shellcheck disable=SC2088  # the literal tilde is what is being matched
+  case "$d" in
+    '~')   d="${HOME:-}" ;;
+    '~/'*) d="${HOME:-}/${d#\~/}" ;;
+  esac
+  [[ -n "$d" ]] || return 1
   [[ "$d" == /* ]] || d="$1/$d"
   (cd -- "$d" 2>/dev/null && pwd -P)
 }
@@ -163,59 +178,112 @@ head_branch() {
   esac
 }
 
-# Directory the next segment runs in: the payload's cwd, moved by `cd`.
-# Empty means unknown (`cd -`, `cd "$X"`), which a bare push then refuses.
-vcwd="$pcwd"
+# Classify one git push long option by name, abbreviations included: git
+# accepts any unique prefix (`--mirr` is --mirror), so a name that is a prefix
+# of a dangerous option is taken as that option. A prefix of two options is
+# an error to git, so refusing it costs nothing. Sets $lo.
+lo=""
+long_opt() {
+  local o="${1%%=*}" k
+  lo=ok
+  case "$o" in
+    force-with-lease|no-force-with-lease|force-if-includes|no-force-if-includes)
+      return 0 ;;
+  esac
+  for k in force mirror all branches prune delete; do
+    [[ "$k" == "$o"* ]] && { lo=$k; return 0; }
+  done
+  if (( ${#o} >= 3 )) && [[ repo == "$o"* ]]; then lo=repo; return 0; fi
+  if (( ${#o} >= 2 )); then
+    for k in push-option receive-pack exec; do
+      [[ "$k" == "$o"* ]] && { lo=arg; return 0; }
+    done
+  fi
+  return 0
+}
 
-# check_push <segment>: tokenise one simple command; when it is a git push,
-# refuse a force spelling or a destination that is the default branch.
+# A ref operand the shell would still expand is not the text the guard sees,
+# so it cannot be judged: a variable, a substitution, a glob or a brace list.
+unjudgeable_ref() {
+  [[ -z "$1" || "$1" == *[\$\`\*\?\[\{]* ]]
+}
+
+# Directory the next segment runs in: the payload's cwd, moved by `cd`.
+# Empty means unknown, which a bare push then refuses.
+vcwd="$pcwd"
+sub=0            # depth of ( … ) subshells the walk is inside
+last_cd=0        # the previous segment was a cd
+
+# check_push <segment> <continued>: tokenise one simple command; when it is a
+# git push, refuse a force spelling or a destination that is the default
+# branch. <continued> is 1 when the segment runs on into a backquoted
+# substitution, so its last operand is not all the guard can see.
 check_push() {
-  local -a tk=(); local i=0 w a dir n
+  local -a tk=(); local i=0 w a dir n v wrapped=0 wrap_cd=0 xa=0 cont="${2:-0}"
   read -ra tk <<<"$1"
   n=${#tk[@]}
   for (( i=0; i<n; i++ )); do tk[i]=${tk[i]//[\"\'\\]/}; done
   i=0
+  last_cd=0
 
-  # Skip assignments and wrappers to reach the command word.
+  # Skip assignments, shell keywords and wrappers to reach the command word.
   while (( i < n )); do
     w=${tk[i]}
     if [[ "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then (( i++ )); continue; fi
     case "$w" in
-      sudo|env|command|builtin|exec|nohup|time|nice|ionice|stdbuf|xargs|eval|\
-      '{'|'!'|then|do|else|if|while|until)
-        (( i++ ))
-        while (( i < n )) && [[ "${tk[i]}" == -* ]]; do (( i++ )); done
-        continue ;;
-      timeout)
-        (( i++ ))
-        while (( i < n )) && [[ "${tk[i]}" == -* ]]; do (( i++ )); done
-        (( i++ ))
-        continue ;;
+      sudo|env|exec|nice|ionice|stdbuf|xargs|timeout|time)
+        wrapped=1
+        [[ "$w" == xargs ]] && xa=1 ;;
+      command|builtin|nohup|eval|'{'|'!'|then|do|else|if|while|until) ;;
+      *) break ;;
     esac
-    break
+    (( i++ ))
+    while (( i < n )) && [[ "${tk[i]}" == -* ]]; do
+      (( wrapped )) && [[ "${tk[i]}" == -C* || "${tk[i]}" == --chdir* ]] && wrap_cd=1
+      (( i++ ))
+    done
   done
+  # Those wrappers' options can take values (`nice -n 5 git`, `sudo -u x
+  # git`, `timeout -s KILL 5 git`), so after one the command word is the first
+  # token named git, wherever it is. A -C or --chdir on the way (`env -C dir`)
+  # moves the directory to one this walk does not follow.
+  if (( wrapped )) && [[ "${tk[i]##*/}" != git ]]; then
+    while (( i < n )) && [[ "${tk[i]##*/}" != git ]]; do
+      [[ "${tk[i]}" == -C* || "${tk[i]}" == --chdir* ]] && wrap_cd=1
+      (( i++ ))
+    done
+  fi
   (( i < n )) || return 0
   w=${tk[i]##*/}
 
   case "$w" in
     cd|pushd)
+      last_cd=1
       (( i++ ))
       while (( i < n )) && [[ "${tk[i]}" == -* && "${tk[i]}" != - ]]; do (( i++ )); done
       if (( i >= n )); then
-        vcwd="${HOME:-}"
-      elif [[ "${tk[i]}" == - || "${tk[i]}" == *'$'* || -z "$vcwd" ]]; then
+        v="${HOME:-}"
+      else
+        v=${tk[i]}
+      fi
+      if (( sub )) || [[ -z "$vcwd" || "$v" == - || "$v" == *'$'* ]]; then
         vcwd=""
       else
-        vcwd=$(resolve_dir "$vcwd" "${tk[i]}") || vcwd=""
+        vcwd=$(resolve_dir "$vcwd" "$v") || vcwd=""
       fi
       return 0 ;;
+    popd)
+      vcwd=""; return 0 ;;
     bash|sh|dash|zsh|ksh)
       # `bash -c 'git push …'`: the quotes are already stripped, so the code
-      # is the rest of the segment.
+      # is the rest of the segment. It runs in a child shell, so a `cd` in it
+      # does not move this one.
       (( i++ ))
       while (( i < n )) && [[ "${tk[i]}" == -* ]]; do
         if [[ "${tk[i]}" =~ ^-[A-Za-z]*c[A-Za-z]*$ ]]; then
-          check_push "${tk[*]:i+1}"
+          v=$vcwd
+          check_push "${tk[*]:i+1}" "$cont"
+          vcwd=$v
           return 0
         fi
         (( i++ ))
@@ -225,8 +293,11 @@ check_push() {
     *) return 0 ;;
   esac
 
-  # git's global options, before the subcommand.
+  # git's global options, before the subcommand. Inline configuration that
+  # can redirect or rename a push is refused outright: it is typed in the
+  # command, so it is the model's to choose.
   dir="$vcwd"
+  (( wrap_cd )) && dir=""
   (( i++ ))
   while (( i < n )); do
     a=${tk[i]}
@@ -240,7 +311,22 @@ check_push() {
         dir=""; (( i+=2 )); continue ;;
       --git-dir=*|--work-tree=*)
         dir="" ;;
-      -c|--namespace|--exec-path|--config-env|--super-prefix)
+      -c|--config-env)
+        v=${tk[i+1]:-}
+        v=${v,,}
+        case "$v" in
+          push.*|remote.*|alias.*|"")
+            block_push "git -c ${v%%=*} (inline configuration that can redirect a push)" ;;
+        esac
+        (( i+=2 )); continue ;;
+      --config-env=*)
+        v=${a#--config-env=}
+        v=${v,,}
+        case "$v" in
+          push.*|remote.*|alias.*|"")
+            block_push "git --config-env ${v%%=*} (inline configuration that can redirect a push)" ;;
+        esac ;;
+      --namespace|--exec-path|--super-prefix|--attr-source)
         (( i+=2 )); continue ;;
       -*) ;;
       *) break ;;
@@ -249,8 +335,11 @@ check_push() {
   done
   [[ "${tk[i]:-}" == push ]] || return 0
   (( i++ ))
+  (( cont )) && block_push "git push with a command substitution in its operands (fail closed)"
+  (( xa ))   && block_push "git push under xargs (its operands arrive at run time; fail closed)"
 
-  # git push's own options and operands.
+  # git push's own options and operands. The first operand is always the
+  # repository, even beside --repo (git lets the operand override it).
   local force=0 del=0 every=0 mirror=0 prune=0 seen_remote=0 r src dst cur
   local -a refs=()
   while (( i < n )); do
@@ -263,21 +352,22 @@ check_push() {
           (( i++ ))
         done
         break ;;
-      --force)                        force=1 ;;
-      --force-with-lease|--force-with-lease=*|--force-if-includes|--no-force-if-includes) ;;
-      --mirror)                       mirror=1 ;;
-      --all|--branches)               every=1 ;;
-      --prune)                        prune=1 ;;
-      --delete)                       del=1 ;;
-      --repo=*)                       seen_remote=1 ;;
-      --repo|-o|--push-option|--receive-pack|--exec)
-        [[ "$a" == --repo ]] && seen_remote=1
-        (( i+=2 )); continue ;;
-      --*) ;;
+      --*)
+        long_opt "${a#--}"
+        case "$lo" in
+          force)           force=1 ;;
+          mirror)          mirror=1 ;;
+          all|branches)    every=1 ;;
+          prune)           prune=1 ;;
+          delete)          del=1 ;;
+          repo|arg)        [[ "$a" == *=* ]] || (( i++ )) ;;
+        esac ;;
+      -o)
+        (( i++ )) ;;
       -*)
         [[ "$a" == *f* ]] && force=1
         [[ "$a" == *d* ]] && del=1
-        if [[ "$a" == *o ]]; then (( i+=2 )); continue; fi ;;
+        [[ "$a" == *o ]] && (( i++ )) ;;
       *)
         if (( seen_remote )); then refs+=( "$a" ); else seen_remote=1; fi ;;
     esac
@@ -290,6 +380,8 @@ check_push() {
   (( every ))  && block_push "git push --all / --branches (pushes the default branch)"
 
   for r in "${refs[@]}"; do
+    unjudgeable_ref "$r" \
+      && block_push "git push with a refspec the shell would expand ($r; fail closed)"
     [[ "$r" == +* ]] && block_push "git push +refspec (a forced update: $r)"
     if (( del )); then
       dst=$r
@@ -318,18 +410,44 @@ check_push() {
   return 0
 }
 
+# A backslash-newline continues the line, as the shell would join it.
+pcmd=${cmd//$'\\\n'/ }
+
 # Segments: the command split on the shell's separators, naively — quotes are
 # not respected, so a separator inside a quoted string starts a new segment.
-# That can only add segments, and so only ever refuse more.
-while IFS= read -r seg; do
-  check_push "$seg"
-done <<<"${cmd//[;&|()\`]/$'\n'}"
+# That can only add segments, and so only ever refuse more. Each separator is
+# kept at the start of the segment it opens, so the walk can tell what a `cd`
+# was joined to: `&&` and `;` move the shell; a pipe, `||`, a background `&`
+# or a subshell leave its directory unknown.
+segs=()
+s=$pcmd
+for x in ';' '&' '|' '(' ')' '`'; do s=${s//"$x"/$'\n'"$x"}; done
+while IFS= read -r line; do segs+=( "$line" ); done <<<"$s"
+for (( k=0; k<${#segs[@]}; k++ )); do
+  line=${segs[k]}
+  lead=${line:0:1}
+  case "$lead" in
+    '(') (( sub++ )) ;;
+    ')') (( sub > 0 )) && (( sub-- )) ;;
+    '|') (( last_cd )) && vcwd="" ;;
+    '&')
+      prev=""
+      (( k > 0 )) && prev=${segs[k-1]}
+      (( last_cd )) && [[ "$line" != '&' && "$prev" != '&' ]] && vcwd="" ;;
+  esac
+  [[ "$lead" == [\;\&\|\(\)\`] ]] && line=${line:1}
+  next=${segs[k+1]:-}
+  cont=0
+  [[ "${next:0:1}" == '`' ]] && cont=1
+  check_push "$line" "$cont"
+done
 
 # Backstop over the whole string for spellings the segment parser cannot
 # reach (an interpreter's inline code, a here-document): a bare --force or a
 # short-flag cluster with f, after `git push` (or `git -C x push`) and before
-# the next separator, so a later command's -f is not read as the push's.
-[[ "$cmd" =~ git[[:space:]]+((-C|-c)[[:space:]]*[^[:space:]]+[[:space:]]+)*push[[:space:]][^\;\&\|]*[[:space:]](--force|-[a-zA-Z]*f[a-zA-Z]*)([[:space:]\"\']|$) ]] \
+# the next separator or line, so a later command's -f is not read as the push's.
+BACKSTOP='git[[:space:]]+((-C|-c)[[:space:]]*[^[:space:]]+[[:space:]]+)*push([[:space:]][^;&|'$'\n'']*)?[[:space:]](--force|-[a-zA-Z]*f[a-zA-Z]*)([[:space:]]|$)'
+[[ "$pcmd" =~ $BACKSTOP ]] \
   && block_push "git push --force (use --force-with-lease on a pull-request branch)"
 
 # --- escape hatch: one command ------------------------------------------
@@ -389,10 +507,7 @@ fi
 # Kubernetes
 [[ "$cmd" =~ kubectl[[:space:]]+delete ]] && block "kubectl delete"
 
-# Git history rewriting on shared branches
-[[ "$cmd" =~ git[[:space:]]+push.*(--force|-f)([[:space:]]|$) ]] \
-  && ! [[ "$cmd" =~ --force-with-lease ]] \
-  && block "git push --force (use --force-with-lease)"
+# Git history rewriting. Pushes are handled by the push rules above.
 [[ "$cmd" =~ git[[:space:]]+reset[[:space:]]+--hard ]] && block "git reset --hard"
 [[ "$cmd" =~ git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*[dfx] ]] && block "git clean"
 
