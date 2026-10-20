@@ -51,7 +51,11 @@ expansion in its subcommand position that could build the word
 refuses on its own. Both start from one tokenisation: a regular-expression
 scan that reads quotes as the shell does, run inside the payload parse (the
 same jq or python3 process, so a push costs no second interpreter start; a
-`bash -c` code string is tokenised in a process of its own). The pattern is
+`bash -c` code string is tokenised in a process of its own). The parse
+tokenises only a command whose plain text names push or git, a linear test;
+stripping quotes first was not linear in jq. A push spelled only across quotes
+(`$G p"u"sh`) is caught by the push rules' own check, which strips quotes,
+and tokenised then. The pattern is
 written once for python3 and once for jq, and the guard matrix reads both out
 of the hook and checks they agree. A failing tokeniser refuses the push.
 
@@ -178,7 +182,8 @@ allowed: it is the sanctioned rewrite of a pull-request branch.
   about 8 ms for an ordinary command and 10 ms for one that names push. A
   100 KB command takes about 1 s, whether or not it names push, against the
   10 s hook timeout; guard-security already refuses any command over 100000
-  characters.
+  characters. On the jq path a 30 KB here-document costs 0.1 s, or 0.9 s
+  when it names git and so is tokenised.
 - On a machine with jq but no python3, a command over 32768 characters that
   names push is refused.
 - `git` with a subcommand the shell builds is refused whatever the subcommand

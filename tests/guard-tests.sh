@@ -2171,6 +2171,17 @@ if command -v jq >/dev/null 2>&1; then
   tp "$STUB" guard-bash.sh  0 "jq only: a comment is not operands"    "$PUSH_COMMENT_PAYLOAD" "$GP/onfeat"
   tp "$STUB" guard-bash.sh  2 "jq only: push to main"                 "$PUSH_MAIN_PAYLOAD"    "$GP/onfeat"
   tp "$STUB" guard-bash.sh  0 "jq only: push a feature branch"        "$PUSH_FEAT_PAYLOAD"    "$GP/onfeat"
+  # The tokeniser's own jq run, outside the parse: a `bash -c` code string,
+  # and a push spelled only across quotes, which the parse leaves untokenised.
+  # Payloads are built here, with python3 still on PATH for `j`.
+  JQ_BASHC_MAIN="$(j Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1]}))' "bash -c 'git push \"/tmp/r >\" main'")")"
+  JQ_BASHC_FEAT="$(j Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1]}))' "bash -c 'git push origin feat'")")"
+  tp "$STUB" guard-bash.sh  2 "jq only: bash -c pushing main"         "$JQ_BASHC_MAIN" "$GP/onfeat"
+  tp "$STUB" guard-bash.sh  0 "jq only: bash -c pushing a feature"    "$JQ_BASHC_FEAT" "$GP/onfeat"
+  tp "$STUB" guard-bash.sh  2 "jq only: a quote-split push word"      "$(j Bash '{"command":"$G p\"u\"sh origin main"}')" "$GP/onfeat"
+  # Past TOK_JQ_MAX with no python3, a command naming push is refused.
+  tp "$STUB" guard-bash.sh  2 "jq only: over the jq limit, names push" "$(j Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1]}))' "gh pr create --body \"git push $GP_PAD\"")")" "$GP/onfeat"
+  tp "$STUB" guard-bash.sh  0 "jq only: over the jq limit, no push"    "$(j Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1]}))' "echo '$GP_PAD'")")" "$GP/onfeat"
 fi
 # Back to neither parser, which the next case is about.
 stub_bin bash cat grep sed head tail basename

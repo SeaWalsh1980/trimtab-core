@@ -36,8 +36,10 @@ payload=$(cat)
 # successful parse of nothing, which the empty-command allow below then waves
 # through; only the python3 branch raised. Truncated stdin and a missing `cat`
 # both land here. Everything after the parse is a bash builtin, except that
-# the push rules' tokeniser runs python3 (or jq) again for a `bash -c` code
-# string, so jq/python3 and cat are still this guard's whole external surface.
+# the push rules' tokeniser runs python3 (or jq) again for a command the parse
+# did not tokenise: a `bash -c` code string, a jq-parsed command over
+# TOK_JQ_MAX, or a push spelled only across quotes. jq/python3 and cat are
+# still this guard's whole external surface.
 if [[ -z "$payload" ]]; then
   echo "guard-bash: empty hook payload. Blocking (fail closed)." >&2
   exit 2
@@ -101,7 +103,10 @@ TOK_JQ_MAX=32768
 # Extract .cwd (first line, newlines flattened), the command's tokens (a count
 # line, then that many piece lines; -1 when not tokenised) and
 # .tool_input.command (the rest), using jq if present, else python3. Only a
-# command that names push or git, once quotes are removed, is tokenised here.
+# command whose plain text names push or git is tokenised here: a plain-text
+# test is linear, where stripping quotes first in jq was not. A push spelled
+# across quotes with no git beside it (`$G p"u"sh`) is left to the push rules,
+# whose own check strips quotes and tokenises it then.
 # The cwd is the Bash tool's working directory, which a bare `git push`
 # pushes from; the hook process's own $PWD is the fallback when the payload
 # carries none.
@@ -112,7 +117,7 @@ if command -v jq >/dev/null 2>&1; then
       ((.cwd // "") | tostring | gsub("\n"; " ")),
       ( (.tool_input.command // "") as $raw
         | ($raw | if type == "string" then . else tojson end) as $c
-        | ( if ($c | length) <= $max and ($c | gsub("[\"'"'"'\\\\]"; "") | test("push|git"))
+        | ( if ($c | length) <= $max and ($c | test("push|git"))
             then [ $c | tok ] | length, .[]
             else -1 end ),
           $raw )' 2>/dev/null); then
@@ -127,8 +132,7 @@ import json, sys
 d = json.load(sys.stdin)
 print(str(d.get("cwd") or "").replace("\n", " "))
 c = (d.get("tool_input") or {}).get("command") or ""
-t = re.sub(r"[\"'"'"'\\]", "", c if isinstance(c, str) else "")
-if isinstance(c, str) and ("push" in t or "git" in t):
+if isinstance(c, str) and ("push" in c or "git" in c):
     pieces = tok(c)
     print(len(pieces))
     for p in pieces:
@@ -662,23 +666,24 @@ assemble() {
   for p in "${PIECES[@]}"; do
     v=${p:1}
     case "${p:0:1}" in
-      W) NAIVE_TEXT+=" "
-         if (( have )); then
-           if (( skip )); then skip=0; else QT+=( "W$w" ); fi
-         fi
-         w=""; have=0 ;;
+      W) NAIVE_TEXT+=" ";    assemble_flush ;;
       C) ;;
-      R|O)
-         NAIVE_TEXT+=" $v "
-         if (( have )); then
-           if (( skip )); then skip=0; else QT+=( "W$w" ); fi
-         fi
-         w=""; have=0
-         if [[ "${p:0:1}" == R ]]; then skip=1; else skip=0; QT+=( "O$v" ); fi ;;
+      R) NAIVE_TEXT+=" $v "; assemble_flush; skip=1 ;;
+      O) NAIVE_TEXT+=" $v "; assemble_flush; skip=0; QT+=( "O$v" ) ;;
       Q|L) NAIVE_TEXT+=$v; w+=$v; have=1 ;;
     esac
   done
-  if (( have && !skip )); then QT+=( "W$w" ); fi
+  assemble_flush
+}
+
+# assemble_flush: end assemble's current word (its locals w, have, skip are
+# visible here). The word right after a redirection is its target and is
+# dropped, which spends the pending skip; any other word is kept.
+assemble_flush() {
+  if (( have )); then
+    if (( skip )); then skip=0; else QT+=( "W$w" ); fi
+  fi
+  w=""; have=0
 }
 
 # quote_pass: judge each simple command in QT between unquoted operators.
