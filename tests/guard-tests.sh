@@ -239,6 +239,23 @@ pb 2 "$GP/onmain" "cd $GP/onfeat || true; git push"
 pb 2 "$GP/onmain" "pushd $GP/onfeat; popd; git push"
 pb 2 "$GP/onmain" "bash -c 'cd $GP/onfeat'; git push"
 
+# A redirection glued to an operand names a file, not the ref.
+pb 2 "$GP/onfeat" 'git push origin main>/dev/null'
+pb 2 "$GP/onfeat" 'git push origin HEAD:main>push.log'
+pb 2 "$GP/onfeat" 'git push origin main 2>/dev/null'
+pb 2 "$GP/onfeat" 'git push origin main > push.log'
+
+# git reads its repository and configuration from the environment too.
+pb 2 "$GP/onfeat" "GIT_DIR=$GP/onmain/.git git push"
+pb 2 "$GP/onfeat" "env GIT_DIR=$GP/onmain/.git git push"
+pb 2 "$GP/onfeat" "GIT_WORK_TREE=$GP/onmain git push"
+pb 2 "$GP/onfeat" 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=matching git push'
+pb 2 "$GP/onfeat" "GIT_CONFIG_PARAMETERS='push.default=matching' git push"
+
+# The default branch's name, in any case.
+pb 2 "$GP/onfeat" 'git push origin Main'
+pb 2 "$GP/onfeat" 'git push origin feat:MASTER'
+
 # The payload's cwd, not the hook process's, is where a bare push runs.
 t guard-bash.sh 2 "push: payload cwd on main, process cwd on feat" \
   "$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","cwd":sys.argv[1],"tool_input":{"command":"git push"}}))' "$GP/onmain")" "$GP/onfeat"
@@ -269,6 +286,10 @@ pb 0 "$GP/onfeat" 'git push --tags origin'
 pb 0 "$GP/onfeat" 'git push -o ci.skip origin feat'
 pb 0 "$GP/onfeat" 'git push --force-with-lease -u origin HEAD'
 pb 0 "$GP/onfeat" 'git push origin feat 2>&1 | tail -5'
+pb 0 "$GP/onfeat" 'git push -u origin feat >push.log 2>&1'
+pb 0 "$GP/onfeat" 'git push origin feat > /dev/null'
+pb 0 "$GP/onfeat" 'GIT_TRACE=1 git push origin feat'
+pb 0 "$GP/onfeat" 'GIT_SSH_COMMAND=ssh git push origin feat'
 # A later command's -f is not the push's (the old regex blocked these).
 pb 0 "$GP/onfeat" 'git push origin feat && rm -f /tmp/x'
 pb 0 "$GP/onfeat" $'git push origin feat\nsed -f script.sed notes.txt'

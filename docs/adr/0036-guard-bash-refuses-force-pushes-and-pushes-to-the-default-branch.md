@@ -64,24 +64,28 @@ refuses:
 - each of those long options by any prefix git would accept (`--mirr`,
   `--al`, `--pru`, `--forc`, `--del`); a prefix git finds ambiguous is an
   error to git, so refusing it costs nothing;
-- a destination that is `main` or `master` after any `refs/` and `heads/`
-  prefixes, since git guesses the namespace (`heads/main` and `refs/main` both
-  land on `refs/heads/main`), including a delete (`:main`, `--delete`, `-d`);
+- a destination that is `main` or `master`, in any case, after any `refs/`
+  and `heads/` prefixes, since git guesses the namespace (`heads/main` and
+  `refs/main` both land on `refs/heads/main`), including a delete (`:main`,
+  `--delete`, `-d`). Redirections are removed first, as the shell would:
+  `main>/dev/null` is the operand `main`;
 - a refspec the shell would still expand (`$`, a backquote, `*`, `?`, `[`,
   `{`, or empty after quotes), a push whose operands run on into a backquoted
   substitution, and a push under `xargs`: the guard cannot see the ref that
   will be pushed;
-- `-c` / `--config-env` naming `push.*`, `remote.*` or `alias.*`: inline
-  configuration can map a bare push onto the default branch, force it, or
-  rename `push`, and it is typed in the command, so it is the model's to
-  choose;
+- `-c` / `--config-env` naming `push.*`, `remote.*` or `alias.*`, and a
+  `GIT_CONFIG*` assignment on the push (`GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n`,
+  `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_GLOBAL`): configuration can map a bare
+  push onto the default branch, force it, or rename `push`, and when it is
+  typed in the command it is the model's to choose;
 - `HEAD` / `@` as the destination, or no refspec at all, when the current
   branch is `main` or `master`. The first operand is always the repository,
   even beside `--repo`. The current branch is read from the repository's
   `HEAD` file (following a linked worktree's `.git` file) in the directory the
   payload's `cwd` names, moved by `cd` and `git -C`;
 - that same case when the branch cannot be read: no repository, an unreadable
-  `HEAD`, `cd -`, a `cd` through a variable, `--git-dir`, `popd`, or a `cd`
+  `HEAD`, `cd -`, a `cd` through a variable, `--git-dir`, a `GIT_DIR`,
+  `GIT_WORK_TREE` or `GIT_COMMON_DIR` assignment on the push, `popd`, or a `cd`
   that does not move this shell (inside `( … )`, piped, followed by `||` or
   a background `&`). "Cannot tell" is not "safe" (ADR 0001).
 
@@ -153,7 +157,11 @@ What a text hook cannot see:
   `push.default=upstream` / `matching` in a git config file, which can map a
   bare push from a feature branch onto the default branch. The guard reads
   the current branch's name, not the push mapping. (The same keys given
-  inline with `-c` are refused.)
+  inline with `-c` or a `GIT_CONFIG*` assignment are refused.)
+- State set by an earlier command: `git config push.default matching`, or
+  `export GIT_DIR=…` / `export GIT_CONFIG_COUNT=…`, then a plain `git push`
+  in a later command or a later call. The guard judges each command on what
+  it says, not on what the shell or the repository was told before.
 - A shell function or alias named `git`, and a `git` planted earlier on PATH.
 - `find … -exec git push` and other runners that pass operands at run time
   without being named here.

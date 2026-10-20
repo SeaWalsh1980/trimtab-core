@@ -124,9 +124,10 @@ EOF
 # The default branch is taken as main or master. Reading origin/HEAD would
 # need git itself, and everything after the parse above is a bash builtin.
 # git also guesses a destination's namespace (`heads/main`, `refs/main` both
-# land on refs/heads/main), so those prefixes are peeled off first.
+# land on refs/heads/main), so those prefixes are peeled off first. Compared
+# without case: on a case-insensitive filesystem `Main` is the same ref.
 is_default_branch() {
-  local n="$1" p
+  local n="${1,,}" p
   while :; do
     p=$n
     n=${n#refs/}
@@ -219,17 +220,44 @@ last_cd=0        # the previous segment was a cd
 # branch. <continued> is 1 when the segment runs on into a backquoted
 # substitution, so its last operand is not all the guard can see.
 check_push() {
-  local -a tk=(); local i=0 w a dir n v wrapped=0 wrap_cd=0 xa=0 cont="${2:-0}"
-  read -ra tk <<<"$1"
+  local -a raw=() tk=(); local i=0 w a dir n v pre tgt drop=0
+  local wrapped=0 wrap_cd=0 xa=0 env_dir=0 env_cfg="" cont="${2:-0}"
+  read -ra raw <<<"$1"
+
+  # Quotes and backslashes go first, as the shell removes them. Then
+  # redirections, which name a file, not an operand: `main>/dev/null` is the
+  # operand `main`, and `2>`, `>log` or a lone `>` followed by its target are
+  # dropped whole.
+  for a in "${raw[@]}"; do
+    a=${a//[\"\'\\]/}
+    if (( drop )); then drop=0; continue; fi
+    if [[ "$a" == *[\<\>]* ]]; then
+      pre=${a%%[<>]*}
+      tgt=${a#*[<>]}
+      tgt=${tgt##[<>&|]}
+      tgt=${tgt##[<>&|]}
+      [[ -z "$tgt" ]] && drop=1
+      [[ -z "$pre" || "$pre" =~ ^[0-9]+$ || "$pre" == '&' ]] && continue
+      a=$pre
+    fi
+    tk+=( "$a" )
+  done
   n=${#tk[@]}
-  for (( i=0; i<n; i++ )); do tk[i]=${tk[i]//[\"\'\\]/}; done
   i=0
   last_cd=0
 
   # Skip assignments, shell keywords and wrappers to reach the command word.
+  # git reads its repository and configuration from the environment too, so
+  # an assignment naming one is remembered for a push below.
   while (( i < n )); do
     w=${tk[i]}
-    if [[ "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then (( i++ )); continue; fi
+    if [[ "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+      case "${w%%=*}" in
+        GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR) env_dir=1 ;;
+        GIT_CONFIG*)                          env_cfg=${w%%=*} ;;
+      esac
+      (( i++ )); continue
+    fi
     case "$w" in
       sudo|env|exec|nice|ionice|stdbuf|xargs|timeout|time)
         wrapped=1
@@ -297,7 +325,7 @@ check_push() {
   # can redirect or rename a push is refused outright: it is typed in the
   # command, so it is the model's to choose.
   dir="$vcwd"
-  (( wrap_cd )) && dir=""
+  (( wrap_cd || env_dir )) && dir=""
   (( i++ ))
   while (( i < n )); do
     a=${tk[i]}
@@ -337,6 +365,8 @@ check_push() {
   (( i++ ))
   (( cont )) && block_push "git push with a command substitution in its operands (fail closed)"
   (( xa ))   && block_push "git push under xargs (its operands arrive at run time; fail closed)"
+  [[ -n "$env_cfg" ]] \
+    && block_push "git push with $env_cfg set (configuration in the environment can redirect a push)"
 
   # git push's own options and operands. The first operand is always the
   # repository, even beside --repo (git lets the operand override it).
