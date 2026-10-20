@@ -74,8 +74,14 @@ refuses:
   `main>/dev/null` is the operand `main`;
 - a refspec the shell would still expand (`$`, a backquote, `*`, `?`, `[`,
   `{`, or empty after quotes), a push whose operands run on into a backquoted
-  substitution, and a push under `xargs`: the guard cannot see the ref that
-  will be pushed;
+  substitution, a push under `xargs`, and a push carrying a quoted or escaped
+  `<` or `>` (`'>'`, `\>`), which is an ordinary character rather than a
+  redirection: the guard cannot see the ref that will be pushed;
+- a `push` operand behind a command word the guard cannot read: a variable
+  (`$g push`, `${GIT} push`), a substitution (`$(command -v git) push`,
+  `` `which git` push ``), or a wrapper whose git never appears literally.
+  The guard cannot tell what such a word runs, so it does not assume it is
+  not git;
 - `-c` / `--config-env` naming `push.*`, `remote.*` or `alias.*`, and a
   `GIT_CONFIG*` assignment on the push (`GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n`,
   `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_GLOBAL`), including one behind a

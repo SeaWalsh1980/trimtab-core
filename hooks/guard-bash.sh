@@ -234,15 +234,25 @@ note_assignment() {
 # branch. <continued> is 1 when the segment runs on into a backquoted
 # substitution, so its last operand is not all the guard can see.
 check_push() {
-  local -a raw=() tk=(); local i=0 w a dir n v pre tgt drop=0
-  local wrapped=0 wrap_cd=0 xa=0 env_dir=0 env_cfg="" cont="${2:-0}"
+  local -a raw=() tk=(); local i=0 j w a u x y dir n v pre tgt drop=0
+  local wrapped=0 wrap_cd=0 xa=0 env_dir=0 env_cfg="" qredir=0 cont="${2:-0}"
   read -ra raw <<<"$1"
 
   # Quotes and backslashes go first, as the shell removes them. Then
   # redirections, which name a file, not an operand: `main>/dev/null` is the
   # operand `main`, and `2>`, `>log` or a lone `>` followed by its target are
-  # dropped whole.
+  # dropped whole. A `<` or `>` that is itself quoted or escaped ('>' or \>)
+  # is an ordinary character to the shell, not a redirection; once quotes are
+  # gone the two cannot be told apart, so it is noted here and a push that
+  # carries one is refused below.
   for a in "${raw[@]}"; do
+    if [[ "$a" == *[\<\>]* && "$a" == *[\"\'\\]* ]]; then
+      u=${a//\\?/}
+      while [[ "$u" =~ (\'[^\']*\'|\"[^\"]*\") ]]; do u=${u/"${BASH_REMATCH[0]}"/}; done
+      x=${a//[^<>]/}
+      y=${u//[^<>]/}
+      (( ${#x} != ${#y} )) && qredir=1
+    fi
     a=${a//[\"\'\\]/}
     if (( drop )); then drop=0; continue; fi
     if [[ "$a" == *[\<\>]* ]]; then
@@ -289,6 +299,27 @@ check_push() {
       [[ "${tk[i]}" == -C* || "${tk[i]}" == --chdir* ]] && wrap_cd=1
       [[ "${tk[i]}" =~ $ASSIGN ]] && note_assignment "${tk[i]}"
       (( i++ ))
+    done
+  fi
+
+  # A command word the guard cannot read — a variable (`$g push`), a
+  # substitution (`$(command -v git) push`, whose split leaves a segment
+  # starting `push`, or an empty word when it was quoted), or a wrapper whose
+  # git never appears literally — is
+  # not judged as anything else here; when the command carries a `push`
+  # operand it is refused (fail closed), as a refspec the shell expands is.
+  j=-1
+  if (( i < n )); then
+    [[ -z "${tk[i]}" || "${tk[i]}" == *[\$\`]* || "${tk[i]##*/}" == push ]] && j=$i
+  elif (( wrapped )); then
+    for (( x=0; x<n; x++ )); do
+      [[ "${tk[x]}" == *[\$\`]* ]] && { j=$x; break; }
+    done
+  fi
+  if (( j >= 0 )); then
+    for (( ; j<n; j++ )); do
+      [[ "${tk[j]}" == push ]] \
+        && block_push "git push through a command word the guard cannot read (fail closed)"
     done
   fi
   (( i < n )) || return 0
@@ -377,6 +408,8 @@ check_push() {
   (( xa ))   && block_push "git push under xargs (its operands arrive at run time; fail closed)"
   [[ -n "$env_cfg" ]] \
     && block_push "git push with $env_cfg set (configuration in the environment can redirect a push)"
+  (( qredir )) \
+    && block_push "git push with a quoted or escaped < or > in its operands (fail closed)"
 
   # git push's own options and operands. The first operand is always the
   # repository, even beside --repo (git lets the operand override it).

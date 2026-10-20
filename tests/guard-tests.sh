@@ -264,6 +264,20 @@ pb 2 "$GP/onfeat" "env -u FOO GIT_DIR=$GP/onmain/.git git push"
 pb 2 "$GP/onfeat" 'git push -fofoo origin feat'
 pb 2 "$GP/onfeat" 'git push -uo ci.skip origin main'
 
+# A quoted or escaped < or > is an ordinary character, not a redirection,
+# so it cannot swallow the next operand.
+pb 2 "$GP/onfeat" "git push origin '>' main"
+pb 2 "$GP/onfeat" 'git push origin \> main'
+pb 2 "$GP/onfeat" "git push '>' main"
+
+# A command word the guard cannot read, carrying a push.
+pb 2 "$GP/onfeat" 'g=git; $g push origin main'
+pb 2 "$GP/onfeat" 'GIT=git; ${GIT} push origin main'
+pb 2 "$GP/onfeat" '$(command -v git) push origin main'
+pb 2 "$GP/onfeat" '"$(which git)" push origin main'
+pb 2 "$GP/onfeat" '`which git` push origin main'
+pb 2 "$GP/onfeat" 'nice -n 5 $g push origin main'
+
 # The default branch's name, in any case.
 pb 2 "$GP/onfeat" 'git push origin Main'
 pb 2 "$GP/onfeat" 'git push origin feat:MASTER'
@@ -309,6 +323,12 @@ pb 0 "$GP/onmain" "cd $GP/onfeat >&2 && git push"
 # An `o` value holding f or d is not --force or --delete.
 pb 0 "$GP/onfeat" 'git push -ofast origin feat'
 pb 0 "$GP/onfeat" 'git push -odeploy origin feat'
+# A quoted redirect target, and unreadable words that carry no push.
+pb 0 "$GP/onfeat" 'git push origin feat >"push.log" 2>&1'
+pb 0 "$GP/onfeat" "echo '>' main"
+pb 0 "$GP/onfeat" '$EDITOR push.md'
+pb 0 "$GP/onfeat" 'time make push'
+pb 0 "$GP/onfeat" 'git log --format="%h > %s"'
 # A later command's -f is not the push's (the old regex blocked these).
 pb 0 "$GP/onfeat" 'git push origin feat && rm -f /tmp/x'
 pb 0 "$GP/onfeat" $'git push origin feat\nsed -f script.sed notes.txt'
