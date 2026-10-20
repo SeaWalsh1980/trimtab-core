@@ -45,9 +45,26 @@ configuration. Each was confirmed against git 2.47 and is now covered below.
 
 ## Decision
 
-guard-bash parses each simple command: the command (backslash-newlines
-joined) split on `; & | ( )` and backquotes, with each separator kept so the
-walk knows what joined two commands; a redirection carrying `&` (`2>&1`,
+A command that names `push` (once quotes are removed) is judged twice, and
+either pass refuses on its own:
+
+- a **naive pass** splits on `; & | ( )` and backquotes without respecting
+  quotes, so it sees inside a quoted substitution (`echo "$(git push …)"`)
+  and a here-document's lines;
+- a **quote-aware pass** tokenises as the shell does: a quoted `>` is an
+  ordinary character rather than a redirection, a quoted `;` does not end
+  the command, and a quoted string that spans spaces is one word. Its cost
+  grows with length times words, so a command over 8192 characters that
+  names `push` is refused instead (measured: about 0.7 s at the cap against
+  the 10 s hook timeout, 2 ms on an ordinary push).
+
+Earlier drafts handled quoting token by token in the naive pass alone, and
+every review round found another quoting edge (glued redirects, a quoted
+`>`, quotes spanning spaces); the second pass replaces those patches.
+
+Within each pass guard-bash parses each simple command: the command
+(backslash-newlines joined) split on its separators, with each separator
+kept so the walk knows what joined two commands; a redirection carrying `&` (`2>&1`,
 `&>file`, `|&`) is folded to its plain form first, so it is not read as a
 background job. Assignments (`NAME=`, `NAME+=`, `NAME[i]=`, all of which bash
 takes as a prefix) and shell keywords are skipped; after `sudo`, `env`, `exec`, `nice`, `ionice`, `stdbuf`, `xargs`,
@@ -74,12 +91,13 @@ refuses:
   `main>/dev/null` is the operand `main`;
 - a refspec the shell would still expand (`$`, a backquote, `*`, `?`, `[`,
   `{`, or empty after quotes), a push whose operands run on into a backquoted
-  substitution, a push under `xargs`, and a push carrying a quoted or escaped
-  `<` or `>` (`'>'`, `\>`), which is an ordinary character rather than a
-  redirection: the guard cannot see the ref that will be pushed;
+  substitution, and a push under `xargs`: the guard cannot see the ref that
+  will be pushed;
 - a `push` operand behind a command word the guard cannot read: a variable
   (`$g push`, `${GIT} push`), a substitution (`$(command -v git) push`,
-  `` `which git` push ``), or a wrapper whose git never appears literally.
+  `` `which git` push ``), a glob or brace list the shell expands
+  (`/usr/bin/gi? push`, `{git,} push`; `[` and `[[` excepted, being the test
+  command), or a wrapper whose git never appears literally.
   The guard cannot tell what such a word runs, so it does not assume it is
   not git;
 - `-c` / `--config-env` naming `push.*`, `remote.*` or `alias.*`, and a
@@ -143,9 +161,11 @@ allowed: it is the sanctioned rewrite of a pull-request branch.
   CI step goes red on that one case, by design.
 - Two refusals of the old regex go away: a later command's `-f` after a push
   (`&& npm ci -f`, a next-line `sed -f`) is no longer read as the push's.
-- Measured on the workstation, 100 runs each: about 5.4–6.4 ms per call before,
-  and about 6.9–7.0 ms after, for both an ordinary command and a push: about
-  1 ms added to every Bash call.
+- Measured on the workstation, 50 runs each: about 5 ms per call before; after,
+  about 7 ms for an ordinary command and 9 ms for a push. The worst case under
+  the length cap is about 0.7 s.
+- A command over 8192 characters that names `push` is refused. Write long
+  content with a file-writing tool rather than a heredoc that mentions push.
 - A here-document or commit message containing a line that begins
   `git push origin main` blocks, as quoted `rm -rf` already did. It is the
   same known limitation (matching does not tell code from data); write such

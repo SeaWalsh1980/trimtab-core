@@ -277,6 +277,18 @@ pb 2 "$GP/onfeat" '$(command -v git) push origin main'
 pb 2 "$GP/onfeat" '"$(which git)" push origin main'
 pb 2 "$GP/onfeat" '`which git` push origin main'
 pb 2 "$GP/onfeat" 'nice -n 5 $g push origin main'
+# A glob or brace list as the command word: the shell expands it to git.
+pb 2 "$GP/onfeat" '/usr/bin/gi? push origin main'
+pb 2 "$GP/onfeat" 'g*t push origin main'
+pb 2 "$GP/onfeat" 'gi[t] push origin main'
+pb 2 "$GP/onfeat" '{git,} push origin main'
+
+# A quoted string that spans spaces is one word, and its > is not a
+# redirection (the naive pass alone would drop main as its target).
+pb 2 "$GP/onfeat" 'git push "/tmp/r >" main'
+pb 2 "$GP/onfeat" "git push origin 'a >' main"
+# A quoted separator does not end the command.
+pb 2 "$GP/onfeat" "git push origin 'x;' main"
 
 # The default branch's name, in any case.
 pb 2 "$GP/onfeat" 'git push origin Main'
@@ -329,6 +341,19 @@ pb 0 "$GP/onfeat" "echo '>' main"
 pb 0 "$GP/onfeat" '$EDITOR push.md'
 pb 0 "$GP/onfeat" 'time make push'
 pb 0 "$GP/onfeat" 'git log --format="%h > %s"'
+# A quoted > in a push option's value is the value's, not a redirection.
+pb 0 "$GP/onfeat" "git push -o 'ci.message=a>b' origin feat"
+# `[` is the test command, not a glob, even beside the word push.
+pb 0 "$GP/onfeat" '[ "$mode" = push ] && git push origin feat'
+# A command that does not name push is not parsed at all.
+pb 0 "$GP/onmain" 'cat notes.txt | grep -c main'
+# Past the quote-aware pass's length cap, a command naming push is refused
+# rather than left unjudged; one that does not name push is unaffected.
+GP_PAD=$(printf 'x%.0s' $(seq 9000))
+t guard-bash.sh 2 "push: over the length cap, names push" \
+  "$(j Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1]}))' "git commit -m 'push $GP_PAD'")")" "$GP/onfeat"
+t guard-bash.sh 0 "push: over the length cap, no push" \
+  "$(j Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1]}))' "echo '$GP_PAD'")")" "$GP/onfeat"
 # A later command's -f is not the push's (the old regex blocked these).
 pb 0 "$GP/onfeat" 'git push origin feat && rm -f /tmp/x'
 pb 0 "$GP/onfeat" $'git push origin feat\nsed -f script.sed notes.txt'

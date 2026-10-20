@@ -219,7 +219,7 @@ last_cd=0        # the previous segment was a cd
 ASSIGN='^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?='
 
 # git reads its repository and configuration from the environment too, so an
-# assignment naming one is remembered for a push. Sets check_push's own
+# assignment naming one is remembered for a push. Sets judge's own
 # env_dir / env_cfg (bash locals are visible to the functions they call).
 note_assignment() {
   local name="${1%%[+=[]*}"
@@ -229,44 +229,15 @@ note_assignment() {
   esac
 }
 
-# check_push <segment> <continued>: tokenise one simple command; when it is a
-# git push, refuse a force spelling or a destination that is the default
-# branch. <continued> is 1 when the segment runs on into a backquoted
-# substitution, so its last operand is not all the guard can see.
-check_push() {
-  local -a raw=() tk=(); local i=0 j w a u x y dir n v pre tgt drop=0
-  local wrapped=0 wrap_cd=0 xa=0 env_dir=0 env_cfg="" qredir=0 cont="${2:-0}"
-  read -ra raw <<<"$1"
-
-  # Quotes and backslashes go first, as the shell removes them. Then
-  # redirections, which name a file, not an operand: `main>/dev/null` is the
-  # operand `main`, and `2>`, `>log` or a lone `>` followed by its target are
-  # dropped whole. A `<` or `>` that is itself quoted or escaped ('>' or \>)
-  # is an ordinary character to the shell, not a redirection; once quotes are
-  # gone the two cannot be told apart, so it is noted here and a push that
-  # carries one is refused below.
-  for a in "${raw[@]}"; do
-    if [[ "$a" == *[\<\>]* && "$a" == *[\"\'\\]* ]]; then
-      u=${a//\\?/}
-      while [[ "$u" =~ (\'[^\']*\'|\"[^\"]*\") ]]; do u=${u/"${BASH_REMATCH[0]}"/}; done
-      x=${a//[^<>]/}
-      y=${u//[^<>]/}
-      (( ${#x} != ${#y} )) && qredir=1
-    fi
-    a=${a//[\"\'\\]/}
-    if (( drop )); then drop=0; continue; fi
-    if [[ "$a" == *[\<\>]* ]]; then
-      pre=${a%%[<>]*}
-      tgt=${a#*[<>]}
-      tgt=${tgt#"${tgt%%[!<>&|]*}"}       # the rest of the operator, any length
-      [[ -z "$tgt" ]] && drop=1
-      [[ -z "$pre" || "$pre" =~ ^[0-9]+$ || "$pre" == '&' ]] && continue
-      a=$pre
-    fi
-    tk+=( "$a" )
-  done
+# judge <continued>: judge one simple command, given as the words in TK; when
+# it is a git push, refuse a force spelling or a destination that is the
+# default branch. <continued> is 1 when the command runs on into a
+# backquoted substitution, so its last operand is not all the guard can see.
+TK=()
+judge() {
+  local -a tk=( "${TK[@]}" ); local i=0 j w a dir n v
+  local wrapped=0 wrap_cd=0 xa=0 env_dir=0 env_cfg="" cont="${1:-0}"
   n=${#tk[@]}
-  i=0
   last_cd=0
 
   # Skip assignments (each noted by note_assignment; a `+=` is one too, never
@@ -302,26 +273,29 @@ check_push() {
     done
   fi
 
-  # A command word the guard cannot read — a variable (`$g push`), a
-  # substitution (`$(command -v git) push`, whose split leaves a segment
-  # starting `push`, or an empty word when it was quoted), or a wrapper whose
-  # git never appears literally — is
-  # not judged as anything else here; when the command carries a `push`
-  # operand it is refused (fail closed), as a refspec the shell expands is.
+  # A command word the guard cannot read is not assumed not to be git. That
+  # is a variable or substitution (`$g push`, `$(command -v git) push`), a
+  # glob or brace list the shell expands (`/usr/bin/gi? push`), the `push`
+  # or empty word a split substitution leaves behind, or a wrapper whose git
+  # never appears literally. When the command carries a `push` operand it is
+  # refused (fail closed), as a refspec the shell expands is. `[` and `[[`
+  # are the test command, not a glob.
   j=-1
   if (( i < n )); then
-    [[ -z "${tk[i]}" || "${tk[i]}" == *[\$\`]* || "${tk[i]##*/}" == push ]] && j=$i
+    w=${tk[i]}
+    if [[ -z "$w" || "${w##*/}" == push ]] \
+       || [[ "$w" != '[' && "$w" != '[[' && "$w" == *[\$\`\*\?\[\{]* ]]; then
+      j=$i
+    fi
   elif (( wrapped )); then
-    for (( x=0; x<n; x++ )); do
-      [[ "${tk[x]}" == *[\$\`]* ]] && { j=$x; break; }
+    for (( j=0; j<n; j++ )); do
+      [[ "${tk[j]}" == *[\$\`\*\?\[\{]* ]] && break
     done
   fi
-  if (( j >= 0 )); then
-    for (( ; j<n; j++ )); do
-      [[ "${tk[j]}" == push ]] \
-        && block_push "git push through a command word the guard cannot read (fail closed)"
-    done
-  fi
+  for (( ; j>=0 && j<n; j++ )); do
+    [[ "${tk[j]}" == push ]] \
+      && block_push "git push through a command word the guard cannot read (fail closed)"
+  done
   (( i < n )) || return 0
   w=${tk[i]##*/}
 
@@ -344,15 +318,13 @@ check_push() {
     popd)
       vcwd=""; return 0 ;;
     bash|sh|dash|zsh|ksh)
-      # `bash -c 'git push …'`: the quotes are already stripped, so the code
-      # is the rest of the segment. It runs in a child shell, so a `cd` in it
-      # does not move this one.
+      # `bash -c 'git push …'`: the code is the rest of the command, scanned
+      # as a command of its own. It runs in a child shell, so a `cd` in it
+      # does not move this one (scan_command puts the directory back).
       (( i++ ))
       while (( i < n )) && [[ "${tk[i]}" == -* ]]; do
         if [[ "${tk[i]}" =~ ^-[A-Za-z]*c[A-Za-z]*$ ]]; then
-          v=$vcwd
-          check_push "${tk[*]:i+1}" "$cont"
-          vcwd=$v
+          scan_command "${tk[*]:i+1}"
           return 0
         fi
         (( i++ ))
@@ -408,8 +380,6 @@ check_push() {
   (( xa ))   && block_push "git push under xargs (its operands arrive at run time; fail closed)"
   [[ -n "$env_cfg" ]] \
     && block_push "git push with $env_cfg set (configuration in the environment can redirect a push)"
-  (( qredir )) \
-    && block_push "git push with a quoted or escaped < or > in its operands (fail closed)"
 
   # git push's own options and operands. The first operand is always the
   # repository, even beside --repo (git lets the operand override it).
@@ -489,44 +459,175 @@ check_push() {
   return 0
 }
 
+# --- two passes over the command ---------------------------------------------
+# Every command is judged twice, and each pass refuses on its own, so the
+# union only ever refuses more:
+#
+# - the naive pass splits on separators without respecting quotes. It sees
+#   inside a quoted substitution (`echo "$(git push origin main)"`) and a
+#   here-document's lines, which the quote-aware pass keeps as one word;
+# - the quote-aware pass reads quotes as the shell does. A quoted `>` is an
+#   ordinary character, a quoted `;` does not end the command, and a string
+#   that spans spaces (`"/tmp/r >"`) is one word, none of which the naive
+#   pass can tell.
+
+# naive_words <segment>: whitespace words with quotes and backslashes removed,
+# then redirections dropped: `main>/dev/null` is the operand `main`, and
+# `2>`, `>log` or a lone `>` with the word after it go. Sets TK.
+naive_words() {
+  local -a raw=(); local a pre tgt drop=0
+  read -ra raw <<<"$1"
+  TK=()
+  for a in "${raw[@]}"; do
+    a=${a//[\"\'\\]/}
+    if (( drop )); then drop=0; continue; fi
+    if [[ "$a" == *[\<\>]* ]]; then
+      pre=${a%%[<>]*}
+      tgt=${a#*[<>]}
+      tgt=${tgt#"${tgt%%[!<>&|]*}"}       # the rest of the operator, any length
+      [[ -z "$tgt" ]] && drop=1
+      [[ -z "$pre" || "$pre" =~ ^[0-9]+$ || "$pre" == '&' ]] && continue
+      a=$pre
+    fi
+    TK+=( "$a" )
+  done
+}
+
+# naive_pass <command>: each separator is kept at the start of the segment it
+# opens, so the walk can tell what a `cd` was joined to: `&&` and `;` move the
+# shell; a pipe, `||`, a background `&` or a subshell leave its directory
+# unknown. A redirection carrying `&` (`2>&1`, `&>file`, `>&2`, `|&`) is not
+# a background job or a separator, so it is folded to its plain form first.
+naive_pass() {
+  local -a segs=(); local s=$1 x line lead prev next k cont
+  s=${s//'&>'/'>'}
+  s=${s//'>&'/'>'}
+  s=${s//'<&'/'<'}
+  s=${s//'|&'/'|'}
+  for x in ';' '&' '|' '(' ')' '`'; do s=${s//"$x"/$'\n'"$x"}; done
+  while IFS= read -r line; do segs+=( "$line" ); done <<<"$s"
+  for (( k=0; k<${#segs[@]}; k++ )); do
+    line=${segs[k]}
+    lead=${line:0:1}
+    case "$lead" in
+      '(') (( sub++ )) ;;
+      ')') (( sub > 0 )) && (( sub-- )) ;;
+      '|') (( last_cd )) && vcwd="" ;;
+      '&')
+        prev=""
+        (( k > 0 )) && prev=${segs[k-1]}
+        (( last_cd )) && [[ "$line" != '&' && "$prev" != '&' ]] && vcwd="" ;;
+    esac
+    [[ "$lead" == [\;\&\|\(\)\`] ]] && line=${line:1}
+    next=${segs[k+1]:-}
+    cont=0
+    [[ "${next:0:1}" == '`' ]] && cont=1
+    naive_words "$line"
+    judge "$cont"
+  done
+}
+
+# The quote-aware tokeniser's pieces, each anchored at the start of what is
+# left. An unterminated quote runs to the end, as the shell would wait for it.
+# A redirection carrying `&` (`2>&1`, `&>file`, `>&2`) or `|` (`>|file`) is
+# one operator, tried before the separators so its `&` is not a background
+# job; `|&` is a pipe.
+Q_WS=$'^[ \t]+'
+Q_RD='^(&>>?|[<>]+[&|]?)'
+Q_OP=$'^(&&|\\|\\||\\|&|;;|[;&|()`\n])'
+Q_SQ="^'([^']*)'?"
+Q_DQ='^"(([^"\\]|\\.)*)"?'
+Q_BS='^\\(.?)'
+Q_LIT=$'^[^ \t\n;&|()`<>\'"\\\\]+'
+
+# qtokens <command>: the command as shell words and operators, quote-aware.
+# Sets QT to items "W<word>" and "O<operator>". An unquoted < or > starts a
+# redirection: a plain-digit word before it is its file descriptor, and the
+# next word is its target; both are dropped.
+qtokens() {
+  local s="$1" w="" m v have=0 wq=0 skip=0
+  QT=()
+  q_end() {
+    if (( have )); then
+      if (( skip )); then skip=0; else QT+=( "W$w" ); fi
+    fi
+    w=""; have=0; wq=0
+  }
+  while [[ -n "$s" ]]; do
+    if [[ "$s" =~ $Q_WS ]]; then
+      m=${BASH_REMATCH[0]}; q_end
+    elif [[ "$s" =~ $Q_RD ]]; then
+      m=${BASH_REMATCH[0]}
+      if (( have && !wq )) && [[ "$w" =~ ^[0-9]+$ ]]; then
+        w=""; have=0
+      else
+        q_end
+      fi
+      skip=1
+    elif [[ "$s" =~ $Q_OP ]]; then
+      m=${BASH_REMATCH[0]}; q_end; skip=0; QT+=( "O$m" )
+    elif [[ "$s" =~ $Q_SQ ]]; then
+      m=${BASH_REMATCH[0]}; w+=${BASH_REMATCH[1]}; have=1; wq=1
+    elif [[ "$s" =~ $Q_DQ ]]; then
+      m=${BASH_REMATCH[0]}; v=${BASH_REMATCH[1]}; w+=${v//\\\"/\"}; have=1; wq=1
+    elif [[ "$s" =~ $Q_BS ]]; then
+      m=${BASH_REMATCH[0]}; w+=${BASH_REMATCH[1]}; have=1; wq=1
+    elif [[ "$s" =~ $Q_LIT ]]; then
+      m=${BASH_REMATCH[0]}; w+=$m; have=1
+    else
+      m=${s:0:1}; w+=$m; have=1
+    fi
+    s=${s:${#m}}
+  done
+  q_end
+}
+
+# The quote-aware pass costs time in proportion to the command's length times
+# its words; past this a command that names push is refused rather than left
+# unjudged, since a hook that overruns its timeout does not block.
+Q_MAX=8192
+
+# quote_pass <command>: judge each simple command between unquoted operators.
+quote_pass() {
+  local -a items=(); local it op k cont
+  if (( ${#1} > Q_MAX )); then
+    block_push "a command over $Q_MAX characters that names push is too long to judge (write long content with a file tool)"
+  fi
+  qtokens "$1"
+  items=( "${QT[@]}" "O" )
+  TK=()
+  for (( k=0; k<${#items[@]}; k++ )); do
+    it=${items[k]}
+    if [[ "$it" == W* ]]; then TK+=( "${it:1}" ); continue; fi
+    op=${it:1}
+    cont=0
+    [[ "$op" == '`' ]] && cont=1
+    (( ${#TK[@]} )) && judge "$cont"
+    TK=()
+    case "$op" in
+      '(')          (( sub++ )) ;;
+      ')')          (( sub > 0 )) && (( sub-- )) ;;
+      '|'|'||'|'&') (( last_cd )) && vcwd="" ;;
+    esac
+  done
+}
+
+# scan_command <command>: both passes, each from the same starting directory.
+# A command that does not name push at all, once quotes are gone, has nothing
+# for these rules to judge.
+scan_command() {
+  local start=$vcwd s0=$sub t=${1//[\"\'\\]/}
+  [[ "$t" == *push* ]] || return 0
+  sub=0; last_cd=0
+  naive_pass "$1"
+  vcwd=$start; sub=0; last_cd=0
+  quote_pass "$1"
+  vcwd=$start; sub=$s0
+}
+
 # A backslash-newline continues the line, as the shell would join it.
 pcmd=${cmd//$'\\\n'/ }
-
-# Segments: the command split on the shell's separators, naively — quotes are
-# not respected, so a separator inside a quoted string starts a new segment.
-# That can only add segments, and so only ever refuse more. Each separator is
-# kept at the start of the segment it opens, so the walk can tell what a `cd`
-# was joined to: `&&` and `;` move the shell; a pipe, `||`, a background `&`
-# or a subshell leave its directory unknown.
-# A redirection that carries an `&` (`2>&1`, `&>file`, `>&2`, `|&`) is not a
-# background job or a separator; it is folded to its plain form first, so
-# `cd repo 2>&1 && git push` still moves the shell.
-segs=()
-s=$pcmd
-s=${s//'&>'/'>'}
-s=${s//'>&'/'>'}
-s=${s//'<&'/'<'}
-s=${s//'|&'/'|'}
-for x in ';' '&' '|' '(' ')' '`'; do s=${s//"$x"/$'\n'"$x"}; done
-while IFS= read -r line; do segs+=( "$line" ); done <<<"$s"
-for (( k=0; k<${#segs[@]}; k++ )); do
-  line=${segs[k]}
-  lead=${line:0:1}
-  case "$lead" in
-    '(') (( sub++ )) ;;
-    ')') (( sub > 0 )) && (( sub-- )) ;;
-    '|') (( last_cd )) && vcwd="" ;;
-    '&')
-      prev=""
-      (( k > 0 )) && prev=${segs[k-1]}
-      (( last_cd )) && [[ "$line" != '&' && "$prev" != '&' ]] && vcwd="" ;;
-  esac
-  [[ "$lead" == [\;\&\|\(\)\`] ]] && line=${line:1}
-  next=${segs[k+1]:-}
-  cont=0
-  [[ "${next:0:1}" == '`' ]] && cont=1
-  check_push "$line" "$cont"
-done
+scan_command "$pcmd"
 
 # Backstop over the whole string for spellings the segment parser cannot
 # reach (an interpreter's inline code, a here-document): a bare --force or a
