@@ -48,7 +48,7 @@ flat=${flat//[\"\'\\]/}
 # Besides the names, gh's own subcommands: a command word the shell builds
 # (${G}h, /usr/bin/g?) hides `gh` but not what follows it.
 about_github='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-]|$)|graphql|github\.com'
-about_github+='|(^|[^A-Za-z0-9_])(pr[[:space:]]+(create|review)|api[[:space:]]|repo[[:space:]]+sync|alias[[:space:]]+(set|import))'
+about_github+='|(^|[^A-Za-z0-9_])(pr[[:space:]]+(create|new|review)|api[[:space:]]|repo[[:space:]]+sync|alias[[:space:]]+(set|import))'
 if [[ "$payload" != *'\u'* && "$payload" != *"\$'"* ]]; then
   shopt -s nocasematch
   [[ "$flat" =~ $about_github ]] || exit 0

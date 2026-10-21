@@ -63,6 +63,15 @@ rule; the line never quotes the command.
   name the ref by an opaque ID, so they are refused outright;
   `createCommitOnBranch` and `mergeBranch` when they name the default branch
   or name no branch. The default branch is `main` or `master`, as in ADR 0036.
+
+**Not refused here: merging a pull request.** `gh pr merge`, REST
+`PUT …/pulls/<n>/merge` and GraphQL `mergePullRequest` /
+`enablePullRequestAutoMerge` pass. A merge is the one write to the default
+branch that is meant to happen, once a project's own conditions hold (its
+approvals, checks and review replies), and the base cannot know those
+conditions. They belong to a project-level merge-gate hook and to the
+server's branch ruleset, which requires the code owner's approval. The matrix
+pins this with allow cases, so a change to it is deliberate.
 - A write to a github.com host through `curl` or `wget` (a data, form or
   upload option, or a method other than GET or HEAD), and options this guard
   cannot read: `curl -K` / `--config` (in a cluster too, `-sK`, and `-K-` from
@@ -190,6 +199,8 @@ The guard reads the command text, so it does not see:
   the same subcommands; the same residual as a `git` earlier on PATH in
   ADR 0036;
 - an MCP tool (guard-mcp's, ADR 0013 and 0034) or the desktop app's tools;
+- a pull request merge, by decision (above): left to a project's merge gate
+  and the server ruleset;
 - a default branch named other than `main` or `master`;
 - a GitHub Enterprise host reached by `curl` (only github.com hosts are
   matched); gh against any host is read the same way;

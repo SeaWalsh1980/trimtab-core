@@ -2338,6 +2338,7 @@ tg 2 'gh alias import aliases.yml'                       'gh alias import, which
 tg 2 'gh "$@"'                                           'gh "$@" (accepted false positive)'
 tg 2 'G=g; ${G}h pr create --title t'                    'a gh word the shell builds still reaches the adapter'
 tg 2 '/usr/bin/g? pr create --title t'                   'a globbed gh word still reaches the adapter'
+tg 2 '/usr/bin/g? pr new --title t'                      'a globbed gh word before pr new still reaches the adapter'
 tg 2 'G=gh; sudo $G pr create --title t'                 'an expansion that may be gh, behind a wrapper'
 tg 2 'G=g; env ${G}h pr create --title t'                'a built gh word behind env'
 tg 2 'G=g; eval "${G}h pr create --title t"'             'eval keeps an expansion dynamic when it re-reads the text'
@@ -2448,6 +2449,10 @@ tg 2 'gh api -X PUT repos/o/r/contents/README.md -f message=m -f content=x -f br
 tg 0 'gh api -X PUT repos/o/r/contents/README.md -f message=m -f content=x -f branch=feat'
 tg 2 'gh api -X DELETE repos/o/r/contents/a/b.md -f message=m -f sha=x'
 tg 2 'gh api -X POST repos/o/r/merge-upstream -f branch=main'
+# Merging a PR is left to the project's merge gate and the server ruleset
+# (ADR 0037): the base cannot know a project's merge conditions.
+tg 0 'gh pr merge 1 --squash'                            'a PR merge is the merge gate'"'"'s, not this guard'"'"'s'
+tg 0 'gh api -X PUT repos/o/r/pulls/1/merge'             'a REST PR merge is the merge gate'"'"'s, not this guard'"'"'s'
 tg 2 'gh repo sync --force'
 tg 2 'gh repo sync o/r --source u/r --force'
 tg 0 'gh repo sync -b feat'
