@@ -38,11 +38,12 @@ rule; the line never quotes the command.
 
 **What it refuses.**
 
-- A PR opened as anything but a draft: `gh pr create` unless `--draft` / `-d`
-  is set last, and always with `--web` (the browser form can create a
-  non-draft PR); a REST `POST …/pulls` unless the body's `draft` is the
-  boolean `true` (`-F draft=true`, or `"draft": true` in an `--input` file);
-  a GraphQL `createPullRequest` without `draft: true`.
+- A PR opened as anything but a draft: `gh pr create` (or its alias
+  `gh pr new`) unless `--draft` / `-d` is set last, and always with `--web`
+  (the browser form can create a non-draft PR); a REST `POST …/pulls` unless
+  the body's `draft` is the boolean `true` (`-F draft=true`, or
+  `"draft": true` in an `--input` file); a GraphQL `createPullRequest`
+  without `draft: true` outside its strings and comments.
 - An approving review: `gh pr review --approve` / `-a`, in a cluster too
   (`-ca`); a REST review or review event whose `event` is APPROVE in any case;
   a GraphQL `addPullRequestReview` / `submitPullRequestReview` whose event is
@@ -59,8 +60,9 @@ rule; the line never quotes the command.
   `createCommitOnBranch` and `mergeBranch` when they name the default branch
   or name no branch. The default branch is `main` or `master`, as in ADR 0036.
 - A write to a github.com host through `curl` or `wget` (a data, form or
-  upload option, or a method other than GET or HEAD), and a `curl -K` config
-  file, which this guard cannot read. Reads pass.
+  upload option, or a method other than GET or HEAD), and options this guard
+  cannot read: `curl -K` / `--config` (in a cluster too, `-sK`, and `-K-` from
+  stdin), `wget -e` / `--execute` / `--config`. Reads pass.
 
 **How it reads a command.** Two passes, as in ADR 0036, and either may refuse.
 
@@ -89,7 +91,10 @@ dynamic `gh` command or subcommand, a body on stdin, an unreadable or non-JSON
 `--input`, a field or path built by the shell on a write, a relative file
 after a `cd`, a field given twice with different values (which one gh sends is
 gh's merge rule, not this guard's to assume), an alias expansion read from
-stdin. A path whose expansions stand only for the owner, repository or an ID
+stdin, and a request file whose name appears anywhere else in the command:
+the hook reads the file before the command runs, so a redirect, `cp`, `tee`
+or `sed -i` earlier in the same command could rewrite what gh then sends. A
+path whose expansions stand only for the owner, repository or an ID
 (`repos/$OWNER/$REPO/pulls/$N/reviews`) is read; one where an expansion may be
 a route word is not. GraphQL is any path ending in `graphql`, so GitHub
 Enterprise's `api/graphql` is read too.
@@ -175,6 +180,9 @@ The guard reads the command text, so it does not see:
 - an MCP tool (guard-mcp's, ADR 0013 and 0034) or the desktop app's tools;
 - a default branch named other than `main` or `master`;
 - a GitHub Enterprise host reached by `curl` (only github.com hosts are
-  matched); gh against any host is read the same way.
+  matched); gh against any host is read the same way;
+- state set by an earlier command: a `~/.curlrc` or `~/.wgetrc` that adds a
+  method or data, a request file written by an earlier call and read here,
+  a gh alias defined earlier.
 
 Each is a reason the server stays the boundary.

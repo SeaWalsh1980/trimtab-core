@@ -2295,6 +2295,8 @@ tg() { # tg <expected-exit> <command> [label]  — one guard-github case, run in
 # --- gh pr create: a draft, and nothing that opens a form -------------------
 tg 2 'gh pr create --title t --body b'
 tg 0 'gh pr create --draft --title t --body b'
+tg 2 'gh pr new --title t'                               'gh pr new, create'"'"'s alias'
+tg 0 'gh pr new --draft --title t'
 tg 0 'gh pr create -d -t t -b b'
 tg 0 'gh pr create -df'
 tg 2 'gh pr create --draft=false --title t'
@@ -2366,6 +2368,10 @@ tg 2 'gh api repos/o/r/pulls --input array.json'         'an --input file that i
 tg 2 'gh api repos/o/r/pulls --input draft.json --dummy' 'an unknown gh api option'
 tg 2 'cd /tmp && gh api repos/o/r/pulls --input draft.json' 'a relative file after cd'
 tg 0 "gh api repos/o/r/pulls --input $GG/draft.json"    'an absolute --input file'
+tg 2 "printf '{}' > draft.json && gh api repos/o/r/pulls --input draft.json" 'an --input file the same command rewrites'
+tg 2 'cp nodraft.json draft.json; gh api repos/o/r/pulls --input draft.json' 'an --input file the same command copies over'
+tg 2 "printf 'mutation{resolveReviewThread(input:{threadId:1}){clientMutationId}}' > read.graphql; gh api graphql -F query=@read.graphql" 'a query file the same command rewrites'
+tg 0 'cat comment.json; gh api repos/o/r/pulls --input draft.json' 'another file named in the command does not count'
 tg 0 'gh api "repos/$REPO/pulls?state=open"'
 tg 0 'gh api repos/o/r/pulls'
 tg 2 'gh api -XPOST https://api.github.com/repos/o/r/pulls -f title=t'
@@ -2408,6 +2414,8 @@ tg 2 "gh api graphql -f query='mutation(\$e: PullRequestReviewEvent!) { submitPu
 tg 0 "gh api graphql -f query='mutation { addPullRequestReview(input:{pullRequestId:\"x\", event: COMMENT, body:\"approve?\"}) { clientMutationId } }'"
 tg 2 "gh api graphql -f query='mutation { createPullRequest(input:{repositoryId:\"x\",baseRefName:\"main\",headRefName:\"h\",title:\"t\"}) { clientMutationId } }'"
 tg 0 "gh api graphql -f query='mutation { createPullRequest(input:{repositoryId:\"x\",baseRefName:\"main\",headRefName:\"h\",title:\"t\",draft:true}) { clientMutationId } }'"
+tg 2 "gh api graphql -f query='mutation { createPullRequest(input:{repositoryId:\"x\",baseRefName:\"main\",headRefName:\"h\",title:\"t\"}) { clientMutationId } } # draft: true'" 'draft: true in a GraphQL comment sets nothing'
+tg 2 "gh api graphql -f query='mutation { createPullRequest(input:{repositoryId:\"x\",baseRefName:\"main\",headRefName:\"h\",title:\"draft: true\"}) { clientMutationId } }'" 'draft: true in a GraphQL string sets nothing'
 tg 2 "gh api graphql -f query='mutation { updateRef(input:{refId:\"x\",oid:\"y\"}) { clientMutationId } }'"
 tg 2 "gh api graphql -f query='mutation { createCommitOnBranch(input:{branch:{repositoryNameWithOwner:\"o/r\",branchName:\"main\"}}) { clientMutationId } }'"
 tg 0 "gh api graphql -f query='mutation { createCommitOnBranch(input:{branch:{repositoryNameWithOwner:\"o/r\",branchName:\"feat\"}}) { clientMutationId } }'"
@@ -2441,6 +2449,12 @@ tg 0 'curl -fsSL https://example.com/x -d y'
 tg 2 'wget --post-data=x https://api.github.com/graphql'
 tg 2 'curl -K cfg https://api.github.com/x'              'curl options from a file'
 tg 0 'curl --request-target x https://api.github.com/x'  'curl --request-target is not a method'
+tg 2 'curl -K- https://api.github.com/graphql'           'curl options on stdin'
+tg 2 'curl -sK cfg https://api.github.com/graphql'       'curl -K inside a short cluster'
+tg 2 'curl --config=cfg https://api.github.com/graphql'
+tg 2 "wget -e 'method=POST' https://api.github.com/graphql" 'wget -e runs a wgetrc command'
+tg 2 'wget --config=w.rc https://api.github.com/graphql'
+tg 0 'wget -qO- https://api.github.com/repos/o/r'        'a wget read'
 tg 2 'curl --request=PATCH https://api.github.com/repos/o/r/git/refs/heads/main'
 tg 2 'curl --request DELETE https://api.github.com/repos/o/r/git/refs/heads/main'
 # --- text that only mentions a refused command -----------------------------

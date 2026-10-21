@@ -293,6 +293,7 @@ class Ctx:
     cwd: Path
     cwd_known: bool       # no cd / pushd / popd earlier in the command
     strict: bool          # quote-aware pass
+    command: str = ""     # the whole command the hook was given
 
     def unknown(self, what: str) -> None:
         """Something the decision needs cannot be read: refused by the quote-aware pass only."""
@@ -303,6 +304,13 @@ class Ctx:
         t = word.text
         if word.dynamic or t in ("", "-"):
             self.unknown("a value comes from stdin or a shell expansion")
+            return None
+        # The file is read now, but gh reads it after the rest of the command has run, which
+        # may have rewritten it. So a file whose name appears anywhere else in the command
+        # (a redirect, cp, tee, sed -i, ln) is unreadable.
+        name = re.escape(posixpath.basename(t.rstrip("/")))
+        if len(re.findall(rf"(?<![A-Za-z0-9_.-]){name}(?![A-Za-z0-9_.-])", self.command)) > 1:
+            self.unknown("a file the request reads is also named elsewhere in the command")
             return None
         path = Path(t).expanduser()
         if not path.is_absolute():
@@ -404,7 +412,7 @@ def check_gh(args: list[Word], ctx: Ctx) -> None:
         if group.text in ("pr", "repo", "alias"):
             ctx.unknown("the gh command is a shell expansion")
         return
-    if group.text == "pr" and sub.text == "create":
+    if group.text == "pr" and sub.text in ("create", "new"):  # cobra registers `new` as create's alias
         check_pr_create(tail, ctx)
     elif group.text == "pr" and sub.text == "review":
         check_pr_review(tail, ctx)
@@ -636,6 +644,13 @@ _DRAFT_TRUE = re.compile(r"(?<![A-Za-z0-9_])draft\s*:\s*true(?![A-Za-z0-9_])", r
 _REF_MUTATION = re.compile(r"(?<![A-Za-z0-9_])(?:updateRefs?|deleteRef)(?![A-Za-z0-9_])", re.I)
 _BRANCH_MUTATION = re.compile(r"(?<![A-Za-z0-9_])(?:createCommitOnBranch|mergeBranch)(?![A-Za-z0-9_])", re.I)
 _DEFAULT_NAME = re.compile(r"(?<![A-Za-z0-9_./-])(?:refs/heads/)?(?:main|master)(?![A-Za-z0-9_./-])", re.I)
+# GraphQL strings (block and plain) and comments: what is said there sets nothing.
+_GQL_NOISE = re.compile(r'"""[\s\S]*?(?:"""|$)|"(?:[^"\\\n]|\\.)*"?|#[^\n]*')
+
+
+def _skeleton(query: str) -> str:
+    """The query with its strings and comments blanked, for a check that something is set."""
+    return _GQL_NOISE.sub(" ", query)
 
 
 def _strings(value) -> list[str]:
@@ -681,7 +696,7 @@ def check_graphql(req: Request, ctx: Ctx) -> None:
         if unknown:
             ctx.unknown("the review mutation's variables are unreadable")
     if _CREATE_PR.search(query):
-        draft = _DRAFT_TRUE.search(query) or _variable_draft(variables)
+        draft = _DRAFT_TRUE.search(_skeleton(query)) or _variable_draft(variables)
         if not draft and not (unknown and not ctx.strict):
             raise Refused("a PR opened through GraphQL must set `draft: true`")
     if _REF_MUTATION.search(query):
@@ -718,8 +733,11 @@ def check_http(tool: str, args: list[Word], ctx: Ctx) -> None:
         t = w.text
         if tool == "wget":
             write |= bool(_WGET_WRITE.match(t))
+            # -e / --execute runs a wgetrc command (`method=POST`); --config reads a wgetrc.
+            if re.match(r"^(?:--execute|--config)(?:=|$)", t) or re.match(r"^-[A-Za-z]*e", t):
+                ctx.unknown("wget takes commands from an option or a file")
             continue
-        if t in ("-K", "--config") or t.startswith("--config="):
+        if re.match(r"^--config(?:=|$)", t) or re.match(r"^-[A-Za-z]*K", t):
             ctx.unknown("curl reads its options from a file")
         if _CURL_WRITE_LONG.match(t):
             write = True
@@ -784,7 +802,7 @@ def judge(command: str, ctx: Ctx, parsed: list[list[Word]] | None = None) -> Non
     if ctx.strict and runs_text(command, naive):
         passes.append((False, naive))
     for strict, segs in passes:
-        sub = Ctx(ctx.cwd, ctx.cwd_known, strict)
+        sub = Ctx(ctx.cwd, ctx.cwd_known, strict, ctx.command)
         for words in segs:
             check_segment(words, sub)
 
@@ -802,7 +820,8 @@ def decide(payload: dict) -> tuple[int, str]:
     cwd_known = isinstance(cwd, str) and cwd.startswith("/") and not any(
         w.text in DIR_CHANGERS for s in parsed for w in s)
     try:
-        judge(command, Ctx(Path(cwd) if isinstance(cwd, str) and cwd else Path("/"), cwd_known, True), parsed)
+        judge(command, Ctx(Path(cwd) if isinstance(cwd, str) and cwd else Path("/"), cwd_known, True, command),
+              parsed)
     except Refused as why:
         return BLOCK, (f"guard-github: blocked: {why}. This is a GitHub write the operator makes "
                        "(docs/adr/0037-guard-github-refuses-the-github-writes-the-operator-owns.md); "
