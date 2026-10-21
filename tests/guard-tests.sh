@@ -2467,6 +2467,15 @@ tg 0 $'# gh pr create\ngit status'                       'a comment naming a ref
 tg 2 'echo gh pr create'                                 'an unquoted gh word (accepted false positive)'
 tg 2 "printf 'gh pr review 1 --approve' | xargs -0 sh -c" 'quoted text run through xargs'
 tg 2 "ssh host 'gh pr review 1 --approve'"               'quoted text run remotely'
+tg 2 'echo --draft=false | xargs gh pr create --draft --title t' 'xargs appends arguments to a create'
+tg 2 'echo --approve | xargs gh pr review 1 --comment'   'xargs appends arguments to a review'
+tg 2 'echo pr create --title t | xargs gh'               'xargs supplies the whole gh command'
+tg 2 'printf x | parallel gh pr create --draft --title {}' 'parallel appends arguments'
+tg 2 "env -S 'gh pr create --title t'"                   'env -S splits a string into a create'
+tg 2 "env --split-string='gh pr review 1 --approve'"     'env --split-string= splits a string into an approval'
+tg 2 "env -i -S 'gh pr create --title t'"
+tg 0 'env FOO=1 gh pr create --draft --title t'          'env with an assignment still reads gh'
+tg 0 "env -S 'gh pr create --draft --title t'"
 
 # --- the payload, the parser and the override ------------------------------
 t guard-github.sh 2 "empty payload"                      ''

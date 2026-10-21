@@ -66,6 +66,8 @@ _NAIVE_SPLIT = re.compile(r"\$\(|[;&|()`\n]")
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "mksh", "busybox"}
 # Commands that run text, from an argument or their input, as a command.
 RUNS_TEXT = SHELLS | {"eval", "source", ".", "xargs", "ssh", "su", "parallel", "watch", "script", "flock"}
+# Commands that append arguments read from stdin to the command they run.
+APPENDERS = {"xargs", "parallel"}
 DIR_CHANGERS = {"cd", "pushd", "popd"}
 # Stands for an expansion inside a word, so a path keeps its literal structure.
 HOLE = "\x00"
@@ -761,15 +763,33 @@ def check_http(tool: str, args: list[Word], ctx: Ctx) -> None:
 # ---- one command -------------------------------------------------------------------------
 
 def check_segment(words: list[Word], ctx: Ctx) -> None:
+    appends = False  # an earlier word (xargs, parallel) adds arguments the guard never sees
     for k, w in enumerate(words):
         name = _ASSIGNMENT.sub("", w.text) if not ctx.strict else w.text
         base = posixpath.basename(name)
         rest = words[k + 1:]
-        if not w.dynamic and base == "gh":
+        is_gh = (not w.dynamic and base == "gh") or (
+            # An expansion that may be gh, anywhere a wrapper (sudo, env, nice) could put it.
+            w.dynamic and bool(rest) and rest[0].text in ("pr", "api", "repo", "alias") and not rest[0].dynamic)
+        if is_gh:
+            if appends:
+                ctx.unknown("xargs or parallel appends arguments to gh that this guard cannot read")
             check_gh(rest, ctx)
-        # An expansion that may be gh, anywhere a wrapper (sudo, env, nice) could put it.
-        elif w.dynamic and rest and rest[0].text in ("pr", "api", "repo", "alias") and not rest[0].dynamic:
-            check_gh(rest, ctx)
+        elif not w.dynamic and base in APPENDERS:
+            appends = True
+        elif not w.dynamic and base == "env":
+            for j, x in enumerate(rest):
+                t = x.text
+                if t in ("-S", "--split-string") and j + 1 < len(rest):
+                    split = rest[j + 1]
+                elif m := re.fullmatch(r"(?:-[A-Za-z]*S|--split-string=)(.+)", t, re.S):
+                    split = Word(m.group(1), x.dynamic)
+                else:
+                    continue
+                if split.dynamic:
+                    ctx.unknown("env -S runs a command built by the shell")
+                judge(split.text, ctx)  # env -S splits its argument into a command
+                break
         elif not w.dynamic and base in ("curl", "wget"):
             check_http(base, rest, ctx)
         elif not w.dynamic and base == "eval":
@@ -788,7 +808,13 @@ def runs_text(command: str, naive: list[list[Word]]) -> bool:
 
     Substitutions need no naive pass: the quote-aware pass reads them, quoted or not.
     """
-    return any(posixpath.basename(_ASSIGNMENT.sub("", w.text)) in RUNS_TEXT for seg in naive for w in seg)
+    for seg in naive:
+        names = [posixpath.basename(_ASSIGNMENT.sub("", w.text)) for w in seg]
+        if any(n in RUNS_TEXT for n in names):
+            return True
+        if "env" in names and any(re.match(r"-[A-Za-z]*S|--split-string", w.text) for w in seg):
+            return True  # env -S splits a string into a command
+    return False
 
 
 def judge(command: str, ctx: Ctx, parsed: list[list[Word]] | None = None) -> None:

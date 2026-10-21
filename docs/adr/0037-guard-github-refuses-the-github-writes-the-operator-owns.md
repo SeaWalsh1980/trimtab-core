@@ -73,7 +73,8 @@ rule; the line never quotes the command.
    way pflag reads them: clusters letter by letter, a valued option taking the
    rest of the cluster or the next word, `--opt=value`, and no abbreviations
    (cobra accepts none). The last setting of an option wins. `bash -c`,
-   `sh -lc`, `eval` and `gh alias set` re-read the text they will run, and so
+   `sh -lc`, `eval`, `env -S` and `gh alias set` re-read the text they will
+   run, and so
    does a `$(…)` or backquote substitution inside double quotes; text re-read
    keeps its expansions dynamic.
 2. *Naive.* Every quote and backslash removed, split the same way, every word
@@ -91,7 +92,9 @@ dynamic `gh` command or subcommand, a body on stdin, an unreadable or non-JSON
 `--input`, a field or path built by the shell on a write, a relative file
 after a `cd`, a field given twice with different values (which one gh sends is
 gh's merge rule, not this guard's to assume), an alias expansion read from
-stdin, and a request file whose name appears anywhere else in the command:
+stdin, gh run by `xargs` or `parallel` (they append arguments read from stdin,
+which can unset `--draft` or add `--approve`; guard-bash refuses `xargs`
+pushes for the same reason, ADR 0036), and a request file whose name appears anywhere else in the command:
 the hook reads the file before the command runs, so a redirect, `cp`, `tee`
 or `sed -i` earlier in the same command could rewrite what gh then sends. A
 path whose expansions stand only for the owner, repository or an ID
@@ -183,6 +186,11 @@ The guard reads the command text, so it does not see:
   matched); gh against any host is read the same way;
 - state set by an earlier command: a `~/.curlrc` or `~/.wgetrc` that adds a
   method or data, a request file written by an earlier call and read here,
-  a gh alias defined earlier.
+  a gh alias defined earlier;
+- a request file rewritten in the same command through a name the guard
+  cannot match to it: a glob (`> re*.graphql`), a variable (`cp x "$F"`), or
+  another link to the same file. Matching those would mean refusing every
+  command that names a glob or a variable beside a file read, which refuses
+  ordinary calls; it takes deliberate evasion, which the server still stops.
 
 Each is a reason the server stays the boundary.
