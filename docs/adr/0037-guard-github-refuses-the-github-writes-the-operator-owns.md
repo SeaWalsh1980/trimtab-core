@@ -42,8 +42,12 @@ rule; the line never quotes the command.
   `gh pr new`) unless `--draft` / `-d` is set last, and always with `--web`
   (the browser form can create a non-draft PR); a REST `POST …/pulls` unless
   the body's `draft` is the boolean `true` (`-F draft=true`, or
-  `"draft": true` in an `--input` file); a GraphQL `createPullRequest`
-  without `draft: true` outside its strings and comments.
+  `"draft": true` in an `--input` file); a GraphQL `createPullRequest` unless
+  every draft it passes is true and it passes one: a literal outside its
+  strings and comments (`draft: true`), the variable it names
+  (`draft: $d` with `-F d=true`), or an input object passed whole
+  (`input: $i` with `-F i[draft]=true`). A variable the query does not use
+  sets nothing. Fields nest as gh nests them (`a[b]=v`, `a[]=v`).
 - An approving review: `gh pr review --approve` / `-a`, in a cluster too
   (`-ca`); a REST review or review event whose `event` is APPROVE in any case;
   a GraphQL `addPullRequestReview` / `submitPullRequestReview` whose event is
@@ -181,6 +185,10 @@ The guard reads the command text, so it does not see:
   `node`, a Makefile), or a script piped into a shell from a file;
 - a gh alias or extension defined before the session, or in a file;
 - a command word that comes from the environment rather than the command;
+- gh under another name: a copy, a symlink or a wrapper (`./g2 pr create`).
+  Reading any word followed by `pr create` as gh would refuse other tools with
+  the same subcommands; the same residual as a `git` earlier on PATH in
+  ADR 0036;
 - an MCP tool (guard-mcp's, ADR 0013 and 0034) or the desktop app's tools;
 - a default branch named other than `main` or `master`;
 - a GitHub Enterprise host reached by `curl` (only github.com hosts are

@@ -547,7 +547,6 @@ def body_of(req: Request, ctx: Ctx) -> dict | Unknown:
             return UNKNOWN
         if not eq:
             continue
-        key = re.sub(r"\[.*$", "", key)
         if HOLE in val:
             value = UNKNOWN
         elif name in ("-F", "--field") and val.startswith("@"):
@@ -557,12 +556,49 @@ def body_of(req: Request, ctx: Ctx) -> dict | Unknown:
             value = _typed(val)
         else:
             value = val
-        # A key given twice with different values: which one gh sends is gh's merge rule,
-        # not this guard's to assume, so the value counts as unreadable.
-        if key in body and body[key] != value:
-            value = UNKNOWN
-        body[key] = value
+        _set_field(body, key, value)
     return body
+
+
+def _set_field(body: dict, key: str, value) -> None:
+    """Place a field as gh nests it: `a[b]=v` is {"a": {"b": v}}, `a[]=v` appends to a list.
+
+    A key given twice with different values: which one gh sends is gh's merge rule, not this
+    guard's to assume, so the value counts as unreadable. A key whose shape this does not read
+    makes its top-level name unreadable.
+    """
+    m = re.fullmatch(r"([^\[\]]+)((?:\[[^\[\]]*\])*)", key)
+    if not m:
+        body[re.sub(r"\[.*$", "", key)] = UNKNOWN
+        return
+    parts = [m.group(1)] + re.findall(r"\[([^\[\]]*)\]", m.group(2))
+    array = parts[-1] == ""
+    path = parts[:-1] if array else parts
+    if "" in path:
+        body[parts[0]] = UNKNOWN  # an array of objects: not a shape any check here needs
+        return
+    node = body
+    for part in path[:-1]:
+        child = node.get(part)
+        if child is None:
+            child = node[part] = {}
+        if not isinstance(child, dict):
+            node[part] = UNKNOWN
+            return
+        node = child
+    last = path[-1]
+    if array:
+        current = node.get(last)
+        if current is None:
+            node[last] = [value]
+        elif isinstance(current, list):
+            current.append(value)
+        else:
+            node[last] = UNKNOWN
+        return
+    if last in node and node[last] != value:
+        value = UNKNOWN
+    node[last] = value
 
 
 def _get(body: dict | Unknown, key: str, ctx: Ctx, what: str):
@@ -614,7 +650,10 @@ def check_api(args: list[Word], ctx: Ctx) -> None:
             raise Refused("a PR opened through the API must send `-F draft=true`")
     elif R_REVIEW.fullmatch(path):
         event = _get(body_of(req, ctx), "event", ctx, "the review's event is a shell expansion or unreadable")
-        if isinstance(event, str) and event.strip().upper() == "APPROVE":
+        if _has_unknown(event):
+            ctx.unknown("the review's event is a shell expansion or unreadable")
+        # A string, or one nested in a list or object (`-f event[]=APPROVE`).
+        if any(s.strip().upper() == "APPROVE" for s in _strings(event)):
             raise Refused("an approving review is the code owner's, never the session's")
     elif m := R_REF.fullmatch(path):
         if m.group(1).strip("/") in DEFAULT_BRANCHES or HOLE in m.group(1):
@@ -642,7 +681,6 @@ _REVIEW_MUTATION = re.compile(r"(?<![A-Za-z0-9_])(?:addPullRequestReview|submitP
                               r"(?![A-Za-z0-9_])", re.I)
 _EVENT_APPROVE = re.compile(r"(?<![A-Za-z0-9_])event\s*:\s*\"?APPROVE(?![A-Za-z0-9_])", re.I)
 _CREATE_PR = re.compile(r"(?<![A-Za-z0-9_])createPullRequest(?![A-Za-z0-9_])", re.I)
-_DRAFT_TRUE = re.compile(r"(?<![A-Za-z0-9_])draft\s*:\s*true(?![A-Za-z0-9_])", re.I)
 _REF_MUTATION = re.compile(r"(?<![A-Za-z0-9_])(?:updateRefs?|deleteRef)(?![A-Za-z0-9_])", re.I)
 _BRANCH_MUTATION = re.compile(r"(?<![A-Za-z0-9_])(?:createCommitOnBranch|mergeBranch)(?![A-Za-z0-9_])", re.I)
 _DEFAULT_NAME = re.compile(r"(?<![A-Za-z0-9_./-])(?:refs/heads/)?(?:main|master)(?![A-Za-z0-9_./-])", re.I)
@@ -698,7 +736,7 @@ def check_graphql(req: Request, ctx: Ctx) -> None:
         if unknown:
             ctx.unknown("the review mutation's variables are unreadable")
     if _CREATE_PR.search(query):
-        draft = _DRAFT_TRUE.search(_skeleton(query)) or _variable_draft(variables)
+        draft = _graphql_draft(_skeleton(query), variables if isinstance(variables, dict) else {})
         if not draft and not (unknown and not ctx.strict):
             raise Refused("a PR opened through GraphQL must set `draft: true`")
     if _REF_MUTATION.search(query):
@@ -711,12 +749,25 @@ def check_graphql(req: Request, ctx: Ctx) -> None:
             raise Refused("a commit or merge onto the default branch through GraphQL")
 
 
-def _variable_draft(variables) -> bool:
-    if isinstance(variables, dict):
-        return any((k == "draft" and v is True) or _variable_draft(v) for k, v in variables.items())
-    if isinstance(variables, list):
-        return any(_variable_draft(v) for v in variables)
-    return False
+_DRAFT_ARG = re.compile(r"(?<![A-Za-z0-9_])draft\s*:\s*(\$?[A-Za-z0-9_]+)", re.I)
+_INPUT_VAR = re.compile(r"(?<![A-Za-z0-9_])input\s*:\s*\$([A-Za-z0-9_]+)", re.I)
+
+
+def _graphql_draft(skeleton: str, variables: dict) -> bool:
+    """Every draft the query sets is true, and it sets at least one.
+
+    A draft is read where the query passes it: a literal (`draft: true`), a variable the query
+    names (`draft: $d`), or a whole input object passed as a variable (`input: $i`). A variable
+    the query does not use sets nothing.
+    """
+    settings = []
+    for value in _DRAFT_ARG.findall(skeleton):
+        settings.append(variables.get(value[1:]) if value.startswith("$") else value.lower() == "true")
+    for name in _INPUT_VAR.findall(skeleton):
+        obj = variables.get(name)
+        if isinstance(obj, dict) and "draft" in obj:
+            settings.append(obj["draft"])
+    return bool(settings) and all(s is True for s in settings)
 
 
 # ---- curl and wget -----------------------------------------------------------------------

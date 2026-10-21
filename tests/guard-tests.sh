@@ -2416,6 +2416,15 @@ tg 2 "gh api graphql -f query='mutation { createPullRequest(input:{repositoryId:
 tg 0 "gh api graphql -f query='mutation { createPullRequest(input:{repositoryId:\"x\",baseRefName:\"main\",headRefName:\"h\",title:\"t\",draft:true}) { clientMutationId } }'"
 tg 2 "gh api graphql -f query='mutation { createPullRequest(input:{repositoryId:\"x\",baseRefName:\"main\",headRefName:\"h\",title:\"t\"}) { clientMutationId } } # draft: true'" 'draft: true in a GraphQL comment sets nothing'
 tg 2 "gh api graphql -f query='mutation { createPullRequest(input:{repositoryId:\"x\",baseRefName:\"main\",headRefName:\"h\",title:\"draft: true\"}) { clientMutationId } }'" 'draft: true in a GraphQL string sets nothing'
+GG_CPR='createPullRequest(input:{repositoryId:"x",baseRefName:"main",headRefName:"h",title:"t"'
+tg 2 "gh api graphql -f query='mutation { $GG_CPR,draft:false}) { clientMutationId } }' -F draft=true" 'draft:false in the query beside an unused draft variable'
+tg 0 "gh api graphql -f query='mutation(\$d:Boolean) { $GG_CPR,draft:\$d}) { clientMutationId } }' -F d=true" 'draft through the variable the query names'
+tg 2 "gh api graphql -f query='mutation(\$d:Boolean) { $GG_CPR,draft:\$d}) { clientMutationId } }' -F d=false"
+tg 2 "gh api graphql -f query='mutation(\$d:Boolean) { $GG_CPR,draft:\$d}) { clientMutationId } }'" 'a draft variable the request never sets'
+tg 0 "gh api graphql -f query='mutation(\$i:CreatePullRequestInput!) { createPullRequest(input:\$i) { clientMutationId } }' -F 'i[draft]=true' -f 'i[title]=t'" 'a whole input object with draft true'
+tg 2 "gh api graphql -f query='mutation(\$i:CreatePullRequestInput!) { createPullRequest(input:\$i) { clientMutationId } }' -F 'i[draft]=false'"
+tg 2 "gh api graphql -f query='mutation(\$i:CreatePullRequestInput!) { createPullRequest(input:\$i) { clientMutationId } }' -f 'i[title]=t'" 'an input object with no draft'
+tg 2 'gh api repos/o/r/pulls/1/reviews -f "event[]=APPROVE"' 'an APPROVE nested in a list'
 tg 2 "gh api graphql -f query='mutation { updateRef(input:{refId:\"x\",oid:\"y\"}) { clientMutationId } }'"
 tg 2 "gh api graphql -f query='mutation { createCommitOnBranch(input:{branch:{repositoryNameWithOwner:\"o/r\",branchName:\"main\"}}) { clientMutationId } }'"
 tg 0 "gh api graphql -f query='mutation { createCommitOnBranch(input:{branch:{repositoryNameWithOwner:\"o/r\",branchName:\"feat\"}}) { clientMutationId } }'"
