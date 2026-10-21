@@ -547,6 +547,8 @@ for pack in ${pack_list[@]+"${pack_list[@]}"}; do
 done
 probe_guard guard-security.sh "an edit to a CI workflow" \
   '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/x/.github/workflows/ci.yml"}}'
+probe_guard guard-github.sh "a PR opened as anything but a draft" \
+  '{"tool_name":"Bash","tool_input":{"command":"gh pr create --title t --body b"}}'
 unset pem
 
 # guard-mcp never exits 2: it answers "ask" as JSON on exit 0, so the operator

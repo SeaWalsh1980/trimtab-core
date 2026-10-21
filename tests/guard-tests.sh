@@ -1958,7 +1958,7 @@ sc_report() { # sc_report <ok: 0|1> <hook> <label>
   if [[ "$1" == 0 ]]; then printf 'PASS  %-14s %-4s  %s\n' "$2" site "$3"
   else printf 'FAIL  %-14s %-4s  %s\n' "$2" site "$3"; fails=$((fails+1)); fi
 }
-SC_HOOKS=(guard-mcp.sh pr-monitor-record.sh pr-body-check.sh doctrine-drift.sh rule-usage.sh)
+SC_HOOKS=(guard-mcp.sh pr-monitor-record.sh pr-body-check.sh doctrine-drift.sh rule-usage.sh guard-github.sh)
 sc_payload() { # sc_payload <hook>  — a payload that reaches the hook's python3
   case "$1" in
     guard-mcp.sh)         pm_fix sc-a 9 ;;
@@ -1966,6 +1966,7 @@ sc_payload() { # sc_payload <hook>  — a payload that reaches the hook's python
     # --fill blocks before the instance's registry is read, so the verdict is
     # 2 whether or not TRIMTAB_INSTANCE is set (CI has none).
     pr-body-check.sh)     j Bash '{"command":"gh pr create --title t --fill"}' ;;
+    guard-github.sh)      j Bash '{"command":"gh pr create --draft"}' ;;
     rule-usage.sh)        python3 -c 'import json; print(json.dumps({"hook_event_name":"PreToolUse","session_id":"sc-a","tool_name":"Skill","tool_input":{"skill":"trimtab-plan"}}))' ;;
     *)                    j Read '{"file_path":"/p/app/main.py"}' ;;
   esac
@@ -2047,7 +2048,7 @@ printf '%s\n' 'import runpy, sys' 'root, module = sys.argv[1], sys.argv[2]' 'sys
   'sys.argv = [module] + sys.argv[3:]' 'runpy.run_module(module, run_name="__main__", alter_sys=True)' \
   > "$SC_LEAKY/hooks/run_module.py"
 SC_RUN_CFG=$(mktemp -d "$CPTMP/sc-leaky-config.XXXXXX")
-for h in guard-mcp.sh pr-monitor-record.sh pr-body-check.sh doctrine-drift.sh; do
+for h in guard-mcp.sh pr-monitor-record.sh pr-body-check.sh doctrine-drift.sh guard-github.sh; do
   pl=$(sc_payload "$h")
   sc_run "$SC_LEAKY/hooks" "$h" "$pl" >/dev/null
   [[ -e "$SC_MARK" ]]; sc_report $? "$h" "control: with the root on sys.path a root plant does load"
@@ -2265,6 +2266,331 @@ def load(f):
 PY
 tm ask  "python3 only: a planted json.py does not make a write a read" "$MCP_WRITE" "$STUB" "$PLANT"
 tm ask  "python3 only: a planted json.py does not pass marking a PR ready" "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")" "$STUB" "$PLANT"
+
+echo "== guard-github (ADR 0037) =="
+# Each case runs in a fixture directory holding the files a request reads
+# (--input, -F key=@file), and the payload carries that directory as cwd.
+GG="$CPTMP/guard-github"
+mkdir -p "$GG"
+printf '{"event":"APPROVE"}' > "$GG/approve.json"
+printf '{"event":"COMMENT","body":"x"}' > "$GG/comment.json"
+printf '{"title":"t","head":"h","base":"main","draft":true}' > "$GG/draft.json"
+printf '{"title":"t","head":"h","base":"main"}' > "$GG/nodraft.json"
+printf '[1]' > "$GG/array.json"
+printf 'not json' > "$GG/garbage.json"
+printf 'mutation { resolveReviewThread(input:{threadId:"x"}) { thread { id } } }' > "$GG/resolve.graphql"
+# r is r: the mutation's name is spelled with a JSON escape.
+printf '{"query":"mutation { \\u0072esolveReviewThread(input:{threadId:\\"x\\"}) { thread { id } } }"}' > "$GG/resolve-esc.json"
+printf 'query { viewer { login } }' > "$GG/read.graphql"
+mkfifo "$GG/fifo"
+# Valid JSON with draft true, so only the size limit refuses it.
+python3 -c 'import json,sys; json.dump({"draft": True, "pad": "x" * 1100000}, open(sys.argv[1], "w"))' "$GG/big.json"
+gg_payload() { # gg_payload <command> [cwd]  — a Bash payload with a cwd
+  python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]},"cwd":sys.argv[2]}))' "$1" "${2:-$GG}"
+}
+tg() { # tg <expected-exit> <command> [label]  — one guard-github case, run in the fixture
+  t guard-github.sh "$1" "${3:-$2}" "$(gg_payload "$2")" "$GG"
+}
+
+# --- gh pr create: a draft, and nothing that opens a form -------------------
+tg 2 'gh pr create --title t --body b'
+tg 0 'gh pr create --draft --title t --body b'
+tg 2 'gh pr new --title t'                               'gh pr new, create'"'"'s alias'
+tg 0 'gh pr new --draft --title t'
+tg 0 'gh pr create -d -t t -b b'
+tg 0 'gh pr create -df'
+tg 2 'gh pr create --draft=false --title t'
+tg 2 'gh pr create --draft --draft=false'
+tg 0 'gh pr create --draft=false --draft'
+tg 2 'gh pr create --draft --web'
+tg 2 'gh pr create -dw'
+tg 2 'gh pr create --title --draft'                      'gh pr create --title --draft (the title is "--draft")'
+tg 2 'gh pr create -t -d'                                'gh pr create -t -d (the title is "-d")'
+tg 2 'gh pr create --title t -d=false'
+tg 2 'gh pr create --unknownflag --draft'                'an unknown option, which may take the next word'
+tg 2 'gh pr create $FLAGS --title t'                     'a shell expansion where an option may stand'
+tg 2 'gh pr create --draft $EXTRA'                       'an expansion after --draft may unset it'
+tg 2 "bash -c 'gh pr create --draft \$EXTRA'"            'the same inside bash -c, read quote-aware'
+tg 0 'gh pr create --draft --title "$T" --body-file "$F"' 'expansions as option values pass'
+tg 2 '/usr/bin/gh pr create'
+tg 2 'g"h" pr create'
+tg 2 'g\h pr create'
+tg 2 'cd x && gh pr create'
+tg 2 'gh pr -R o/r create --title t'                     'a persistent option between the group and the command'
+tg 0 'gh pr -R o/r create --draft'
+tg 2 "echo 'gh pr create --title t' | bash"              'quoted text piped into a shell'
+tg 2 "bash -c 'gh pr create --title t'"
+tg 2 'bash -lc "gh pr create --title t"'
+tg 2 "eval 'gh pr create'"
+tg 2 'GH=gh; $GH pr create --title t'                    'the command word is an expansion'
+tg 2 "\$'\\x67h' pr create"                              'ANSI-C quoting spells the command word'
+tg 2 $'echo hi\ngh pr create --title t'                  'a create on the second line'
+tg 2 'echo "$(gh pr create --title t)"'                  'a create inside a quoted substitution'
+tg 2 'echo "x `gh pr create --title t` y"'               'a create inside quoted backquotes'
+tg 2 'echo "$(echo "$(gh pr review 1 --approve)")"'      'an approval inside nested quoted substitutions'
+tg 0 'gh pr create -t "$(printf x)" --draft'             'a substitution in a value does not cut --draft off'
+tg 0 $'gh pr create --title t --body "$(cat <<\'EOF\'\nSummary (short)\nEOF\n)" --draft' 'a heredoc body in a substitution, --draft after it'
+tg 2 'X=`gh pr create`'                                  'a create inside backquotes'
+tg 2 'gh alias set mk "pr create --title t"'             'an alias that expands to a non-draft create'
+tg 2 "gh alias set mk '!gh pr review 1 --approve'"       'a shell alias that approves'
+tg 0 'gh alias set mk "pr create --draft"'
+tg 2 'gh alias import aliases.yml'                       'gh alias import, which this guard cannot read'
+tg 2 'gh "$@"'                                           'gh "$@" (accepted false positive)'
+tg 2 'G=g; ${G}h pr create --title t'                    'a gh word the shell builds still reaches the adapter'
+tg 2 '/usr/bin/g? pr create --title t'                   'a globbed gh word still reaches the adapter'
+tg 2 '/usr/bin/g? pr new --title t'                      'a globbed gh word before pr new still reaches the adapter'
+tg 2 'G=gh; sudo $G pr create --title t'                 'an expansion that may be gh, behind a wrapper'
+tg 2 'G=g; env ${G}h pr create --title t'                'a built gh word behind env'
+tg 2 'G=g; eval "${G}h pr create --title t"'             'eval keeps an expansion dynamic when it re-reads the text'
+tg 2 "echo 'pr create --title t' | gh alias set mk -"    'an alias expansion read from stdin'
+# --- gh pr review: no approval --------------------------------------------
+tg 2 'gh pr review 12 --approve'
+tg 2 'gh pr review 12 -a'
+tg 2 'gh pr review 12 -ca'                               'a short cluster holding -a'
+tg 2 'gh pr review 12 --approve=true'
+tg 0 'gh pr review 12 --approve=false --comment -b x'
+tg 0 'gh pr review 12 --comment -b "please approve"'
+tg 0 'gh pr review 12 -r -b x'
+tg 0 'gh pr review 12 -b --approve'                      'gh pr review -b --approve (the body is "--approve")'
+tg 0 'gh pr ready 12'
+tg 0 'gh pr ready 12 --undo'
+tg 0 'gh pr view 12 --json reviews'
+# --- REST: a PR create sends a typed draft of true ---------------------------
+tg 2 'gh api -X POST repos/o/r/pulls -f title=t -f head=h -f base=main'
+tg 0 'gh api -X POST repos/o/r/pulls -F draft=true -f title=t'
+tg 2 'gh api repos/o/r/pulls -F draft=false -f title=t'
+tg 2 'gh api repos/o/r/pulls -f draft=true -f title=t'   'a raw-string draft is not the boolean'
+tg 0 'gh api repos/o/r/pulls --input draft.json'
+tg 2 'gh api repos/o/r/pulls --input nodraft.json'
+tg 2 'gh api repos/o/r/pulls --input -'                  'the body on stdin'
+tg 2 'gh api repos/o/r/pulls --input missing.json'       'an unreadable --input file'
+tg 2 'gh api repos/o/r/pulls --input garbage.json'       'an --input file that is not JSON'
+tg 2 'gh api repos/o/r/pulls --input array.json'         'an --input file that is not an object'
+tg 2 'gh api repos/o/r/pulls --input draft.json --dummy' 'an unknown gh api option'
+tg 2 'cd /tmp && gh api repos/o/r/pulls --input draft.json' 'a relative file after cd'
+tg 0 "gh api repos/o/r/pulls --input $GG/draft.json"    'an absolute --input file'
+tg 2 "printf '{}' > draft.json && gh api repos/o/r/pulls --input draft.json" 'an --input file the same command rewrites'
+tg 2 'cp nodraft.json draft.json; gh api repos/o/r/pulls --input draft.json' 'an --input file the same command copies over'
+tg 2 "printf 'mutation{resolveReviewThread(input:{threadId:1}){clientMutationId}}' > read.graphql; gh api graphql -F query=@read.graphql" 'a query file the same command rewrites'
+tg 0 'cat comment.json; gh api repos/o/r/pulls --input draft.json' 'another file named in the command does not count'
+tg 0 'gh api "repos/$REPO/pulls?state=open"'
+tg 0 'gh api repos/o/r/pulls'
+tg 2 'gh api -XPOST https://api.github.com/repos/o/r/pulls -f title=t'
+tg 2 'gh api --method=post /repos/o/r/pulls/ -f title=t'
+tg 2 'gh api -iXPOST repos/o/r/pulls -f title=t'         'a method inside a short cluster'
+tg 2 'gh api -X POST api/v3/repos/o/r/pulls -f title=t'
+tg 2 'gh api repos/o/r/pulls --input fifo'               'an --input FIFO is refused, not read (a hang fails open)'
+tg 2 'gh api repos/o/r/pulls --input /dev/zero'          'an --input device is refused, not read'
+tg 2 'gh api repos/o/r/pulls --input big.json'           'an --input file over the size limit'
+tg 2 'gh api repos/o/r/pulls -F draft=false -F draft=true' 'a draft set twice to different values'
+# --- REST: no approving review ---------------------------------------------
+tg 2 'gh api -X POST repos/o/r/pulls/1/reviews -f event=APPROVE'
+tg 2 'gh api repos/o/r/pulls/1/reviews -f event=approve'
+tg 2 'gh api repos/o/r/pulls/1/reviews --input approve.json'
+tg 0 'gh api repos/o/r/pulls/1/reviews --input comment.json'
+tg 2 'gh api repos/o/r/pulls/1/reviews/9/events -f event=APPROVE'
+tg 2 'gh api "repos/$R/pulls/$N/reviews" -f event="$E"'  'an event set by the shell'
+tg 0 'gh api "repos/$R/pulls/$N/reviews" -f event=COMMENT -f body=x'
+tg 0 'gh api -X POST "repos/{owner}/{repo}/pulls/5/comments/7/replies" -f body="[fixed] done"'
+tg 0 'gh api -X POST repos/o/r/issues/5/comments -f body="gh pr review 1 --approve is refused"' 'a comment body that names a refused command'
+tg 2 'gh api -X POST "$URL" -f event=APPROVE'            'a write to a path built by the shell'
+tg 2 'gh api "$X" repos/o/r/pulls/1/reviews -f event=COMMENT' 'an expansion that may be an option'
+tg 0 'gh api "$URL"'                                     'a read of a path built by the shell'
+tg 2 'gh api repos/o/r/pulls/1/reviews -f "$KV"'         'a field built by the shell'
+tg 2 'gh api repos/o/r/pulls/1/reviews -f event=APPROVE -f event=COMMENT' 'an event set twice to different values'
+tg 0 'gh api -X POST "repos/$OWNER/$REPO/issues/1/comments" -f body=x' 'owner and repository in separate variables'
+tg 2 'gh api -X POST "repos/$OWNER/$REPO/$ROUTE" -f event=APPROVE' 'an expansion where a route word stands'
+# --- GraphQL ---------------------------------------------------------------
+tg 2 "gh api graphql -f query='mutation { resolveReviewThread(input:{threadId:\"x\"}) { thread { id } } }'"
+tg 2 'gh api graphql -F query=@resolve.graphql'
+tg 2 'gh api graphql --input resolve-esc.json'           'resolveReviewThread spelled with a JSON escape'
+tg 2 'gh api graphql -F query=@-'                        'a query on stdin'
+tg 2 'gh api graphql -f query="$(cat q)"'                'a query built by the shell'
+tg 0 'gh api graphql -F query=@read.graphql'
+tg 2 "gh api -X POST https://ghe.example/api/graphql -f query='mutation { resolveReviewThread(input:{threadId:\"x\"}) { thread { id } } }'" 'GitHub Enterprise GraphQL at api/graphql'
+tg 0 "gh api graphql -f query='query { repository(owner:\"o\",name:\"r\") { pullRequest(number:1) { reviewThreads(first:50) { nodes { isResolved } } } } }'" 'a read of review threads'
+tg 0 "gh api graphql -f query='mutation { unresolveReviewThread(input:{threadId:\"x\"}) { thread { id } } }'"
+tg 2 "gh api graphql -f query='mutation { addPullRequestReview(input:{pullRequestId:\"x\", event: APPROVE}) { clientMutationId } }'"
+tg 2 "gh api graphql -f query='mutation(\$e: PullRequestReviewEvent!) { submitPullRequestReview(input:{pullRequestReviewId:\"x\", event: \$e}) { clientMutationId } }' -f e=APPROVE" 'APPROVE in a variable'
+tg 0 "gh api graphql -f query='mutation { addPullRequestReview(input:{pullRequestId:\"x\", event: COMMENT, body:\"approve?\"}) { clientMutationId } }'"
+tg 2 "gh api graphql -f query='mutation { createPullRequest(input:{repositoryId:\"x\",baseRefName:\"main\",headRefName:\"h\",title:\"t\"}) { clientMutationId } }'"
+tg 0 "gh api graphql -f query='mutation { createPullRequest(input:{repositoryId:\"x\",baseRefName:\"main\",headRefName:\"h\",title:\"t\",draft:true}) { clientMutationId } }'"
+tg 2 "gh api graphql -f query='mutation { createPullRequest(input:{repositoryId:\"x\",baseRefName:\"main\",headRefName:\"h\",title:\"t\"}) { clientMutationId } } # draft: true'" 'draft: true in a GraphQL comment sets nothing'
+tg 2 "gh api graphql -f query='mutation { createPullRequest(input:{repositoryId:\"x\",baseRefName:\"main\",headRefName:\"h\",title:\"draft: true\"}) { clientMutationId } }'" 'draft: true in a GraphQL string sets nothing'
+GG_CPR='createPullRequest(input:{repositoryId:"x",baseRefName:"main",headRefName:"h",title:"t"'
+tg 2 "gh api graphql -f query='mutation { $GG_CPR,draft:false}) { clientMutationId } }' -F draft=true" 'draft:false in the query beside an unused draft variable'
+tg 0 "gh api graphql -f query='mutation(\$d:Boolean) { $GG_CPR,draft:\$d}) { clientMutationId } }' -F d=true" 'draft through the variable the query names'
+tg 2 "gh api graphql -f query='mutation(\$d:Boolean) { $GG_CPR,draft:\$d}) { clientMutationId } }' -F d=false"
+tg 0 "gh api graphql -f query='mutation(\$draft:Boolean!) { $GG_CPR,draft:\$draft}) { clientMutationId } }' -F draft=true" 'a variable named draft: its definition sets nothing'
+tg 2 "gh api graphql -f query='mutation(\$draft:Boolean!) { $GG_CPR,draft:\$draft}) { clientMutationId } }' -F draft=false"
+tg 2 "gh api graphql -f query='mutation(\$d:Boolean) { $GG_CPR,draft:\$d}) { clientMutationId } }'" 'a draft variable the request never sets'
+tg 0 "gh api graphql -f query='mutation(\$i:CreatePullRequestInput!) { createPullRequest(input:\$i) { clientMutationId } }' -F 'i[draft]=true' -f 'i[title]=t'" 'a whole input object with draft true'
+tg 2 "gh api graphql -f query='mutation(\$i:CreatePullRequestInput!) { createPullRequest(input:\$i) { clientMutationId } }' -F 'i[draft]=false'"
+tg 2 "gh api graphql -f query='mutation(\$i:CreatePullRequestInput!) { createPullRequest(input:\$i) { clientMutationId } }' -f 'i[title]=t'" 'an input object with no draft'
+tg 2 'gh api repos/o/r/pulls/1/reviews -f "event[]=APPROVE"' 'an APPROVE nested in a list'
+tg 2 "gh api graphql -f query='mutation { updateRef(input:{refId:\"x\",oid:\"y\"}) { clientMutationId } }'"
+tg 2 "gh api graphql -f query='mutation { createCommitOnBranch(input:{branch:{repositoryNameWithOwner:\"o/r\",branchName:\"main\"}}) { clientMutationId } }'"
+tg 0 "gh api graphql -f query='mutation { createCommitOnBranch(input:{branch:{repositoryNameWithOwner:\"o/r\",branchName:\"feat\"}}) { clientMutationId } }'"
+# --- REST writes to the default branch, and gh repo sync --force -------------
+tg 2 'gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc -F force=true'
+tg 2 'gh api -X DELETE repos/o/r/git/refs/heads/MASTER'
+tg 0 'gh api -X PATCH repos/o/r/git/refs/heads/feat -f sha=abc'
+tg 2 'gh api -X PATCH "repos/o/r/git/refs/heads/$B" -f sha=abc' 'a ref write to a branch set by the shell'
+tg 2 'gh api -X PATCH repos/o/r/git/refs/heads%2Fmain -f sha=abc' 'a percent-encoded ref path'
+tg 2 'gh api -X PATCH repos/o/r/git/refs/heads/feat/../main -f sha=abc' 'a dot-dot ref path'
+tg 0 'gh api repos/o/r/git/refs/heads/main'
+tg 2 'gh api repos/o/r/git/refs -f ref=refs/heads/main -f sha=abc'
+tg 0 'gh api repos/o/r/git/refs -f ref=refs/heads/feat -f sha=abc'
+tg 2 'gh api repos/o/r/merges -f base=main -f head=feat'
+tg 0 'gh api repos/o/r/merges -f base=feat -f head=main'
+tg 2 'gh api repos/o/r/merges -f head=feat'              'a merge with no base'
+tg 2 'gh api -X PUT repos/o/r/contents/README.md -f message=m -f content=x' 'a contents write with no branch'
+tg 2 'gh api -X PUT repos/o/r/contents/README.md -f message=m -f content=x -f branch=main'
+tg 0 'gh api -X PUT repos/o/r/contents/README.md -f message=m -f content=x -f branch=feat'
+tg 2 'gh api -X DELETE repos/o/r/contents/a/b.md -f message=m -f sha=x'
+tg 2 'gh api -X POST repos/o/r/merge-upstream -f branch=main'
+# Merging a PR is left to the project's merge gate and the server ruleset
+# (ADR 0037): the base cannot know a project's merge conditions.
+tg 0 'gh pr merge 1 --squash'                            'a PR merge is the merge gate'"'"'s, not this guard'"'"'s'
+tg 0 'gh api -X PUT repos/o/r/pulls/1/merge'             'a REST PR merge is the merge gate'"'"'s, not this guard'"'"'s'
+tg 2 'gh repo sync --force'
+tg 2 'gh repo sync o/r --source u/r --force'
+tg 0 'gh repo sync -b feat'
+# --- curl and wget: no writes to GitHub -----------------------------------
+tg 2 'curl -X POST -H "Authorization: bearer $(gh auth token)" https://api.github.com/graphql -d @q.json'
+tg 2 'curl -sS https://api.github.com/repos/o/r/pulls --data "{}"'
+tg 2 'curl -XPATCH https://api.github.com/repos/o/r/git/refs/heads/main'
+tg 0 'curl -fsSL https://api.github.com/repos/o/r/pulls'
+tg 0 'curl -fsSL https://example.com/x -d y'
+tg 2 'wget --post-data=x https://api.github.com/graphql'
+tg 2 'curl -K cfg https://api.github.com/x'              'curl options from a file'
+tg 0 'curl --request-target x https://api.github.com/x'  'curl --request-target is not a method'
+tg 2 'curl -K- https://api.github.com/graphql'           'curl options on stdin'
+tg 2 'curl -sK cfg https://api.github.com/graphql'       'curl -K inside a short cluster'
+tg 2 'curl --config=cfg https://api.github.com/graphql'
+tg 2 "wget -e 'method=POST' https://api.github.com/graphql" 'wget -e runs a wgetrc command'
+tg 2 'wget --config=w.rc https://api.github.com/graphql'
+tg 0 'wget -qO- https://api.github.com/repos/o/r'        'a wget read'
+tg 2 'curl --request=PATCH https://api.github.com/repos/o/r/git/refs/heads/main'
+tg 2 'curl --request DELETE https://api.github.com/repos/o/r/git/refs/heads/main'
+# --- text that only mentions a refused command -----------------------------
+tg 0 'git status'
+tg 0 'ls ~/.config/gh'
+tg 0 'gh pr list --state open'
+tg 0 'gh issue create --title t --body b'
+tg 0 'git commit -m "refuse gh pr review --approve"'     'a commit message naming a refused command'
+tg 0 $'# gh pr create\ngit status'                       'a comment naming a refused command'
+tg 2 'echo gh pr create'                                 'an unquoted gh word (accepted false positive)'
+tg 2 "printf 'gh pr review 1 --approve' | xargs -0 sh -c" 'quoted text run through xargs'
+tg 2 "ssh host 'gh pr review 1 --approve'"               'quoted text run remotely'
+tg 2 'echo --draft=false | xargs gh pr create --draft --title t' 'xargs appends arguments to a create'
+tg 2 'echo --approve | xargs gh pr review 1 --comment'   'xargs appends arguments to a review'
+tg 2 'echo pr create --title t | xargs gh'               'xargs supplies the whole gh command'
+tg 2 'printf x | parallel gh pr create --draft --title {}' 'parallel appends arguments'
+tg 2 "env -S 'gh pr create --title t'"                   'env -S splits a string into a create'
+tg 2 "env --split-string='gh pr review 1 --approve'"     'env --split-string= splits a string into an approval'
+tg 2 "env -i -S 'gh pr create --title t'"
+tg 2 "env -iS 'gh pr create \$X --draft'"                'env -iS takes the next word, read quote-aware'
+tg 2 "echo 'pr review 1 --approve' | xargs -I{} sh -c 'gh {}'" 'xargs -I feeds stdin into a sh -c script'
+tg 2 "echo x | xargs -I{} eval 'gh pr view {}'"          'xargs feeds stdin into eval'
+tg 2 "echo x | parallel env -S 'gh pr view {}'"          'parallel feeds stdin into env -S'
+tg 0 "sh -c 'gh pr view 1'"                              'a shell script without xargs is read as usual'
+tg 0 'env FOO=1 gh pr create --draft --title t'          'env with an assignment still reads gh'
+tg 0 "env -S 'gh pr create --draft --title t'"
+
+# --- the payload, the parser and the override ------------------------------
+t guard-github.sh 2 "empty payload"                      ''
+t guard-github.sh 2 "garbage payload"                    'not json'
+t guard-github.sh 2 "truncated JSON naming gh"           '{"tool_name":"Bash","tool_input":{"command":"gh pr create"}'
+t guard-github.sh 2 "a JSON array"                       '["gh pr create"]'
+t guard-github.sh 2 "a command that is not a string"     '{"tool_name":"Bash","tool_input":{"command":["gh","pr","create"]}}'
+t guard-github.sh 2 "a \\u escape hides gh from the prefilter" '{"tool_name":"Bash","tool_input":{"command":"gh pr create"}}'
+t guard-github.sh 0 "another tool is not judged"         "$(j Read '{"file_path":"/p/gh"}')"
+t guard-github.sh 2 "inline override prefix never reaches hook" "$(gg_payload 'HOOK_ALLOW_GITHUB=1 gh pr create')"
+(
+  before=$fails
+  export HOOK_ALLOW_GITHUB=1
+  t guard-github.sh 0 "exported HOOK_ALLOW_GITHUB=1 lifts it" "$(gg_payload 'gh pr create')"
+  [[ $fails -eq $before ]]
+) || fails=$((fails+1))
+# Fail closed when python3 cannot run: a command naming GitHub blocks, and
+# anything else still passes on the bash prefilter alone.
+GG_PAYLOAD=$(gg_payload 'gh pr create --draft')
+stub_bin bash cat
+tp "$STUB" guard-github.sh 2 "no python3: a command naming gh blocks" "$GG_PAYLOAD"
+tp "$STUB" guard-github.sh 0 "no python3: another command passes"    "$(gg_payload 'git status')"
+GG_OLD="$CPTMP/gg-old-python"
+mkdir -p "$GG_OLD"
+printf '#!/bin/sh\nexit 2\n' > "$GG_OLD/python3"; chmod +x "$GG_OLD/python3"
+stub_bin bash cat
+ln -s "$GG_OLD/python3" "$STUB/python3"
+tp "$STUB" guard-github.sh 2 "a python3 that rejects -P (older than 3.11) blocks" "$GG_PAYLOAD"
+stub_bin bash cat grep sed head tail basename
+# A broken install: no loader, and an adapter that fails. Both block.
+GG_COPY="$CPTMP/gg-copy"
+mkdir -p "$GG_COPY"
+cp -RL "$HOOKS" "$GG_COPY/hooks"
+cp -RL "$HOOKS/../trimtab" "$GG_COPY/trimtab"
+rm -f "$GG_COPY/hooks/run_module.py"
+printf '%s' "$GG_PAYLOAD" | bash "$GG_COPY/hooks/guard-github.sh" >/dev/null 2>&1
+[[ $? -eq 2 ]] && echo "PASS  guard-github.sh exit=2  a missing loader blocks" \
+  || { echo "FAIL  guard-github.sh  a missing loader must block"; fails=$((fails+1)); }
+cp "$HOOKS/run_module.py" "$GG_COPY/hooks/run_module.py"
+printf 'raise RuntimeError("broken")\n' > "$GG_COPY/trimtab/adapters/guard_github.py"
+printf '%s' "$GG_PAYLOAD" | bash "$GG_COPY/hooks/guard-github.sh" >/dev/null 2>&1
+[[ $? -eq 2 ]] && echo "PASS  guard-github.sh exit=2  an adapter that fails blocks" \
+  || { echo "FAIL  guard-github.sh  an adapter that fails must block"; fails=$((fails+1)); }
+printf 'import sys\nsys.exit(1)\n' > "$GG_COPY/trimtab/adapters/guard_github.py"
+printf '%s' "$GG_PAYLOAD" | bash "$GG_COPY/hooks/guard-github.sh" >/dev/null 2>&1
+[[ $? -eq 2 ]] && echo "PASS  guard-github.sh exit=2  an adapter exit 1 blocks" \
+  || { echo "FAIL  guard-github.sh  an adapter exit 1 must block"; fails=$((fails+1)); }
+# An adapter that hangs is killed and blocks inside the hook's 10 s timeout,
+# which would otherwise end the call as a pass.
+if command -v timeout >/dev/null 2>&1; then
+  printf 'import time\ntime.sleep(60)\n' > "$GG_COPY/trimtab/adapters/guard_github.py"
+  gg_start=$SECONDS
+  printf '%s' "$GG_PAYLOAD" | bash "$GG_COPY/hooks/guard-github.sh" >/dev/null 2>&1
+  gg_rc=$?
+  [[ $gg_rc -eq 2 && $((SECONDS - gg_start)) -lt 10 ]] \
+    && echo "PASS  guard-github.sh exit=2  a hung adapter is killed and blocks within the timeout" \
+    || { echo "FAIL  guard-github.sh  a hung adapter must block within 10 s (exit $gg_rc)"; fails=$((fails+1)); }
+else
+  echo "SKIP  guard-github.sh  timeout(1) is not installed in this run"
+fi
+# A json.py in the session's directory cannot answer for the adapter (-I).
+GG_PLANT="$CPTMP/gg-plant"
+mkdir -p "$GG_PLANT"
+printf 'def loads(s):\n    return {"tool_name": "Read"}\n' > "$GG_PLANT/json.py"
+t guard-github.sh 2 "a planted json.py does not pass a non-draft create" "$(gg_payload 'gh pr create' "$GG_PLANT")" "$GG_PLANT"
+# The quote-aware pass uses guard-bash's tokeniser (ADR 0036): the two
+# patterns are the same text, so a fix to one cannot leave the other behind.
+gg_tok() { sed -n '/_TOK = re.compile(/,/(?P<A>/p' "$1" | sed 's/^ *//'; }
+GG_TOK_BASH=$(gg_tok "$HOOKS/guard-bash.sh")
+GG_TOK_PY=$(gg_tok "$HOOKS/../trimtab/adapters/guard_github.py")
+if [[ -n "$GG_TOK_BASH" && "$GG_TOK_BASH" == "$GG_TOK_PY" ]]; then
+  echo "PASS  guard-github.sh tokeniser  the same pattern as guard-bash"
+else
+  echo "FAIL  guard-github.sh tokeniser  differs from guard-bash's, or was not found"; fails=$((fails+1))
+fi
+
+echo "== guard-github registration (settings.base.json) =="
+python3 - "$HOOKS/../settings.base.json" <<'PY'
+import json, re, sys
+groups = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
+want = '"$HOME/.claude/hooks/guard-github.sh"'
+found = [(g.get("matcher"), h) for g in groups for h in g["hooks"] if h.get("command") == want]
+def case(ok, label):
+    print("%s  %-14s %s" % ("PASS" if ok else "FAIL", "registration", label))
+    return 0 if ok else 1
+fails = case(len(found) == 1, "guard-github is registered exactly once")
+if len(found) == 1:
+    matcher, hook = found[0]
+    fails += case(hook.get("timeout") == 10, "guard-github has the 10 s timeout")
+    m = re.compile(matcher or "")
+    fails += case(bool(m.fullmatch("Bash")), "its matcher catches Bash")
+sys.exit(fails)
+PY
+fails=$((fails + $?))
 
 echo "== rules frontmatter =="
 # Regression guard: every rules/*.md must open with a YAML frontmatter block that

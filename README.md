@@ -5,8 +5,11 @@ it.
 
 Trimtab does two jobs. It **guards** a Claude Code session: PreToolUse hooks
 that block destructive commands, reads of credential files, secrets written
-into files, and edits to the controls that review change (CI workflows,
-CODEOWNERS, Claude Code settings and hooks), and that ask the operator to
+into files, edits to the controls that review change (CI workflows,
+CODEOWNERS, Claude Code settings and hooks), and the GitHub writes the
+operator owns (a PR opened as anything but a draft, an approving review,
+resolving a review thread, an API write to the default branch; ADR 0037),
+and that ask the operator to
 approve, call by call, an MCP tool call not named as a read (ADR 0013; the
 name is the only evidence, so a write named like a read is not asked). A
 few writes pass by exact full name instead: the desktop app's UI tools
@@ -134,7 +137,8 @@ directory and checks the environment it writes.
 The package needs Python 3.11 or later (the installer refuses older) and PyYAML installed system-wide (for
 example `apt install python3-yaml`): the CLI and the hooks run `python3 -I`, which ignores user site-packages and
 `PYTHONPATH`, and the installer refuses a PyYAML it can reach only there. The guards need bash 4 or later,
-`grep`, and `jq` or `python3`.
+`grep`, and `jq` or `python3`; `guard-github` needs `python3` 3.11 or later and blocks any command naming GitHub
+without it.
 
 ## Contributing
 
