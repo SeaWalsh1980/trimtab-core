@@ -749,7 +749,8 @@ def check_graphql(req: Request, ctx: Ctx) -> None:
             raise Refused("a commit or merge onto the default branch through GraphQL")
 
 
-_DRAFT_ARG = re.compile(r"(?<![A-Za-z0-9_])draft\s*:\s*(\$?[A-Za-z0-9_]+)", re.I)
+# Not after `$`: `$draft: Boolean!` defines a variable, it sets nothing.
+_DRAFT_ARG = re.compile(r"(?<![A-Za-z0-9_$])draft\s*:\s*(\$?[A-Za-z0-9_]+)", re.I)
 _INPUT_VAR = re.compile(r"(?<![A-Za-z0-9_])input\s*:\s*\$([A-Za-z0-9_]+)", re.I)
 
 

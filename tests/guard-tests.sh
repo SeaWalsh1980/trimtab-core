@@ -2420,6 +2420,8 @@ GG_CPR='createPullRequest(input:{repositoryId:"x",baseRefName:"main",headRefName
 tg 2 "gh api graphql -f query='mutation { $GG_CPR,draft:false}) { clientMutationId } }' -F draft=true" 'draft:false in the query beside an unused draft variable'
 tg 0 "gh api graphql -f query='mutation(\$d:Boolean) { $GG_CPR,draft:\$d}) { clientMutationId } }' -F d=true" 'draft through the variable the query names'
 tg 2 "gh api graphql -f query='mutation(\$d:Boolean) { $GG_CPR,draft:\$d}) { clientMutationId } }' -F d=false"
+tg 0 "gh api graphql -f query='mutation(\$draft:Boolean!) { $GG_CPR,draft:\$draft}) { clientMutationId } }' -F draft=true" 'a variable named draft: its definition sets nothing'
+tg 2 "gh api graphql -f query='mutation(\$draft:Boolean!) { $GG_CPR,draft:\$draft}) { clientMutationId } }' -F draft=false"
 tg 2 "gh api graphql -f query='mutation(\$d:Boolean) { $GG_CPR,draft:\$d}) { clientMutationId } }'" 'a draft variable the request never sets'
 tg 0 "gh api graphql -f query='mutation(\$i:CreatePullRequestInput!) { createPullRequest(input:\$i) { clientMutationId } }' -F 'i[draft]=true' -f 'i[title]=t'" 'a whole input object with draft true'
 tg 2 "gh api graphql -f query='mutation(\$i:CreatePullRequestInput!) { createPullRequest(input:\$i) { clientMutationId } }' -F 'i[draft]=false'"
