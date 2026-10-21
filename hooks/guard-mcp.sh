@@ -10,15 +10,30 @@
 #   no output                      no decision; the session's permission rules apply
 #   permissionDecision "ask"       the operator is prompted for this call
 #   permissionDecision "deny"      refused, with a reason the model reads; for
-#                                  mcp__ccd_pr__set_monitor only (ADR 0028)
+#                                  mcp__ccd_pr__set_monitor (ADR 0028) and the
+#                                  pull-request writes the operator owns
+#                                  (ADR 0038)
 # Unlike the other guards this one never exits 2: the operator wants to approve
 # a write, not lose the tool. Outside an interactive session an ask ends as a
 # denial (measured, ADR 0013).
 #
 # Checks run in this order, and the first that answers wins. Every check is by
-# name only except the two marked [args], which also read the call's
+# name only except those marked [args], which also read the call's
 # arguments.
 #
+#   the last __ part, on any server (ADR 0038):
+#     names a review thread, review, comment or
+#     conversation and says resolve (unresolve
+#     removed first, any case)                      -> deny
+#     merge_pull_request                            -> deny
+#     [args] create_pull_request                    -> deny unless draft is true
+#     [args] pull_request_review_write,
+#     create_pull_request_review,
+#     create_and_submit_pull_request_review,
+#     submit_pending_pull_request_review            -> deny an APPROVE event, a
+#                                                      resolving method, or one
+#                                                      it cannot read
+#     anything they do not deny falls through to the checks below
 #   [args] mcp__ccd_pr__set_monitor (CCD_OWN_PR)    -> pass when its url is a PR
 #                                                      this session created, or
 #                                                      it is the auto-archive
@@ -102,6 +117,122 @@ fi
 # This check is also what makes $name safe to print inside the JSON reason.
 [[ "$name" =~ ^mcp__[A-Za-z0-9_-]+$ ]] \
   || ask "the call is not named as an MCP tool (mcp__<server>__<tool>), so it cannot be classified. Approve it only if you intended it."
+
+# The pull-request writes the operator owns are denied before any pass below
+# can answer (ADR 0038): a merge, a pull request opened as anything but a
+# draft, an approving review, and resolving a review thread. A deny, not an
+# ask: approving the prompt would be the agent's own approval of the act the
+# rule reserves for a person. Matched on the last __ part of the name, on any
+# server, since a server's name is set per deployment; denying the same tool
+# name on another server costs a refusal, never a pass.
+gh_tool="${name##*__}"
+# Resolving, in any case, with every "unresolve" removed first: reopening a
+# thread is not resolving it. Builtins only, so no missing tr or awk can make
+# the match come up empty.
+resolve_word() { # resolve_word <text>  — true when it says "resolve"
+  local t="${1//[Uu][Nn][Rr][Ee][Ss][Oo][Ll][Vv][Ee]/}"
+  [[ "$t" == *[Rr][Ee][Ss][Oo][Ll][Vv][Ee]* ]]
+}
+case "$gh_tool" in
+  *[Tt][Hh][Rr][Ee][Aa][Dd]*|*[Rr][Ee][Vv][Ii][Ee][Ww]*|*[Cc][Oo][Mm][Mm][Ee][Nn][Tt]*|*[Cc][Oo][Nn][Vv][Ee][Rr][Ss][Aa][Tt][Ii][Oo][Nn]*)
+    resolve_word "$gh_tool" \
+      && deny "$name resolves a review thread. Only the thread's author resolves it, so it is denied (ADR 0038). Reply to the thread instead and leave it open." ;;
+esac
+GH_MERGE=(
+  merge_pull_request
+)
+GH_CREATE=(
+  create_pull_request
+)
+GH_REVIEW=(
+  pull_request_review_write create_pull_request_review
+  create_and_submit_pull_request_review submit_pending_pull_request_review
+)
+# gh_args <mode>  — the verdict of the argument check for create or review,
+# read inside the parser so no argument reaches this script or a reason.
+# create: draft (draft is the JSON true) or not-draft. review: approve (event
+# APPROVE, in any case or spacing), resolve (a method that resolves), unreadable
+# (an event or method that is not a string) or other. Either mode: no-object.
+# Anything else, an empty answer included, means the parser did not finish.
+# No regular expressions: a jq built without regex support fails on gsub,
+# which would deny every review. White space is the six ASCII characters
+# (tab, newline, vertical tab, form feed, carriage return, space) in both
+# parsers, so the two agree.
+gh_args() {
+  local mode="$1" v rc
+  if command -v jq >/dev/null 2>&1; then
+    v=$(printf '%s' "$payload" | jq -r --arg mode "$mode" '
+      .tool_input as $a
+      | if ($a | type) != "object" then "no-object"
+        elif $mode == "create" then (if $a.draft == true then "draft" else "not-draft" end)
+        elif ($a | has("event")) and ($a.event | type) != "string" then "unreadable"
+        elif ($a | has("event")) and ($a.event | ascii_upcase | explode | map(select(. != 32 and (. < 9 or . > 13))) | implode) == "APPROVE" then "approve"
+        elif ($a | has("method")) and ($a.method | type) != "string" then "unreadable"
+        elif ($a | has("method")) and ($a.method | ascii_downcase | split("unresolve") | join("") | contains("resolve")) then "resolve"
+        else "other" end' 2>/dev/null)
+    rc=$?
+  else
+    v=$(printf '%s' "$payload" | python3 -I -c '
+import json, sys
+mode, a = sys.argv[1], json.load(sys.stdin).get("tool_input")
+def upper(s):  # ASCII only, as jq ascii_upcase
+    return "".join(chr(ord(c) - 32) if "a" <= c <= "z" else c for c in s)
+def lower(s):  # ASCII only, as jq ascii_downcase
+    return "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in s)
+if not isinstance(a, dict):
+    v = "no-object"
+elif mode == "create":
+    v = "draft" if a.get("draft") is True else "not-draft"
+elif "event" in a and not isinstance(a["event"], str):
+    v = "unreadable"
+elif "event" in a and "".join(c for c in upper(a["event"]) if c not in " \t\n\v\f\r") == "APPROVE":
+    v = "approve"
+elif "method" in a and not isinstance(a["method"], str):
+    v = "unreadable"
+elif "method" in a and "resolve" in lower(a["method"]).replace("unresolve", ""):
+    v = "resolve"
+else:
+    v = "other"
+sys.stdout.write(v)
+' "$mode" 2>/dev/null)
+    rc=$?
+  fi
+  # A verdict counts only from a parser that finished.
+  [[ $rc -eq 0 ]] || v="(failed)"
+  printf '%s' "$v"
+}
+for t in "${GH_MERGE[@]}"; do
+  [[ "$gh_tool" == "$t" ]] \
+    && deny "$name merges a pull request. A merge is not made through an MCP tool: it goes through the project's own merge route and its gates, so it is denied (ADR 0038). Report it to the operator."
+done
+for t in "${GH_CREATE[@]}"; do
+  [[ "$gh_tool" == "$t" ]] || continue
+  case "$(gh_args create)" in
+    draft) ;;
+    not-draft)
+      deny "$name opens a pull request that is not a draft. A pull request opens as a draft (draft set to true), so it is denied (ADR 0038). Call it again with draft true." ;;
+    no-object)
+      deny "$name carries no argument object, so its draft flag cannot be read and it is denied (fail closed, ADR 0038)." ;;
+    *)
+      deny "$name could not have its arguments read, so it is denied (fail closed, ADR 0038). This says nothing about the call." ;;
+  esac
+done
+for t in "${GH_REVIEW[@]}"; do
+  [[ "$gh_tool" == "$t" ]] || continue
+  case "$(gh_args review)" in
+    other) ;;
+    approve)
+      deny "$name approves a pull request. Approval is the code owner's, never the agent's, so it is denied (ADR 0038). A comment review is allowed." ;;
+    resolve)
+      deny "$name resolves a review thread. Only the thread's author resolves it, so it is denied (ADR 0038). Reply to the thread instead and leave it open." ;;
+    unreadable)
+      deny "$name carries an event or method that is not text, so whether it approves or resolves cannot be read and it is denied (fail closed, ADR 0038)." ;;
+    no-object)
+      deny "$name carries no argument object, so its event cannot be read and it is denied (fail closed, ADR 0038)." ;;
+    *)
+      deny "$name could not have its arguments read, so it is denied (fail closed, ADR 0038). This says nothing about the call." ;;
+  esac
+done
 
 # Auto-fix on a PR, by exact full name (ADR 0028). It passes only for a PR this
 # session created, as recorded by hooks/pr-monitor-record.sh, and is otherwise
