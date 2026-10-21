@@ -83,14 +83,29 @@ cannot read refuses: an option it does not know (whether it takes a value
 decides what the next word is), a dynamic word where an option may stand, a
 dynamic `gh` command or subcommand, a body on stdin, an unreadable or non-JSON
 `--input`, a field or path built by the shell on a write, a relative file
-after a `cd`. A path whose expansions stand only for the owner, repository or
-an ID (`repos/$REPO/pulls/$N/reviews`) is read; one where an expansion may be a
-route word is not. The hook blocks on an empty payload, one that is not a JSON
-object, a missing or older python3, a missing loader, and any adapter error.
-A bash prefilter lets a command through without python3 only when, with JSON
-whitespace escapes turned to spaces and quotes and backslashes removed, it
-names neither `gh`, `graphql` nor `github.com`; a `\u` escape or `$'` sends it
-to the adapter regardless.
+after a `cd`, a field given twice with different values (which one gh sends is
+gh's merge rule, not this guard's to assume), an alias expansion read from
+stdin. A path whose expansions stand only for the owner, repository or an ID
+(`repos/$OWNER/$REPO/pulls/$N/reviews`) is read; one where an expansion may be
+a route word is not. GraphQL is any path ending in `graphql`, so GitHub
+Enterprise's `api/graphql` is read too.
+
+**Time.** A hook that outlives its timeout fails open, so nothing the command
+names may make the adapter slow. A file it reads (`--input`, `-F key=@file`)
+is opened non-blocking and read only if it is a regular file of at most 1 MiB;
+a FIFO, a device or a larger file is refused unread (a FIFO hung the first
+draft for the full timeout, and `/dev/zero` exhausted memory). The adapter
+blocks itself at 7 s, and the hook runs it under `timeout`, which kills it at
+8 s; both end in a block, inside the 10 s timeout.
+
+The hook blocks on an empty payload, one that is not a JSON object, a missing
+or older python3, a missing loader, and any adapter error. A bash prefilter
+lets a command through without python3 only when, with JSON whitespace escapes
+turned to spaces and quotes and backslashes removed, it names neither `gh`,
+`graphql`, `github.com` nor one of the gh subcommands judged here
+(`pr create`, `pr review`, `api`, `repo sync`, `alias set`, `alias import`),
+so a `gh` word the shell builds (`${G}h`, `/usr/bin/g?`) still reaches the
+adapter; a `\u` escape or `$'` sends it there regardless.
 
 **Override.** `HOOK_ALLOW_GITHUB=1`, exported by the operator before launching
 claude. An inline prefix never reaches the hook, and the installer refuses any

@@ -2282,6 +2282,9 @@ printf 'mutation { resolveReviewThread(input:{threadId:"x"}) { thread { id } } }
 # r is r: the mutation's name is spelled with a JSON escape.
 printf '{"query":"mutation { \\u0072esolveReviewThread(input:{threadId:\\"x\\"}) { thread { id } } }"}' > "$GG/resolve-esc.json"
 printf 'query { viewer { login } }' > "$GG/read.graphql"
+mkfifo "$GG/fifo"
+# Valid JSON with draft true, so only the size limit refuses it.
+python3 -c 'import json,sys; json.dump({"draft": True, "pad": "x" * 1100000}, open(sys.argv[1], "w"))' "$GG/big.json"
 gg_payload() { # gg_payload <command> [cwd]  — a Bash payload with a cwd
   python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]},"cwd":sys.argv[2]}))' "$1" "${2:-$GG}"
 }
@@ -2327,6 +2330,9 @@ tg 2 "gh alias set mk '!gh pr review 1 --approve'"       'a shell alias that app
 tg 0 'gh alias set mk "pr create --draft"'
 tg 2 'gh alias import aliases.yml'                       'gh alias import, which this guard cannot read'
 tg 2 'gh "$@"'                                           'gh "$@" (accepted false positive)'
+tg 2 'G=g; ${G}h pr create --title t'                    'a gh word the shell builds still reaches the adapter'
+tg 2 '/usr/bin/g? pr create --title t'                   'a globbed gh word still reaches the adapter'
+tg 2 "echo 'pr create --title t' | gh alias set mk -"    'an alias expansion read from stdin'
 # --- gh pr review: no approval --------------------------------------------
 tg 2 'gh pr review 12 --approve'
 tg 2 'gh pr review 12 -a'
@@ -2359,6 +2365,10 @@ tg 2 'gh api -XPOST https://api.github.com/repos/o/r/pulls -f title=t'
 tg 2 'gh api --method=post /repos/o/r/pulls/ -f title=t'
 tg 2 'gh api -iXPOST repos/o/r/pulls -f title=t'         'a method inside a short cluster'
 tg 2 'gh api -X POST api/v3/repos/o/r/pulls -f title=t'
+tg 2 'gh api repos/o/r/pulls --input fifo'               'an --input FIFO is refused, not read (a hang fails open)'
+tg 2 'gh api repos/o/r/pulls --input /dev/zero'          'an --input device is refused, not read'
+tg 2 'gh api repos/o/r/pulls --input big.json'           'an --input file over the size limit'
+tg 2 'gh api repos/o/r/pulls -F draft=false -F draft=true' 'a draft set twice to different values'
 # --- REST: no approving review ---------------------------------------------
 tg 2 'gh api -X POST repos/o/r/pulls/1/reviews -f event=APPROVE'
 tg 2 'gh api repos/o/r/pulls/1/reviews -f event=approve'
@@ -2373,6 +2383,9 @@ tg 2 'gh api -X POST "$URL" -f event=APPROVE'            'a write to a path buil
 tg 2 'gh api "$X" repos/o/r/pulls/1/reviews -f event=COMMENT' 'an expansion that may be an option'
 tg 0 'gh api "$URL"'                                     'a read of a path built by the shell'
 tg 2 'gh api repos/o/r/pulls/1/reviews -f "$KV"'         'a field built by the shell'
+tg 2 'gh api repos/o/r/pulls/1/reviews -f event=APPROVE -f event=COMMENT' 'an event set twice to different values'
+tg 0 'gh api -X POST "repos/$OWNER/$REPO/issues/1/comments" -f body=x' 'owner and repository in separate variables'
+tg 2 'gh api -X POST "repos/$OWNER/$REPO/$ROUTE" -f event=APPROVE' 'an expansion where a route word stands'
 # --- GraphQL ---------------------------------------------------------------
 tg 2 "gh api graphql -f query='mutation { resolveReviewThread(input:{threadId:\"x\"}) { thread { id } } }'"
 tg 2 'gh api graphql -F query=@resolve.graphql'
@@ -2380,6 +2393,7 @@ tg 2 'gh api graphql --input resolve-esc.json'           'resolveReviewThread sp
 tg 2 'gh api graphql -F query=@-'                        'a query on stdin'
 tg 2 'gh api graphql -f query="$(cat q)"'                'a query built by the shell'
 tg 0 'gh api graphql -F query=@read.graphql'
+tg 2 "gh api -X POST https://ghe.example/api/graphql -f query='mutation { resolveReviewThread(input:{threadId:\"x\"}) { thread { id } } }'" 'GitHub Enterprise GraphQL at api/graphql'
 tg 0 "gh api graphql -f query='query { repository(owner:\"o\",name:\"r\") { pullRequest(number:1) { reviewThreads(first:50) { nodes { isResolved } } } } }'" 'a read of review threads'
 tg 0 "gh api graphql -f query='mutation { unresolveReviewThread(input:{threadId:\"x\"}) { thread { id } } }'"
 tg 2 "gh api graphql -f query='mutation { addPullRequestReview(input:{pullRequestId:\"x\", event: APPROVE}) { clientMutationId } }'"
@@ -2476,6 +2490,19 @@ printf 'import sys\nsys.exit(1)\n' > "$GG_COPY/trimtab/adapters/guard_github.py"
 printf '%s' "$GG_PAYLOAD" | bash "$GG_COPY/hooks/guard-github.sh" >/dev/null 2>&1
 [[ $? -eq 2 ]] && echo "PASS  guard-github.sh exit=2  an adapter exit 1 blocks" \
   || { echo "FAIL  guard-github.sh  an adapter exit 1 must block"; fails=$((fails+1)); }
+# An adapter that hangs is killed and blocks inside the hook's 10 s timeout,
+# which would otherwise end the call as a pass.
+if command -v timeout >/dev/null 2>&1; then
+  printf 'import time\ntime.sleep(60)\n' > "$GG_COPY/trimtab/adapters/guard_github.py"
+  gg_start=$SECONDS
+  printf '%s' "$GG_PAYLOAD" | bash "$GG_COPY/hooks/guard-github.sh" >/dev/null 2>&1
+  gg_rc=$?
+  [[ $gg_rc -eq 2 && $((SECONDS - gg_start)) -lt 10 ]] \
+    && echo "PASS  guard-github.sh exit=2  a hung adapter is killed and blocks within the timeout" \
+    || { echo "FAIL  guard-github.sh  a hung adapter must block within 10 s (exit $gg_rc)"; fails=$((fails+1)); }
+else
+  echo "SKIP  guard-github.sh  timeout(1) is not installed in this run"
+fi
 # A json.py in the session's directory cannot answer for the adapter (-I).
 GG_PLANT="$CPTMP/gg-plant"
 mkdir -p "$GG_PLANT"

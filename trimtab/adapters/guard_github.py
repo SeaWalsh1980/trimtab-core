@@ -34,8 +34,11 @@ non-JSON file, a shell expansion, an option it does not know), refuses. Standard
 from __future__ import annotations
 
 import json
+import os
 import posixpath
 import re
+import signal
+import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +67,11 @@ RUNS_TEXT = SHELLS | {"eval", "source", ".", "xargs", "ssh", "su", "parallel", "
 DIR_CHANGERS = {"cd", "pushd", "popd"}
 # Stands for an expansion inside a word, so a path keeps its literal structure.
 HOLE = "\x00"
+# The most a request file may hold; a larger one is refused, not read.
+MAX_FILE = 1 << 20
+# Seconds before the adapter gives up and blocks, inside the hook's 10 s timeout (a timeout
+# fails open). The hook also runs it under `timeout`, which kills it shortly after.
+DEADLINE = 7
 
 
 class Refused(Exception):
@@ -74,10 +82,6 @@ class Refused(Exception):
 class Word:
     text: str          # quotes removed; HOLE where the shell would substitute
     dynamic: bool      # the shell expands something in it
-
-    @property
-    def name(self) -> str:
-        return posixpath.basename(self.text)
 
 
 # ---- reading the command -----------------------------------------------------------------
@@ -277,10 +281,29 @@ class Ctx:
                 return None
             path = self.cwd / path
         try:
-            return path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+            return _read_regular(path)
+        except (OSError, UnicodeDecodeError, ValueError):
             self.unknown("a file the request reads cannot be read")
             return None
+
+
+def _read_regular(path: Path) -> str:
+    """A regular file's text, at most MAX_FILE bytes.
+
+    Opened non-blocking and checked with fstat, so a FIFO, a device or an oversized file is
+    refused at once rather than read: a read that outlasts the hook's timeout fails open.
+    """
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_FILE:
+            raise ValueError("not a regular file within the size limit")
+        data = os.read(fd, MAX_FILE + 1)
+    finally:
+        os.close(fd)
+    if len(data) > MAX_FILE:
+        raise ValueError("over the size limit")
+    return data.decode("utf-8")
 
 
 PR_CREATE_VALUED = {"-a", "--assignee", "-B", "--base", "-b", "--body", "-F", "--body-file", "-H", "--head",
@@ -369,8 +392,8 @@ def check_alias_set(args: list[Word], ctx: Ctx) -> None:
     if len(positional) < 2:
         return
     expansion = positional[1]
-    if expansion.dynamic:
-        ctx.unknown("an alias's expansion is a shell expansion")
+    if expansion.dynamic or expansion.text == "-":
+        ctx.unknown("an alias's expansion is a shell expansion or comes from stdin")
         return
     text = expansion.text
     shell = text.startswith("!") or any(w.text in ("-s", "--shell") for w in args)
@@ -409,6 +432,8 @@ def _readable_path(path: str) -> bool:
             continue
         if "contents" in parts[:k]:
             continue
+        if k == 2 and parts[0] == "repos":
+            continue  # the repository, after an owner that is itself an expansion
         if k == 0 or parts[k - 1] not in _ID_PARENTS:
             return False
     return True
@@ -484,14 +509,19 @@ def body_of(req: Request, ctx: Ctx) -> dict | Unknown:
             continue
         key = re.sub(r"\[.*$", "", key)
         if HOLE in val:
-            body[key] = UNKNOWN
+            value = UNKNOWN
         elif name in ("-F", "--field") and val.startswith("@"):
             text = ctx.read_file(Word(val[1:], False))
-            body[key] = UNKNOWN if text is None else text
+            value = UNKNOWN if text is None else text
         elif name in ("-F", "--field"):
-            body[key] = _typed(val)
+            value = _typed(val)
         else:
-            body[key] = val
+            value = val
+        # A key given twice with different values: which one gh sends is gh's merge rule,
+        # not this guard's to assume, so the value counts as unreadable.
+        if key in body and body[key] != value:
+            value = UNKNOWN
+        body[key] = value
     return body
 
 
@@ -528,7 +558,8 @@ def check_api(args: list[Word], ctx: Ctx) -> None:
     req = parse_api(args, ctx)
     if req is None:
         return
-    if req.path == "graphql":
+    # GitHub Enterprise serves GraphQL at api/graphql; any path ending in it is read as GraphQL.
+    if req.path.split("/")[-1] == "graphql":
         check_graphql(req, ctx)
         return
     if req.method == "GET" or req.method == "HEAD":
@@ -718,14 +749,14 @@ def runs_text(command: str, naive: list[list[Word]]) -> bool:
     return any(posixpath.basename(_ASSIGNMENT.sub("", w.text)) in RUNS_TEXT for seg in naive for w in seg)
 
 
-def judge(command: str, ctx: Ctx) -> None:
+def judge(command: str, ctx: Ctx, parsed: list[list[Word]] | None = None) -> None:
     """Judge every command in `command`; nesting (`bash -c`, `eval`, an alias) recurses here.
 
     The naive pass runs only when something in the command can run quoted text, so a comment or
     a commit message that mentions a refused command is not read as one.
     """
     naive = naive_segments(command)
-    passes = [(False, naive)] if not ctx.strict else [(True, segments(command))]
+    passes = [(False, naive)] if not ctx.strict else [(True, parsed if parsed is not None else segments(command))]
     if ctx.strict and runs_text(command, naive):
         passes.append((False, naive))
     for strict, segs in passes:
@@ -743,10 +774,11 @@ def decide(payload: dict) -> tuple[int, str]:
     if not isinstance(command, str):
         return BLOCK, "guard-github: blocked: the command is not a string"
     cwd = payload.get("cwd")
+    parsed = segments(command)
     cwd_known = isinstance(cwd, str) and cwd.startswith("/") and not any(
-        w.text in DIR_CHANGERS for s in segments(command) for w in s)
+        w.text in DIR_CHANGERS for s in parsed for w in s)
     try:
-        judge(command, Ctx(Path(cwd) if isinstance(cwd, str) and cwd else Path("/"), cwd_known, True))
+        judge(command, Ctx(Path(cwd) if isinstance(cwd, str) and cwd else Path("/"), cwd_known, True), parsed)
     except Refused as why:
         return BLOCK, (f"guard-github: blocked: {why}. This is a GitHub write the operator makes "
                        "(docs/adr/0037-guard-github-refuses-the-github-writes-the-operator-owns.md); "
@@ -755,7 +787,13 @@ def decide(payload: dict) -> tuple[int, str]:
     return ALLOW, ""
 
 
+def _out_of_time(signum, frame):
+    raise TimeoutError("the deadline passed")
+
+
 def main() -> int:
+    signal.signal(signal.SIGALRM, _out_of_time)
+    signal.alarm(DEADLINE)
     try:
         payload = json.loads(sys.stdin.read())
         if not isinstance(payload, dict):

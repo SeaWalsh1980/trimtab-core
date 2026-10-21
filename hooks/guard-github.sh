@@ -16,9 +16,9 @@
 # about GitHub, and a payload that hides its text from it (a JSON \u escape,
 # ANSI-C quoting) goes to the adapter.
 #
-# Fast path: python3 starts only for a command naming gh, graphql or a
-# github.com host once quotes and backslashes are removed. Anything else exits
-# after one bash startup.
+# Fast path: python3 starts only for a command naming gh, graphql, a
+# github.com host or a gh subcommand (pr create, api, …) once quotes and
+# backslashes are removed. Anything else exits after one bash startup.
 #
 # Session override: export HOOK_ALLOW_GITHUB=1
 #   (must be exported before launching claude — an inline prefix on a Bash
@@ -45,7 +45,10 @@ trimmed="${payload#"${payload%%[![:space:]]*}"}"
 # payload to the adapter.
 flat=${payload//\\[nrtbf]/ }
 flat=${flat//[\"\'\\]/}
+# Besides the names, gh's own subcommands: a command word the shell builds
+# (${G}h, /usr/bin/g?) hides `gh` but not what follows it.
 about_github='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-]|$)|graphql|github\.com'
+about_github+='|(^|[^A-Za-z0-9_])(pr[[:space:]]+(create|review)|api[[:space:]]|repo[[:space:]]+sync|alias[[:space:]]+(set|import))'
 if [[ "$payload" != *'\u'* && "$payload" != *"\$'"* ]]; then
   shopt -s nocasematch
   [[ "$flat" =~ $about_github ]] || exit 0
@@ -63,7 +66,12 @@ here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # loads the package without putting the root on sys.path, so no file at the
 # root can stand in for a module (ADR 0035). -B: write no bytecode beside the
 # package.
-python3 -I -S -B "$here/run_module.py" "$here/.." trimtab.adapters.guard_github <<<"$payload"
+# A hook that outlives its 10 s timeout fails open, so the adapter stops itself
+# at 7 s (and blocks), and `timeout` kills it at 8 s if that did not happen;
+# either way the exit is non-zero and blocks below.
+deadline=()
+command -v timeout >/dev/null 2>&1 && deadline=(timeout -k 1 8)
+${deadline[@]+"${deadline[@]}"} python3 -I -S -B "$here/run_module.py" "$here/.." trimtab.adapters.guard_github <<<"$payload"
 rc=$?
 [[ $rc -eq 0 ]] && exit 0
 # The adapter printed its reason; any other non-zero is a fault, and blocks.
