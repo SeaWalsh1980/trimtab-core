@@ -71,12 +71,16 @@ rule; the line never quotes the command.
    way pflag reads them: clusters letter by letter, a valued option taking the
    rest of the cluster or the next word, `--opt=value`, and no abbreviations
    (cobra accepts none). The last setting of an option wins. `bash -c`,
-   `sh -lc`, `eval` and `gh alias set` re-read the text they will run.
+   `sh -lc`, `eval` and `gh alias set` re-read the text they will run, and so
+   does a `$(…)` or backquote substitution inside double quotes; text re-read
+   keeps its expansions dynamic.
 2. *Naive.* Every quote and backslash removed, split the same way, every word
-   literal. It runs only when the command can run quoted text as a command (a
-   `$(` or backquote, or a word such as `bash`, `sh`, `eval`, `source`,
-   `xargs` or `ssh`), so `echo '…' | bash` is read, while a commit message or a
-   comment body that names a refused command is not.
+   literal. It runs only when the command holds a word that runs quoted text
+   as a command (`bash`, `sh`, `eval`, `source`, `xargs`, `ssh`, …), so
+   `echo '…' | bash` is read, while a commit message or a comment body that
+   names a refused command is not. A substitution does not trigger it: the
+   naive split at `$(` cut `--draft` off a create whose title came from one,
+   and the quote-aware pass reads substitutions itself.
 
 **Fails closed.** In the quote-aware pass, anything the decision needs and
 cannot read refuses: an option it does not know (whether it takes a value

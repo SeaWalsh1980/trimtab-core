@@ -22,10 +22,12 @@ How it reads the command. Two passes, and either may refuse:
 1. quote-aware: one regex tokeniser (the pattern guard-bash uses, ADR 0036) splits the text
    into commands at `; & | ( )`, backquotes and newlines, joins quoted pieces into words, and
    marks a word *dynamic* when the shell would expand it (`$`, a backquote, a glob or a brace
-   outside single quotes). A dynamic word where the decision depends on it is refused.
+   outside single quotes). A dynamic word where the decision depends on it is refused. The
+   commands a double-quoted `$(…)` or backquote substitution runs are read the same way.
 2. naive: the same text with every quote and backslash removed, split the same way, every word
    taken literally. It sees a command hidden inside a quoted string that something then runs
-   (`echo '…' | bash`). It refuses only on evidence; what it cannot read, it leaves to pass 1.
+   (`echo '…' | bash`), and runs only when the command holds such a runner (a shell, `eval`,
+   `xargs`, `ssh`, …). It refuses only on evidence; what it cannot read, it leaves to pass 1.
 
 Fails closed: any error, or a value the decision needs and cannot read (stdin, an unreadable or
 non-JSON file, a shell expansion, an option it does not know), refuses. Standard library only.
@@ -86,9 +88,14 @@ class Word:
 
 # ---- reading the command -----------------------------------------------------------------
 
-def _dq(body: str) -> tuple[str, bool]:
-    """The value of a double-quoted piece's inside, and whether the shell expands anything in it."""
-    out, dynamic, i = [], False, 0
+def _dq_parts(body: str) -> tuple[str, bool, list[str]]:
+    """(value, dynamic, the commands its `$(…)` and backquote substitutions run).
+
+    A substitution's end is found by counting parentheses (or the next backquote), which is
+    what the tokeniser can know without running a parser; a quote inside one ends the
+    double-quoted piece early, as it does for guard-bash's tokeniser.
+    """
+    out, dynamic, subs, i = [], False, [], 0
     while i < len(body):
         c = body[i]
         if c == "\\" and i + 1 < len(body):
@@ -96,18 +103,37 @@ def _dq(body: str) -> tuple[str, bool]:
             out.append(nxt if nxt in '$`"\\' else c + nxt)
             i += 2
             continue
-        if c == "`" or (c == "$" and _EXPANSION.match(body, i)):
+        if body.startswith("$(", i):
+            depth, j = 1, i + 2
+            while j < len(body) and depth:
+                depth += {"(": 1, ")": -1}.get(body[j], 0)
+                j += 1
+            subs.append(body[i + 2:j - 1 if depth == 0 else j])
+            dynamic = True
+            out.append(HOLE)
+            i = j
+            continue
+        if c == "`":
+            end = body.find("`", i + 1)
+            end = len(body) if end < 0 else end
+            subs.append(body[i + 1:end])
+            dynamic = True
+            out.append(HOLE)
+            i = end + 1
+            continue
+        if c == "$" and _EXPANSION.match(body, i):
             dynamic = True
             out.append(HOLE)
         else:
             out.append(c)
         i += 1
-    return "".join(out), dynamic
+    return "".join(out), dynamic, subs
 
 
 def segments(command: str) -> list[list[Word]]:
     """The command's simple commands as words, by the quote-aware pass."""
     segs: list[list[Word]] = []
+    nested: list[list[Word]] = []
     words: list[Word] = []
     text: list[str] = []
     dynamic = in_word = skip_target = False
@@ -139,12 +165,16 @@ def segments(command: str) -> list[list[Word]]:
                 text.append(value[1:-1] if len(value) > 1 and value.endswith("'") else value[1:])
             elif kind == "D":
                 inner = value[1:-1] if len(value) > 1 and value.endswith('"') else value[1:]
-                val, dyn = _dq(inner)
+                val, dyn, subs = _dq_parts(inner)
                 text.append(val)
                 dynamic |= dyn
+                for sub in subs:  # a quoted substitution runs its own commands
+                    nested.extend(segments(sub))
             elif kind == "B":
                 text.append(value[1:])
             else:  # L, A
+                if HOLE in value:
+                    dynamic = True  # re-read text (eval, an alias) that held an expansion
                 if _EXPANSION.search(value) or (value.endswith("$") and m.end() < len(command)):
                     dynamic = True
                     text.append(_EXPANSION.sub(HOLE, value))
@@ -154,7 +184,7 @@ def segments(command: str) -> list[list[Word]]:
                     dynamic = True
     flush()
     segs.append(words)
-    return [s for s in segs if s]
+    return [s for s in segs + nested if s]
 
 
 def naive_segments(command: str) -> list[list[Word]]:
@@ -676,7 +706,7 @@ def _variable_draft(variables) -> bool:
 
 _GITHUB_HOST = re.compile(r"(?:^|[/@.])github\.com(?:[:/]|$)|api\.github", re.I)
 _CURL_WRITE_LONG = re.compile(r"^--(?:data(?:-[a-z]+)?|json|form(?:-string)?|upload-file|post30[123])(?:=|$)")
-_CURL_REQUEST = re.compile(r"^(?:-X|--request)(?:=)?(.*)$")
+_CURL_REQUEST = re.compile(r"^(?:-X(.*)|--request(?:=(.*))?)$")
 _WGET_WRITE = re.compile(r"^--(?:post-data|post-file|body-data|body-file|method)(?:=|$)")
 
 
@@ -694,7 +724,7 @@ def check_http(tool: str, args: list[Word], ctx: Ctx) -> None:
         if _CURL_WRITE_LONG.match(t):
             write = True
         elif m := _CURL_REQUEST.match(t):
-            method = m.group(1) or (args[k + 1].text if k + 1 < len(args) else "")
+            method = m.group(1) or m.group(2) or (args[k + 1].text if k + 1 < len(args) else "")
             write |= method.upper() not in ("GET", "HEAD")
         elif re.match(r"^-[A-Za-z]+", t) and not t.startswith("--"):
             letters = t[1:]
@@ -719,8 +749,8 @@ def check_segment(words: list[Word], ctx: Ctx) -> None:
         rest = words[k + 1:]
         if not w.dynamic and base == "gh":
             check_gh(rest, ctx)
-        elif w.dynamic and k == _command_index(words) and rest and rest[0].text in ("pr", "api", "repo", "alias") \
-                and not rest[0].dynamic:
+        # An expansion that may be gh, anywhere a wrapper (sudo, env, nice) could put it.
+        elif w.dynamic and rest and rest[0].text in ("pr", "api", "repo", "alias") and not rest[0].dynamic:
             check_gh(rest, ctx)
         elif not w.dynamic and base in ("curl", "wget"):
             check_http(base, rest, ctx)
@@ -735,17 +765,11 @@ def check_segment(words: list[Word], ctx: Ctx) -> None:
                     break
 
 
-def _command_index(words: list[Word]) -> int:
-    k = 0
-    while k < len(words) and not words[k].dynamic and _ASSIGNMENT.match(words[k].text):
-        k += 1
-    return k
-
-
 def runs_text(command: str, naive: list[list[Word]]) -> bool:
-    """The command can run text as a command: a substitution, or a word that runs its input or an argument."""
-    if "$(" in command or "`" in command:
-        return True
+    """The command holds a word that runs its input or an argument as a command.
+
+    Substitutions need no naive pass: the quote-aware pass reads them, quoted or not.
+    """
     return any(posixpath.basename(_ASSIGNMENT.sub("", w.text)) in RUNS_TEXT for seg in naive for w in seg)
 
 
