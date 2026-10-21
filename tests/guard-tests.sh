@@ -2474,6 +2474,11 @@ tg 2 'printf x | parallel gh pr create --draft --title {}' 'parallel appends arg
 tg 2 "env -S 'gh pr create --title t'"                   'env -S splits a string into a create'
 tg 2 "env --split-string='gh pr review 1 --approve'"     'env --split-string= splits a string into an approval'
 tg 2 "env -i -S 'gh pr create --title t'"
+tg 2 "env -iS 'gh pr create \$X --draft'"                'env -iS takes the next word, read quote-aware'
+tg 2 "echo 'pr review 1 --approve' | xargs -I{} sh -c 'gh {}'" 'xargs -I feeds stdin into a sh -c script'
+tg 2 "echo x | xargs -I{} eval 'gh pr view {}'"          'xargs feeds stdin into eval'
+tg 2 "echo x | parallel env -S 'gh pr view {}'"          'parallel feeds stdin into env -S'
+tg 0 "sh -c 'gh pr view 1'"                              'a shell script without xargs is read as usual'
 tg 0 'env FOO=1 gh pr create --draft --title t'          'env with an assignment still reads gh'
 tg 0 "env -S 'gh pr create --draft --title t'"
 

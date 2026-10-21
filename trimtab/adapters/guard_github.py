@@ -780,27 +780,36 @@ def check_segment(words: list[Word], ctx: Ctx) -> None:
         elif not w.dynamic and base == "env":
             for j, x in enumerate(rest):
                 t = x.text
-                if t in ("-S", "--split-string") and j + 1 < len(rest):
-                    split = rest[j + 1]
+                if re.fullmatch(r"-[A-Za-z]*S|--split-string", t) and j + 1 < len(rest):
+                    split = rest[j + 1]  # -S, a cluster ending in S, or --split-string: the next word
                 elif m := re.fullmatch(r"(?:-[A-Za-z]*S|--split-string=)(.+)", t, re.S):
                     split = Word(m.group(1), x.dynamic)
                 else:
                     continue
                 if split.dynamic:
                     ctx.unknown("env -S runs a command built by the shell")
+                _runs_script(appends, ctx)
                 judge(split.text, ctx)  # env -S splits its argument into a command
                 break
         elif not w.dynamic and base in ("curl", "wget"):
             check_http(base, rest, ctx)
         elif not w.dynamic and base == "eval":
+            _runs_script(appends, ctx)
             judge(" ".join(x.text for x in rest), ctx)
         elif not w.dynamic and base in SHELLS:
             for j, x in enumerate(rest):
                 if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", x.text) and j + 1 < len(rest):
                     if rest[j + 1].dynamic:
                         ctx.unknown("a shell runs a command built by the shell")
+                    _runs_script(appends, ctx)
                     judge(rest[j + 1].text, ctx)
                     break
+
+
+def _runs_script(appends: bool, ctx: Ctx) -> None:
+    """A script run behind xargs or parallel takes stdin text (`-I{}` substitutes it into the script)."""
+    if appends:
+        ctx.unknown("xargs or parallel feeds stdin into a script that this guard cannot read")
 
 
 def runs_text(command: str, naive: list[list[Word]]) -> bool:

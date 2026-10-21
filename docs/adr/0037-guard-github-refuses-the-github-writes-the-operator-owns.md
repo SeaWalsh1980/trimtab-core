@@ -94,7 +94,8 @@ after a `cd`, a field given twice with different values (which one gh sends is
 gh's merge rule, not this guard's to assume), an alias expansion read from
 stdin, gh run by `xargs` or `parallel` (they append arguments read from stdin,
 which can unset `--draft` or add `--approve`; guard-bash refuses `xargs`
-pushes for the same reason, ADR 0036), and a request file whose name appears anywhere else in the command:
+pushes for the same reason, ADR 0036), a shell, `eval` or `env -S` script run
+by them (`-I{}` substitutes stdin text into the script), and a request file whose name appears anywhere else in the command:
 the hook reads the file before the command runs, so a redirect, `cp`, `tee`
 or `sed -i` earlier in the same command could rewrite what gh then sends. A
 path whose expansions stand only for the owner, repository or an ID
