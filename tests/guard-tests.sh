@@ -1958,7 +1958,7 @@ sc_report() { # sc_report <ok: 0|1> <hook> <label>
   if [[ "$1" == 0 ]]; then printf 'PASS  %-14s %-4s  %s\n' "$2" site "$3"
   else printf 'FAIL  %-14s %-4s  %s\n' "$2" site "$3"; fails=$((fails+1)); fi
 }
-SC_HOOKS=(guard-mcp.sh pr-monitor-record.sh pr-body-check.sh doctrine-drift.sh rule-usage.sh)
+SC_HOOKS=(guard-mcp.sh pr-monitor-record.sh pr-body-check.sh doctrine-drift.sh rule-usage.sh guard-github.sh)
 sc_payload() { # sc_payload <hook>  — a payload that reaches the hook's python3
   case "$1" in
     guard-mcp.sh)         pm_fix sc-a 9 ;;
@@ -1966,6 +1966,7 @@ sc_payload() { # sc_payload <hook>  — a payload that reaches the hook's python
     # --fill blocks before the instance's registry is read, so the verdict is
     # 2 whether or not TRIMTAB_INSTANCE is set (CI has none).
     pr-body-check.sh)     j Bash '{"command":"gh pr create --title t --fill"}' ;;
+    guard-github.sh)      j Bash '{"command":"gh pr create --draft"}' ;;
     rule-usage.sh)        python3 -c 'import json; print(json.dumps({"hook_event_name":"PreToolUse","session_id":"sc-a","tool_name":"Skill","tool_input":{"skill":"trimtab-plan"}}))' ;;
     *)                    j Read '{"file_path":"/p/app/main.py"}' ;;
   esac
@@ -2047,7 +2048,7 @@ printf '%s\n' 'import runpy, sys' 'root, module = sys.argv[1], sys.argv[2]' 'sys
   'sys.argv = [module] + sys.argv[3:]' 'runpy.run_module(module, run_name="__main__", alter_sys=True)' \
   > "$SC_LEAKY/hooks/run_module.py"
 SC_RUN_CFG=$(mktemp -d "$CPTMP/sc-leaky-config.XXXXXX")
-for h in guard-mcp.sh pr-monitor-record.sh pr-body-check.sh doctrine-drift.sh; do
+for h in guard-mcp.sh pr-monitor-record.sh pr-body-check.sh doctrine-drift.sh guard-github.sh; do
   pl=$(sc_payload "$h")
   sc_run "$SC_LEAKY/hooks" "$h" "$pl" >/dev/null
   [[ -e "$SC_MARK" ]]; sc_report $? "$h" "control: with the root on sys.path a root plant does load"
@@ -2303,6 +2304,8 @@ tg 2 'gh pr create -t -d'                                'gh pr create -t -d (th
 tg 2 'gh pr create --title t -d=false'
 tg 2 'gh pr create --unknownflag --draft'                'an unknown option, which may take the next word'
 tg 2 'gh pr create $FLAGS --title t'                     'a shell expansion where an option may stand'
+tg 2 'gh pr create --draft $EXTRA'                       'an expansion after --draft may unset it'
+tg 2 "bash -c 'gh pr create --draft \$EXTRA'"            'the same inside bash -c, read quote-aware'
 tg 0 'gh pr create --draft --title "$T" --body-file "$F"' 'expansions as option values pass'
 tg 2 '/usr/bin/gh pr create'
 tg 2 'g"h" pr create'
