@@ -34,8 +34,8 @@ GitHub's MCP server reaches the same writes by name:
   (create, submit a pending review, delete one).
 - No tool of that server was checked to resolve a review thread when this was
   written. A server that adds one would name it (as `resolve_review_thread`)
-  or add it as a review tool's method; both shapes are denied in advance, and
-  any other shape is a residual (below).
+  or add it as a method of one of the review tools above; those two shapes
+  are denied in advance, and any other shape is a residual (below).
 
 Before this change guard-mcp asked about each of them, as about every write it
 cannot read (ADR 0013). An ask puts the call in front of whoever is at the
@@ -108,6 +108,8 @@ match uses bash patterns only, so a stub PATH cannot empty it.
 
 - An MCP merge, approval or thread resolution is never made by an agent
   session, attended or not, without the operator exporting `HOOK_ALLOW_MCP`.
+  That override lifts the whole guard, these denies included: under it none
+  of them is enforced.
 - A pull request opened through MCP must pass `draft: true`; the reason says
   so, so the agent can call again.
 - Measured on this change: the matrix holds 1,315 cases (1,231 before), all
@@ -123,9 +125,20 @@ match uses bash patterns only, so a stub PATH cannot empty it.
 - **A guard that cannot parse the payload asks, not denies.** With neither jq
   nor python3, guard-mcp cannot read the tool's name, so a merge asks
   (ADR 0001).
+- **Marking a draft ready, by decision.** A draft opened through MCP can be
+  marked ready afterwards: `update_pull_request` with `draft: false` asks
+  (ADR 0034), and a ready-for-review tool under another name asks by ADR
+  0013's rule. Neither is denied, because the rule is draft *until final*:
+  marking a finished pull request ready is the agent's own step, and the
+  shell route (`gh pr ready`) is allowed as well (ADR 0037). The prompt stays
+  for the MCP route only.
 - **Other names.** A tool that merges, approves or resolves under a name not
   covered here (another server's own vocabulary, a generic GraphQL tool) is
-  asked about by ADR 0013's rule, not denied.
+  asked about by ADR 0013's rule, not denied. For resolving, the name check
+  runs only on a name that also holds thread, review, comment or
+  conversation (so `resolve_discussion` asks), and the `method` check runs
+  only on the four review tools named above; a thread tool under another name
+  that takes a resolving `method` asks.
 - **Server-side state.** A pending review created as a comment and then
   submitted as APPROVE through another route is that route's to catch.
 
