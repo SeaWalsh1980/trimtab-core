@@ -1499,7 +1499,7 @@ tm ask  "PR-workflow list is exact: a suffix" "$(j mcp__claude-code-remote__subs
 tm ask  "PR-workflow list is exact: a prefix" "$(j mcp__xclaude-code-remote__subscribe_pr_activity '{}')"
 tm ask  "PR-workflow list is exact: a case change" "$(j mcp__claude-code-remote__Subscribe_PR_Activity '{}')"
 tm ask  "PR-workflow: a branch update still asks" "$(j mcp__github__update_pull_request_branch '{}')"
-tm ask  "PR-workflow: a merge still asks"     "$(j mcp__github__merge_pull_request '{}')"
+tm deny "PR-workflow: a merge is denied (ADR 0038)" "$(j mcp__github__merge_pull_request '{}')"
 tm ask  "PR-workflow: an unsubscribe still asks" "$(j mcp__claude-code-remote__unsubscribe_pr_activity '{}')"
 tm ask  "PR-workflow: a remote send_message still asks" "$(j mcp__claude-code-remote__send_message '{}')"
 tm ask  "PR-workflow: a remote create_session still asks" "$(j mcp__claude-code-remote__create_session '{}')"
@@ -1567,6 +1567,80 @@ if [[ -n "$by_name" && -z "$both" ]]; then
 else
   printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "an argument-read name also passes by name:$both"
   fails=$((fails+1))
+fi
+
+# The pull-request writes the operator owns are denied, on any server, before
+# any pass can answer (ADR 0038). Each deny names its cause; an ask that
+# follows a call the denies let through is the classification's, as before.
+GH_SERVERS=(github plugin_github_github srv)
+for s in "${GH_SERVERS[@]}"; do
+  tm deny "merge on $s"                       "$(j "mcp__${s}__merge_pull_request" "{$PR_REF}")" "$PATH" . "merges a pull request"
+  tm deny "non-draft create on $s"            "$(j "mcp__${s}__create_pull_request" '{"owner":"o","repo":"r","title":"t","head":"h","base":"main"}')" "$PATH" . "not a draft"
+  tm deny "approve on $s"                     "$(j "mcp__${s}__pull_request_review_write" "{$PR_REF,\"method\":\"create\",\"event\":\"APPROVE\"}")" "$PATH" . "approves"
+  tm deny "resolve tool on $s"                "$(j "mcp__${s}__resolve_review_thread" '{"threadId":"x"}')" "$PATH" . "resolves a review thread"
+done
+GH_CREATE_NAME=mcp__github__create_pull_request
+GH_REVIEW_NAME=mcp__github__pull_request_review_write
+CR='"owner":"o","repo":"r","title":"t","head":"h","base":"main"'
+tm ask  "create: draft true is not denied (it asks as a write)" "$(j $GH_CREATE_NAME "{$CR,\"draft\":true}")"
+tm deny "create: draft false"                 "$(j $GH_CREATE_NAME "{$CR,\"draft\":false}")" "$PATH" . "not a draft"
+tm deny "create: draft as the string true"    "$(j $GH_CREATE_NAME "{$CR,\"draft\":\"true\"}")" "$PATH" . "not a draft"
+tm deny "create: draft as 1"                  "$(j $GH_CREATE_NAME "{$CR,\"draft\":1}")" "$PATH" . "not a draft"
+tm deny "create: draft null"                  "$(j $GH_CREATE_NAME "{$CR,\"draft\":null}")" "$PATH" . "not a draft"
+tm deny "create: arguments not an object"     '{"tool_name":"mcp__github__create_pull_request","tool_input":["draft"]}' "$PATH" . "no argument object"
+tm deny "create: no tool_input at all"        '{"tool_name":"mcp__github__create_pull_request"}' "$PATH" . "no argument object"
+tm ask  "create: a longer tool name is not create_pull_request" "$(j mcp__github__create_pull_request_with_copilot '{}')"
+tm deny "review: APPROVE in lower case"       "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"create\",\"event\":\"approve\"}")" "$PATH" . "approves"
+tm deny "review: APPROVE with spaces"         "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"submit_pending\",\"event\":\" APPROVE \"}")" "$PATH" . "approves"
+tm deny "review: APPROVE without a method"    "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":\"APPROVE\"}")" "$PATH" . "approves"
+tm deny "review: an event that is not text"   "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"create\",\"event\":[\"APPROVE\"]}")" "$PATH" . "not text"
+tm deny "review: a null event"                "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"create\",\"event\":null}")" "$PATH" . "not text"
+tm deny "review: a method that is not text"   "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":1}")" "$PATH" . "not text"
+tm deny "review: a resolving method"          "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"resolve_thread\",\"threadId\":\"x\"}")" "$PATH" . "resolves a review thread"
+tm deny "review: a resolving method, upper"   "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"RESOLVE_THREAD\"}")" "$PATH" . "resolves a review thread"
+tm deny "review: arguments not an object"     '{"tool_name":"mcp__github__pull_request_review_write","tool_input":"APPROVE"}' "$PATH" . "no argument object"
+tm ask  "review: a comment review asks"       "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"create\",\"event\":\"COMMENT\",\"body\":\"APPROVE\"}")"
+tm ask  "review: request changes asks"        "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"create\",\"event\":\"REQUEST_CHANGES\"}")"
+tm ask  "review: an unresolving method asks"  "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"unresolve_thread\"}")"
+tm ask  "review: deleting a pending review asks" "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"delete_pending\"}")"
+for n in create_pull_request_review create_and_submit_pull_request_review submit_pending_pull_request_review; do
+  tm deny "review tool $n: APPROVE"           "$(j "mcp__github__$n" "{$PR_REF,\"event\":\"APPROVE\"}")" "$PATH" . "approves"
+  tm ask  "review tool $n: COMMENT asks"      "$(j "mcp__github__$n" "{$PR_REF,\"event\":\"COMMENT\"}")"
+done
+tm deny "resolve by name: CamelCase"          "$(j mcp__srv__ResolveReviewThread '{}')" "$PATH" . "resolves a review thread"
+tm deny "resolve by name: a comment"          "$(j mcp__srv__resolve_comment '{}')" "$PATH" . "resolves a review thread"
+tm deny "resolve by name: a conversation"     "$(j mcp__srv__resolve-conversation '{}')" "$PATH" . "resolves a review thread"
+tm deny "resolve by name: unresolve then resolve" "$(j mcp__srv__unresolve_and_resolve_thread '{}')" "$PATH" . "resolves a review thread"
+tm deny "resolve by name: even a read verb"   "$(j mcp__srv__get_and_resolve_thread '{}')" "$PATH" . "resolves a review thread"
+tm ask  "unresolve by name asks"              "$(j mcp__srv__unresolve_review_thread '{}')"
+tm ask  "resolve without a thread word is not denied (it asks as a write)" "$(j mcp__srv__resolve-library-id '{}')"
+tm pass "a thread read still passes"          "$(j mcp__srv__list_review_threads '{}')"
+tm ask  "the deny list is by tool part: a suffix" "$(j mcp__github__merge_pull_request_x '{}')"
+tm ask  "the deny list is by tool part: a case change" "$(j mcp__github__Merge_Pull_Request '{}')"
+# The denies run first: a name on a pass list is still denied for these.
+tm deny "an ambiguous split still denies a merge" "$(j mcp__a__b__merge_pull_request '{}')" "$PATH" . "merges a pull request"
+pin_list GH_MERGE merge_pull_request
+pin_list GH_CREATE create_pull_request
+pin_list GH_REVIEW pull_request_review_write create_pull_request_review create_and_submit_pull_request_review submit_pending_pull_request_review
+# A parser that does not finish the check denies; a pass from one that printed
+# and then failed does not count. The same shim as the PR edit's, keyed on
+# --arg rather than --argjson.
+if command -v jq >/dev/null 2>&1; then
+  printf '#!/bin/sh\ncase " $* " in *" --arg mode "*) exit 5 ;; esac\nexec %q "$@"\n' "$(command -v jq)" > "$JQ_SHIM/jq"
+  tm deny "create: an unfinished check denies"  "$(j $GH_CREATE_NAME "{$CR,\"draft\":true}")" "$JQ_SHIM" . "could not have its arguments read"
+  printf '#!/bin/sh\ncase " $* " in *" --arg mode "*) echo draft; exit 1 ;; esac\nexec %q "$@"\n' "$(command -v jq)" > "$JQ_SHIM/jq"
+  tm deny "create: a draft verdict from a check that then failed does not count" "$(j $GH_CREATE_NAME "{$CR,\"draft\":true}")" "$JQ_SHIM" . "could not have its arguments read"
+  printf '#!/bin/sh\ncase " $* " in *" --arg mode "*) echo other; exit 1 ;; esac\nexec %q "$@"\n' "$(command -v jq)" > "$JQ_SHIM/jq"
+  tm deny "review: an other verdict from a check that then failed does not count" "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":\"COMMENT\"}")" "$JQ_SHIM" . "could not have its arguments read"
+else
+  echo "SKIP  guard-mcp.sh   unfinished create/review check: jq is not installed in this run"
+fi
+# A deny's reason is fixed text too: the arguments never reach it.
+MARK_DENY="deny-argument-marker-$$"
+if printf '%s' "$(j $GH_CREATE_NAME "{$CR,\"body\":\"$MARK_DENY\"}")" | bash "$HOOKS/guard-mcp.sh" 2>&1 | grep -q "$MARK_DENY"; then
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh deny "a deny never repeats the call's arguments"; fails=$((fails+1))
+else
+  printf 'PASS  %-14s %-4s  %s\n' guard-mcp.sh deny "a deny never repeats the call's arguments"
 fi
 
 # Read-only tools whose verb comes last pass by exact <tool> part, on any
@@ -2242,6 +2316,12 @@ if command -v jq >/dev/null 2>&1; then
   tm ask  "jq only: a write asks"               "$MCP_WRITE" "$STUB"
   tm pass "jq only: a PR title edit passes"     "$(j $PR_EDIT_NAME "{$PR_REF,\"title\":\"t\"}")" "$STUB"
   tm ask  "jq only: marking a PR ready asks"     "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")" "$STUB"
+  tm deny "jq only: a non-draft create is denied" "$(j $GH_CREATE_NAME "{$CR,\"draft\":false}")" "$STUB" . "not a draft"
+  tm ask  "jq only: a draft create asks"          "$(j $GH_CREATE_NAME "{$CR,\"draft\":true}")" "$STUB"
+  tm deny "jq only: an approval is denied"        "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":\" approve\"}")" "$STUB" . "approves"
+  tm deny "jq only: a resolving method is denied" "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"resolve_thread\"}")" "$STUB" . "resolves a review thread"
+  tm ask  "jq only: an unresolving method asks"   "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"unresolve_thread\"}")" "$STUB"
+  tm deny "jq only: a non-text event is denied"   "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":1}")" "$STUB" . "not text"
 else
   echo "SKIP  guard-mcp.sh   jq only: jq is not installed in this run"
 fi
@@ -2251,6 +2331,14 @@ tm ask  "python3 only: a write asks"          "$MCP_WRITE" "$STUB"
 tm ask  "python3 only: garbage payload asks"  'NOT JSON AT ALL' "$STUB"
 tm pass "python3 only: a PR title edit passes" "$(j $PR_EDIT_NAME "{$PR_REF,\"title\":\"t\"}")" "$STUB"
 tm ask  "python3 only: marking a PR ready asks" "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")" "$STUB"
+tm deny "python3 only: a non-draft create is denied" "$(j $GH_CREATE_NAME "{$CR,\"draft\":false}")" "$STUB" . "not a draft"
+tm deny "python3 only: draft as the string true is denied" "$(j $GH_CREATE_NAME "{$CR,\"draft\":\"true\"}")" "$STUB" . "not a draft"
+tm ask  "python3 only: a draft create asks"     "$(j $GH_CREATE_NAME "{$CR,\"draft\":true}")" "$STUB"
+tm deny "python3 only: an approval is denied"   "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":\" approve\"}")" "$STUB" . "approves"
+tm deny "python3 only: a resolving method is denied" "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"resolve_thread\"}")" "$STUB" . "resolves a review thread"
+tm ask  "python3 only: an unresolving method asks" "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"unresolve_thread\"}")" "$STUB"
+tm deny "python3 only: a non-text event is denied" "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":1}")" "$STUB" . "not text"
+tm deny "python3 only: arguments not an object are denied" '{"tool_name":"mcp__github__create_pull_request","tool_input":[]}' "$STUB" . "no argument object"
 # The python3 fallback must not import from the session's working directory,
 # which is the repository under work: a json.py planted there would otherwise
 # shadow the standard library and answer for the guard. This one names every
@@ -2266,6 +2354,7 @@ def load(f):
 PY
 tm ask  "python3 only: a planted json.py does not make a write a read" "$MCP_WRITE" "$STUB" "$PLANT"
 tm ask  "python3 only: a planted json.py does not pass marking a PR ready" "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")" "$STUB" "$PLANT"
+tm deny "python3 only: a planted json.py does not pass a non-draft create" "$(j $GH_CREATE_NAME "{$CR,\"draft\":false}")" "$STUB" "$PLANT" "not a draft"
 
 echo "== guard-github (ADR 0037) =="
 # Each case runs in a fixture directory holding the files a request reads

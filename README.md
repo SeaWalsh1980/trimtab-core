@@ -22,6 +22,10 @@ denied rather than asked, so an unattended session carries on (ADR 0028).
 GitHub's `update_pull_request` passes only when it edits nothing but a PR's
 title, body or reviewers, and asks otherwise, so marking a draft ready stays
 the operator's (ADR 0034).
+The same pull-request writes guard-github refuses in a shell are denied as
+MCP calls, on any server, before any pass can answer: a merge, a PR opened
+without `draft` set to true, an approving review, and resolving a review
+thread, by name or by a review tool's method (ADR 0038).
 And it runs a **loop** over a body of engineering rules: every rule is a
 *harness item* with a stable ID, pull requests cite the items they applied
 and report friction against them, and a retrospective tallies that evidence
@@ -162,13 +166,15 @@ stand in for one.
 - Unit tests are hermetic and deterministic: fixture instances in a
   temporary directory, no network.
 - Errors are typed. Guards fail closed: the blocking guards block, and
-  `guard-mcp` asks the operator, or for `set_monitor` denies: a missing
+  `guard-mcp` asks the operator; for the pull-request writes of ADR 0038
+  an argument it cannot read denies; and for `set_monitor` it denies: a
+  missing
   recorder, `python3` or session list, or one it cannot trust, records
   nothing and denies. The recorder itself never blocks. The two policy hooks
   (`doctrine-drift`, `pr-body-check`) fail open with a message.
 - A change to a guard comes with cases in `tests/guard-tests.sh`, including
   the case that must still be blocked, or for `guard-mcp`, asked (denied,
-  for `set_monitor`).
+  for `set_monitor` and the ADR 0038 writes).
 
 ## Licence
 
