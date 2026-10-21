@@ -1334,7 +1334,7 @@ echo "== guard-mcp =="
 # docs/adr/0013-guard-mcp-asks-before-mcp-tools-that-may-write.md.
 tm() { # tm <want: pass|ask|deny> <label> <payload> [PATH for the guard] [its cwd] [text the reason holds]
   local want="$1" label="$2" payload="$3" p="${4:-$PATH}" d="${5:-.}" says="${6:-}" out rc verdict
-  out=$(cd "$d" && printf '%s' "$payload" | PATH="$p" "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null); rc=$?
+  out=$(cd "$d" && printf '%s' "$payload" | PATH="$p" "$BASH" "${TM_HOOK:-$HOOKS/guard-mcp.sh}" 2>/dev/null); rc=$?
   verdict=$(printf '%s' "$out" | python3 -c '
 import json, sys
 want, rc, out = sys.argv[1], int(sys.argv[2]), sys.stdin.read()
@@ -1617,8 +1617,29 @@ tm ask  "resolve without a thread word is not denied (it asks as a write)" "$(j 
 tm pass "a thread read still passes"          "$(j mcp__srv__list_review_threads '{}')"
 tm ask  "the deny list is by tool part: a suffix" "$(j mcp__github__merge_pull_request_x '{}')"
 tm ask  "the deny list is by tool part: a case change" "$(j mcp__github__Merge_Pull_Request '{}')"
-# The denies run first: a name on a pass list is still denied for these.
+# The last __ part decides, so a name the classification cannot split is
+# still denied.
 tm deny "an ambiguous split still denies a merge" "$(j mcp__a__b__merge_pull_request '{}')" "$PATH" . "merges a pull request"
+# The denies run before every pass: a copy of the guard whose pass lists also
+# name these tools must still deny them. Nothing on the shipped lists overlaps
+# a deny, so only a widened copy can show the order.
+ORDER=$(mktemp -d "$CPTMP/order.XXXXXX")
+sed -e 's/^CCD_ALLOW=($/&\n  mcp__github__merge_pull_request mcp__srv__resolve_review_thread/' \
+    -e 's/^PR_WORKFLOW_ALLOW=($/&\n  mcp__github__create_pull_request/' \
+    -e 's/^TOOL_READ_ALLOW=($/&\n  pull_request_review_write/' \
+    -e 's/^PR_EDIT=($/&\n  mcp__github__submit_pending_pull_request_review/' \
+    "$HOOKS/guard-mcp.sh" > "$ORDER/guard-mcp.sh"
+if [[ $(grep -c -e merge_pull_request\ mcp__srv__resolve -e '^  mcp__github__create_pull_request$' -e '^  pull_request_review_write$' -e '^  mcp__github__submit_pending' "$ORDER/guard-mcp.sh") -eq 4 ]]; then
+  TM_HOOK="$ORDER/guard-mcp.sh"
+  tm deny "order: a merge on the app list is still denied" "$(j mcp__github__merge_pull_request '{}')" "$PATH" . "merges a pull request"
+  tm deny "order: a resolve on the app list is still denied" "$(j mcp__srv__resolve_review_thread '{}')" "$PATH" . "resolves a review thread"
+  tm deny "order: a non-draft create on the PR-workflow list is still denied" "$(j $GH_CREATE_NAME "{$CR}")" "$PATH" . "not a draft"
+  tm deny "order: an approval on the read list is still denied" "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":\"APPROVE\"}")" "$PATH" . "approves"
+  tm deny "order: an approval on the PR-edit list is still denied" "$(j mcp__github__submit_pending_pull_request_review "{$PR_REF,\"event\":\"APPROVE\"}")" "$PATH" . "approves"
+  unset TM_HOOK
+else
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "order: could not widen the pass lists in a copy of the guard"; fails=$((fails+1))
+fi
 pin_list GH_MERGE merge_pull_request
 pin_list GH_CREATE create_pull_request
 pin_list GH_REVIEW pull_request_review_write create_pull_request_review create_and_submit_pull_request_review submit_pending_pull_request_review
@@ -2322,6 +2343,16 @@ if command -v jq >/dev/null 2>&1; then
   tm deny "jq only: a resolving method is denied" "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"resolve_thread\"}")" "$STUB" . "resolves a review thread"
   tm ask  "jq only: an unresolving method asks"   "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"unresolve_thread\"}")" "$STUB"
   tm deny "jq only: a non-text event is denied"   "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":1}")" "$STUB" . "not text"
+  tm deny "jq only: APPROVE with a tab and newline is denied" "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":\"\\tAPPROVE\\n\"}")" "$STUB" . "approves"
+  tm ask  "jq only: APPROVE with a no-break space asks" "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":\"APPROVE\\u00a0\"}")" "$STUB"
+  # A jq built without regex support: any regex filter fails. The checks use
+  # none, so a comment review still asks and an approval is still denied.
+  NOREGEX=$(mktemp -d "$CPTMP/noregex.XXXXXX")
+  printf '#!/bin/sh\ncase "$*" in *gsub*|*test\\(*|*match\\(*|*capture\\(*|*scan\\(*|*splits\\(*|*sub\\(*) echo "jq: regex not supported" >&2; exit 3 ;; esac\nexec %q "$@"\n' "$(command -v jq)" > "$NOREGEX/jq"
+  chmod +x "$NOREGEX/jq"; ln -s "$(command -v cat)" "$NOREGEX/cat"
+  tm ask  "jq without regex: a comment review asks"   "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":\"COMMENT\"}")" "$NOREGEX"
+  tm deny "jq without regex: an approval is denied"   "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":\" approve\"}")" "$NOREGEX" . "approves"
+  tm deny "jq without regex: a resolving method is denied" "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"resolve_thread\"}")" "$NOREGEX" . "resolves a review thread"
 else
   echo "SKIP  guard-mcp.sh   jq only: jq is not installed in this run"
 fi
@@ -2338,6 +2369,8 @@ tm deny "python3 only: an approval is denied"   "$(j $GH_REVIEW_NAME "{$PR_REF,\
 tm deny "python3 only: a resolving method is denied" "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"resolve_thread\"}")" "$STUB" . "resolves a review thread"
 tm ask  "python3 only: an unresolving method asks" "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"unresolve_thread\"}")" "$STUB"
 tm deny "python3 only: a non-text event is denied" "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":1}")" "$STUB" . "not text"
+tm deny "python3 only: APPROVE with a tab and newline is denied" "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":\"\\tAPPROVE\\n\"}")" "$STUB" . "approves"
+tm ask  "python3 only: APPROVE with a no-break space asks, as with jq" "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":\"APPROVE\\u00a0\"}")" "$STUB"
 tm deny "python3 only: arguments not an object are denied" '{"tool_name":"mcp__github__create_pull_request","tool_input":[]}' "$STUB" . "no argument object"
 # The python3 fallback must not import from the session's working directory,
 # which is the repository under work: a json.py planted there would otherwise

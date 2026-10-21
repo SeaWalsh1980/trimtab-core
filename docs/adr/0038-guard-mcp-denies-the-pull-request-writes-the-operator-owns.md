@@ -30,9 +30,12 @@ GitHub's MCP server reaches the same writes by name:
 - `pull_request_review_write`, and in older releases
   `create_pull_request_review`, `create_and_submit_pull_request_review` and
   `submit_pending_pull_request_review`, submit a review whose `event` may be
-  `APPROVE`. A `method` argument selects the operation in the newer tool.
-- A tool that resolves a review thread names it (`resolve_review_thread`), or
-  is a review tool's method.
+  `APPROVE`. A `method` argument selects the operation in the newer tool
+  (create, submit a pending review, delete one).
+- No tool of that server was checked to resolve a review thread when this was
+  written. A server that adds one would name it (as `resolve_review_thread`)
+  or add it as a review tool's method; both shapes are denied in advance, and
+  any other shape is a residual (below).
 
 Before this change guard-mcp asked about each of them, as about every write it
 cannot read (ADR 0013). An ask puts the call in front of whoever is at the
@@ -73,7 +76,10 @@ exact and case-sensitive for the three lists (`GH_MERGE`, `GH_CREATE`,
 resolving.
 
 The arguments are read inside jq, or `python3 -I` without jq, and only a
-verdict word comes back; no argument reaches a reason. The resolve-by-name
+verdict word comes back; no argument reaches a reason. Neither parser uses a
+regular expression, so a jq built without regex support still reads them,
+and both treat white space as the six ASCII characters and fold case in ASCII
+only, so they agree on every input. The resolve-by-name
 match uses bash patterns only, so a stub PATH cannot empty it.
 
 `HOOK_ALLOW_MCP`, exported by the operator, still lifts the whole guard.
@@ -104,7 +110,7 @@ match uses bash patterns only, so a stub PATH cannot empty it.
   session, attended or not, without the operator exporting `HOOK_ALLOW_MCP`.
 - A pull request opened through MCP must pass `draft: true`; the reason says
   so, so the agent can call again.
-- Measured on this change: the matrix holds 1,303 cases (1,231 before), all
+- Measured on this change: the matrix holds 1,315 cases (1,231 before), all
   passing; each new deny case fails against the guard before it.
 - The base branch's matrix shows one red case on this change, the merge that
   used to ask (see Status).

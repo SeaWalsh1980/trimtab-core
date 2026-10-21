@@ -154,6 +154,10 @@ GH_REVIEW=(
 # APPROVE, in any case or spacing), resolve (a method that resolves), unreadable
 # (an event or method that is not a string) or other. Either mode: no-object.
 # Anything else, an empty answer included, means the parser did not finish.
+# No regular expressions: a jq built without regex support fails on gsub,
+# which would deny every review. White space is the six ASCII characters
+# (tab, newline, vertical tab, form feed, carriage return, space) in both
+# parsers, so the two agree.
 gh_args() {
   local mode="$1" v rc
   if command -v jq >/dev/null 2>&1; then
@@ -162,26 +166,30 @@ gh_args() {
       | if ($a | type) != "object" then "no-object"
         elif $mode == "create" then (if $a.draft == true then "draft" else "not-draft" end)
         elif ($a | has("event")) and ($a.event | type) != "string" then "unreadable"
-        elif ($a | has("event")) and ($a.event | ascii_upcase | gsub("\\s"; "")) == "APPROVE" then "approve"
+        elif ($a | has("event")) and ($a.event | ascii_upcase | explode | map(select(. != 32 and (. < 9 or . > 13))) | implode) == "APPROVE" then "approve"
         elif ($a | has("method")) and ($a.method | type) != "string" then "unreadable"
-        elif ($a | has("method")) and ($a.method | ascii_downcase | gsub("unresolve"; "") | contains("resolve")) then "resolve"
+        elif ($a | has("method")) and ($a.method | ascii_downcase | split("unresolve") | join("") | contains("resolve")) then "resolve"
         else "other" end' 2>/dev/null)
     rc=$?
   else
     v=$(printf '%s' "$payload" | python3 -I -c '
-import json, re, sys
+import json, sys
 mode, a = sys.argv[1], json.load(sys.stdin).get("tool_input")
+def upper(s):  # ASCII only, as jq ascii_upcase
+    return "".join(chr(ord(c) - 32) if "a" <= c <= "z" else c for c in s)
+def lower(s):  # ASCII only, as jq ascii_downcase
+    return "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in s)
 if not isinstance(a, dict):
     v = "no-object"
 elif mode == "create":
     v = "draft" if a.get("draft") is True else "not-draft"
 elif "event" in a and not isinstance(a["event"], str):
     v = "unreadable"
-elif "event" in a and re.sub(r"\s", "", a["event"]).upper() == "APPROVE":
+elif "event" in a and "".join(c for c in upper(a["event"]) if c not in " \t\n\v\f\r") == "APPROVE":
     v = "approve"
 elif "method" in a and not isinstance(a["method"], str):
     v = "unreadable"
-elif "method" in a and "resolve" in a["method"].lower().replace("unresolve", ""):
+elif "method" in a and "resolve" in lower(a["method"]).replace("unresolve", ""):
     v = "resolve"
 else:
     v = "other"

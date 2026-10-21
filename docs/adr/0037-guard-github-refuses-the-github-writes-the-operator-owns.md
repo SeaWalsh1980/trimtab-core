@@ -198,7 +198,8 @@ The guard reads the command text, so it does not see:
   Reading any word followed by `pr create` as gh would refuse other tools with
   the same subcommands; the same residual as a `git` earlier on PATH in
   ADR 0036;
-- an MCP tool (guard-mcp's, ADR 0013 and 0034) or the desktop app's tools;
+- an MCP tool (guard-mcp's, ADR 0013 and 0034; ADR 0038 denies the same
+  pull-request writes as MCP calls) or the desktop app's tools;
 - a pull request merge, by decision (above): left to a project's merge gate
   and the server ruleset;
 - a default branch named other than `main` or `master`;
