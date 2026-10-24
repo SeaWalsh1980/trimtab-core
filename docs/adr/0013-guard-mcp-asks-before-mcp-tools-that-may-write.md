@@ -17,7 +17,10 @@ arguments and denies rather than asks. Amended 2026-10-17 by
 PR-activity subscription and a sibling-session message pass by exact full
 name. `mcp__github__update_pull_request` does not pass by name: guard-mcp
 reads its arguments, passes an edit of only the title, body or reviewers,
-and asks on anything else.
+and asks on anything else. Amended by
+[ADR 0038](0038-guard-mcp-denies-the-pull-request-writes-the-operator-owns.md):
+a merge, a pull request opened without `draft` true, an approving review and
+resolving a review thread are denied, on any server, before any pass.
 
 ## Context
 
