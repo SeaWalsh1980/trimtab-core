@@ -37,9 +37,15 @@ Trimtab is split in two, and this repository is only one half.
 
 - **The base** (this repository) holds the mechanism: the `trimtab` Python
   package and its CLI, the guards and hooks, the `/trimtab-*` commands, the
-  `trimtab-*` agents, `bootstrap.sh`, the routine templates and the tests.
+  `trimtab-*` agents, the skills (`wrap-merged`: after a merge, record the
+  work and hand over a clean context; in a project that runs an instance's
+  authorised plans, verify the plan first and then continue, hand over or
+  stop on the merged progress record's `## Next`),
+  `bootstrap.sh`, the routine templates and the tests.
   It holds no rules and no deployment values: no repository names, no
-  paths, no identities.
+  paths, no identities. A skill may carry the procedure an instance's rule
+  requires (as `wrap-merged` does for authorised-plan runs); the rule itself
+  stays in the instance, and the skill changes when it does.
 - **An instance** holds what is particular to one operator: the doctrine
   (`rules/`, from which `HARNESS.md` is generated), the list of consuming
   projects, settings choices and deployment values. An instance pins the
@@ -157,7 +163,8 @@ stand in for one.
 - Cite decisions by this repository's ADRs in `docs/adr/`, never by an
   instance's ADRs, plans or specs; where no ADR here records a decision,
   state the reason in place. Text read inside another repository
-  (`agents/`, `commands/`, `templates/`, `routines/templates/`, CLI output)
+  (`agents/`, `commands/`, `skills/`, `templates/`, `routines/templates/`,
+  CLI output)
   writes `trimtab-core ADR NNNN`, because that repository numbers its own
   ADRs; elsewhere, write `ADR NNNN` or the ADR's full file name.
   `tests/trimtab/test_doc_references.py` checks the numbers and paths.
