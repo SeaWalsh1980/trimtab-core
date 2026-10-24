@@ -43,7 +43,9 @@ Trimtab is split in two, and this repository is only one half.
   stop on the merged progress record's `## Next`),
   `bootstrap.sh`, the routine templates and the tests.
   It holds no rules and no deployment values: no repository names, no
-  paths, no identities.
+  paths, no identities. A skill may carry the procedure an instance's rule
+  requires (as `wrap-merged` does for authorised-plan runs); the rule itself
+  stays in the instance, and the skill changes when it does.
 - **An instance** holds what is particular to one operator: the doctrine
   (`rules/`, from which `HARNESS.md` is generated), the list of consuming
   projects, settings choices and deployment values. An instance pins the

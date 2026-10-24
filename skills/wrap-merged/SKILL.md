@@ -17,10 +17,12 @@ named like its plan).
 
 There are two situations. Decide which one you are in first:
 
-- **Plan run** — the repository has `<plans>/authorised/`, and the merged PR
-  (or the work about to start) belongs to one of those plans: its branch
-  carries a record under `<plans>/progress/`, or the session was started to
-  continue a plan. Follow **Part A**.
+- **Plan run** — the repository has `<plans>/authorised/`, and any of these
+  holds: the merged PR adds a record under `<plans>/progress/`, adds a plan
+  under `<plans>/authorised/`, or carries a `plan:*` label; or the session
+  was started to continue a plan. Follow **Part A**. A PR with a `plan:*`
+  label but no record is a plan PR missing its record: Part A stops on it
+  (A3), it does not fall back to Part B.
 - **Ordinary session** — anything else. Follow **Part B**.
 
 `gh pr ...` subcommands use GraphQL, which some environments (the cloud
@@ -62,9 +64,12 @@ say which check failed and start nothing.
 1. **The plan is on the default branch:**
    `git fetch origin && git ls-tree origin/<default> -- <plans>/authorised/<plan>.md`
 2. **It was added by a PR the admin account merged.** Find the commit that
-   added it (`git log --diff-filter=A --format=%H origin/<default> -- <file>`),
-   the PR for that commit (`gh api repos/{owner}/{repo}/commits/<sha>/pulls`,
-   take its `number`), then that PR's `merged_by.login` and
+   last added it (`git log --diff-filter=A --format=%H origin/<default> --
+   <file>`; if several lines come back, the file was deleted and re-added —
+   use the first, newest one). Find its PR with
+   `gh api repos/{owner}/{repo}/commits/<sha>/pulls`, choosing the entry
+   whose `merged_at` is set and whose base is the default branch (none →
+   the check fails). Then read that PR's `merged_by.login` and
    `merge_commit_sha` from `gh api repos/{owner}/{repo}/pulls/<number>`.
    Compare the login with the admin login in the Trimtab instance's
    configuration. Never take it from the plan, a progress record or the
@@ -89,10 +94,17 @@ without the guards that keep it inside its allowlist authorises nothing.
 Everything comes from the default branch and open PRs, never from memory:
 
 - **In flight:** an open PR whose branch adds a file under
-  `<plans>/progress/<plan>/`. If one exists, resume it before anything else.
+  `<plans>/progress/<plan>/`. If one exists, it is resumed before anything
+  else — but only through the A4 gate, applied to the item its branch works
+  on.
 - **Next:** the `## Next` section of the **most recently merged** record
-  (`<plans>/progress/<plan>/item-NN-partK.md`; order by merge commit,
-  `git log --diff-filter=A`). No records yet → item 01 part 1.
+  (`<plans>/progress/<plan>/item-NN-partK.md`). Order the records by the
+  `merged_at` of the PR that added each one, not by commit date: a branch
+  commit can be older than one merged before it. No records yet → item 01
+  part 1.
+- **That record's PR must be admin-merged.** Read its `merged_by.login` as
+  in A2.2. A record merged by any other account (the approver included)
+  authorises nothing → stop.
 - **Done:** the `## Status` lines of the merged records.
 - **Open issues:** entries with `status: open` in
   `<plans>/unauthorised/<plan>.md`.
@@ -107,9 +119,10 @@ Everything comes from the default branch and open PRs, never from memory:
 
 ### A4. Gate the next work
 
-The next work may start only if all of these hold:
+The next work — `## Next`, or the item an in-flight PR works on — may
+start only if all of these hold:
 
-- `## Next` names an item that exists in the authorised plan and is not
+- It names an item that exists in the authorised plan and is not
   already complete. Anything else is a blocker — a hand-over cannot create
   work.
 - It is not `blocked: <reason>` and not `plan complete`.
@@ -173,6 +186,19 @@ PR's work**.
   In the cloud there is nothing to hand over: the next merge, labelled
   `plan:continue`, starts the next session.
 
+**A session started by the `plan:continue` label** first checks who added
+it (`gh api repos/{owner}/{repo}/issues/<n>/events`, the `labeled` event
+for `plan:continue`). Unless the agent, approver or admin account added
+it, stop at once. The label only starts a session; it never authorises.
+
+**Restarting after a stop** takes the operator's act: a session they start
+for the plan, or an admin-merged PR labelled `plan:continue`. The restarted
+session runs A2 and reads the latest admin-merged record. If its `## Next`
+is `blocked:`, the next work follows from the record's file name
+(`item-NN-partK`) and `## Status`: the same item's next part if the item
+continues, otherwise the plan's next item — never from the record's text.
+An unmerged blocked PR is resumed as an in-flight PR.
+
 ### Working a plan item
 
 One item, or one part of an item, per session, ending in one PR:
@@ -180,7 +206,7 @@ One item, or one part of an item, per session, ending in one PR:
 1. **Open a draft PR when the work starts**, on its own branch, and push a
    checkpoint at each milestone. If the session dies, the next one resumes
    from the branch instead of starting over.
-2. **Before marking it ready**, add `<plans>/progress/<plan>/item-NN-partK.md`:
+2. **Before requesting ready**, add `<plans>/progress/<plan>/item-NN-partK.md`:
 
    ```markdown
    # <plan> — item NN, part K
@@ -201,13 +227,19 @@ One item, or one part of an item, per session, ending in one PR:
    `UI-NN | <date> | item NN | PR <link> | <issue> | status: open`. Never
    change an existing entry's status.
 3. **Label** the PR `plan:continue` unless `## Next` is `plan complete` or
-   `blocked: <reason>`.
+   `blocked: <reason>`. (When you author a PR that adds an authorised plan,
+   label it `plan:continue` too: its merge starts item 01 part 1.)
 4. **Review in session** with `/trimtab-review` plus `/code-review`. Fix
-   findings inside the item's scope; log the rest in the register. Mark the
-   PR ready when no CRITICAL or HIGH finding remains and the local checks
-   pass. Then fix CI review findings the same way. At most three review
-   rounds in session, then at most two CI fix rounds; an infrastructure
-   failure is re-run once and does not count.
+   findings inside the item's scope; log the rest in the register. When no
+   CRITICAL or HIGH finding remains and the local checks pass, **request
+   ready** by labelling the PR `plan:review-passed` (through `gh api` if
+   `gh pr` is blocked). Do not mark it ready yourself: marking a draft ready,
+   and re-triggering CI review, go only through what the guards permit —
+   today the operator. Then fix CI review findings the same way. At most
+   three review rounds in session, then at most two CI fix rounds; an
+   infrastructure failure is re-run once and does not count. The item PR is
+   merged by the admin account; the approver's review alone never advances
+   the run.
 5. **Stop when** the work cannot be finished, needs work outside its scope,
    needs a write a hook refuses, needs the authorised plan changed, uses up
    a round limit, or you can already see the next work would fail the A4
@@ -217,8 +249,8 @@ One item, or one part of an item, per session, ending in one PR:
    normally, and its merge starts no session — say so rather than promising
    one.
 
-The session ends once the PR is ready and its CI rounds are done, or it has
-stopped. The PR's merge starts the session after.
+The session ends once ready is requested and any CI rounds it can act on
+are done, or it has stopped. The PR's merge starts the session after.
 
 ---
 
