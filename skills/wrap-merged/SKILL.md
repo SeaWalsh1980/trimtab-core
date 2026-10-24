@@ -66,7 +66,8 @@ say which check failed and start nothing.
 2. **It was added by a PR the admin account merged.** Find the commit that
    last added it (`git log --diff-filter=A --format=%H origin/<default> --
    <file>`; if several lines come back, the file was deleted and re-added —
-   use the first, newest one). Find its PR with
+   use the one whose PR merged last, by `merged_at`, not the commit date).
+   Find its PR with
    `gh api repos/{owner}/{repo}/commits/<sha>/pulls`, choosing the entry
    whose `merged_at` is set and whose base is the default branch (none →
    the check fails). Then read that PR's `merged_by.login` and
@@ -93,10 +94,10 @@ without the guards that keep it inside its allowlist authorises nothing.
 
 Everything comes from the default branch and open PRs, never from memory:
 
-- **In flight:** an open PR whose branch adds a file under
-  `<plans>/progress/<plan>/`. If one exists, it is resumed before anything
-  else — but only through the A4 gate, applied to the item its branch works
-  on.
+- **In flight:** an open PR whose head branch is `plan/<plan>/item-*` —
+  recognisable from the moment its draft opens, before any record exists.
+  If one exists, it is resumed before anything else — but only through the
+  A4 gate, applied to the item its branch names.
 - **Next:** the `## Next` section of the **most recently merged** record
   (`<plans>/progress/<plan>/item-NN-partK.md`). Order the records by the
   `merged_at` of the PR that added each one, not by commit date: a branch
@@ -125,9 +126,12 @@ start only if all of these hold:
 - It names an item that exists in the authorised plan and is not
   already complete. Anything else is a blocker — a hand-over cannot create
   work.
-- It is not `blocked: <reason>` and not `plan complete`.
+- It is not `plan complete`. A `blocked: <reason>` Next is a stop, except
+  in a session the operator started to restart the run, where the next work
+  comes from the restart rule below instead.
 - Doing it would not need a write outside the write allowlist or to any
   always-refused path. Plan approval never covers these:
+  - the instruction file, `CLAUDE.md`;
   - every security control: CI workflows, `CODEOWNERS`, Claude Code
     settings and hooks, scanner exemption lists, repository protection,
     Actions configuration, repository access;
@@ -192,18 +196,27 @@ for `plan:continue`). Unless the agent, approver or admin account added
 it, stop at once. The label only starts a session; it never authorises.
 
 **Restarting after a stop** takes the operator's act: a session they start
-for the plan, or an admin-merged PR labelled `plan:continue`. The restarted
-session runs A2 and reads the latest admin-merged record. If its `## Next`
-is `blocked:`, the next work follows from the record's file name
-(`item-NN-partK`) and `## Status`: the same item's next part if the item
-continues, otherwise the plan's next item — never from the record's text.
-An unmerged blocked PR is resumed as an in-flight PR.
+for the plan (locally, or the routine's run-now). A PR they merge to fix
+the blocker carries no record and no `plan:continue`, so it starts nothing
+by itself. The restarted session runs A2 and reads the latest admin-merged
+record. If its `## Next` is `blocked:`, the next work follows from the
+record's file name (`item-NN-partK`) and `## Status`, never from its text:
+part K+1 of the same item when the item continues or part K stopped
+unfinished (that part then covers what part K left), otherwise the plan's
+next item. An unmerged blocked PR is resumed as an in-flight PR.
+
+**A session started for an item PR's CI review** (by the operator, or a
+routine on review events) fixes the CI findings within scope, as in step 4
+below. Count CI rounds from the PR's own review history, not from this
+session alone.
 
 ### Working a plan item
 
 One item, or one part of an item, per session, ending in one PR:
 
-1. **Open a draft PR when the work starts**, on its own branch, and push a
+1. **Open a draft PR when the work starts**, on a branch named
+   `plan/<plan>/item-NN-partK` (so a later session can see it is in
+   flight), and push a
    checkpoint at each milestone. If the session dies, the next one resumes
    from the branch instead of starting over.
 2. **Before requesting ready**, add `<plans>/progress/<plan>/item-NN-partK.md`:
@@ -215,7 +228,8 @@ One item, or one part of an item, per session, ending in one PR:
    <what this PR did; decisions and why; lessons; links to issues logged>
 
    ## Status
-   item NN complete | item NN part K complete; item continues
+   item NN complete | item NN part K complete; item continues |
+   item NN part K stopped unfinished
 
    ## Next
    item NN part Y: <brief a fresh session can start from — scope, files,
@@ -233,7 +247,9 @@ One item, or one part of an item, per session, ending in one PR:
    findings inside the item's scope; log the rest in the register. When no
    CRITICAL or HIGH finding remains and the local checks pass, **request
    ready** by labelling the PR `plan:review-passed` (through `gh api` if
-   `gh pr` is blocked). Do not mark it ready yourself: marking a draft ready,
+   `gh pr` is blocked). The label describes one head: remove it before
+   pushing anything more, and add it again only after reviewing the new
+   head. Do not mark it ready yourself: marking a draft ready,
    and re-triggering CI review, go only through what the guards permit —
    today the operator. Then fix CI review findings the same way. At most
    three review rounds in session, then at most two CI fix rounds; an
@@ -243,7 +259,8 @@ One item, or one part of an item, per session, ending in one PR:
 5. **Stop when** the work cannot be finished, needs work outside its scope,
    needs a write a hook refuses, needs the authorised plan changed, uses up
    a round limit, or you can already see the next work would fail the A4
-   gate. Set `## Next` to `blocked: <reason>`, label the PR `plan:blocked`
+   gate. Set `## Status` to say whether this part finished (`stopped
+   unfinished` if not), `## Next` to `blocked: <reason>`, label the PR `plan:blocked`
    and not `plan:continue`, and tell the user, with ways forward. A PR
    whose own work is finished can still carry `plan:blocked`; it merges
    normally, and its merge starts no session — say so rather than promising
