@@ -97,7 +97,9 @@ Everything comes from the default branch and open PRs, never from memory:
 - **In flight:** an open PR whose head branch is `plan/<plan>/item-*` —
   recognisable from the moment its draft opens, before any record exists.
   If one exists, it is resumed before anything else — but only through the
-  A4 gate, applied to the item its branch names.
+  A4 gate, applied to the item its branch names. An open PR labelled
+  `plan:blocked` is not resumed this way; only an operator-started restart
+  picks it up.
 - **Next:** the `## Next` section of the **most recently merged** record
   (`<plans>/progress/<plan>/item-NN-partK.md`). Order the records by the
   `merged_at` of the PR that added each one, not by commit date: a branch
@@ -111,7 +113,9 @@ Everything comes from the default branch and open PRs, never from memory:
   `<plans>/unauthorised/<plan>.md`.
 - **The merged PR carries no record** → stop, unless it is the PR that
   added the authorised plan itself (the plan's first run: start item 01
-  part 1). Every item PR must carry a record, and continuing from an older
+  part 1). This applies to a session started by a merge; an
+  operator-started restart has no merged PR to check here (a fix PR the
+  operator merged is not a plan PR) and goes straight to the restart rule. Every item PR must carry a record, and continuing from an older
   `## Next` risks redoing work.
 - **Sanity-check the record against the code.** If it says an item is
   complete but the plan's done condition is plainly unmet on the default
@@ -233,7 +237,8 @@ One item, or one part of an item, per session, ending in one PR:
 
    ## Next
    item NN part Y: <brief a fresh session can start from — scope, files,
-   starting state> | item MM part 1: <brief> | plan complete
+   starting state> | item MM part 1: <brief> | plan complete |
+   blocked: <reason>
    ```
 
    and append anything you found but did not do to
@@ -261,7 +266,8 @@ One item, or one part of an item, per session, ending in one PR:
    a round limit, or you can already see the next work would fail the A4
    gate. Set `## Status` to say whether this part finished (`stopped
    unfinished` if not), `## Next` to `blocked: <reason>`, label the PR `plan:blocked`
-   and not `plan:continue`, and tell the user, with ways forward. A PR
+   and remove any `plan:continue` added in step 3 (the labels always follow
+   the final `## Next`), and tell the user, with ways forward. A PR
    whose own work is finished can still carry `plan:blocked`; it merges
    normally, and its merge starts no session — say so rather than promising
    one.
