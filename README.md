@@ -33,9 +33,10 @@ Trimtab is split in two, and this repository is only one half.
 
 - **The base** (this repository) holds the mechanism: the `trimtab` Python
   package and its CLI, the guards and hooks, the `/trimtab-*` commands, the
-  `trimtab-*` agents, the skills (`wrap-merged`: record a merged PR in
-  memory and the plan, then hand over a `/compact` command for the next
-  task), `bootstrap.sh`, the routine templates and the tests.
+  `trimtab-*` agents, the skills (`wrap-merged`: after a merge, verify an
+  authorised plan and continue from the merged progress record's `## Next`,
+  or record the work and hand over a clean context), `bootstrap.sh`, the
+  routine templates and the tests.
   It holds no rules and no deployment values: no repository names, no
   paths, no identities.
 - **An instance** holds what is particular to one operator: the doctrine
