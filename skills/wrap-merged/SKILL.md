@@ -20,7 +20,7 @@ named like its plan).
 `<plans>/progress/`, adds a plan under `<plans>/authorised/`, or carries a
 `plan:*` label, or the session was started to continue or restart a plan.
 A PR with a `plan:*` label but no record is a plan PR missing its record:
-it is a stop (A3). Any other merge is outside this skill: say so in one
+it is a stop (section 3). Any other merge is outside this skill: say so in one
 line and do nothing here. In particular, never edit anything under
 `<plans>/` for a merge that is not a plan run.
 
@@ -43,19 +43,23 @@ plan, and you never edit an authorised plan or an earlier progress record.
 for the operator (for example: approve a new plan covering it, make the
 guarded change by hand, or correct the record in a reviewed PR).
 
-### A1. Confirm the merge
+### 1. Confirm the merge
 
 ```bash
 gh api repos/{owner}/{repo}/pulls/<n> --jq '{state, merged, merged_at, merge_commit_sha, base: .base.ref, labels: [.labels[].name]}'
 ```
 
-- `merged` is true → continue.
+- `merged` is true and `base` is the default branch → continue.
+- Merged into any other branch → the work has not landed where the run
+  reads its state; treat it as not merged.
+- An operator-started restart has no merged PR: skip this step and go
+  straight to section 2.
 - Not merged (open, or closed unmerged) → nothing is done. Keep any lessons
   (memory if the session has one, otherwise in your report), record nothing
   as done, and stop. A wrongly recorded "done" sends the next session past
   work that never landed.
 
-### A2. Run the authorisation check
+### 2. Run the authorisation check
 
 The plan is authorised only if **every** check holds. Any failure is a stop:
 say which check failed and start nothing.
@@ -63,9 +67,10 @@ say which check failed and start nothing.
 1. **The plan is on the default branch:**
    `git fetch origin && git ls-tree origin/<default> -- <plans>/authorised/<plan>.md`
 2. **It was added by a PR the admin account merged.** Find the commit that
-   last added it (`git log --diff-filter=A --format=%H origin/<default> --
-   <file>`; if several lines come back, the file was deleted and re-added —
-   use the one whose PR merged last, by `merged_at`, not the commit date).
+   last added it in merge order: `git log --first-parent -m
+   --diff-filter=A --format=%H origin/<default> -- <file>`, first line (if
+   several come back, the file was deleted and re-added; first-parent
+   order is merge order, so the first is the latest).
    Find its PR with
    `gh api repos/{owner}/{repo}/commits/<sha>/pulls`, choosing the entry
    whose `merged_at` is set and whose base is the default branch (none →
@@ -81,15 +86,16 @@ say which check failed and start nothing.
    PR before its merge are fine; only changes after the merge count.)
 4. **The enforcement is live.** The repository's write allowlist exists; the
    guard that enforces it is installed and reports itself live; and
-   `CODEOWNERS` gives every always-refused file path in A4 to the admin. If you
-   cannot confirm all three, the check fails. In particular, until the base
-   ships that allowlist guard, this check fails and no plan can run.
+   `CODEOWNERS` gives every always-refused file path in section 4 to the
+   admin. If you cannot confirm all three, the check fails. In particular,
+   until the base ships that allowlist guard, this check fails and no plan
+   can run.
 
 Why this strict: the merge is the only authorisation an autonomous run has.
 A plan edited after approval, merged by the agent's own account, or run
 without the guards that keep it inside its allowlist authorises nothing.
 
-### A3. Work out the state
+### 3. Work out the state
 
 Everything comes from the default branch and open PRs, never from memory:
 
@@ -99,18 +105,20 @@ Everything comes from the default branch and open PRs, never from memory:
   repository (not a fork) and its author must be the agent or admin
   account from instance configuration. A `plan/…` PR that fails either
   test is a stop — report it; never resume or build on it. Otherwise it is
-  resumed before anything else — but only through the
-  A4 gate, applied to the item its branch names. An open PR labelled
-  `plan:blocked` is not resumed this way; only an operator-started restart
-  picks it up.
+  resumed before anything else, but only through the gate in section 4,
+  applied to the item its branch names. An open PR labelled `plan:blocked`
+  is not resumed this way; only an operator-started restart picks it up.
 - **Next:** the `## Next` section of the **most recently merged** record
-  (`<plans>/progress/<plan>/item-NN-partK.md`). Order the records by the
-  `merged_at` of the PR that added each one, not by commit date: a branch
-  commit can be older than one merged before it. No records yet → item 01
-  part 1.
-- **That record's PR must be admin-merged.** Read its `merged_by.login` as
-  in A2.2. A record merged by any other account (the approver included)
-  authorises nothing → stop.
+  (`<plans>/progress/<plan>/item-NN-partK.md`). Take merge order from the
+  default branch's first-parent history, in one local call:
+  `git log --first-parent -m --diff-filter=A --name-only --format=%H
+  origin/<default> -- <plans>/progress/<plan>/` lists the records newest
+  merge first (commit dates inside a branch do not matter). No records yet
+  → item 01 part 1.
+- **That record's PR must be admin-merged.** For the latest record only,
+  find its PR and read `merged_by.login` as in section 2, check 2. A record
+  merged by any other account (the approver included) authorises nothing →
+  stop.
 - **Done:** the `## Status` lines of the merged records.
 - **Open issues:** entries with `status: open` in
   `<plans>/unauthorised/<plan>.md`.
@@ -118,14 +126,15 @@ Everything comes from the default branch and open PRs, never from memory:
   added the authorised plan itself (the plan's first run: start item 01
   part 1). This applies to a session started by a merge; an
   operator-started restart has no merged PR to check here (a fix PR the
-  operator merged is not a plan PR) and goes straight to the restart rule. Every item PR must carry a record, and continuing from an older
+  operator merged is not a plan PR) and goes straight to the restart rule.
+  Every item PR must carry a record, and continuing from an older
   `## Next` risks redoing work.
 - **Sanity-check the record against the code.** If it says an item is
   complete but the plan's done condition is plainly unmet on the default
   branch, log it in the register, and stop if the next work depends on it.
   A record is the agent's claim; the merged code is the fact.
 
-### A4. Gate the next work
+### 4. Gate the next work
 
 The next work — `## Next`, or the item an in-flight PR works on — may
 start only if all of these hold:
@@ -150,7 +159,7 @@ If the gate fails: say "needs approval: <reason>", list the open issues
 with their PR links, propose ways forward, and stop. If `## Next` is
 `plan complete`, say so and stop.
 
-### A5. Record
+### 5. Record
 
 - **No repository write after the merge.** The progress record shipped in
   the PR; editing it now would put unreviewed text on the default branch.
@@ -158,13 +167,13 @@ with their PR links, propose ways forward, and stop. If `## Next` is
   date, what comes next). It is optional — the merged record is the source
   of truth, and cloud sessions have no memory at all.
 
-### A6. Tidy
+### 6. Tidy
 
 Follow the project's own after-merge instructions (removing the PR's
 worktree or local branch, pulling the default branch). Do only what they
 say; never delete a branch or worktree holding unmerged work.
 
-### A7. Continue or hand over
+### 7. Continue or hand over
 
 Report first, in a few lines:
 
@@ -179,7 +188,7 @@ PR's work**.
 
 - **It does not** — the session started fresh from the merge: a routine or
   Action fired on it, a parent sent the brief, or a cleared session picked
-  it up. The context is already clean, so if A3 and A4 passed, do the next
+  it up. The context is already clean, so if steps 3 and 4 passed, do the next
   work now — the in-flight PR if there is one, otherwise `## Next` —
   following "Working a plan item" below.
 - **It does** — this session did the merged work. Hand over instead, so the
@@ -202,14 +211,15 @@ PR's work**.
 
 **A session started by the `plan:continue` label** first checks who added
 it (`gh api repos/{owner}/{repo}/issues/<n>/events`, the `labeled` event
-for `plan:continue`). Unless the agent, approver or admin account added
-it, stop at once. The label only starts a session; it never authorises.
+for `plan:continue`). Unless the agent or admin account added it, stop at
+once; the approver is not an authority and cannot start a run. The label
+only starts a session; it never authorises.
 
 **Restarting after a stop** takes the operator's act: a session they start
 for the plan (locally, or the routine's run-now). A PR they merge to fix
 the blocker carries no record and no `plan:continue`, so it starts nothing
-by itself. The restarted session runs A2 and reads the latest admin-merged
-record. If its `## Next` is `blocked:`, the next work follows from the
+by itself. The restarted session runs section 2 and reads the latest
+admin-merged record. If its `## Next` is `blocked:`, the next work follows from the
 record's file name (`item-NN-partK`) and `## Status`, never from its text:
 part K+1 of the same item when the item continues or part K stopped
 unfinished (that part then covers what part K left), otherwise the plan's
@@ -217,8 +227,8 @@ next item. An unmerged blocked PR is resumed as an in-flight PR.
 
 **A session started for an item PR's CI review** (by the operator, or a
 routine on review events) fixes the CI findings within scope, as in step 4
-below. Count CI rounds from the PR's own review history, not from this
-session alone.
+of "Working a plan item" below. Count CI rounds from the PR's own review
+history, not from this session alone.
 
 ### Working a plan item
 
@@ -269,11 +279,12 @@ One item, or one part of an item, per session, ending in one PR:
    the run.
 5. **Stop when** the work cannot be finished, needs work outside its scope,
    needs a write a hook refuses, needs the authorised plan changed, uses up
-   a round limit, or you can already see the next work would fail the A4
-   gate. Set `## Status` to say whether this part finished (`stopped
-   unfinished` if not), `## Next` to `blocked: <reason>`, label the PR `plan:blocked`
-   and remove any `plan:continue` added in step 3 (the labels always follow
-   the final `## Next`), and tell the user, with ways forward. A PR
+   a round limit, or you can already see the next work would fail the gate
+   in section 4. Set `## Status` to say whether this part finished
+   (`stopped unfinished` if not) and `## Next` to `blocked: <reason>`; label
+   the PR `plan:blocked` and remove any `plan:continue` added in step 3 (the
+   labels always follow the final `## Next`); and tell the user, with ways
+   forward. A PR
    whose own work is finished can still carry `plan:blocked`; it merges
    normally, and its merge starts no session — say so rather than promising
    one.
