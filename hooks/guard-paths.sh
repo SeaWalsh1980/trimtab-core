@@ -816,6 +816,13 @@ hl_check_abs() {   # $1 = absolute path, $2 = write tool 1/0, $3 = reason, $4 = 
   [[ "$abs" == "$hl_root" ]] && return 0
   rel="${abs#"$hl_root"/}"
   hl_refused "$rel" && hl_deny "$3 (repository harness or control)" "$4"
+  # A .claude directory that is itself a link puts the allowlist (and the
+  # rest of the harness) outside the reviewed tree, where a regular file at
+  # the end of the link would pass the check below. Refuse every write in
+  # such a repository rather than trust it (fail closed).
+  if (( $2 )) && [[ -L "$hl_root/.claude" ]]; then
+    hl_deny "the repository's .claude is a symlink; its allowlist cannot be trusted (fail closed)" "$4"
+  fi
   # -L as well as -e: a link at the allowlist's path, dangling or not, must
   # not read as "no allowlist" and switch default-deny off; hl_allowed then
   # refuses it (fail closed).

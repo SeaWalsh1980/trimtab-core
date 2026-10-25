@@ -145,7 +145,9 @@ out of that repository's allowlist and by CODEOWNERS.
 - A link where `.claude/write-allowlist` should be, dangling or not,
   refuses every write: the list must be a regular file inside the reviewed
   tree, or a link to a world-writable file elsewhere could widen it. It does
-  not switch default-deny off.
+  not switch default-deny off. For the same reason, a repository whose
+  `.claude` directory is itself a link refuses every write: the allowlist
+  at the end of that link is outside the reviewed tree.
 - Accepted residual: a shell command that reaches a protected file through
   a hard link (`sed -i … src/hard.json`) is judged at its spelt path. The
   link-count check costs a `stat` per call and runs for Edit and Write only;
