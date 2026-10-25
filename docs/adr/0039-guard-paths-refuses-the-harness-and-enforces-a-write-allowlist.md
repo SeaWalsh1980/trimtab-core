@@ -59,10 +59,13 @@ resolved with `cd -P`, and a link on the way that does not resolve blocks),
 so a symlink inside an allowlisted directory cannot reach `.claude/`, and
 a write whose target is itself a symlink is refused outright; layer 1
 compares lower-cased, so `Claude.md` on a case-insensitive filesystem is
-refused; and a Bash fragment holding `*`, `?` or `[` is refused when the
-pattern could expand to a protected path, including a glob in a directory
-above the repository, where the root cannot be found from the literal path
-and any tail of the pattern is tested instead.
+refused; a Bash word holding `*`, `?` or `[` (with or without `/` or `.`)
+is expanded the way the shell would, with bash's own pathname expansion,
+and refused when any match is a protected path, wherever the glob sits;
+`nocaseglob` is always on for that expansion, and `dotglob` when the
+command mentions `dotglob` or `GLOBIGNORE`; and a write to an existing file
+with more than one hard link is refused, since a hard link to a protected
+file is invisible to every path check.
 
 A repository without an allowlist gets layer 1 only, so nothing breaks
 before each repository adds its file (step 4b). The operator lifts both
@@ -106,13 +109,17 @@ out of that repository's allowlist and by CODEOWNERS.
   CODEOWNERS protecting them.
 - A path built at run time in a shell (`p=.cl; cat ${p}aude/x`) is out of
   reach of any path guard; CODEOWNERS at merge is the backstop there too.
-- A Bash glob such as `*.md` is refused in a repository where it could
-  expand to `CLAUDE.md`, which is noisier than the literal checks.
+- A Bash glob is refused when it expands to a protected file that exists:
+  `cat *.md` or `git add *` in a directory holding `CLAUDE.md`. A glob that
+  matches nothing names nothing (the shell keeps it literal) and passes.
+- Expanding a glob that names a large tree (`/*/*/*`) costs time in the
+  hook; no bound is set, since such words are rare in practice.
 - Each write call costs one more `cd -P` subshell to resolve its physical
   path. Bash paths are normalised once and shared between the control-plane
   and harness checks.
 - Editing a file through a symlink is refused, even when the link points
-  somewhere harmless; edit the real file.
-- A Bash glob in a directory outside any repository is refused when a tail
-  of it could match a protected path (`/x/*/settings.json` matches
-  `.claude/settings.json`), which over-blocks some unrelated globs.
+  somewhere harmless; edit the real file. Editing a file with other hard
+  links is refused the same way.
+- The guard gains one external: `stat`, run once per write to an existing
+  file inside a repository to read its link count (GNU spelling, then BSD).
+  If neither answers, the write blocks (ADR 0001).

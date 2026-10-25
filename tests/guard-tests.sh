@@ -1153,6 +1153,11 @@ t guard-paths.sh 2 "allowlist: an unlisted directory is refused" "$(e Write "$AL
 t guard-paths.sh 2 "allowlist: cannot widen the harness layer" "$(e Write "$AL/.github/workflows/x.yml")"
 t guard-paths.sh 0 "allowlist: Read is not confined"           "$(e Read "$AL/Makefile")"
 t guard-paths.sh 0 "allowlist: bash is not confined by it (CODEOWNERS is)" "$(bsh 'cat Makefile')" "$AL"
+# Real files for the glob and hard-link cases: a glob is judged by what it
+# expands to, so the protected files must exist.
+mkdir -p "$HL/.claude/hooks"
+: > "$HL/CLAUDE.md"; : > "$HL/CODEOWNERS"
+: > "$HL/.claude/settings.json"; : > "$HL/.claude/hooks/pre.sh"
 # Known bypass shapes, pinned (ADR 0039).
 ln -s ../.claude "$AL/src/cfg"
 t guard-paths.sh 2 "bypass: a symlink inside the allowlist into .claude/" "$(e Edit "$AL/src/cfg/settings.json")"
@@ -1167,6 +1172,15 @@ ln -s ../.claude/settings.json "$AL/src/cfg.json"
 t guard-paths.sh 2 "bypass: the target itself is a symlink into .claude/" "$(e Edit "$AL/src/cfg.json")"
 t guard-paths.sh 2 "bypass: a glob in a directory above the repository" "$(bsh "cat ${CPTMP%/*}/*/hl-repo/.claude/settings.json")"
 t guard-paths.sh 0 "control: a final-component glob outside any repository" "$(bsh "cat $CPTMP/loose/*.md")"
+t guard-paths.sh 2 "bypass: a glob into .claude/hooks/"        "$(bsh 'sed -i s/a/b/ .c*/hooks/pre.sh')" "$HL"
+t guard-paths.sh 2 "bypass: a glob word with no / or ."        "$(bsh 'sed -i d CODEOWNER?')" "$HL"
+t guard-paths.sh 2 "bypass: dotglob turned on in the command"  "$(bsh 'shopt -s dotglob; cat */settings.json')" "$HL"
+t guard-paths.sh 0 "control: the same glob without dotglob"    "$(bsh 'cat */settings.json')" "$HL"
+t guard-paths.sh 0 "control: a glob that matches nothing"      "$(bsh 'cat .zz*/nothing')" "$HL"
+ln "$HL/.claude/settings.json" "$AL/src/hard.json"
+t guard-paths.sh 2 "bypass: a hard link to a protected file"   "$(e Edit "$AL/src/hard.json")"
+: > "$AL/src/plain.py"
+t guard-paths.sh 0 "control: an existing file with one link"   "$(e Edit "$AL/src/plain.py")"
 # Allowlist spellings an owner may use: ./, a trailing slash, CRLF endings.
 printf 'src/**\r\n./tools/**\r\nnotes/\r\n' > "$AL/.claude/write-allowlist"
 t guard-paths.sh 0 "allowlist: a CRLF line still matches"      "$(e Edit "$AL/src/a.py")"

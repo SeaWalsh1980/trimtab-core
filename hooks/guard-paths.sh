@@ -9,7 +9,9 @@
 # payload and prints the deny messages (missing, the payload is empty, which
 # blocks); jq or python3 parses the payload; and `readlink`, run only when
 # ~/.claude/CLAUDE.md is a link (bootstrap always makes it one), without which
-# every call blocks. `sed` was dropped for bash expansions after a missing one
+# every call blocks. The harness layer (ADR 0039) adds `stat`, run once per
+# write to an existing file inside a repository to read its link count; a
+# missing `stat` blocks that write. `sed` was dropped for bash expansions after a missing one
 # was found to empty both the path and the command and allow everything. See
 # docs/adr/0001-guards-fail-closed-on-missing-dependencies.md.
 #
@@ -554,8 +556,9 @@ cp_scan_cmd() {
   local IFS=$' \t\n\047\042(),;|&<>={}:'
   for frag in $c; do
     # Same bare-word rule as the token loop: a fragment with no / or . is a
-    # word like `hooks`, and blocking those would block the English word.
-    [[ "$frag" == *[/.]* ]] || continue
+    # word like `hooks`, and blocking those would block the English word. A
+    # glob word (`CLAUDE*`) is not a bare word: it names whatever it expands to.
+    [[ "$frag" == *[/.]* || "$frag" == *[\*\?\[]* ]] || continue
     cp_check "$frag" "shell command referencing the live control plane"
     # The harness layer is defined further down; it runs here too, so a path
     # welded into `python3 -c "open('.claude/settings.json','w')"` is seen.
@@ -692,21 +695,38 @@ hl_refused() {   # $1 = a path relative to its repository root
   return 1
 }
 
-# A Bash fragment holding glob characters names whatever the shell expands it
-# to, which the literal checks above never see (`.cla*/settings.json`). Refuse
-# it when the pattern could match a protected path. Variables built at run time
-# stay out of reach of any path guard; ADR 0039 records that residual.
-hl_probes=( ".claude/settings.json" ".claude/x" ".github/workflows/x" \
-            "CLAUDE.md" "CLAUDE.local.md" "CODEOWNERS" "docs/CODEOWNERS" \
-            ".gitleaks.toml" ".trivyignore" ".bandit-allowlist.yml" "$hl_plans/x" )
-hl_glob_refused() {   # $1 = a relative path containing * ? or [
-  local p
-  shopt -s nocasematch
-  for p in "${hl_probes[@]}"; do
-    # shellcheck disable=SC2053
-    if [[ "$p" == $1 ]]; then shopt -u nocasematch; return 0; fi
+# A Bash word holding glob characters names whatever the shell expands it to,
+# which the literal checks above never see (`.c*/hooks/x`, `CLAUDE*`).
+# Expand it the way the shell would, with bash's own pathname expansion (no
+# exec), and judge every match. nocaseglob is always on, since a
+# case-insensitive filesystem matches either way; dotglob is on when the
+# command line mentions it or GLOBIGNORE, either of which lets `*` reach
+# dotfiles. A glob that matches nothing stays a literal word in the shell, so
+# it names no protected file. Variables built at run time stay out of reach
+# of any path guard; ADR 0039 records that residual.
+hl_dotglob=0
+[[ "$cmd" == *dotglob* || "$cmd" == *GLOBIGNORE* ]] && hl_dotglob=1
+hl_glob_hits() {   # $1 = an absolute path containing * ? or [; 0 = a match is refused
+  local -a hits=()
+  local m restore_f=0 restore_dot=0 restore_case=0 restore_null=0 IFS=
+  [[ -o noglob ]] && restore_f=1
+  shopt -q dotglob || restore_dot=1
+  shopt -q nocaseglob || restore_case=1
+  shopt -q nullglob || restore_null=1
+  set +f
+  shopt -s nocaseglob nullglob
+  (( hl_dotglob )) && shopt -s dotglob
+  # shellcheck disable=SC2206
+  hits=( $1 )
+  (( restore_f )) && set -f
+  (( restore_dot )) && shopt -u dotglob
+  (( restore_case )) && shopt -u nocaseglob
+  (( restore_null )) && shopt -u nullglob
+  for m in ${hits[@]+"${hits[@]}"}; do
+    hl_find_root "$m" || continue
+    [[ "$m" == "$hl_root" ]] && continue
+    hl_refused "${m#"$hl_root"/}" && return 0
   done
-  shopt -u nocasematch
   return 1
 }
 
@@ -748,38 +768,17 @@ hl_allowed() {   # $1 = repository root, $2 = relative path; 0 = listed
   return 1
 }
 
-# A glob in a directory ABOVE any repository (`/home/*/proj/.claude/x`) hides
-# the root from hl_find_root, which walks the literal path. Without a root,
-# refuse the pattern when any tail of it could match a protected path.
-hl_glob_tail_refused() {   # $1 = an absolute path with a glob in a directory part
-  local tail="${1#/}" p
-  shopt -s nocasematch
-  while [[ -n "$tail" ]]; do
-    for p in "${hl_probes[@]}"; do
-      # shellcheck disable=SC2053
-      if [[ "$p" == $tail ]]; then shopt -u nocasematch; return 0; fi
-    done
-    [[ "$tail" == */* ]] || break
-    tail="${tail#*/}"
-  done
-  shopt -u nocasematch
-  return 1
-}
-
 hl_check_abs() {   # $1 = absolute path, $2 = write tool 1/0, $3 = reason, $4 = as given
   local abs="$1" rel
-  if ! hl_find_root "$abs"; then
-    if (( ! $2 )) && [[ "${abs%/*}" == *[\*\?\[]* ]] && hl_glob_tail_refused "$abs"; then
-      hl_deny "$3 (a glob that can expand to a repository harness or control path)" "$4"
-    fi
-    return 0
+  # A glob is judged by what it expands to, wherever the glob sits (above the
+  # repository root too, where the literal path finds no root).
+  if (( ! $2 )) && [[ "$abs" == *[\*\?\[]* ]] && hl_glob_hits "$abs"; then
+    hl_deny "$3 (a glob that expands to a repository harness or control path)" "$4"
   fi
+  hl_find_root "$abs" || return 0
   [[ "$abs" == "$hl_root" ]] && return 0
   rel="${abs#"$hl_root"/}"
   hl_refused "$rel" && hl_deny "$3 (repository harness or control)" "$4"
-  if (( ! $2 )) && [[ "$rel" == *[\*\?\[]* ]] && hl_glob_refused "$rel"; then
-    hl_deny "$3 (a glob that can expand to a repository harness or control path)" "$4"
-  fi
   if (( $2 )) && [[ -e "$hl_root/.claude/write-allowlist" ]]; then
     hl_allowed "$hl_root" "$rel" || hl_deny "write outside the repository's write allowlist" "$4"
   fi
@@ -799,6 +798,18 @@ hl_check() {   # $1 = path as given, $2 = 1 for a write tool, $3 = reason,
   # a link is rare; refusing it closes the route.
   if [[ -L "$spelt" ]]; then
     hl_deny "$3 (the target is a symlink; write the real file instead)" "$1"
+  fi
+  # A hard link is invisible to every path check: an Edit of `src/s.json`
+  # rewrites `.claude/settings.json` if the two share an inode. bash has no
+  # builtin for the link count, so this costs one `stat` exec per write to an
+  # existing file (GNU spelling first, then BSD); if neither answers, block.
+  if [[ -f "$spelt" ]]; then
+    local nl
+    nl=$(stat -c %h -- "$spelt" 2>/dev/null) \
+      || nl=$(stat -f %l -- "$spelt" 2>/dev/null) \
+      || hl_deny "$3 (cannot read the target's link count; fail closed)" "$1"
+    [[ "$nl" =~ ^[0-9]+$ ]] || hl_deny "$3 (cannot read the target's link count; fail closed)" "$1"
+    (( nl > 1 )) && hl_deny "$3 (the target has other hard links, one of which may be a protected file)" "$1"
   fi
   # A write lands where the kernel resolves the path, which a symlink inside an
   # allowlisted directory can point into .claude/ or another refused path.
@@ -862,7 +873,7 @@ if [[ -n "$cmd" ]]; then
     tok="${tok%[,;\"\')]}"
     tok="${tok#[\"\'(]}"
     [[ "$tok" == -* ]] && continue
-    [[ "$tok" == *[/.]* ]] || continue
+    [[ "$tok" == *[/.]* || "$tok" == *[\*\?\[]* ]] || continue
     # Relative tokens resolve against the hook's cwd, which the whole-string
     # scan above cannot do.
     cp_check "$tok" "shell command referencing"
