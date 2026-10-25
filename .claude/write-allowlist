@@ -1,0 +1,13 @@
+# Where an agent may write with Edit, Write, MultiEdit or NotebookEdit in this
+# repository. guard-paths refuses every other path (ADR 0039). One glob per
+# line, relative to the repository root; `**` and `*` both span directories.
+#
+# Docs and tests only. The mechanism (hooks/, bin/, the trimtab/ package,
+# skills/, agents/, commands/, templates/, routines/, systemd/, bootstrap.sh,
+# settings.base.json) is the harness and is left out on purpose; the operator
+# lifts this for harness work by exporting HOOK_ALLOW_HARNESS=1. This file
+# cannot widen guard-paths' always-refused paths, and CODEOWNERS still
+# reviews every path at merge.
+tests/**
+docs/adr/**
+README.md
