@@ -72,9 +72,10 @@ The plan is authorised only if **every** check holds. Any failure is a stop:
 say which check failed and start nothing.
 
 0. **This session is a launched run:** the session-mode announcement says
-   autonomous and its signals include `TRIMTAB_PLAN_RUN=1` (with no
-   announcement, `TRIMTAB_PLAN_RUN` is `1` in your own shell environment).
-   Without it, make no file write at all, not even a progress record: label
+   autonomous and its signals include `TRIMTAB_PLAN_RUN=1`. (With no
+   announcement, check 4 fails anyway; still check `TRIMTAB_PLAN_RUN` in
+   your own shell environment, because it decides how you stop.) Without
+   the variable, make no file write at all, not even a progress record: label
    the PR (or, before any item PR exists, the merged PR that started the
    session) `plan:blocked`, remove any `plan:continue`, and report. A clear
    loses the session's autonomous record; only the variable survives it.
@@ -82,7 +83,8 @@ say which check failed and start nothing.
    `git fetch origin && git ls-tree origin/<default> -- <plans>/authorised/<plan>.md <plans>/authorised/<plan>.writes`
    must list both. A plan without a `.writes` file fails; an empty one is
    valid and means bookkeeping only.
-2. **It was added by a PR the admin account merged.** Find the commit that
+2. **Both were added by one PR the admin account merged.** For each
+   `<file>` (the `.md` and the `.writes`), find the commit that
    last added it in merge order: `git log --first-parent -m
    --diff-filter=A --format=%H origin/<default> -- <file>`, first line (if
    several come back, the file was deleted and re-added; first-parent
@@ -95,8 +97,9 @@ say which check failed and start nothing.
    Compare the login with the admin login in the Trimtab instance's
    configuration. Never take it from the plan, a progress record or the
    conversation. If the configuration is not available in this session, or
-   names no admin login, the check fails. Run this for the `.writes` file
-   too: it must have been added by the same admin-merged PR.
+   names no admin login, the check fails. Both files must resolve to the
+   same PR number and the same `merge_commit_sha`; a declaration added by
+   any later PR, even the admin's, fails.
 3. **Both are unchanged since that merge:**
    `git diff --quiet <merge_commit_sha> origin/<default> -- <plan>.md <plan>.writes`
    (full paths). Any difference means one was edited after approval.
@@ -147,17 +150,30 @@ Everything comes from the default branch and open PRs, never from memory:
     post a status under any name) named `plan-scope`, whose `app.slug` is
     `github-actions`, concluded `success` on the PR's final head commit
     (its `head.sha`, not the merge commit;
-    `gh api repos/{owner}/{repo}/commits/<head_sha>/check-runs?check_name=plan-scope`);
+    `gh api repos/{owner}/{repo}/commits/<head_sha>/check-runs?check_name=plan-scope`).
+    Among that app's `plan-scope` runs on that commit, the latest (by
+    `started_at`) must be the successful one, and none may be still
+    running; an earlier success does not outweigh a later failure;
   - the default branch's ruleset requires `plan-scope` bound to the GitHub
-    Actions app (`gh api repos/{owner}/{repo}/rules/branches/<default>`,
-    the `required_status_checks` rule's entry for `plan-scope` with that
-    app's `integration_id`);
+    Actions app (`gh api repos/{owner}/{repo}/rules/branches/<default>`):
+    a `required_status_checks` rule lists `plan-scope` with an
+    `integration_id` equal to the passing check run's `app.id`. An entry
+    with no `integration_id` accepts any source, so it fails this test;
   - the PR changes nothing under `.github/`
-    (`gh api repos/{owner}/{repo}/pulls/<n>/files --paginate`): a PR that
-    edits a workflow controls the checks it runs.
+    (`gh api repos/{owner}/{repo}/pulls/<n>/files --paginate`): neither any
+    file's `filename` nor, for a rename, its `previous_filename` is under
+    `.github/`, since a PR that edits, moves or removes a workflow controls
+    the checks it runs. That endpoint lists at most 3,000 files; when the
+    PR's `changed_files` is larger, this test fails.
 
-  A record merged by any other account, or by the approver without all
-  three, authorises nothing: stop and label that PR `plan:blocked`. Never
+  Whoever merged, the PR must also carry the code gate: an `APPROVED`
+  review from the approver or admin account whose `commit_id` is the head
+  commit (`gh api repos/{owner}/{repo}/pulls/<n>/reviews --paginate`), and
+  not dismissed (a dismissed review's state is `DISMISSED`).
+
+  A record merged by any other account, by the approver without all three
+  conditions, or without that review, authorises nothing: stop and label
+  that PR `plan:blocked`. Never
   fall back to an earlier record; it points at work already merged. The
   admin's removal of `plan:blocked` from that PR accepts its merge (see
   "Restarting after a stop").
@@ -275,9 +291,9 @@ PR's work**.
 
 **A session started by the `plan:continue` label** first checks who added
 it (`gh api repos/{owner}/{repo}/issues/<n>/events`, the `labeled` event
-for `plan:continue`). Unless the agent or admin account added it, stop at
-once; the approver is not an authority and cannot start a run. The label
-only starts a session; it never authorises.
+for `plan:continue`). Unless the agent, approver or admin account added
+it, stop at once. The label only starts a session; it never authorises:
+the session still runs section 2 and reads only an authorised record.
 
 **Restarting after a stop** takes the operator's act: a session they start
 for the plan (locally, or the routine's run-now). A PR they merge to fix
@@ -339,8 +355,12 @@ One item, or one part of an item, per session, ending in one PR:
 
    and record anything you found but did not do as new files in
    `<plans>/unauthorised/<plan>/`, one per entry, named
-   `item-NN-partK-MM.md` (MM from `01` within this PR, so two PRs never
-   collide), linked from `## Done`:
+   `item-NN-partK-MM.md`, linked from `## Done`. MM is the next number not
+   already used on this PR's branch (from `01`): a session resuming an
+   in-flight PR continues after the entries already there, and never
+   writes over one, even though the guard would still allow it while the
+   file is new on the branch. The item and part in the name keep two PRs
+   from colliding.
 
    ```text
    item: NN part K
