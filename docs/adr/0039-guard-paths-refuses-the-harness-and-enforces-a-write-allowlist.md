@@ -112,8 +112,24 @@ out of that repository's allowlist and by CODEOWNERS.
 - A Bash glob is refused when it expands to a protected file that exists:
   `cat *.md` or `git add *` in a directory holding `CLAUDE.md`. A glob that
   matches nothing names nothing (the shell keeps it literal) and passes.
-- Expanding a glob that names a large tree (`/*/*/*`) costs time in the
-  hook; no bound is set, since such words are rare in practice.
+- The harness layer's own glob expansion is bounded: a word with more than
+  three wildcard path components (`/*/*/*/*`), or one that expands to more
+  than 2,000 matches, is refused as too broad to check (fail closed). This
+  does not bound the guard's older token loop, which has always let bash
+  expand each unquoted word as it splits the command; that cost predates
+  this change and is out of its scope.
+- Accepted residual: a shell write through a symlinked directory inside the
+  repository (`sed -i … src/cfg/settings.json` with `src/cfg ->
+  ../.claude`) is judged at its spelt path. Edit and Write resolve the
+  physical path; resolving every path-shaped shell word the same way would
+  cost a subshell per word. CODEOWNERS at merge is the backstop. The matrix
+  pins the current behaviour as a residual case.
+- Accepted residual: the guard turns on `dotglob` for its expansion only
+  when the command text contains `dotglob` or `GLOBIGNORE`, so a spelling
+  that hides the word (`shopt -s dot''glob`, or a variable) enables it in the
+  shell alone. Always enabling it would refuse every `*` at a repository
+  root, since `*` would then reach `.claude/`. CODEOWNERS at merge is the
+  backstop; the matrix pins this as a residual case too.
 - Each write call costs one more `cd -P` subshell to resolve its physical
   path. Bash paths are normalised once and shared between the control-plane
   and harness checks.

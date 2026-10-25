@@ -706,10 +706,29 @@ hl_refused() {   # $1 = a path relative to its repository root
 # of any path guard; ADR 0039 records that residual.
 hl_dotglob=0
 [[ "$cmd" == *dotglob* || "$cmd" == *GLOBIGNORE* ]] && hl_dotglob=1
-hl_glob_hits() {   # $1 = an absolute path containing * ? or [; 0 = a match is refused
-  local -a hits=()
-  local m restore_f=0 restore_dot=0 restore_case=0 restore_null=0 IFS=
+# Expansion runs in this process with no timeout, so its cost is bounded
+# before it starts: a word with more than hl_glob_max_parts wildcard path
+# components (`/*/*/*/*`) is refused as too broad to check, and more than
+# hl_glob_max_hits matches are refused rather than judged one by one. Both
+# fail closed; a real command rarely needs either.
+hl_glob_max_parts=3
+hl_glob_max_hits=2000
+hl_glob_hits() {   # $1 = an absolute path containing * ? or [
+                   # 0 = a match is refused, 1 = none is, 2 = too broad to check
+  local -a hits=() parts=()
+  local m n=0 restore_f=0 restore_dot=0 restore_case=0 restore_null=0 IFS=/
   [[ -o noglob ]] && restore_f=1
+  set -f
+  # shellcheck disable=SC2206
+  parts=( $1 )
+  for m in ${parts[@]+"${parts[@]}"}; do
+    [[ "$m" == *[\*\?\[]* ]] && n=$((n + 1))
+  done
+  if (( n > hl_glob_max_parts )); then
+    (( restore_f )) || set +f
+    return 2
+  fi
+  IFS=
   shopt -q dotglob || restore_dot=1
   shopt -q nocaseglob || restore_case=1
   shopt -q nullglob || restore_null=1
@@ -722,6 +741,7 @@ hl_glob_hits() {   # $1 = an absolute path containing * ? or [; 0 = a match is r
   (( restore_dot )) && shopt -u dotglob
   (( restore_case )) && shopt -u nocaseglob
   (( restore_null )) && shopt -u nullglob
+  (( ${#hits[@]} > hl_glob_max_hits )) && return 2
   for m in ${hits[@]+"${hits[@]}"}; do
     hl_find_root "$m" || continue
     [[ "$m" == "$hl_root" ]] && continue
@@ -772,8 +792,12 @@ hl_check_abs() {   # $1 = absolute path, $2 = write tool 1/0, $3 = reason, $4 = 
   local abs="$1" rel
   # A glob is judged by what it expands to, wherever the glob sits (above the
   # repository root too, where the literal path finds no root).
-  if (( ! $2 )) && [[ "$abs" == *[\*\?\[]* ]] && hl_glob_hits "$abs"; then
-    hl_deny "$3 (a glob that expands to a repository harness or control path)" "$4"
+  if (( ! $2 )) && [[ "$abs" == *[\*\?\[]* ]]; then
+    local g
+    hl_glob_hits "$abs"
+    g=$?
+    (( g == 0 )) && hl_deny "$3 (a glob that expands to a repository harness or control path)" "$4"
+    (( g == 2 )) && hl_deny "$3 (a glob too broad to check; narrow it)" "$4"
   fi
   hl_find_root "$abs" || return 0
   [[ "$abs" == "$hl_root" ]] && return 0

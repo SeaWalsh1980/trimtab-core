@@ -1181,6 +1181,14 @@ ln "$HL/.claude/settings.json" "$AL/src/hard.json"
 t guard-paths.sh 2 "bypass: a hard link to a protected file"   "$(e Edit "$AL/src/hard.json")"
 : > "$AL/src/plain.py"
 t guard-paths.sh 0 "control: an existing file with one link"   "$(e Edit "$AL/src/plain.py")"
+t guard-paths.sh 2 "cap: a glob with too many wildcard parts is refused" "$(bsh 'ls /*/*/*/*')" "$HL"
+t guard-paths.sh 0 "cap: three wildcard parts are still checked" "$(bsh 'ls src/*/*/*')" "$HL"
+# Accepted residuals, pinned as they stand so a change to either is seen
+# (ADR 0039, Consequences). A shell write through a symlinked directory is
+# judged at its spelt path, and dotglob spelt so the text check misses it
+# turns on in the shell only. CODEOWNERS at merge is the backstop for both.
+t guard-paths.sh 0 "residual: a shell write through a symlinked directory" "$(bsh 'sed -i s/a/b/ src/cfg/settings.json')" "$AL"
+t guard-paths.sh 0 "residual: dotglob spelt to hide the word"  "$(bsh "shopt -s dot''glob; cat */settings.json")" "$HL"
 # Allowlist spellings an owner may use: ./, a trailing slash, CRLF endings.
 printf 'src/**\r\n./tools/**\r\nnotes/\r\n' > "$AL/.claude/write-allowlist"
 t guard-paths.sh 0 "allowlist: a CRLF line still matches"      "$(e Edit "$AL/src/a.py")"
