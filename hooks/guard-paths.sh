@@ -800,6 +800,9 @@ hl_allowed() {   # $1 = repository root, $2 = relative path
       is_create=1
       line="${line#+}"
       line="${line#"${line%%[![:space:]]*}"}"
+      # A bare `+` (or `+ # note`, whose comment was stripped above) names
+      # no path; skip it rather than read it as a pattern.
+      [[ -z "$line" ]] && continue
     fi
     pat="${line//\*\*/*}"
     pat="${pat#/}"

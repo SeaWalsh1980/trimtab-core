@@ -1240,6 +1240,20 @@ mkdir -p "$CO/notes/free"; : > "$CO/notes/free/f.md"
 t guard-paths.sh 0 "create-only: a plain entry for the path wins"  "$(e Edit "$CO/notes/free/f.md")"
 HOOK_ALLOW_HARNESS=1 t guard-paths.sh 0 "create-only: the operator export lifts it" "$(e Edit "$CO/records/0001-old.md")"
 t guard-paths.sh 2 "create-only: still default-deny elsewhere"    "$(e Write "$CO/Makefile")"
+# -L is all that separates an existing link from a new file here: pin both a
+# live and a dangling link at a create-only path.
+: > "$CPTMP/co-target.md"
+ln -s "$CPTMP/co-target.md" "$CO/records/0010-live-link.md"
+ln -s "$CPTMP/no-such-co-target" "$CO/records/0011-dangling-link.md"
+t guard-paths.sh 2 "create-only: a Write over an existing link is refused" "$(e Write "$CO/records/0010-live-link.md")"
+t guard-paths.sh 2 "create-only: a Write over a dangling link is refused" "$(e Write "$CO/records/0011-dangling-link.md")"
+t guard-paths.sh 2 "create-only: NotebookEdit is refused"         "$(j NotebookEdit "{\"notebook_path\":\"$CO/records/0001-old.md\"}")"
+# A bare `+`, or `+` with only a comment after it, names no path.
+CB="$CPTMP/co-bare"
+mkdir -p "$CB/.git" "$CB/.claude" "$CB/src"
+printf '%s\n' '+' '+ # a note' 'src/**' > "$CB/.claude/write-allowlist"
+t guard-paths.sh 0 "create-only: a bare + line is skipped, the rest still applies" "$(e Edit "$CB/src/a.py")"
+t guard-paths.sh 2 "create-only: a bare + line grants nothing"     "$(e Write "$CB/notes.md")"
 chmod 000 "$AL/.claude/write-allowlist"
 if [[ -r "$AL/.claude/write-allowlist" ]]; then
   printf 'SKIP  guard-paths.sh          allowlist: unreadable list fails closed (running as root)\n'
