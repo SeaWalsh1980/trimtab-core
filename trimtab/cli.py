@@ -15,7 +15,7 @@ from pathlib import Path
 from trimtab import bump
 from trimtab import config as project_config
 from trimtab import dependabot
-from trimtab import instance, propose, roots, routines, scrub, upstream
+from trimtab import instance, planscope, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
 from trimtab.ids import ID_SHAPE
@@ -846,6 +846,23 @@ def cmd_scrub(args) -> int:
     return 1 if hits else 0
 
 
+def cmd_check_plan_scope(args) -> int:
+    try:
+        result = planscope.check(args.repo, args.base, args.head, args.head_ref)
+    except planscope.PlanScopeError as err:
+        print(f"error: {err}; nothing is vouched for", file=sys.stderr)
+        return 2
+    if result.ref is planscope.Ref.NOT_PLAN:
+        print(f"plan-scope: skipped; {args.head_ref!r} is not a plan branch")
+        return 0
+    if result.ref is planscope.Ref.MALFORMED:
+        print(f"FAIL  {args.head_ref!r} is under plan/ but is not plan/<plan>/item-NN-partK", file=sys.stderr)
+        return 1
+    _print_problems(result.problems)
+    print(f"plan-scope: {len(result.problems)} problem(s) for plan {result.plan}")
+    return 1 if result.problems else 0
+
+
 def cmd_routine_render(args) -> int:
     pairs = {}
     for item in args.set or []:
@@ -1101,6 +1118,16 @@ def build_parser() -> argparse.ArgumentParser:
     scr.add_argument("--public", action="store_true", help="generic shapes only; needs no instance")
     scr.add_argument("--self", dest="self_repo", metavar="OWNER/NAME", help="with --public: this repository")
     scr.set_defaults(func=cmd_scrub)
+
+    ps = sub.add_parser("check-plan-scope",
+                        help="fail a plan run's PR that changes a path outside its plan's scope, read from the "
+                             "base commit (ADR 0041)")
+    ps.add_argument("--base", required=True, metavar="SHA", help="the PR's base commit, from the platform's event")
+    ps.add_argument("--head-ref", required=True, metavar="BRANCH",
+                    help="the PR's head branch name, from the platform's event; a non-plan branch is skipped")
+    ps.add_argument("--head", default="HEAD", metavar="REV", help="the PR's head commit (default: HEAD)")
+    ps.add_argument("--repo", default=".", metavar="DIR", help="the repository (default: .)")
+    ps.set_defaults(func=cmd_check_plan_scope)
 
     rt = sub.add_parser("routine", help="routine specs")
     rts = rt.add_subparsers(dest="routine_command", required=True)
