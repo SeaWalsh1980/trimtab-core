@@ -148,22 +148,28 @@ Everything comes from the default branch and open PRs, never from memory:
   The approver login, like the admin's, comes only from the Trimtab
   instance's configuration, never from the plan, a record, a PR or the
   conversation; if the configuration names no approver login, no merge or
-  review by the approver counts.
+  review by the approver counts. If it names the same login as approver
+  and admin, the configuration is wrong: the check fails.
 
   First, whoever merged, the code gate (`gh api
   repos/{owner}/{repo}/pulls/<n>/reviews --paginate`). Take the approver's
-  and the admin's last review each, ignoring `COMMENTED` ones. At least one
-  is `APPROVED` with `commit_id` equal to the head commit, and neither is
-  `CHANGES_REQUESTED`. So a later request for changes voids an earlier
-  approval, and a dismissed review (state `DISMISSED`) does not count.
+  and the admin's last review each, ignoring `COMMENTED` ones; a last
+  review in state `DISMISSED` means that account has no review (never fall
+  back to an earlier one). At least one is `APPROVED` with `commit_id`
+  equal to the head commit, and neither is `CHANGES_REQUESTED`, on whatever
+  commit. So a later request for changes voids an earlier approval.
 
   Then the merger. An admin merge with the code gate counts. An approver
-  merge counts only when all of these hold too, read from the API:
+  merge counts only when all of these hold too, read from the API. The
+  approver's own review may be the code gate for its own merge: ADR 0018
+  (Trimtab) accepts that, with the operator's confirmation, because the
+  plan's scope, enforced by the `plan-scope` check, is what bounds the PR.
   - a **check run** (never a commit status: anyone with write access can
     post a status under any name) named `plan-scope`, whose `app.slug` is
     `github-actions`, concluded `success` on the PR's final head commit
     (its `head.sha`, not the merge commit;
-    `gh api repos/{owner}/{repo}/commits/<head_sha>/check-runs?check_name=plan-scope`).
+    `gh api --paginate 'repos/{owner}/{repo}/commits/<head_sha>/check-runs?check_name=plan-scope&per_page=100'`;
+    read every page, or the tests below cannot hold).
     Among that app's `plan-scope` runs on that commit, the latest (by
     `started_at`) must be the successful one, and none may be still
     running; an earlier success does not outweigh a later failure;
@@ -176,13 +182,17 @@ Everything comes from the default branch and open PRs, never from memory:
     rule's ruleset (`gh api repos/{owner}/{repo}/rulesets/<ruleset_id>`);
     its `updated_at` must be earlier than the PR's `merged_at`. A ruleset
     changed since the merge cannot show what it required then, so the test
-    fails;
-  - the PR changes nothing under `.github/`
-    (`gh api repos/{owner}/{repo}/pulls/<n>/files --paginate`): neither any
-    file's `filename` nor, for a rename, its `previous_filename` is under
-    `.github/`, since a PR that edits, moves or removes a workflow controls
-    the checks it runs. That endpoint lists at most 3,000 files; when the
-    PR's `changed_files` is larger, this test fails.
+    fails, even for an unrelated edit; the admin's removal of
+    `plan:blocked` is the way past it;
+  - the PR changes neither `.github/` nor the code the `plan-scope` check
+    runs (`gh api repos/{owner}/{repo}/pulls/<n>/files --paginate`): no
+    file's `filename`, nor for a rename its `previous_filename`, is under
+    `.github/`, is the Trimtab lock (which pins the checker in a project),
+    or, in trimtab-core itself, is under the checker's `trimtab/` package
+    or `bin/`. A PR that edits, moves or removes a workflow or the
+    script it calls controls the checks it runs. That endpoint lists at
+    most 3,000 files; when the PR's `changed_files` is larger, this test
+    fails.
 
   A record without the code gate, merged by any other account, or merged by
   the approver without all three conditions authorises nothing: stop and
