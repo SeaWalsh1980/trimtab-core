@@ -1197,7 +1197,11 @@ t guard-paths.sh 2 "allowlist: a link to a list outside the repo fails closed (W
 DL3="$CPTMP/dl-linked-dir"; mkdir -p "$DL3/.git" "$DL3/src" "$CPTMP/elsewhere-claude"
 printf 'src/**\n' > "$CPTMP/elsewhere-claude/write-allowlist"
 ln -s "$CPTMP/elsewhere-claude" "$DL3/.claude"
-t guard-paths.sh 2 "allowlist: a symlinked .claude directory fails closed" "$(e Write "$DL3/src/a.py")"
+t guard-paths.sh 2 "allowlist: a symlinked .claude directory fails closed (Write)" "$(e Write "$DL3/src/a.py")"
+t guard-paths.sh 2 "allowlist: a symlinked .claude directory fails closed (Edit)" "$(e Edit "$DL3/src/b.py")"
+DL4="$CPTMP/dl-linked-noallow"; mkdir -p "$DL4/.git" "$DL4/src" "$CPTMP/elsewhere-empty"
+ln -s "$CPTMP/elsewhere-empty" "$DL4/.claude"
+t guard-paths.sh 2 "allowlist: a symlinked .claude with no allowlist also fails closed" "$(e Edit "$DL4/src/a.py")"
 # The allowlist never confines Bash (ADR 0039); CODEOWNERS covers shell
 # writes. Pinned so a change to that is seen.
 t guard-paths.sh 0 "allowlist: a shell write is not judged against it" "$(bsh 'sed -i s/a/b/ src/a.py')" "$DL2"
