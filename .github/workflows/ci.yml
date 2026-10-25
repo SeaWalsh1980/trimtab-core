@@ -14,8 +14,8 @@ permissions:
 
 jobs:
   # The single required context for these checks, and the only job in this
-  # workflow (plan-scope.yml has its own, also required by name): each separate job was
-  # billed a whole minute for seconds of work. Each step keeps the name of the
+  # workflow (plan-scope.yml has its own, to be required by name in the
+  # ruleset): each separate job was billed a whole minute for seconds of work. Each step keeps the name of the
   # job it came from. Every check step runs whatever an earlier one did
   # (`!cancelled()`), so one failure does not hide the next, and the job fails
   # if any did. Never add `continue-on-error`: it would leave that step
