@@ -56,10 +56,13 @@ own repository), for every tool except Read:
 Three bypass shapes are closed in the same change: a write is judged at its
 physical path as well as its spelt one (the deepest existing ancestor is
 resolved with `cd -P`, and a link on the way that does not resolve blocks),
-so a symlink inside an allowlisted directory cannot reach `.claude/`;
-layer 1 compares lower-cased, so `Claude.md` on a case-insensitive
-filesystem is refused; and a Bash fragment holding `*`, `?` or `[` is
-refused when the pattern could expand to a protected path.
+so a symlink inside an allowlisted directory cannot reach `.claude/`, and
+a write whose target is itself a symlink is refused outright; layer 1
+compares lower-cased, so `Claude.md` on a case-insensitive filesystem is
+refused; and a Bash fragment holding `*`, `?` or `[` is refused when the
+pattern could expand to a protected path, including a glob in a directory
+above the repository, where the root cannot be found from the literal path
+and any tail of the pattern is tested instead.
 
 A repository without an allowlist gets layer 1 only, so nothing breaks
 before each repository adds its file (step 4b). The operator lifts both
@@ -106,4 +109,10 @@ out of that repository's allowlist and by CODEOWNERS.
 - A Bash glob such as `*.md` is refused in a repository where it could
   expand to `CLAUDE.md`, which is noisier than the literal checks.
 - Each write call costs one more `cd -P` subshell to resolve its physical
-  path.
+  path. Bash paths are normalised once and shared between the control-plane
+  and harness checks.
+- Editing a file through a symlink is refused, even when the link points
+  somewhere harmless; edit the real file.
+- A Bash glob in a directory outside any repository is refused when a tail
+  of it could match a protected path (`/x/*/settings.json` matches
+  `.claude/settings.json`), which over-blocks some unrelated globs.

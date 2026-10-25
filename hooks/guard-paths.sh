@@ -559,7 +559,8 @@ cp_scan_cmd() {
     cp_check "$frag" "shell command referencing the live control plane"
     # The harness layer is defined further down; it runs here too, so a path
     # welded into `python3 -c "open('.claude/settings.json','w')"` is seen.
-    hl_check "$frag" 0 "shell command referencing"
+    # cp_check has just normalised the fragment into cp_n; reuse it.
+    hl_check "$frag" 0 "shell command referencing" "$cp_n"
   done
   (( reset_f )) && set +f
   return 0
@@ -747,9 +748,32 @@ hl_allowed() {   # $1 = repository root, $2 = relative path; 0 = listed
   return 1
 }
 
+# A glob in a directory ABOVE any repository (`/home/*/proj/.claude/x`) hides
+# the root from hl_find_root, which walks the literal path. Without a root,
+# refuse the pattern when any tail of it could match a protected path.
+hl_glob_tail_refused() {   # $1 = an absolute path with a glob in a directory part
+  local tail="${1#/}" p
+  shopt -s nocasematch
+  while [[ -n "$tail" ]]; do
+    for p in "${hl_probes[@]}"; do
+      # shellcheck disable=SC2053
+      if [[ "$p" == $tail ]]; then shopt -u nocasematch; return 0; fi
+    done
+    [[ "$tail" == */* ]] || break
+    tail="${tail#*/}"
+  done
+  shopt -u nocasematch
+  return 1
+}
+
 hl_check_abs() {   # $1 = absolute path, $2 = write tool 1/0, $3 = reason, $4 = as given
   local abs="$1" rel
-  hl_find_root "$abs" || return 0
+  if ! hl_find_root "$abs"; then
+    if (( ! $2 )) && [[ "${abs%/*}" == *[\*\?\[]* ]] && hl_glob_tail_refused "$abs"; then
+      hl_deny "$3 (a glob that can expand to a repository harness or control path)" "$4"
+    fi
+    return 0
+  fi
   [[ "$abs" == "$hl_root" ]] && return 0
   rel="${abs#"$hl_root"/}"
   hl_refused "$rel" && hl_deny "$3 (repository harness or control)" "$4"
@@ -762,13 +786,20 @@ hl_check_abs() {   # $1 = absolute path, $2 = write tool 1/0, $3 = reason, $4 = 
   return 0
 }
 
-hl_check() {   # $1 = path as given, $2 = 1 for a write tool, $3 = reason
+hl_check() {   # $1 = path as given, $2 = 1 for a write tool, $3 = reason,
+               # $4 = its normalised form when the caller already has it
   (( hl_on )) || return 0
   [[ -z "$1" ]] && return 0
-  cp_norm "$1"
-  local spelt="$cp_n" anc rest="" phys
+  local spelt anc rest="" phys
+  if [[ -n "${4:-}" ]]; then spelt="$4"; else cp_norm "$1"; spelt="$cp_n"; fi
   hl_check_abs "$spelt" "$2" "$3" "$1"
   (( $2 )) || return 0
+  # A target that is itself a symlink writes wherever the link points, which
+  # neither the spelt path nor the directory walk below sees. Writing through
+  # a link is rare; refusing it closes the route.
+  if [[ -L "$spelt" ]]; then
+    hl_deny "$3 (the target is a symlink; write the real file instead)" "$1"
+  fi
   # A write lands where the kernel resolves the path, which a symlink inside an
   # allowlisted directory can point into .claude/ or another refused path.
   # Resolve the deepest existing ancestor physically (one `cd -P`, as for the
@@ -835,8 +866,9 @@ if [[ -n "$cmd" ]]; then
     # Relative tokens resolve against the hook's cwd, which the whole-string
     # scan above cannot do.
     cp_check "$tok" "shell command referencing"
+    tok_n="$cp_n"
     check_path "$tok" "shell command referencing"
-    hl_check "$tok" 0 "shell command referencing"
+    hl_check "$tok" 0 "shell command referencing" "$tok_n"
   done
 fi
 

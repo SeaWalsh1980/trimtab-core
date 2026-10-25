@@ -1163,6 +1163,10 @@ t guard-paths.sh 2 "bypass: a case variant of .github/"        "$(e Edit "$HL/.G
 t guard-paths.sh 2 "bypass: a glob that expands into .claude/" "$(bsh 'sed -i s/a/b/ .cla*/settings.json')" "$HL"
 t guard-paths.sh 2 "bypass: a glob that expands to CLAUDE.md"  "$(bsh 'cat CLAUDE.m?')" "$HL"
 t guard-paths.sh 0 "control: a glob over ordinary code"        "$(bsh 'cat src/*.py')" "$HL"
+ln -s ../.claude/settings.json "$AL/src/cfg.json"
+t guard-paths.sh 2 "bypass: the target itself is a symlink into .claude/" "$(e Edit "$AL/src/cfg.json")"
+t guard-paths.sh 2 "bypass: a glob in a directory above the repository" "$(bsh "cat ${CPTMP%/*}/*/hl-repo/.claude/settings.json")"
+t guard-paths.sh 0 "control: a final-component glob outside any repository" "$(bsh "cat $CPTMP/loose/*.md")"
 # Allowlist spellings an owner may use: ./, a trailing slash, CRLF endings.
 printf 'src/**\r\n./tools/**\r\nnotes/\r\n' > "$AL/.claude/write-allowlist"
 t guard-paths.sh 0 "allowlist: a CRLF line still matches"      "$(e Edit "$AL/src/a.py")"
