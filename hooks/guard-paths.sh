@@ -654,8 +654,10 @@ check_path "$file" "file access"
 #    refused. One glob per line, relative to the repository root, `#`
 #    comments and blank lines ignored, `**` read as `*` (which already spans
 #    directories here). A line starting `+` is create-only: a Write may make
-#    a new file there, but nothing may change a file that already exists
-#    (ADR 0040). The list cannot widen layer 1. Bash is not confined
+#    a new file there, and a file new on this branch (absent at its
+#    merge-base with origin's default branch) may be changed, but nothing
+#    may change a file already on the default branch (ADR 0040). The list
+#    cannot widen layer 1. Bash is not confined
 #    by it: any program can write anywhere, so shell writes outside the list
 #    are left to CODEOWNERS at merge.
 #
@@ -794,7 +796,7 @@ hl_allowed() {   # $1 = repository root, $2 = relative path
     line="${line%"${line##*[![:space:]]}"}"   # trailing space and a CRLF's \r
     [[ -z "$line" ]] && continue
     # A leading `+` marks the entry create-only (ADR 0040): a new file may be
-    # written there, an existing one may not be changed.
+    # written there, one already on the default branch may not be changed.
     is_create=0
     if [[ "$line" == +* ]]; then
       is_create=1
@@ -816,6 +818,25 @@ hl_allowed() {   # $1 = repository root, $2 = relative path
     fi
   done < "$list"
   (( create_only )) && return 3
+  return 1
+}
+
+hl_in_base() {   # $1 = relative path; 0 = in the base tree, 1 = not, 2 = no base
+  # The base is the merge-base of HEAD and origin's default branch: what this
+  # branch started from, so every merged file present here is in it. git runs
+  # with the caller's repository-steering variables dropped, replace refs off
+  # (a replacement could show the base with a file removed) and the path
+  # taken literally. A missing git, origin HEAD or merge-base fails closed.
+  local -a g=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE
+              -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES
+              -u GIT_COMMON_DIR -u GIT_CEILING_DIRECTORIES
+              GIT_NO_REPLACE_OBJECTS=1 GIT_LITERAL_PATHSPECS=1
+              git -C "$hl_root" -c core.fsmonitor=false)
+  local def base hit
+  def=$("${g[@]}" symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null) || return 2
+  base=$("${g[@]}" merge-base HEAD "$def" 2>/dev/null) || return 2
+  hit=$("${g[@]}" ls-tree --name-only "$base" -- "$1" 2>/dev/null) || return 2
+  [[ -n "$hit" ]] && return 0
   return 1
 }
 
@@ -851,11 +872,19 @@ hl_check_abs() {   # $1 = absolute path, $2 = write tool 1/0, $3 = reason, $4 = 
     case "$al_rc" in
       0) ;;
       3)
-        # Create-only: a Write that makes a new file passes; an Edit,
-        # MultiEdit or NotebookEdit, or a Write over an existing file (or a
-        # link), changes what is already there and is refused.
-        if [[ "$tool" != Write || -e "$abs" || -L "$abs" ]]; then
-          hl_deny "change to an existing file on a create-only allowlist path; new files only (ADR 0040)" "$4"
+        # Create-only: a Write that makes a new file passes. A change to a
+        # file passes only while the file is new on this branch, absent from
+        # the tree at its merge-base with the default branch; one already
+        # there, or any change when that base cannot be found, is refused. A
+        # link is refused outright: a Write over it writes its target.
+        if [[ -L "$abs" ]]; then
+          hl_deny "write over a link on a create-only allowlist path (ADR 0040)" "$4"
+        elif [[ "$tool" != Write || -e "$abs" ]]; then
+          local base_rc
+          hl_in_base "$rel"
+          base_rc=$?
+          (( base_rc == 0 )) && hl_deny "change to a file already on the default branch, on a create-only allowlist path; new files only (ADR 0040)" "$4"
+          (( base_rc == 2 )) && hl_deny "change on a create-only allowlist path with no merge-base against origin's default branch to tell a new file from an existing one (fail closed; ADR 0040)" "$4"
         fi
         ;;
       *) hl_deny "write outside the repository's write allowlist" "$4" ;;

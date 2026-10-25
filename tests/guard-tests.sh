@@ -1222,8 +1222,10 @@ t guard-paths.sh 0 "allowlist: a leading ./ is ignored"        "$(e Edit "$AL/to
 t guard-paths.sh 0 "allowlist: a trailing slash covers the directory" "$(e Write "$AL/notes/deep/n.txt")"
 t guard-paths.sh 2 "allowlist: still default-deny elsewhere"   "$(e Edit "$AL/Makefile")"
 # Create-only entries (ADR 0040): a leading `+` lets a Write make a new file
-# but refuses any change to one that already exists. A plain entry for the
-# same path wins, since it grants more.
+# and refuses any change to one already on the default branch. A plain entry
+# for the same path wins, since it grants more. $CO has no git history, so
+# there is no base to tell a new file from an existing one and every change
+# fails closed; $CG below has one.
 CO="$CPTMP/co-repo"
 mkdir -p "$CO/.git" "$CO/.claude" "$CO/records" "$CO/notes"
 printf '%s\n' '+records/**' ' + notes/** ' 'notes/free/**' > "$CO/.claude/write-allowlist"
@@ -1232,7 +1234,7 @@ printf '%s\n' '+records/**' ' + notes/** ' 'notes/free/**' > "$CO/.claude/write-
 t guard-paths.sh 0 "create-only: a Write making a new file passes" "$(e Write "$CO/records/0002-new.md")"
 t guard-paths.sh 2 "create-only: a Write over an existing file is refused" "$(e Write "$CO/records/0001-old.md")"
 t guard-paths.sh 2 "create-only: an Edit of an existing file is refused" "$(e Edit "$CO/records/0001-old.md")"
-t guard-paths.sh 2 "create-only: an Edit is refused even for a new path" "$(e Edit "$CO/records/0003-x.md")"
+t guard-paths.sh 2 "create-only: with no git base an Edit fails closed" "$(e Edit "$CO/records/0003-x.md")"
 t guard-paths.sh 2 "create-only: MultiEdit is refused"            "$(e MultiEdit "$CO/records/0001-old.md")"
 t guard-paths.sh 0 "create-only: spaces around the + are ignored" "$(e Write "$CO/notes/new.md")"
 t guard-paths.sh 2 "create-only: spaced entry still refuses edits" "$(e Edit "$CO/notes/old.md")"
@@ -1254,6 +1256,40 @@ mkdir -p "$CB/.git" "$CB/.claude" "$CB/src"
 printf '%s\n' '+' '+ # a note' 'src/**' > "$CB/.claude/write-allowlist"
 t guard-paths.sh 0 "create-only: a bare + line is skipped, the rest still applies" "$(e Edit "$CB/src/a.py")"
 t guard-paths.sh 2 "create-only: a bare + line grants nothing"     "$(e Write "$CB/notes.md")"
+# A file new on this branch, absent at its merge-base with origin's default
+# branch, may be changed; one already on the default branch may not. $CG is a
+# real repository: 0001 on main, 0002 committed on a branch, 0003 untracked.
+CG="$CPTMP/co-git"
+gc() { git -C "$CG" -c user.name=guard-tests -c user.email=guard-tests@example.invalid \
+         -c commit.gpgsign=false "$@" >/dev/null 2>&1; }
+mkdir -p "$CG/.claude" "$CG/records"
+printf '%s\n' '+records/**' > "$CG/.claude/write-allowlist"
+: > "$CG/records/0001-old.md"
+gc init -q -b main; gc add -A; gc commit -q -m base
+gc update-ref refs/remotes/origin/main HEAD
+gc symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+gc checkout -q -b feat
+: > "$CG/records/0002-branch.md"; gc add -A; gc commit -q -m branch
+: > "$CG/records/0003-wip.md"
+t guard-paths.sh 0 "create-only: an Edit of a file committed on this branch passes" "$(e Edit "$CG/records/0002-branch.md")"
+t guard-paths.sh 0 "create-only: a Write over a file new on this branch passes" "$(e Write "$CG/records/0002-branch.md")"
+t guard-paths.sh 0 "create-only: an Edit of an untracked new file passes" "$(e Edit "$CG/records/0003-wip.md")"
+t guard-paths.sh 0 "create-only: MultiEdit of a new file passes"   "$(e MultiEdit "$CG/records/0003-wip.md")"
+t guard-paths.sh 2 "create-only: an Edit of a file on the default branch is refused" "$(e Edit "$CG/records/0001-old.md")"
+t guard-paths.sh 2 "create-only: a Write over a file on the default branch is refused" "$(e Write "$CG/records/0001-old.md")"
+GIT_DIR="$CPTMP/no-such-git-dir" t guard-paths.sh 0 "create-only: the caller's GIT_DIR does not steer the check" "$(e Edit "$CG/records/0002-branch.md")"
+# A replace ref showing main's commit as an empty tree must not hide 0001.
+CG_MAIN=$(git -C "$CG" rev-parse main)
+gc replace "$CG_MAIN" \
+  "$(git -C "$CG" -c user.name=guard-tests -c user.email=guard-tests@example.invalid \
+       commit-tree "$(git -C "$CG" mktree </dev/null)" -m hollow)"
+t guard-paths.sh 2 "create-only: a replace ref cannot hide a file from the base" "$(e Edit "$CG/records/0001-old.md")"
+gc replace -d "$CG_MAIN"
+gc symbolic-ref -d refs/remotes/origin/HEAD
+t guard-paths.sh 2 "create-only: no origin HEAD fails closed"      "$(e Edit "$CG/records/0002-branch.md")"
+gc symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+gc checkout -q --orphan lone; gc commit -q -m lone
+t guard-paths.sh 2 "create-only: a branch unrelated to the default fails closed" "$(e Edit "$CG/records/0001-old.md")"
 chmod 000 "$AL/.claude/write-allowlist"
 if [[ -r "$AL/.claude/write-allowlist" ]]; then
   printf 'SKIP  guard-paths.sh          allowlist: unreadable list fails closed (running as root)\n'
