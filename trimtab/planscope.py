@@ -1,4 +1,4 @@
-"""The plan-scope check: what a plan run's PR may change, judged from git alone (ADR 0041).
+"""The plan-scope check: what a plan run's PR may change, judged from git alone (ADR 0042, building on ADR 0041).
 
 guard-paths' plan-run layer judges each write in the session, where the agent
 can write through the shell or forge its local branch and refs. This check
@@ -13,7 +13,7 @@ A PR from `plan/<plan>/item-NN-partK` may change a path only when all hold:
 - the base commit's write allowlist lists it (layer 2);
 - the base commit's `<plan>.writes` declaration lists it, or it is this PR's
   own progress record (`item-NN-partK.md`) or issue-register entry
-  (`item-NN-partK-*.md`) in the plan's folders, always create-only (layer 3,
+  (`item-NN-partK-MM.md`, MM two or three digits) in the plan's folders, always create-only (layer 3,
   narrowed to the branch's item and part: the hook allows the whole folders);
 - where either list makes it create-only, it is a new file: absent from the
   merge-base and from the base commit;
@@ -154,8 +154,10 @@ def scope(writes: str, plan: str, item: str) -> tuple[Entry, ...]:
     """The plan's declaration plus this PR's own progress record and register entries, always
     create-only. Tied to the branch's item and part, so one PR cannot write another item's record and
     steer which record the next session reads as the latest."""
+    # Digit classes, not `*`: fnmatch's `*` spans `/`, which would allow nested files the skill never reads.
+    register = f"+{PLANS_DIR}/unauthorised/{plan}/{item}-[0-9][0-9]"
     return parse_list(writes + "\n" + f"+{PLANS_DIR}/progress/{plan}/{item}.md\n"
-                      + f"+{PLANS_DIR}/unauthorised/{plan}/{item}-*.md\n")
+                      + f"{register}.md\n{register}[0-9].md\n")
 
 
 def judge(changes: list[Change], allowlist: tuple[Entry, ...], plan_scope: tuple[Entry, ...],
@@ -235,10 +237,18 @@ def read_files(repo: str, sha: str, paths: list[str]) -> dict[str, str | None]:
         return texts
     batch = _git(repo, "cat-file", "--batch", stdin="".join(f"{o}\n" for o in objects.values()).encode("ascii"))
     pos = 0
-    for path in objects:
-        header_end = batch.index(b"\n", pos)
-        size = int(batch[pos:header_end].split(b" ")[2])
+    for path, obj in objects.items():
+        # Each answer is `<object> blob <size>` and the content; anything else (`<object> missing`, a
+        # short read) is git failing to answer, never a list to judge.
+        try:
+            header_end = batch.index(b"\n", pos)
+            name, kind, size_text = batch[pos:header_end].decode("ascii").split(" ")
+            size = int(size_text)
+        except (ValueError, UnicodeDecodeError) as err:
+            raise PlanScopeError(f"git cat-file --batch gave an unreadable answer for {path}") from err
         body = batch[header_end + 1:header_end + 1 + size]
+        if name != obj or kind != "blob" or len(body) != size:
+            raise PlanScopeError(f"git cat-file --batch gave an unreadable answer for {path}")
         pos = header_end + 1 + size + 1
         try:
             texts[path] = body.decode("utf-8")
@@ -249,8 +259,9 @@ def read_files(repo: str, sha: str, paths: list[str]) -> dict[str, str | None]:
 
 def changes(repo: str, base: str, head: str) -> list[Change]:
     """What `git diff base...head` changes, with renames and copies off."""
+    # --ignore-submodules=none: a `submodule.<name>.ignore` setting would otherwise hide a gitlink change.
     out = _git(repo, "diff", "--raw", "-z", "--no-renames", "--no-ext-diff", "--no-textconv",
-               "--end-of-options", f"{base}...{head}")
+               "--ignore-submodules=none", "--end-of-options", f"{base}...{head}")
     fields = out.split(b"\0")
     if fields and fields[-1] == b"":
         fields.pop()

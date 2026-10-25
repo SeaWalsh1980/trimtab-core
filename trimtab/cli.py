@@ -1122,7 +1122,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ps = sub.add_parser("check-plan-scope",
                         help="fail a plan run's PR that changes a path outside its plan's scope, read from the "
-                             "base commit (ADR 0041)")
+                             "base commit (ADR 0042)")
     ps.add_argument("--base", required=True, metavar="SHA", help="the PR's base commit, from the platform's event")
     ps.add_argument("--head-ref", required=True, metavar="BRANCH",
                     help="the PR's head branch name, from the platform's event; a non-plan branch is skipped")

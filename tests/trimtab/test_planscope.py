@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from test_scrub import isolated_git_env
 from trimtab import planscope
@@ -128,6 +129,16 @@ class Judge(unittest.TestCase):
 
         self.assertIn("plan's scope", problems[0])
 
+    def test_a_nested_file_under_a_register_entry_name_fails(self):
+        problems = judged(change(f"{planscope.PLANS_DIR}/unauthorised/{PLAN}/{ITEM}-01/notes.md"))
+
+        self.assertIn("plan's scope", problems[0])
+
+    def test_a_three_digit_register_entry_passes(self):
+        problems = judged(change(f"{planscope.PLANS_DIR}/unauthorised/{PLAN}/{ITEM}-100.md"))
+
+        self.assertEqual(problems, [])
+
     def test_modifying_a_create_only_file_in_the_base_fails(self):
         problems = judged(change(EXISTING_ADR, "M"))
 
@@ -232,10 +243,9 @@ class Repository(unittest.TestCase):
         self.env = isolated_git_env({k: v for k, v in os.environ.items() if k != "TRIMTAB_INSTANCE"}, root)
         self.env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
                         GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
-        self._saved = dict(os.environ)
-        os.environ.clear()
-        os.environ.update(self.env)
-        self.addCleanup(self._restore)
+        patcher = mock.patch.dict(os.environ, self.env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         subprocess.run(["git", "init", "-q", "-b", DEFAULT, str(self.repo)], check=True)
         self.write(planscope.ALLOWLIST, ALLOWLIST)
         self.write(f"{planscope.AUTHORISED}/{PLAN}.md", "# plan\n")
@@ -245,10 +255,6 @@ class Repository(unittest.TestCase):
         self.write("src/app.py", "x = 1\n")
         self.base = self.commit("base")
         git(self.repo, "switch", "-q", "-c", PLAN_REF)
-
-    def _restore(self):
-        os.environ.clear()
-        os.environ.update(self._saved)
 
     def write(self, rel, text):
         path = self.repo / rel
@@ -339,6 +345,55 @@ class Repository(unittest.TestCase):
 
         self.assertTrue(any("write allowlist is not a regular file" in p for p in problems))
 
+    def test_a_gitlink_under_an_ignore_all_submodule_still_fails(self):
+        git(self.repo, "switch", "-q", DEFAULT)
+        self.write(".gitmodules", '[submodule "x"]\n\tpath = docs/adr/vendor\n\turl = ../x\n\tignore = all\n')
+        self.base = self.commit("submodule config")
+        git(self.repo, "switch", "-q", PLAN_REF)
+        git(self.repo, "merge", "-q", DEFAULT)
+        git(self.repo, "update-index", "--add", "--cacheinfo", f"160000,{self.base},docs/adr/vendor")
+        git(self.repo, "commit", "-q", "-m", "item")
+
+        self.assertTrue(any("link or submodule" in p for p in self.check().problems))
+
+    def test_executable_lists_are_read(self):
+        git(self.repo, "switch", "-q", DEFAULT)
+        (self.repo / planscope.ALLOWLIST).chmod(0o755)
+        self.base = self.commit("executable allowlist")
+        git(self.repo, "switch", "-q", PLAN_REF)
+        git(self.repo, "merge", "-q", DEFAULT)
+        self.write(NEW_ADR, "# new\n")
+        self.commit("item")
+
+        self.assertEqual(self.check().problems, ())
+
+    def test_lists_with_identical_content_are_each_read(self):
+        git(self.repo, "switch", "-q", DEFAULT)
+        self.write(f"{planscope.AUTHORISED}/{PLAN}.writes", ALLOWLIST)
+        self.base = self.commit("declaration equals the allowlist")
+        git(self.repo, "switch", "-q", PLAN_REF)
+        git(self.repo, "merge", "-q", DEFAULT)
+        self.write("src/app.py", "x = 2\n")
+        self.commit("item")
+
+        self.assertEqual(self.check().problems, ())
+
+    def test_a_list_git_cannot_read_is_a_typed_error(self):
+        blob = git(self.repo, "rev-parse", f"{self.base}:{planscope.ALLOWLIST}")
+        (self.repo / ".git" / "objects" / blob[:2] / blob[2:]).unlink()
+
+        with self.assertRaises(planscope.PlanScopeError):
+            self.check()
+
+    def test_the_cli_reads_from_a_subdirectory(self):
+        self.write("src/app.py", "x = 2\n")
+        self.commit("item")
+
+        done = self.cli(PLAN_REF, repo=self.repo / "src")
+
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("src/app.py", done.stderr)
+
     def test_a_non_plan_head_ref_is_skipped(self):
         self.write("src/app.py", "x = 2\n")
         self.commit("item")
@@ -379,8 +434,8 @@ class Repository(unittest.TestCase):
 
         self.assertEqual(done.returncode, 2)
 
-    def cli(self, head_ref, base=None):
-        return subprocess.run([str(TRIMTAB), "check-plan-scope", "--repo", str(self.repo),
+    def cli(self, head_ref, base=None, repo=None):
+        return subprocess.run([str(TRIMTAB), "check-plan-scope", "--repo", str(repo or self.repo),
                                "--base", base or self.base, "--head", "HEAD", "--head-ref", head_ref,
                                "--base-ref", DEFAULT, "--default-branch", DEFAULT],
                               capture_output=True, text=True, env=self.env)

@@ -28,12 +28,14 @@ PR from a `plan/` branch fails when any changed path:
   lists them), whatever the lists say;
 - is outside the base commit's write allowlist;
 - is outside the plan's scope: its `.writes` declaration, plus this PR's own
-  progress record (`<item>.md`) and register entries (`<item>-*.md`), where
-  `<item>` is the branch's `item-NN-partK`; these are always create-only;
+  progress record (`<item>.md`) and register entries (`<item>-MM.md`, MM of
+  two or three digits), where `<item>` is the branch's `item-NN-partK`;
+  these are always create-only;
 - is create-only on either list and is not a new file: a modification,
   deletion or type change of a file in the merge-base (a rename is a deletion
   and an addition), or an addition the base commit already holds;
-- is a link or a submodule.
+- is a link or a submodule. The diff runs with `--ignore-submodules=none`,
+  so no `submodule.<name>.ignore` setting can hide a gitlink change.
 
 The allowlist, the plan and its declaration are all read from the base
 commit. A missing one fails. A plan PR whose base branch is not the default
