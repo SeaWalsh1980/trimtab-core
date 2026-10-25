@@ -1105,6 +1105,104 @@ XDG_CONFIG_HOME="$CPTMP/xdg-dangling" t guard-paths.sh 2 "FAIL-CLOSED: a danglin
 XDG_CONFIG_HOME="$CPTMP/xdg-linked" t guard-paths.sh 0 "control: a resolving unit dir link allows an ordinary edit" \
   "$(j Edit '{"file_path":"/p/app/main.py"}')"
 
+echo "== guard-paths: harness and write allowlist (ADR 0039) =="
+# Two fixture repositories (a .git directory is all the guard looks for): HL
+# has no allowlist, so only the always-refused layer applies; AL has one. A
+# worktree under HL is its own repository (a .git file). The plans directory
+# is spelt in pieces, as in the guard, for the base's citation test.
+PL="docs/""plans"
+HL="$CPTMP/hl-repo"
+AL="$CPTMP/al-repo"
+mkdir -p "$HL/.git" "$HL/src" "$HL/.claude/worktrees/w/src" "$AL/.git" "$AL/.claude" "$AL/src"
+: > "$HL/.claude/worktrees/w/.git"
+printf '%s\n' '# what agents may write here' 'src/**' '' "  $PL/progress/** " 'README.md' > "$AL/.claude/write-allowlist"
+e() { j "$1" "{\"file_path\":\"$2\"}"; }
+bsh() { j Bash "{\"command\":\"$1\"}"; }
+t guard-paths.sh 2 "harness: .claude/settings.json"            "$(e Edit "$HL/.claude/settings.json")"
+t guard-paths.sh 2 "harness: the project's rules directory"    "$(e Write "$HL/.claude/rules/Local.md")"
+t guard-paths.sh 2 "harness: the Trimtab lock"                 "$(e Edit "$HL/.claude/trimtab.json")"
+t guard-paths.sh 2 "harness: the write allowlist itself"       "$(e Edit "$AL/.claude/write-allowlist")"
+t guard-paths.sh 2 "harness: CLAUDE.md at the root"            "$(e Edit "$HL/CLAUDE.md")"
+t guard-paths.sh 2 "harness: CLAUDE.md in a subdirectory"      "$(e Write "$HL/src/CLAUDE.md")"
+t guard-paths.sh 2 "harness: CLAUDE.local.md"                  "$(e Write "$HL/CLAUDE.local.md")"
+t guard-paths.sh 2 "harness: a workflow"                       "$(e Edit "$HL/.github/workflows/ci.yml")"
+t guard-paths.sh 2 "harness: CODEOWNERS at the root"           "$(e Edit "$HL/CODEOWNERS")"
+t guard-paths.sh 2 "harness: docs/CODEOWNERS"                  "$(e Edit "$HL/docs/CODEOWNERS")"
+t guard-paths.sh 2 "harness: a scanner exemption list"         "$(e Edit "$HL/.gitleaks.toml")"
+t guard-paths.sh 2 "harness: an authorised plan"               "$(e Write "$HL/$PL/authorised/0001-demo.md")"
+t guard-paths.sh 2 "harness: NotebookEdit is enforced too"     "$(j NotebookEdit "{\"notebook_path\":\"$HL/.claude/n.ipynb\"}")"
+t guard-paths.sh 0 "harness: Read is never refused"            "$(e Read "$HL/CLAUDE.md")"
+t guard-paths.sh 0 "harness: ordinary code, no allowlist"      "$(e Edit "$HL/src/app.py")"
+t guard-paths.sh 0 "harness: a progress record, no allowlist"  "$(e Write "$HL/$PL/progress/0001-demo/item-01-part1.md")"
+t guard-paths.sh 0 "harness: a path outside any repository"    "$(e Write "$CPTMP/loose/CLAUDE.md")"
+t guard-paths.sh 0 "harness: inside a worktree, ordinary code" "$(e Edit "$HL/.claude/worktrees/w/src/a.py")"
+t guard-paths.sh 2 "harness: inside a worktree, its own harness" "$(e Edit "$HL/.claude/worktrees/w/.claude/settings.json")"
+t guard-paths.sh 2 "harness: inside a worktree, its CLAUDE.md" "$(e Edit "$HL/.claude/worktrees/w/CLAUDE.md")"
+t guard-paths.sh 2 "harness: bash naming a relative harness path" "$(bsh 'cat .claude/settings.json')" "$HL"
+t guard-paths.sh 2 "harness: bash with the path welded into code" "$(bsh "python3 -c \\\"open('.github/x.yml','w')\\\"")" "$HL"
+t guard-paths.sh 0 "harness: bash on ordinary code"            "$(bsh 'cat src/app.py')" "$HL"
+t guard-paths.sh 2 "harness: inline override prefix never reaches the hook" "$(bsh 'HOOK_ALLOW_HARNESS=1 cat .claude/settings.json')" "$HL"
+HOOK_ALLOW_HARNESS=1 t guard-paths.sh 0 "harness: operator export lifts the harness layer" "$(e Edit "$HL/CLAUDE.md")"
+HOOK_ALLOW_HARNESS=1 t guard-paths.sh 2 "harness: the export leaves the secrets checks on" "$(e Edit "$HL/.env")"
+HOOK_ALLOW_HARNESS=1 t guard-paths.sh 0 "allowlist: the export lifts default-deny too" "$(e Edit "$AL/Makefile")"
+t guard-paths.sh 0 "allowlist: a listed glob, nested"          "$(e Edit "$AL/src/pkg/mod.py")"
+t guard-paths.sh 0 "allowlist: a listed glob with spaces around it" "$(e Write "$AL/$PL/progress/0001-demo/item-01-part1.md")"
+t guard-paths.sh 0 "allowlist: an exact listed file"           "$(e Edit "$AL/README.md")"
+t guard-paths.sh 2 "allowlist: an unlisted file is refused"    "$(e Edit "$AL/Makefile")"
+t guard-paths.sh 2 "allowlist: an unlisted directory is refused" "$(e Write "$AL/scripts/run.sh")"
+t guard-paths.sh 2 "allowlist: cannot widen the harness layer" "$(e Write "$AL/.github/workflows/x.yml")"
+t guard-paths.sh 0 "allowlist: Read is not confined"           "$(e Read "$AL/Makefile")"
+t guard-paths.sh 0 "allowlist: bash is not confined by it (CODEOWNERS is)" "$(bsh 'cat Makefile')" "$AL"
+# Real files for the glob and hard-link cases: a glob is judged by what it
+# expands to, so the protected files must exist.
+mkdir -p "$HL/.claude/hooks"
+: > "$HL/CLAUDE.md"; : > "$HL/CODEOWNERS"
+: > "$HL/.claude/settings.json"; : > "$HL/.claude/hooks/pre.sh"
+# Known bypass shapes, pinned (ADR 0039).
+ln -s ../.claude "$AL/src/cfg"
+t guard-paths.sh 2 "bypass: a symlink inside the allowlist into .claude/" "$(e Edit "$AL/src/cfg/settings.json")"
+ln -s ../.github "$HL/src/gh"
+t guard-paths.sh 2 "bypass: a symlink into .github/, no allowlist" "$(e Write "$HL/src/gh/workflows/x.yml")"
+t guard-paths.sh 2 "bypass: a case variant of CLAUDE.md"      "$(e Edit "$HL/Claude.md")"
+t guard-paths.sh 2 "bypass: a case variant of .github/"        "$(e Edit "$HL/.GitHub/workflows/x.yml")"
+t guard-paths.sh 2 "bypass: a glob that expands into .claude/" "$(bsh 'sed -i s/a/b/ .cla*/settings.json')" "$HL"
+t guard-paths.sh 2 "bypass: a glob that expands to CLAUDE.md"  "$(bsh 'cat CLAUDE.m?')" "$HL"
+t guard-paths.sh 0 "control: a glob over ordinary code"        "$(bsh 'cat src/*.py')" "$HL"
+ln -s ../.claude/settings.json "$AL/src/cfg.json"
+t guard-paths.sh 2 "bypass: the target itself is a symlink into .claude/" "$(e Edit "$AL/src/cfg.json")"
+t guard-paths.sh 2 "bypass: a glob in a directory above the repository" "$(bsh "cat ${CPTMP%/*}/*/hl-repo/.claude/settings.json")"
+t guard-paths.sh 0 "control: a final-component glob outside any repository" "$(bsh "cat $CPTMP/loose/*.md")"
+t guard-paths.sh 2 "bypass: a glob into .claude/hooks/"        "$(bsh 'sed -i s/a/b/ .c*/hooks/pre.sh')" "$HL"
+t guard-paths.sh 2 "bypass: a glob word with no / or ."        "$(bsh 'sed -i d CODEOWNER?')" "$HL"
+t guard-paths.sh 2 "bypass: dotglob turned on in the command"  "$(bsh 'shopt -s dotglob; cat */settings.json')" "$HL"
+t guard-paths.sh 0 "control: the same glob without dotglob"    "$(bsh 'cat */settings.json')" "$HL"
+t guard-paths.sh 0 "control: a glob that matches nothing"      "$(bsh 'cat .zz*/nothing')" "$HL"
+ln "$HL/.claude/settings.json" "$AL/src/hard.json"
+t guard-paths.sh 2 "bypass: a hard link to a protected file"   "$(e Edit "$AL/src/hard.json")"
+: > "$AL/src/plain.py"
+t guard-paths.sh 0 "control: an existing file with one link"   "$(e Edit "$AL/src/plain.py")"
+t guard-paths.sh 2 "cap: a glob with too many wildcard parts is refused" "$(bsh 'ls /*/*/*/*')" "$HL"
+t guard-paths.sh 0 "cap: three wildcard parts are still checked" "$(bsh 'ls src/*/*/*')" "$HL"
+# Accepted residuals, pinned as they stand so a change to either is seen
+# (ADR 0039, Consequences). A shell write through a symlinked directory is
+# judged at its spelt path, and dotglob spelt so the text check misses it
+# turns on in the shell only. CODEOWNERS at merge is the backstop for both.
+t guard-paths.sh 0 "residual: a shell write through a symlinked directory" "$(bsh 'sed -i s/a/b/ src/cfg/settings.json')" "$AL"
+t guard-paths.sh 0 "residual: dotglob spelt to hide the word"  "$(bsh "shopt -s dot''glob; cat */settings.json")" "$HL"
+# Allowlist spellings an owner may use: ./, a trailing slash, CRLF endings.
+printf 'src/**\r\n./tools/**\r\nnotes/\r\n' > "$AL/.claude/write-allowlist"
+t guard-paths.sh 0 "allowlist: a CRLF line still matches"      "$(e Edit "$AL/src/a.py")"
+t guard-paths.sh 0 "allowlist: a leading ./ is ignored"        "$(e Edit "$AL/tools/x.sh")"
+t guard-paths.sh 0 "allowlist: a trailing slash covers the directory" "$(e Write "$AL/notes/deep/n.txt")"
+t guard-paths.sh 2 "allowlist: still default-deny elsewhere"   "$(e Edit "$AL/Makefile")"
+chmod 000 "$AL/.claude/write-allowlist"
+if [[ -r "$AL/.claude/write-allowlist" ]]; then
+  printf 'SKIP  guard-paths.sh          allowlist: unreadable list fails closed (running as root)\n'
+else
+  t guard-paths.sh 2 "allowlist: an unreadable list fails closed" "$(e Edit "$AL/src/x.py")"
+fi
+chmod 644 "$AL/.claude/write-allowlist"
+
 echo "== guard-secrets =="
 t guard-secrets.sh 2 "write PEM block"           "$(j Write "{\"file_path\":\"/p/app/x.py\",\"content\":\"KEY = \\\"$PEM\\\"\"}")"
 t guard-secrets.sh 2 "write PEM block IN TESTS (tier1 never relaxes)" "$(j Write "{\"file_path\":\"/p/tests/test_x.py\",\"content\":\"KEY = \\\"$PEM\\\"\"}")"
