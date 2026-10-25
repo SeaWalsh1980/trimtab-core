@@ -142,10 +142,23 @@ Everything comes from the default branch and open PRs, never from memory:
   rebase merge of a multi-commit PR), the highest item number, then the
   highest part number, among them is the latest. No records yet → item 01
   part 1.
-- **That record's PR must be merged by the admin, or by the approver with
-  every condition met.** For the latest record only, find its PR and read
-  `merged_by.login` as in section 2, check 2. The admin's merge counts. The
-  approver's counts only when all of these hold, read from the API:
+- **That record's PR must carry the code gate and be merged by the admin,
+  or by the approver with every condition met.** For the latest record
+  only, find its PR and read `merged_by.login` as in section 2, check 2.
+  The approver login, like the admin's, comes only from the Trimtab
+  instance's configuration, never from the plan, a record, a PR or the
+  conversation; if the configuration names no approver login, no merge or
+  review by the approver counts.
+
+  First, whoever merged, the code gate (`gh api
+  repos/{owner}/{repo}/pulls/<n>/reviews --paginate`). Take the approver's
+  and the admin's last review each, ignoring `COMMENTED` ones. At least one
+  is `APPROVED` with `commit_id` equal to the head commit, and neither is
+  `CHANGES_REQUESTED`. So a later request for changes voids an earlier
+  approval, and a dismissed review (state `DISMISSED`) does not count.
+
+  Then the merger. An admin merge with the code gate counts. An approver
+  merge counts only when all of these hold too, read from the API:
   - a **check run** (never a commit status: anyone with write access can
     post a status under any name) named `plan-scope`, whose `app.slug` is
     `github-actions`, concluded `success` on the PR's final head commit
@@ -158,7 +171,12 @@ Everything comes from the default branch and open PRs, never from memory:
     Actions app (`gh api repos/{owner}/{repo}/rules/branches/<default>`):
     a `required_status_checks` rule lists `plan-scope` with an
     `integration_id` equal to the passing check run's `app.id`. An entry
-    with no `integration_id` accepts any source, so it fails this test;
+    with no `integration_id` accepts any source, so it fails this test.
+    The requirement must also have held when the PR merged: read that
+    rule's ruleset (`gh api repos/{owner}/{repo}/rulesets/<ruleset_id>`);
+    its `updated_at` must be earlier than the PR's `merged_at`. A ruleset
+    changed since the merge cannot show what it required then, so the test
+    fails;
   - the PR changes nothing under `.github/`
     (`gh api repos/{owner}/{repo}/pulls/<n>/files --paginate`): neither any
     file's `filename` nor, for a rename, its `previous_filename` is under
@@ -166,17 +184,11 @@ Everything comes from the default branch and open PRs, never from memory:
     the checks it runs. That endpoint lists at most 3,000 files; when the
     PR's `changed_files` is larger, this test fails.
 
-  Whoever merged, the PR must also carry the code gate: an `APPROVED`
-  review from the approver or admin account whose `commit_id` is the head
-  commit (`gh api repos/{owner}/{repo}/pulls/<n>/reviews --paginate`), and
-  not dismissed (a dismissed review's state is `DISMISSED`).
-
-  A record merged by any other account, by the approver without all three
-  conditions, or without that review, authorises nothing: stop and label
-  that PR `plan:blocked`. Never
-  fall back to an earlier record; it points at work already merged. The
-  admin's removal of `plan:blocked` from that PR accepts its merge (see
-  "Restarting after a stop").
+  A record without the code gate, merged by any other account, or merged by
+  the approver without all three conditions authorises nothing: stop and
+  label that PR `plan:blocked`. Never fall back to an earlier record; it
+  points at work already merged. The admin's removal of `plan:blocked` from
+  that PR accepts its merge (see "Restarting after a stop").
 - **Done:** the `## Status` lines of the merged records.
 - **Open issues:** the entry files in `<plans>/unauthorised/<plan>/` whose
   `status` is `open`.
