@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# Session mode: is this session interactive, or an autonomous plan run?
+#
+# Two kinds of session exist. In an interactive one a person is in the loop.
+# An autonomous plan run is automation with the person taken out, working
+# through a plan the admin merged; it gets the stricter guardrails, and it may
+# never do more than an interactive session could. See
+# docs/adr/0041-session-modes-and-plan-scoped-writes.md.
+#
+# This file is both:
+#   - a SessionStart hook (registered in settings.base.json), which announces
+#     the mode in the session's context so the session works by it from its
+#     first turn; and
+#   - a library guard-paths sources, so the mode the session is told and the
+#     mode the guard enforces come from one function and cannot disagree.
+#
+# The test fails toward strict, since a run taken for an interactive session
+# would get the looser rules. A session is autonomous when ANY signal holds:
+#   1. TRIMTAB_PLAN_RUN=1 in this process's environment. The operator sets it
+#      in the cloud environment or exports it before a local run; an inline
+#      prefix on a Bash command never reaches a hook.
+#   2. The repository is on a `plan/*` branch. Plan work happens only there,
+#      so this catches a run whose variable was forgotten.
+#   3. This session was recorded as autonomous earlier. The mode only
+#      tightens: once a signal held, the session stays autonomous, even after
+#      it leaves the plan branch. The record lives under the config
+#      directory's guard-state/, which guard-paths refuses to every tool.
+# Interactive only when none holds.
+set -uo pipefail
+
+sm_git() {   # $1 = a directory in the repository, then git's arguments
+  local dir="$1"
+  shift
+  # The caller's repository-steering variables are dropped so the hook reads
+  # the repository the path is in, not one an environment points at.
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+      -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
+      -u GIT_COMMON_DIR -u GIT_CEILING_DIRECTORIES \
+      GIT_NO_REPLACE_OBJECTS=1 GIT_LITERAL_PATHSPECS=1 \
+      git -C "$dir" -c core.fsmonitor=false "$@"
+}
+
+sm_branch() {   # $1 = a directory; prints the branch name, or nothing
+  # The full ref, not --short: --short prints `heads/plan/...` when a tag of
+  # the same name exists, which would hide the plan branch from signal 2.
+  local ref
+  ref=$(sm_git "$1" symbolic-ref -q HEAD 2>/dev/null) || return 0
+  [[ "$ref" == refs/heads/* ]] && printf '%s' "${ref#refs/heads/}"
+}
+
+# Where the per-session record lives. Only hooks write it.
+sm_state_dir() {
+  local cfg
+  if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then cfg="${CLAUDE_CONFIG_DIR%/}"
+  elif [[ -n "${HOME:-}" ]]; then cfg="${HOME%/}/.claude"
+  else return 1
+  fi
+  printf '%s/guard-state/session-mode' "$cfg"
+}
+
+# A session id names a file, so it must be a plain token (the same shape
+# trimtab/adapters/pr_monitor.py accepts).
+sm_valid_sid() { [[ "$1" =~ ^[A-Za-z0-9_-]{1,128}$ ]]; }
+
+sm_recorded() {   # $1 = session id; 0 = recorded autonomous (or cannot tell)
+  local dir
+  sm_valid_sid "$1" || return 1
+  dir=$(sm_state_dir) || return 1
+  # A link anywhere on the record's path could point the record somewhere a
+  # session can delete it. Treat that as recorded: strict, never looser.
+  [[ -L "${dir%/*}" || -L "$dir" || -L "$dir/$1" ]] && return 0
+  [[ -e "$dir/$1" ]]
+}
+
+sm_record() {   # $1 = session id; best effort, a failure only loses stickiness
+  local dir
+  sm_valid_sid "$1" || return 0
+  dir=$(sm_state_dir) || return 0
+  [[ -L "${dir%/*}" || -L "$dir" ]] && return 0
+  [[ -e "$dir/$1" ]] && return 0
+  ( umask 077 && mkdir -p "$dir" && : > "$dir/$1" ) 2>/dev/null
+  return 0
+}
+
+# sm_classify <directory> <session id>
+# Sets sm_mode (interactive|autonomous), sm_signals (why) and sm_branch_name.
+# Records the session when it is autonomous, so the mode only tightens.
+sm_classify() {
+  local dir="$1" sid="${2:-}"
+  local -a why=()
+  sm_branch_name=$(sm_branch "$dir")
+  [[ "${TRIMTAB_PLAN_RUN:-}" == "1" ]] && why+=("TRIMTAB_PLAN_RUN=1")
+  [[ "$sm_branch_name" == plan/* ]] && why+=("branch $sm_branch_name")
+  sm_recorded "$sid" && why+=("recorded autonomous earlier in this session")
+  if (( ${#why[@]} )); then
+    sm_mode=autonomous
+    sm_signals=$(IFS=';'; printf '%s' "${why[*]}")
+    sm_signals=${sm_signals//;/; }
+    sm_record "$sid"
+  else
+    sm_mode=interactive
+    sm_signals="no autonomous-run signal"
+  fi
+}
+
+# ---- SessionStart hook ----------------------------------------------------
+# Never blocks and always exits 0: SessionStart is not a gate. The guard
+# enforces the mode on every write whatever this announcement said.
+sm_main() {
+  local payload cwd="" sid="" ctx msg
+  payload=$(cat 2>/dev/null) || payload=""
+  if command -v jq >/dev/null 2>&1; then
+    cwd=$(printf '%s' "$payload" | jq -r '(.cwd // "") | tostring' 2>/dev/null) || cwd=""
+    sid=$(printf '%s' "$payload" | jq -r '(.session_id // "") | tostring' 2>/dev/null) || sid=""
+  elif command -v python3 >/dev/null 2>&1; then
+    { IFS= read -r cwd; IFS= read -r sid; } < <(printf '%s' "$payload" | python3 -I -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    d = {}
+d = d if isinstance(d, dict) else {}
+for k in ("cwd", "session_id"):
+    v = d.get(k)
+    print(v.replace("\n", " ") if isinstance(v, str) else "")
+' 2>/dev/null)
+  fi
+  [[ -n "$cwd" && -d "$cwd" ]] || cwd="$PWD"
+  sm_classify "$cwd" "$sid"
+  # The signals hold a branch name, which may carry a quote or a backslash.
+  local s="$sm_signals"
+  s=${s//\\/\\\\}; s=${s//\"/\\\"}
+  if [[ "$sm_mode" == autonomous ]]; then
+    msg="Session mode: AUTONOMOUS PLAN RUN ($s)."
+    ctx="$msg Work only as the rules for running an authorised plan allow: writes are limited to the authorised plan's .writes declaration plus its own progress records and issue-register entries, anything else is a register entry or a blocker, and the guard enforces this on every write. State this mode in your first response."
+    printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$msg" "$ctx"
+  else
+    ctx="Session mode: INTERACTIVE ($s). The repository's write allowlist applies. If this session moves onto a plan/* branch it becomes an autonomous plan run for the rest of the session. State this mode in your first response."
+    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$ctx"
+  fi
+  return 0
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  sm_main
+  exit 0
+fi
