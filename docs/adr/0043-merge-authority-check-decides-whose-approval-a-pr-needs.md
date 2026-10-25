@@ -70,9 +70,20 @@ unexpected answer, or a failed call fails closed (exit 2).
 
 - The gate at merge becomes our own check instead of GitHub's code-owner
   rule. Its tests cover each route, stale, dismissed and voided reviews,
-  every admin-only path kind, and the REST paging; a mutation run against
-  the decision lines showed each one is held by a test. Editing the job's
-  workflow is itself a SEC-7 change.
+  every admin-only path kind, and the REST paging. A mutation trial broke
+  nine decision lines one at a time (the head-commit match, the
+  change-request veto, `filter=all`, the not-completed test, the app filter,
+  the fork test, the pin files, counting dismissals, ordering by id); a test
+  failed for each. Editing the job's workflow is itself a SEC-7 change.
+- The admin-only lists repeat the wrap-merged skill's approver file test. A
+  test fails when the skill stops naming any of them.
+- GitHub refuses a review from a PR's author, so a non-plan PR the admin
+  opens can never pass. That is no worse than today's code-owner review,
+  which the admin's own PRs cannot meet either: the admin merges them by
+  bypassing the ruleset, as now.
+- Paths and plan-scope are read only for a plan head. A non-plan PR needs
+  the admin whatever it changes, so a diff past plan-scope's 5,000-file
+  bound cannot stop the admin's approval counting.
 - GitHub cannot restrict who clicks merge. The wrap-merged skill's
   `merged_by` check (approver or admin) still stops a chain after any other
   merge.

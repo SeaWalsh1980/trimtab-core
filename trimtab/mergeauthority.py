@@ -11,7 +11,7 @@ This check, made a required check in place of code-owner review, can:
   repository (not a fork), the PR targets the default branch, and it changes
   no admin-only path;
 - an admin-only path is one guard-paths' layer 1 refuses (the harness and
-  controls, `docs/plans/authorised/` among them), either root file that can
+  controls, the authorised plans folder among them), either root file that can
   pin the checker (`.claude/trimtab.json`, `instance.json`), or, in a
   repository that runs its checker from its own tree (one with `bin/trimtab`
   in the base commit), that code: `bin/`, `trimtab/`, `hooks/run_module.py`.
@@ -262,13 +262,18 @@ def check(repo: str, pr: Pr, number: int, base: str, who: Accounts, run: Run | N
         raise MergeAuthorityError("--repository must be OWNER/NAME")
     if number < 1:
         raise MergeAuthorityError("--pr must be a positive number")
-    try:
-        paths = sorted({c.path for c in planscope.changes(repo, base, pr.head)})
-        checker_in_tree = bool(planscope.present(repo, base, [CHECKER_MARK]))
-    except planscope.PlanScopeError as err:
-        raise MergeAuthorityError(str(err)) from err
+    # Paths and plan-scope matter only on a plan head: a non-plan PR needs the admin whatever it changes, so
+    # a diff git cannot read, or one past planscope.MAX_CHANGES, must not stop the admin's approval counting.
+    is_plan = planscope.plan_of(pr.head_ref).ref is not planscope.Ref.NOT_PLAN
+    paths: list[str] = []
+    checker_in_tree = False
+    if is_plan:
+        try:
+            paths = sorted({c.path for c in planscope.changes(repo, base, pr.head)})
+            checker_in_tree = bool(planscope.present(repo, base, [CHECKER_MARK]))
+        except planscope.PlanScopeError as err:
+            raise MergeAuthorityError(str(err)) from err
     api = GhApi(run)
     reviews = read_reviews(api, pr.repository, number)
-    is_plan = planscope.plan_of(pr.head_ref).ref is not planscope.Ref.NOT_PLAN
     runs = read_check_runs(api, pr.repository, pr.head) if is_plan else []
     return decide(pr, who, paths, checker_in_tree, reviews, runs)

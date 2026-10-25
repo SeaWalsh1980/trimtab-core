@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -39,12 +40,9 @@ def pr(head_ref=PLAN_REF, head_repo=REPOSITORY, base_ref=DEFAULT):
               default_branch=DEFAULT)
 
 
-def review(login, state="APPROVED", commit=HEAD, id=None):
-    review.count += 1
-    return Review(id if id is not None else review.count, login, state, commit)
-
-
-review.count = 0
+def review(login, state="APPROVED", commit=HEAD, id=0):
+    """A review; id 0 means "in the order given", which decided() fills in."""
+    return Review(id, login, state, commit)
 
 
 def run(conclusion="success", status="completed", started="2026-10-25T10:00:00Z", app="github-actions", id=1):
@@ -55,8 +53,8 @@ PASSED = [run()]
 
 
 def decided(*reviews, head_ref=PLAN_REF, runs=PASSED, paths=SOURCE, checker_in_tree=False, who=WHO, **kwargs):
-    return mergeauthority.decide(pr(head_ref, **kwargs), who, list(paths), checker_in_tree, list(reviews),
-                                 list(runs))
+    ordered = [r if r.id else replace(r, id=i) for i, r in enumerate(reviews, start=1)]
+    return mergeauthority.decide(pr(head_ref, **kwargs), who, list(paths), checker_in_tree, ordered, list(runs))
 
 
 class NonPlanPrs(unittest.TestCase):
@@ -228,6 +226,16 @@ class Reviews(unittest.TestCase):
         self.assertEqual(len(decided(review(APPROVER, state="PENDING")).problems), 1)
 
 
+class AgreesWithTheSkill(unittest.TestCase):
+    """The wrap-merged skill's approver file test reads the same lists after the merge; they must not drift."""
+
+    def test_the_skill_names_every_admin_only_pin_and_checker_path(self):
+        skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
+        paths = (*mergeauthority.PIN_FILES, *mergeauthority.CHECKER_DIRS, *mergeauthority.CHECKER_FILES, ".github/")
+
+        self.assertEqual([p for p in paths if f"`{p}`" not in skill], [])
+
+
 class Configuration(unittest.TestCase):
     def test_no_admin_login_is_an_error(self):
         with self.assertRaises(MergeAuthorityError):
@@ -388,6 +396,16 @@ class Repository(unittest.TestCase):
         self.assertEqual((result.approved_by, [path_of(a) for a in gh.argvs()]),
                          (ADMIN, [f"repos/{REPOSITORY}/pulls/{NUMBER}/reviews"]))
 
+    def test_a_non_plan_pr_needs_no_readable_diff(self):
+        unknown = "d" * 40
+        gh = FakeGh({f"repos/{REPOSITORY}/pulls/{NUMBER}/reviews": json.dumps([review_row(1, ADMIN, commit=unknown)])})
+        the_pr = Pr(repository=REPOSITORY, head_repo=REPOSITORY, head_ref=FEATURE_REF, head=unknown,
+                    base_ref=DEFAULT, default_branch=DEFAULT)
+
+        result = mergeauthority.check(str(self.repo), the_pr, NUMBER, self.base, WHO, run=gh)
+
+        self.assertEqual(result.approved_by, ADMIN)
+
     def test_an_unknown_head_is_an_error(self):
         with self.assertRaises(MergeAuthorityError):
             self.check("d" * 40)
@@ -400,13 +418,27 @@ class Repository(unittest.TestCase):
         self.write("src/app.py", "x = 3\n")
         return self.commit("item")
 
-    def cli(self, *extra):
+    def fake_gh(self, head, reviewer):
+        """A `gh` on PATH for the CLI, which runs the real command: canned reviews and check runs (TST-2)."""
+        bin_dir = Path(self.tmp.name) / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        gh = bin_dir / "gh"
+        gh.write_text("#!/usr/bin/env python3\nimport os, sys\n"
+                      "print(os.environ['FAKE_REVIEWS' if '/reviews' in sys.argv[4] else 'FAKE_RUNS'])\n",
+                      encoding="utf-8")
+        gh.chmod(0o755)
+        return {"PATH": f"{bin_dir}{os.pathsep}{self.env['PATH']}",
+                "FAKE_REVIEWS": json.dumps([review_row(1, reviewer, commit=head)]),
+                "FAKE_RUNS": json.dumps({"check_runs": [run_row(1)]})}
+
+    def cli(self, *extra, reviewer=None):
         head = self.commit_change()
+        env = {**self.env, **self.fake_gh(head, reviewer)} if reviewer else self.env
         return subprocess.run([str(TRIMTAB), "check-merge-authority", "--repo", str(self.repo),
                                "--repository", REPOSITORY, "--pr", str(NUMBER), "--base", self.base, "--head", head,
                                "--head-ref", PLAN_REF, "--head-repo", REPOSITORY, "--base-ref", DEFAULT,
                                "--default-branch", DEFAULT, *extra],
-                              capture_output=True, text=True, env=self.env)
+                              capture_output=True, text=True, env=env)
 
     def test_the_cli_exits_2_without_an_admin_login(self):
         done = self.cli("--admin", "")
@@ -417,6 +449,16 @@ class Repository(unittest.TestCase):
         done = self.cli("--admin", ADMIN, "--approver", ADMIN)
 
         self.assertEqual(done.returncode, 2, done.stderr)
+
+    def test_the_cli_exits_0_and_names_the_approver_on_a_pass(self):
+        done = self.cli("--admin", ADMIN, "--approver", APPROVER, reviewer=APPROVER)
+
+        self.assertEqual((done.returncode, f"approved by {APPROVER}" in done.stdout), (0, True), done.stderr)
+
+    def test_the_cli_exits_1_with_a_fail_line_when_unapproved(self):
+        done = self.cli("--admin", ADMIN, "--approver", APPROVER, reviewer=AGENT)
+
+        self.assertEqual((done.returncode, done.stderr.startswith("FAIL  ")), (1, True), done.stderr)
 
     def test_the_cli_refuses_to_run_without_an_admin_argument(self):
         self.assertEqual(self.cli().returncode, 2)
