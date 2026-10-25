@@ -88,6 +88,9 @@ class Refs(unittest.TestCase):
     def test_a_plan_branch_without_an_item_is_malformed(self):
         self.assertIs(planscope.plan_of(f"plan/{PLAN}").ref, Ref.MALFORMED)
 
+    def test_a_single_digit_item_names_its_item(self):
+        self.assertEqual(planscope.plan_of(f"plan/{PLAN}/item-1-part2"), Branch(Ref.PLAN, PLAN, "item-1-part2"))
+
     def test_a_plan_name_with_dot_dot_is_malformed(self):
         self.assertIs(planscope.plan_of("plan/a..b/item-01-part1").ref, Ref.MALFORMED)
 
@@ -178,6 +181,11 @@ class Judge(unittest.TestCase):
         problems = judged(change(NEW_ADR, mode="160000"))
 
         self.assertIn("link or submodule", problems[0])
+
+    def test_a_path_with_a_newline_is_printed_escaped(self):
+        problems = judged(change("x\n::stop-commands::t"))
+
+        self.assertNotIn("\n", problems[0])
 
     def test_an_empty_declaration_allows_bookkeeping_only(self):
         problems = judged(change(PROGRESS), change("README.md", "M"), writes="")
@@ -324,6 +332,25 @@ class Repository(unittest.TestCase):
         problems = self.check(base_ref="wide").problems
 
         self.assertIn("not the default branch", problems[0])
+
+    def test_full_refs_name_the_same_default_branch(self):
+        self.write(NEW_ADR, "# new\n")
+        self.commit("item")
+
+        result = planscope.check(str(self.repo), self.base, "HEAD", PLAN_REF, "refs/heads/" + DEFAULT, DEFAULT)
+
+        self.assertEqual(result.problems, ())
+
+    def test_a_relative_diff_config_does_not_narrow_the_diff(self):
+        git(self.repo, "config", "diff.relative", "true")
+        self.write("README.md", "changed\n")
+        self.write(NEW_ADR, "# new\n")
+        self.write("src/app.py", "x = 2\n")
+        self.commit("item")
+
+        problems = planscope.check(str(self.repo / "docs"), self.base, "HEAD", PLAN_REF, DEFAULT, DEFAULT).problems
+
+        self.assertTrue(any("src/app.py" in p for p in problems))
 
     def test_a_type_change_to_a_link_fails(self):
         (self.repo / "README.md").unlink()
