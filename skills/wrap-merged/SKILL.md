@@ -96,7 +96,11 @@ Everything comes from the default branch and open PRs, never from memory:
 
 - **In flight:** an open PR whose head branch is `plan/<plan>/item-*` —
   recognisable from the moment its draft opens, before any record exists.
-  If one exists, it is resumed before anything else — but only through the
+  The branch name alone proves nothing: the PR's head must be in this same
+  repository (not a fork) and its author must be the agent or admin
+  account from instance configuration. A `plan/…` PR that fails either
+  test is a stop — report it; never resume or build on it. Otherwise it is
+  resumed before anything else — but only through the
   A4 gate, applied to the item its branch names. An open PR labelled
   `plan:blocked` is not resumed this way; only an operator-started restart
   picks it up.
