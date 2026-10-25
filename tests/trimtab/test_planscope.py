@@ -6,15 +6,20 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from test_scrub import isolated_git_env
 from trimtab import planscope
-from trimtab.planscope import Change, Listed, Ref
+from trimtab.planscope import Branch, Change, Listed, Ref
 
-TRIMTAB = Path(__file__).resolve().parents[2] / "bin" / "trimtab"
+ROOT = Path(__file__).resolve().parents[2]
+TRIMTAB = ROOT / "bin" / "trimtab"
+GUARD_PATHS = ROOT / "hooks" / "guard-paths.sh"
 PLAN = "0019-y"
 OTHER_PLAN = "0018-x"
-PLAN_REF = f"plan/{PLAN}/item-01-part1"
-PROGRESS = f"{planscope.PLANS_DIR}/progress/{PLAN}/item-01-part1.md"
-REGISTER = f"{planscope.PLANS_DIR}/unauthorised/{PLAN}/item-01-part1-01.md"
+ITEM = "item-01-part1"
+PLAN_REF = f"plan/{PLAN}/{ITEM}"
+DEFAULT = "main"
+PROGRESS = f"{planscope.PLANS_DIR}/progress/{PLAN}/{ITEM}.md"
+REGISTER = f"{planscope.PLANS_DIR}/unauthorised/{PLAN}/{ITEM}-01.md"
 EXISTING_ADR = "docs/adr/existing.md"
 NEW_ADR = "docs/adr/new.md"
 ALLOWLIST = "\n".join(["README.md", "src/**", "+docs/adr/**",
@@ -28,7 +33,7 @@ def change(path, status="A", mode=REGULAR):
 
 
 def judged(*changes, in_base=frozenset(), writes=WRITES):
-    return planscope.judge(list(changes), planscope.parse_list(ALLOWLIST), planscope.scope(writes, PLAN),
+    return planscope.judge(list(changes), planscope.parse_list(ALLOWLIST), planscope.scope(writes, PLAN, ITEM),
                            frozenset(in_base))
 
 
@@ -70,20 +75,20 @@ class Lists(unittest.TestCase):
 
 
 class Refs(unittest.TestCase):
-    def test_a_plan_branch_names_its_plan(self):
-        self.assertEqual(planscope.plan_of(PLAN_REF), (Ref.PLAN, PLAN))
+    def test_a_plan_branch_names_its_plan_and_item(self):
+        self.assertEqual(planscope.plan_of(PLAN_REF), Branch(Ref.PLAN, PLAN, ITEM))
 
     def test_a_full_ref_names_the_same_plan(self):
-        self.assertEqual(planscope.plan_of("refs/heads/" + PLAN_REF), (Ref.PLAN, PLAN))
+        self.assertEqual(planscope.plan_of("refs/heads/" + PLAN_REF), Branch(Ref.PLAN, PLAN, ITEM))
 
     def test_a_non_plan_branch_is_skipped(self):
-        self.assertIs(planscope.plan_of("feat/something")[0], Ref.NOT_PLAN)
+        self.assertIs(planscope.plan_of("feat/something").ref, Ref.NOT_PLAN)
 
     def test_a_plan_branch_without_an_item_is_malformed(self):
-        self.assertIs(planscope.plan_of(f"plan/{PLAN}")[0], Ref.MALFORMED)
+        self.assertIs(planscope.plan_of(f"plan/{PLAN}").ref, Ref.MALFORMED)
 
     def test_a_plan_name_with_dot_dot_is_malformed(self):
-        self.assertIs(planscope.plan_of("plan/a..b/item-01-part1")[0], Ref.MALFORMED)
+        self.assertIs(planscope.plan_of("plan/a..b/item-01-part1").ref, Ref.MALFORMED)
 
 
 class Judge(unittest.TestCase):
@@ -104,14 +109,24 @@ class Judge(unittest.TestCase):
         self.assertIn("write allowlist", problems[0])
 
     def test_another_plans_progress_folder_fails(self):
-        problems = judged(change(f"{planscope.PLANS_DIR}/progress/{OTHER_PLAN}/item-01-part1.md"))
+        problems = judged(change(f"{planscope.PLANS_DIR}/progress/{OTHER_PLAN}/{ITEM}.md"))
 
         self.assertEqual(len(problems), 1)
 
     def test_another_plans_register_folder_fails(self):
-        problems = judged(change(f"{planscope.PLANS_DIR}/unauthorised/{OTHER_PLAN}/item-01-part1-01.md"))
+        problems = judged(change(f"{planscope.PLANS_DIR}/unauthorised/{OTHER_PLAN}/{ITEM}-01.md"))
 
         self.assertEqual(len(problems), 1)
+
+    def test_another_items_progress_record_fails(self):
+        problems = judged(change(f"{planscope.PLANS_DIR}/progress/{PLAN}/item-09-part1.md"))
+
+        self.assertIn("plan's scope", problems[0])
+
+    def test_a_later_parts_register_entry_fails(self):
+        problems = judged(change(f"{planscope.PLANS_DIR}/unauthorised/{PLAN}/item-01-part10-01.md"))
+
+        self.assertIn("plan's scope", problems[0])
 
     def test_modifying_a_create_only_file_in_the_base_fails(self):
         problems = judged(change(EXISTING_ADR, "M"))
@@ -148,11 +163,58 @@ class Judge(unittest.TestCase):
 
         self.assertIn("link or submodule", problems[0])
 
+    def test_a_submodule_fails(self):
+        problems = judged(change(NEW_ADR, mode="160000"))
+
+        self.assertIn("link or submodule", problems[0])
+
     def test_an_empty_declaration_allows_bookkeeping_only(self):
         problems = judged(change(PROGRESS), change("README.md", "M"), writes="")
 
         self.assertEqual(len(problems), 1)
         self.assertIn("README.md", problems[0])
+
+
+# The same inputs through guard-paths' own functions and through the port.
+PARITY_LIST = "README.md\nsrc/**\n+docs/adr/**\n./docs/x/\n+docs/**\n# note\n+\n  tests/*.py  \n/lib/[^_]*\n"
+PARITY_PATHS = ["README.md", "readme.md", "src/a/b.py", "docs/adr/n.md", "docs/x/y", "docs/z.md", "tests/a.py",
+                "tests/sub/b.py", "lib/a.py", "lib/_a.py", "other"]
+REFUSED_PATHS = [".claude/rules/x.md", ".claude/worktrees/x", ".GitHub/w.yml", "docs/Readme.md", "sub/CLAUDE.md",
+                 "Claude.local.md", f"{planscope.AUTHORISED}/x.md", ".gitleaks.toml", ".trivyignore",
+                 ".bandit-allowlist.yml", "src/a.py", ".claudex", "CODE" + "OWNERS", "docs/code" + "owners"]
+LISTED_RC = {Listed.YES: 0, Listed.NO: 1, Listed.CREATE_ONLY: 3}
+CALLS = {"hl_match_lines": 'hl_match_lines "$LIST" "$p"', "hl_refused": 'hl_refused "$p"'}
+
+
+def guard_function(name):
+    """One function's text from guard-paths.sh, from `name() {` to its closing `}` at column 0."""
+    lines = GUARD_PATHS.read_text(encoding="utf-8").splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith(f"{name}() {{"))
+    end = next(i for i in range(start, len(lines)) if lines[i] == "}")
+    return "\n".join(lines[start:end + 1])
+
+
+def bash_rcs(function, setup, paths):
+    script = "\n".join([guard_function(function), setup, f'for p in "$@"; do {CALLS[function]}; echo $?; done'])
+    done = subprocess.run(["bash", "-c", script, "bash", *paths], capture_output=True, text=True, check=True,
+                          env={"PATH": os.environ.get("PATH", ""), "LIST": PARITY_LIST})
+    return [int(rc) for rc in done.stdout.split()]
+
+
+class ParityWithGuardPaths(unittest.TestCase):
+    """The port must decide as guard-paths' bash does, so the gate and the hook agree."""
+
+    def test_list_matching_agrees_with_hl_match_lines(self):
+        entries = planscope.parse_list(PARITY_LIST)
+
+        python = [LISTED_RC[planscope.match(entries, p)] for p in PARITY_PATHS]
+
+        self.assertEqual(python, bash_rcs("hl_match_lines", "", PARITY_PATHS))
+
+    def test_layer_one_agrees_with_hl_refused(self):
+        python = [0 if planscope.refused(p) else 1 for p in REFUSED_PATHS]
+
+        self.assertEqual(python, bash_rcs("hl_refused", f'hl_plans="{planscope.AUTHORISED}"', REFUSED_PATHS))
 
 
 def git(repo, *args):
@@ -167,16 +229,14 @@ class Repository(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
         self.repo = root / "repo"
-        self.env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k != "TRIMTAB_INSTANCE"}
-        self.env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
-                        GIT_CEILING_DIRECTORIES=str(root.resolve()),
-                        GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+        self.env = isolated_git_env({k: v for k, v in os.environ.items() if k != "TRIMTAB_INSTANCE"}, root)
+        self.env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
                         GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
         self._saved = dict(os.environ)
         os.environ.clear()
         os.environ.update(self.env)
         self.addCleanup(self._restore)
-        subprocess.run(["git", "init", "-q", "-b", "main", str(self.repo)], check=True)
+        subprocess.run(["git", "init", "-q", "-b", DEFAULT, str(self.repo)], check=True)
         self.write(planscope.ALLOWLIST, ALLOWLIST)
         self.write(f"{planscope.AUTHORISED}/{PLAN}.md", "# plan\n")
         self.write(f"{planscope.AUTHORISED}/{PLAN}.writes", WRITES)
@@ -200,8 +260,8 @@ class Repository(unittest.TestCase):
         git(self.repo, "commit", "-q", "-m", message)
         return git(self.repo, "rev-parse", "HEAD")
 
-    def check(self, head_ref=PLAN_REF):
-        return planscope.check(str(self.repo), self.base, "HEAD", head_ref)
+    def check(self, head_ref=PLAN_REF, base_ref=DEFAULT):
+        return planscope.check(str(self.repo), self.base, "HEAD", head_ref, base_ref, DEFAULT)
 
     def test_an_in_scope_pr_passes(self):
         self.write("README.md", "changed\n")
@@ -235,11 +295,11 @@ class Repository(unittest.TestCase):
     def test_a_create_only_file_added_on_main_since_the_branch_fails(self):
         self.write(NEW_ADR, "# mine\n")
         self.commit("item")
-        git(self.repo, "switch", "-q", "main")
+        git(self.repo, "switch", "-q", DEFAULT)
         self.write(NEW_ADR, "# theirs\n")
         self.base = self.commit("main moves")
 
-        problems = planscope.check(str(self.repo), self.base, PLAN_REF, PLAN_REF).problems
+        problems = planscope.check(str(self.repo), self.base, PLAN_REF, PLAN_REF, DEFAULT, DEFAULT).problems
 
         self.assertTrue(any("base commit already has it" in p for p in problems))
 
@@ -247,9 +307,37 @@ class Repository(unittest.TestCase):
         self.write(PROGRESS, "## Done\n")
         self.commit("item")
 
-        problems = planscope.check(str(self.repo), self.base, "HEAD", "plan/0020-z/item-01-part1").problems
+        problems = self.check(head_ref="plan/0020-z/item-01-part1").problems
 
         self.assertEqual(len(problems), 2)
+
+    def test_a_pr_targeting_another_branch_fails(self):
+        self.write(NEW_ADR, "# new\n")
+        self.commit("item")
+
+        problems = self.check(base_ref="wide").problems
+
+        self.assertIn("not the default branch", problems[0])
+
+    def test_a_type_change_to_a_link_fails(self):
+        (self.repo / "README.md").unlink()
+        (self.repo / "README.md").symlink_to("src/app.py")
+        self.commit("item")
+
+        self.assertTrue(any("link or submodule" in p for p in self.check().problems))
+
+    def test_an_allowlist_that_is_a_link_in_the_base_fails(self):
+        git(self.repo, "switch", "-q", DEFAULT)
+        (self.repo / planscope.ALLOWLIST).unlink()
+        (self.repo / planscope.ALLOWLIST).symlink_to("../README.md")
+        self.base = self.commit("link the allowlist")
+        git(self.repo, "switch", "-q", PLAN_REF)
+        self.write(NEW_ADR, "# new\n")
+        self.commit("item")
+
+        problems = self.check().problems
+
+        self.assertTrue(any("write allowlist is not a regular file" in p for p in problems))
 
     def test_a_non_plan_head_ref_is_skipped(self):
         self.write("src/app.py", "x = 2\n")
@@ -284,9 +372,17 @@ class Repository(unittest.TestCase):
     def test_the_cli_exits_2_on_an_unknown_base(self):
         self.assertEqual(self.cli(PLAN_REF, base="0" * 40).returncode, 2)
 
+    def test_the_cli_refuses_to_run_without_a_head(self):
+        done = subprocess.run([str(TRIMTAB), "check-plan-scope", "--repo", str(self.repo), "--base", self.base,
+                               "--head-ref", PLAN_REF, "--base-ref", DEFAULT, "--default-branch", DEFAULT],
+                              capture_output=True, text=True, env=self.env)
+
+        self.assertEqual(done.returncode, 2)
+
     def cli(self, head_ref, base=None):
         return subprocess.run([str(TRIMTAB), "check-plan-scope", "--repo", str(self.repo),
-                               "--base", base or self.base, "--head-ref", head_ref],
+                               "--base", base or self.base, "--head", "HEAD", "--head-ref", head_ref,
+                               "--base-ref", DEFAULT, "--default-branch", DEFAULT],
                               capture_output=True, text=True, env=self.env)
 
 

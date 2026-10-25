@@ -11,15 +11,19 @@ A PR from `plan/<plan>/item-NN-partK` may change a path only when all hold:
 - the path is not part of the repository's harness or controls (guard-paths'
   layer 1, which no list widens);
 - the base commit's write allowlist lists it (layer 2);
-- the base commit's `<plan>.writes` declaration lists it, or it is under the
-  plan's own progress or issue-register folder, which are always create-only
-  (layer 3);
+- the base commit's `<plan>.writes` declaration lists it, or it is this PR's
+  own progress record (`item-NN-partK.md`) or issue-register entry
+  (`item-NN-partK-*.md`) in the plan's folders, always create-only (layer 3,
+  narrowed to the branch's item and part: the hook allows the whole folders);
 - where either list makes it create-only, it is a new file: absent from the
   merge-base and from the base commit;
 - it is a regular file: a plan run has no reason to add a link or a submodule.
 
 Lists, the plan and its declaration all come from the base commit, never from
-the PR, so a PR cannot widen what judges it. Globs read as guard-paths reads
+the PR, so a PR cannot widen what judges it. The PR must target the default
+branch: a check run belongs to a commit, not to a PR, so a pass against another
+base, whose lists the agent could have pushed, would count for the same head's
+PR into the default branch. Globs read as guard-paths reads
 them (`hl_match_lines`): `**` is `*`, which spans directories, a leading `+`
 marks an entry create-only, a trailing `/` means everything under it. Bash's
 `[^...]` is read as `[!...]`. A backslash escape is not supported, and bash's
@@ -31,19 +35,19 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 from dataclasses import dataclass
 from enum import Enum
 from fnmatch import fnmatchcase
 
-GIT_TIMEOUT_SECONDS = 30
+from trimtab.capture.sources import SourceError, git_bytes
+
 MAX_CHANGES = 5000  # bounded: a diff longer than this is refused, not judged in part (ENG-6.2)
 ALLOWLIST = ".claude/write-allowlist"
 # Spelt in two pieces so the base's citation test, which refuses any plans
 # directory path in a tracked file, does not read this as a citation.
 PLANS_DIR = "docs/" + "plans"
 AUTHORISED = f"{PLANS_DIR}/authorised"
-PLAN_BRANCH = re.compile(r"plan/([A-Za-z0-9][A-Za-z0-9._-]*)/item-[0-9]+-part[0-9]+")
+PLAN_BRANCH = re.compile(r"plan/([A-Za-z0-9][A-Za-z0-9._-]*)/(item-[0-9]+-part[0-9]+)")
 HEADS = "refs/heads/"
 REGULAR_MODES = {"100644", "100755"}
 # The caller's repository-steering variables are dropped, as hooks/session-mode.sh's sm_git does.
@@ -127,22 +131,31 @@ class Ref(Enum):
     MALFORMED = "malformed plan branch"
 
 
-def plan_of(head_ref: str) -> tuple[Ref, str]:
-    """The plan a head branch names. Any `plan/` branch that is not `plan/<plan>/item-NN-partK` is
-    malformed, never skipped: guard-paths refuses every write a run makes on one."""
+@dataclass(frozen=True)
+class Branch:
+    ref: Ref
+    plan: str = ""
+    item: str = ""  # item-NN-partK
+
+
+def plan_of(head_ref: str) -> Branch:
+    """The plan and item a head branch names. Any `plan/` branch that is not `plan/<plan>/item-NN-partK`
+    is malformed, never skipped: guard-paths refuses every write a run makes on one."""
     name = head_ref.removeprefix(HEADS)
     if not name.startswith("plan/"):
-        return Ref.NOT_PLAN, ""
+        return Branch(Ref.NOT_PLAN)
     m = PLAN_BRANCH.fullmatch(name)
     if not m or ".." in m.group(1):
-        return Ref.MALFORMED, ""
-    return Ref.PLAN, m.group(1)
+        return Branch(Ref.MALFORMED)
+    return Branch(Ref.PLAN, m.group(1), m.group(2))
 
 
-def scope(writes: str, plan: str) -> tuple[Entry, ...]:
-    """The plan's declaration plus its own bookkeeping folders, always create-only."""
-    return parse_list(writes + "\n" + f"+{PLANS_DIR}/progress/{plan}/**\n"
-                      + f"+{PLANS_DIR}/unauthorised/{plan}/**\n")
+def scope(writes: str, plan: str, item: str) -> tuple[Entry, ...]:
+    """The plan's declaration plus this PR's own progress record and register entries, always
+    create-only. Tied to the branch's item and part, so one PR cannot write another item's record and
+    steer which record the next session reads as the latest."""
+    return parse_list(writes + "\n" + f"+{PLANS_DIR}/progress/{plan}/{item}.md\n"
+                      + f"+{PLANS_DIR}/unauthorised/{plan}/{item}-*.md\n")
 
 
 def judge(changes: list[Change], allowlist: tuple[Entry, ...], plan_scope: tuple[Entry, ...],
@@ -163,8 +176,8 @@ def judge(changes: list[Change], allowlist: tuple[Entry, ...], plan_scope: tuple
             continue
         in_plan = match(plan_scope, c.path)
         if in_plan is Listed.NO:
-            problems.append(f"{c.path}: outside the plan's scope (its .writes declaration, progress and "
-                            f"issue-register folders)")
+            problems.append(f"{c.path}: outside the plan's scope (its .writes declaration, and this PR's own "
+                            f"progress record and register entries)")
             continue
         if c.status != "D" and c.mode not in REGULAR_MODES:
             problems.append(f"{c.path}: a link or submodule (mode {c.mode}); a plan run writes regular files only")
@@ -190,42 +203,54 @@ class Result:
 
 # ---- git -----------------------------------------------------------------
 
-def _git(repo: str, *args: str, ok: tuple[int, ...] = (0,)) -> tuple[int, bytes]:
+def _git(repo: str, *args: str, stdin: bytes | None = None) -> bytes:
+    # Hardened as hooks/session-mode.sh's sm_git is: no steering variables, no
+    # replace objects, literal pathspecs, no fsmonitor.
     env = {k: v for k, v in os.environ.items() if k not in GIT_STEERING}
     env.update(GIT_NO_REPLACE_OBJECTS="1", GIT_LITERAL_PATHSPECS="1")
     try:
-        done = subprocess.run(["git", "-C", repo, "-c", "core.fsmonitor=false", *args],
-                              capture_output=True, env=env, timeout=GIT_TIMEOUT_SECONDS)
-    except (OSError, subprocess.TimeoutExpired) as err:
-        raise PlanScopeError(f"git {args[0]}: {type(err).__name__}") from err
-    if done.returncode not in ok:
-        stderr = done.stderr.decode("utf-8", errors="replace").strip()[:300]
-        raise PlanScopeError(f"git {args[0]} exited {done.returncode}: {stderr}")
-    return done.returncode, done.stdout
+        return git_bytes(repo, "-c", "core.fsmonitor=false", *args, env=env, stdin=stdin)
+    except SourceError as err:
+        raise PlanScopeError(str(err)) from err
 
 
 def _commit(repo: str, rev: str) -> str:
-    _, out = _git(repo, "rev-parse", "--verify", "--end-of-options", f"{rev}^{{commit}}")
+    out = _git(repo, "rev-parse", "--verify", "--end-of-options", f"{rev}^{{commit}}")
     return out.decode("ascii").strip()
 
 
-def _show(repo: str, sha: str, path: str) -> str | None:
-    """A file's text in a commit, or None when the commit has no regular file there."""
-    _, out = _git(repo, "ls-tree", "-z", sha, "--", path)
-    entry = out.split(b"\0", 1)[0]
-    if not entry or entry.split(b" ", 1)[0].decode("ascii") not in REGULAR_MODES:
-        return None
-    _, text = _git(repo, "cat-file", "blob", entry.split(b"\t", 1)[0].split(b" ")[2].decode("ascii"))
-    try:
-        return text.decode("utf-8")
-    except UnicodeDecodeError as err:
-        raise PlanScopeError(f"{path} at the base commit is not UTF-8") from err
+def read_files(repo: str, sha: str, paths: list[str]) -> dict[str, str | None]:
+    """Each path's text in the commit, or None where it has no regular file: two git calls in all."""
+    out = _git(repo, "ls-tree", "-z", "--full-tree", sha, "--", *paths)
+    objects = {}
+    for entry in out.split(b"\0"):
+        if not entry:
+            continue
+        meta, _, name = entry.partition(b"\t")
+        mode, _, obj = meta.decode("ascii").split(" ")
+        if mode in REGULAR_MODES:
+            objects[os.fsdecode(name)] = obj
+    texts: dict[str, str | None] = dict.fromkeys(paths)
+    if not objects:
+        return texts
+    batch = _git(repo, "cat-file", "--batch", stdin="".join(f"{o}\n" for o in objects.values()).encode("ascii"))
+    pos = 0
+    for path in objects:
+        header_end = batch.index(b"\n", pos)
+        size = int(batch[pos:header_end].split(b" ")[2])
+        body = batch[header_end + 1:header_end + 1 + size]
+        pos = header_end + 1 + size + 1
+        try:
+            texts[path] = body.decode("utf-8")
+        except UnicodeDecodeError as err:
+            raise PlanScopeError(f"{path} at the base commit is not UTF-8") from err
+    return texts
 
 
 def changes(repo: str, base: str, head: str) -> list[Change]:
     """What `git diff base...head` changes, with renames and copies off."""
-    _, out = _git(repo, "diff", "--raw", "-z", "--no-renames", "--no-ext-diff", "--no-textconv",
-                  "--end-of-options", f"{base}...{head}")
+    out = _git(repo, "diff", "--raw", "-z", "--no-renames", "--no-ext-diff", "--no-textconv",
+               "--end-of-options", f"{base}...{head}")
     fields = out.split(b"\0")
     if fields and fields[-1] == b"":
         fields.pop()
@@ -247,25 +272,30 @@ def present(repo: str, sha: str, paths: list[str]) -> frozenset[str]:
     """Which of paths the commit's tree holds, in one call."""
     if not paths:
         return frozenset()
-    _, out = _git(repo, "ls-tree", "-z", "--name-only", "--full-tree", sha, "--", *paths)
+    out = _git(repo, "ls-tree", "-z", "--name-only", "--full-tree", sha, "--", *paths)
     return frozenset(os.fsdecode(p) for p in out.split(b"\0") if p)
 
 
-def check(repo: str, base: str, head: str, head_ref: str) -> Result:
-    """Judge a PR: base and head_ref from the platform's event, head the commit it would merge."""
-    ref, plan = plan_of(head_ref)
-    if ref is not Ref.PLAN:
-        return Result(ref, "", ())
+def check(repo: str, base: str, head: str, head_ref: str, base_ref: str, default_branch: str) -> Result:
+    """Judge a PR. base, head_ref, base_ref and default_branch come from the platform's event; head is
+    the PR's head commit, always named: the job runs from a base checkout, where HEAD is the base."""
+    branch = plan_of(head_ref)
+    if branch.ref is not Ref.PLAN:
+        return Result(branch.ref, "", ())
+    plan = branch.plan
+    if base_ref.removeprefix(HEADS) != default_branch.removeprefix(HEADS):
+        return Result(branch.ref, plan, (f"the PR targets {base_ref!r}, not the default branch "
+                                         f"{default_branch!r}; only the default branch's lists can scope it",))
     base_sha, head_sha = _commit(repo, base), _commit(repo, head)
-    allowlist = _show(repo, base_sha, ALLOWLIST)
-    plan_md = _show(repo, base_sha, f"{AUTHORISED}/{plan}.md")
-    writes = _show(repo, base_sha, f"{AUTHORISED}/{plan}.writes")
-    missing = [what for what, text in (("the write allowlist", allowlist), ("the authorised plan", plan_md),
-                                       ("its .writes declaration", writes)) if text is None]
+    plan_md, writes_path = f"{AUTHORISED}/{plan}.md", f"{AUTHORISED}/{plan}.writes"
+    texts = read_files(repo, base_sha, [ALLOWLIST, plan_md, writes_path])
+    missing = [what for what, path in (("the write allowlist", ALLOWLIST), ("the authorised plan", plan_md),
+                                       ("its .writes declaration", writes_path)) if texts[path] is None]
     if missing:
-        return Result(ref, plan, tuple(f"{m} is not a regular file in the base commit; nothing can be scoped"
-                                       for m in missing))
+        return Result(branch.ref, plan, tuple(f"{m} is not a regular file in the base commit; nothing can be "
+                                              f"scoped" for m in missing))
     found = changes(repo, base_sha, head_sha)
     added = [c.path for c in found if c.status == "A"]
-    problems = judge(found, parse_list(allowlist), scope(writes, plan), present(repo, base_sha, added))
-    return Result(ref, plan, tuple(problems))
+    problems = judge(found, parse_list(texts[ALLOWLIST]), scope(texts[writes_path], plan, branch.item),
+                     present(repo, base_sha, added))
+    return Result(branch.ref, plan, tuple(problems))

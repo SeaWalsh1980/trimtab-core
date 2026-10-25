@@ -19,22 +19,29 @@ branch name come from the platform's event, which the agent cannot forge.
 
 ## Decision
 
-`trimtab check-plan-scope --base <sha> --head-ref <branch> [--head <rev>]`
-(`trimtab/planscope.py`) judges `git diff --raw --no-renames base...head`. A
+`trimtab check-plan-scope --base <sha> --head <sha> --head-ref <branch>
+--base-ref <branch> --default-branch <branch>` (`trimtab/planscope.py`)
+judges `git diff --raw --no-renames base...head`. A
 PR from a `plan/` branch fails when any changed path:
 
 - is a layer 1 path (the harness and controls, as guard-paths' `hl_refused`
   lists them), whatever the lists say;
 - is outside the base commit's write allowlist;
-- is outside the plan's scope: its `.writes` declaration plus its own
-  progress and issue-register folders, which are always create-only;
+- is outside the plan's scope: its `.writes` declaration, plus this PR's own
+  progress record (`<item>.md`) and register entries (`<item>-*.md`), where
+  `<item>` is the branch's `item-NN-partK`; these are always create-only;
 - is create-only on either list and is not a new file: a modification,
   deletion or type change of a file in the merge-base (a rename is a deletion
   and an addition), or an addition the base commit already holds;
 - is a link or a submodule.
 
 The allowlist, the plan and its declaration are all read from the base
-commit. A missing one fails. A `plan/` branch that is not
+commit. A missing one fails. A plan PR whose base branch is not the default
+branch fails: a check run belongs to a commit, not to a PR, so a pass against
+a branch whose lists the agent pushed would count for the same head's PR
+into the default branch. Every input but `--head` comes from the event;
+`--head` is required, because the job runs from a base checkout, where `HEAD`
+is the base and the diff would be empty. A `plan/` branch that is not
 `plan/<plan>/item-NN-partK` fails, as guard-paths refuses every write a run
 makes on one; any other branch is skipped. A diff of more than 5,000 files,
 or one git cannot read, fails closed (exit 2).
@@ -46,8 +53,17 @@ bash's extended forms (`!(x)`, `@(x)`, which `[[ == ]]` enables) are read
 literally, so they can only narrow a match; no allowlist uses them.
 
 The job that runs it must run the checker from the PR's base commit, never
-from the PR's tree, so a PR cannot change what judges it. The wrap-merged
-skill accepts an approver merge only when that holds.
+from the PR's tree, so a PR cannot change what judges it. It must also run
+only for `plan/` heads (a job-level condition), so a non-plan PR's
+`plan-scope` run concludes `skipped`, never `success`. The wrap-merged skill
+accepts an approver merge only when both hold, and only for a PR whose head
+is the record's `plan/<plan>/item-NN-partK` and whose base is the default
+branch.
+
+The bookkeeping scope is narrower than the hook's, which allows the plan's
+whole progress and register folders. Narrower is safe: a run is never wider
+than the gate, and one PR cannot write another item's record and steer which
+record the next session reads as the latest.
 
 ## Options considered
 
@@ -60,9 +76,9 @@ skill accepts an approver merge only when that holds.
 
 ## Consequences
 
-- The matcher now exists twice, in bash and in Python. The tests pin the
-  shared cases (`**`, `+`, a trailing `/`, case, a plain entry winning), and
-  a change to one must be made to the other.
+- The matcher now exists twice, in bash and in Python. A parity test runs
+  guard-paths' own `hl_match_lines` and `hl_refused` against the port on the
+  same inputs, so a change to one that is not made to the other fails.
 - A plan PR that is out of scope fails at merge, after the session has spent
   its work; the hook stays the early, in-session layer.
 - Nothing is enforced until each repository's workflow runs the job and the

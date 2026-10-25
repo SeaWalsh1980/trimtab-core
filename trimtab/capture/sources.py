@@ -377,10 +377,11 @@ def changed_files(root: Path, base: str) -> list[str]:
     return [line for line in done.stdout.splitlines() if line.strip()]
 
 
-def _git(cwd: Path, *args: str) -> bytes:
-    """git's stdout as bytes: a path need not be UTF-8."""
+def git_bytes(cwd: Path | str, *args: str, env: dict[str, str] | None = None, stdin: bytes | None = None) -> bytes:
+    """git's stdout as bytes: a path need not be UTF-8. env replaces the inherited environment when given."""
     try:
-        done = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, timeout=GIT_TIMEOUT_SECONDS)
+        done = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, timeout=GIT_TIMEOUT_SECONDS,
+                              env=env, input=stdin)
     except (OSError, subprocess.TimeoutExpired) as err:
         raise SourceError(f"git {args[0]}: {type(err).__name__}") from err
     if done.returncode != 0:
@@ -412,9 +413,9 @@ def staged_files(cwd: Path) -> list[tuple[int, str, bytes]]:
     only deletes stages nothing to read. A submodule entry has no content of
     its own: it keeps its place in the count and is not read.
     """
-    root = Path(os.fsdecode(_git(cwd, "rev-parse", "--show-toplevel").strip()))
+    root = Path(os.fsdecode(git_bytes(cwd, "rev-parse", "--show-toplevel").strip()))
     # Pairs of `:<old mode> <new mode> <old object> <new object> <status>` and a path.
-    fields = _git(root, *STAGED, "--raw", "-z").split(b"\0")
+    fields = git_bytes(root, *STAGED, "--raw", "-z").split(b"\0")
     files = []
     for position, (meta, path) in enumerate(zip(fields[0::2], fields[1::2]), 1):
         try:
@@ -422,7 +423,7 @@ def staged_files(cwd: Path) -> list[tuple[int, str, bytes]]:
         except ValueError as err:
             raise SourceError("git diff --raw returned an entry that could not be parsed") from err
         if mode != GITLINK:
-            files.append((position, os.fsdecode(path), _git(root, "cat-file", "blob", obj.decode("ascii"))))
+            files.append((position, os.fsdecode(path), git_bytes(root, "cat-file", "blob", obj.decode("ascii"))))
     return files
 
 

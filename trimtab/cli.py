@@ -848,7 +848,8 @@ def cmd_scrub(args) -> int:
 
 def cmd_check_plan_scope(args) -> int:
     try:
-        result = planscope.check(args.repo, args.base, args.head, args.head_ref)
+        result = planscope.check(args.repo, args.base, args.head, args.head_ref, args.base_ref,
+                                 args.default_branch)
     except planscope.PlanScopeError as err:
         print(f"error: {err}; nothing is vouched for", file=sys.stderr)
         return 2
@@ -1125,7 +1126,11 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--base", required=True, metavar="SHA", help="the PR's base commit, from the platform's event")
     ps.add_argument("--head-ref", required=True, metavar="BRANCH",
                     help="the PR's head branch name, from the platform's event; a non-plan branch is skipped")
-    ps.add_argument("--head", default="HEAD", metavar="REV", help="the PR's head commit (default: HEAD)")
+    ps.add_argument("--head", required=True, metavar="SHA",
+                    help="the PR's head commit; required, since the job runs from a base checkout")
+    ps.add_argument("--base-ref", required=True, metavar="BRANCH", help="the branch the PR targets, from the event")
+    ps.add_argument("--default-branch", required=True, metavar="BRANCH",
+                    help="the repository's default branch, from the event; a plan PR targeting another fails")
     ps.add_argument("--repo", default=".", metavar="DIR", help="the repository (default: .)")
     ps.set_defaults(func=cmd_check_plan_scope)
 
