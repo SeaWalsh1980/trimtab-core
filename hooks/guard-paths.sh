@@ -653,7 +653,11 @@ check_path "$file" "file access"
 #    an Edit, Write, MultiEdit or NotebookEdit outside the listed globs is
 #    refused. One glob per line, relative to the repository root, `#`
 #    comments and blank lines ignored, `**` read as `*` (which already spans
-#    directories here). The list cannot widen layer 1. Bash is not confined
+#    directories here). A line starting `+` is create-only: a Write may make
+#    a new file there, and a file new on this branch (absent at its
+#    merge-base with origin's default branch) may be changed, but nothing
+#    may change a file already on the default branch (ADR 0040). The list
+#    cannot widen layer 1. Bash is not confined
 #    by it: any program can write anywhere, so shell writes outside the list
 #    are left to CODEOWNERS at merge.
 #
@@ -774,8 +778,9 @@ EOF
   exit 2
 }
 
-hl_allowed() {   # $1 = repository root, $2 = relative path; 0 = listed
-  local list="$1/.claude/write-allowlist" line pat
+hl_allowed() {   # $1 = repository root, $2 = relative path
+                 # 0 = listed, 1 = not listed, 3 = listed create-only only
+  local list="$1/.claude/write-allowlist" line pat create_only=0 is_create
   # The list must be a regular file in the repository, where CODEOWNERS
   # reviews it. A link could point outside the reviewed tree (a world-writable
   # /tmp file would let anyone widen it), so any link refuses every write.
@@ -790,14 +795,48 @@ hl_allowed() {   # $1 = repository root, $2 = relative path; 0 = listed
     line="${line#"${line%%[![:space:]]*}"}"
     line="${line%"${line##*[![:space:]]}"}"   # trailing space and a CRLF's \r
     [[ -z "$line" ]] && continue
+    # A leading `+` marks the entry create-only (ADR 0040): a new file may be
+    # written there, one already on the default branch may not be changed.
+    is_create=0
+    if [[ "$line" == +* ]]; then
+      is_create=1
+      line="${line#+}"
+      line="${line#"${line%%[![:space:]]*}"}"
+      # A bare `+` (or `+ # note`, whose comment was stripped above) names
+      # no path; skip it rather than read it as a pattern.
+      [[ -z "$line" ]] && continue
+    fi
     pat="${line//\*\*/*}"
     pat="${pat#/}"
     pat="${pat#./}"
     # A trailing slash means "this directory": everything under it.
     [[ "$pat" == */ ]] && pat="${pat}*"
     # shellcheck disable=SC2053
-    [[ "$2" == $pat ]] && return 0
+    if [[ "$2" == $pat ]]; then
+      (( is_create )) || return 0
+      create_only=1
+    fi
   done < "$list"
+  (( create_only )) && return 3
+  return 1
+}
+
+hl_in_base() {   # $1 = relative path; 0 = in the base tree, 1 = not, 2 = no base
+  # The base is the merge-base of HEAD and origin's default branch: what this
+  # branch started from, so every merged file present here is in it. git runs
+  # with the caller's repository-steering variables dropped, replace refs off
+  # (a replacement could show the base with a file removed) and the path
+  # taken literally. A missing git, origin HEAD or merge-base fails closed.
+  local -a g=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE
+              -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES
+              -u GIT_COMMON_DIR -u GIT_CEILING_DIRECTORIES
+              GIT_NO_REPLACE_OBJECTS=1 GIT_LITERAL_PATHSPECS=1
+              git -C "$hl_root" -c core.fsmonitor=false)
+  local def base hit
+  def=$("${g[@]}" symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null) || return 2
+  base=$("${g[@]}" merge-base HEAD "$def" 2>/dev/null) || return 2
+  hit=$("${g[@]}" ls-tree --name-only "$base" -- "$1" 2>/dev/null) || return 2
+  [[ -n "$hit" ]] && return 0
   return 1
 }
 
@@ -827,7 +866,29 @@ hl_check_abs() {   # $1 = absolute path, $2 = write tool 1/0, $3 = reason, $4 = 
   # not read as "no allowlist" and switch default-deny off; hl_allowed then
   # refuses it (fail closed).
   if (( $2 )) && [[ -e "$hl_root/.claude/write-allowlist" || -L "$hl_root/.claude/write-allowlist" ]]; then
-    hl_allowed "$hl_root" "$rel" || hl_deny "write outside the repository's write allowlist" "$4"
+    local al_rc
+    hl_allowed "$hl_root" "$rel"
+    al_rc=$?
+    case "$al_rc" in
+      0) ;;
+      3)
+        # Create-only: a Write that makes a new file passes. A change to a
+        # file passes only while the file is new on this branch, absent from
+        # the tree at its merge-base with the default branch; one already
+        # there, or any change when that base cannot be found, is refused. A
+        # link is refused outright: a Write over it writes its target.
+        if [[ -L "$abs" ]]; then
+          hl_deny "write over a link on a create-only allowlist path (ADR 0040)" "$4"
+        elif [[ "$tool" != Write || -e "$abs" ]]; then
+          local base_rc
+          hl_in_base "$rel"
+          base_rc=$?
+          (( base_rc == 0 )) && hl_deny "change to a file already on the default branch, on a create-only allowlist path; new files only (ADR 0040)" "$4"
+          (( base_rc == 2 )) && hl_deny "change on a create-only allowlist path with no merge-base against origin's default branch to tell a new file from an existing one (fail closed; ADR 0040)" "$4"
+        fi
+        ;;
+      *) hl_deny "write outside the repository's write allowlist" "$4" ;;
+    esac
   fi
   return 0
 }
