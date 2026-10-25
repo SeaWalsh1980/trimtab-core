@@ -21,8 +21,8 @@ branch name come from the platform's event, which the agent cannot forge.
 
 `trimtab check-plan-scope --base <sha> --head <sha> --head-ref <branch>
 --base-ref <branch> --default-branch <branch>` (`trimtab/planscope.py`)
-judges `git diff --raw --no-renames base...head`. A
-PR from a `plan/` branch fails when any changed path:
+judges `git diff --raw --no-renames --ignore-submodules=none --no-relative
+base...head`. A PR from a `plan/` branch fails when any changed path:
 
 - is a layer 1 path (the harness and controls, as guard-paths' `hl_refused`
   lists them), whatever the lists say;
@@ -35,7 +35,12 @@ PR from a `plan/` branch fails when any changed path:
   deletion or type change of a file in the merge-base (a rename is a deletion
   and an addition), or an addition the base commit already holds;
 - is a link or a submodule. The diff runs with `--ignore-submodules=none`,
-  so no `submodule.<name>.ignore` setting can hide a gitlink change.
+  so no `submodule.<name>.ignore` setting can hide a gitlink change, and with
+  `--no-relative`, so `diff.relative` cannot narrow it to a subdirectory.
+
+A changed path holding a newline or another control character is printed
+escaped, so a file name cannot forge a log line or a CI runner's workflow
+command.
 
 The allowlist, the plan and its declaration are all read from the base
 commit. A missing one fails. A plan PR whose base branch is not the default

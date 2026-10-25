@@ -160,6 +160,11 @@ def scope(writes: str, plan: str, item: str) -> tuple[Entry, ...]:
                       + f"{register}.md\n{register}[0-9].md\n")
 
 
+def create_only(allowlist: tuple[Entry, ...], plan_scope: tuple[Entry, ...], path: str) -> bool:
+    """A create-only entry on either list makes the path create-only (ADR 0041)."""
+    return Listed.CREATE_ONLY in (match(allowlist, path), match(plan_scope, path))
+
+
 def judge(changes: list[Change], allowlist: tuple[Entry, ...], plan_scope: tuple[Entry, ...],
           in_base: frozenset[str]) -> list[str]:
     """Every problem with a plan PR's changes; none means in scope.
@@ -185,7 +190,7 @@ def judge(changes: list[Change], allowlist: tuple[Entry, ...], plan_scope: tuple
         if c.status != "D" and c.mode not in REGULAR_MODES:
             problems.append(f"{shown}: a link or submodule (mode {c.mode}); a plan run writes regular files only")
             continue
-        if Listed.CREATE_ONLY in (listed, in_plan):
+        if create_only(allowlist, plan_scope, c.path):
             if c.status != "A":
                 problems.append(f"{shown}: {_verb(c.status)} a file already in the base, on a create-only path")
             elif c.path in in_base:
@@ -317,7 +322,6 @@ def check(repo: str, *, base: str, head: str, head_ref: str, base_ref: str, defa
     allowlist, plan_scope = parse_list(texts[ALLOWLIST]), scope(texts[writes_path], plan, branch.item)
     # Only a create-only addition needs the base lookup; passing every addition could overrun the
     # command line on a large PR and fail it for no scope reason.
-    added = [c.path for c in found if c.status == "A"
-             and Listed.CREATE_ONLY in (match(allowlist, c.path), match(plan_scope, c.path))]
+    added = [c.path for c in found if c.status == "A" and create_only(allowlist, plan_scope, c.path)]
     problems = judge(found, allowlist, plan_scope, present(repo, base_sha, added))
     return Result(branch.ref, plan, tuple(problems))
