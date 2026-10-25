@@ -118,7 +118,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "m=''; o=''; for g in guard-paths guard-bash guard-secrets guard-security guard-mcp guard-github pr-body-check doctrine-drift session-path rule-usage pr-monitor-record; do [ -x \"$HOME/.claude/hooks/$g.sh\" ] && continue; case $g in pr-body-check|doctrine-drift|session-path|rule-usage|pr-monitor-record) o=\"$o hooks/$g.sh\" ;; *) m=\"$m hooks/$g.sh\" ;; esac; done; for n in rules bin CLAUDE.md; do [ -e \"$HOME/.claude/$n\" ] || m=\"$m $n\"; done; if [ -n \"$m\" ]; then printf '{\"systemMessage\":\"GUARDS OFF: missing or dangling in ~/.claude:%s. Re-run ./bootstrap.sh from the canonical checkout, then start a new session.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"WARNING: the PreToolUse guard hooks are not installed (missing:%s), so every tool call in this session is unguarded. Do not run state-changing commands. Tell the operator to re-run ./bootstrap.sh from the canonical checkout and start a new session.\"}}\\n' \"$m$o\" \"$m$o\"; elif [ -n \"$o\" ]; then printf '{\"systemMessage\":\"HOOKS MISSING: the guards are installed, but not in ~/.claude:%s. Re-run ./bootstrap.sh from the canonical checkout, then start a new session.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"NOTE: the guard hooks are installed, but these other Trimtab hooks are missing:%s (PR-body check, doctrine drift warning, CLI path, usage log or PR monitor recorder). Tell the operator to re-run ./bootstrap.sh from the canonical checkout.\"}}\\n' \"$o\" \"$o\"; fi; exit 0",
+            "command": "m=''; o=''; c=''; for g in guard-paths session-mode guard-bash guard-secrets guard-security guard-mcp guard-github pr-body-check doctrine-drift session-path rule-usage pr-monitor-record; do [ -x \"$HOME/.claude/hooks/$g.sh\" ] && continue; case $g in pr-body-check|doctrine-drift|session-path|rule-usage|pr-monitor-record) o=\"$o hooks/$g.sh\" ;; session-mode) c=\"$c hooks/$g.sh\" ;; *) m=\"$m hooks/$g.sh\" ;; esac; done; for n in rules bin CLAUDE.md; do [ -e \"$HOME/.claude/$n\" ] || m=\"$m $n\"; done; if [ -n \"$m\" ]; then printf '{\"systemMessage\":\"GUARDS OFF: missing or dangling in ~/.claude:%s. Re-run ./bootstrap.sh from the canonical checkout, then start a new session.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"WARNING: the PreToolUse guard hooks are not installed (missing:%s), so every tool call in this session is unguarded. Do not run state-changing commands. Tell the operator to re-run ./bootstrap.sh from the canonical checkout and start a new session.\"}}\\n' \"$m$c$o\" \"$m$c$o\"; elif [ -n \"$c\" ]; then printf '{\"systemMessage\":\"SESSION MODE MISSING: not in ~/.claude:%s. guard-paths refuses every write inside a repository until it is restored. Re-run ./bootstrap.sh from the canonical checkout, then start a new session.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"NOTE: the session-mode classifier is missing (%s). The guards are installed, but guard-paths cannot tell an interactive session from an autonomous run, so it refuses every write inside a git repository. Tell the operator to re-run ./bootstrap.sh from the canonical checkout.\"}}\\n' \"$c$o\" \"$c$o\"; elif [ -n \"$o\" ]; then printf '{\"systemMessage\":\"HOOKS MISSING: the guards are installed, but not in ~/.claude:%s. Re-run ./bootstrap.sh from the canonical checkout, then start a new session.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"NOTE: the guard hooks are installed, but these other Trimtab hooks are missing:%s (PR-body check, doctrine drift warning, CLI path, usage log or PR monitor recorder). Tell the operator to re-run ./bootstrap.sh from the canonical checkout.\"}}\\n' \"$o\" \"$o\"; fi; exit 0",
             "timeout": 5
           }
         ]
@@ -149,6 +149,16 @@
           {
             "type": "command",
             "command": "\"$HOME/.claude/hooks/session-path.sh\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$HOME/.claude/hooks/session-mode.sh\"",
             "timeout": 10
           }
         ]

@@ -806,6 +806,33 @@ check_silent_session_path_fails_the_install() {
   fi
 }
 
+# guard-paths sources session-mode.sh (ADR 0041); broken, it refuses every
+# repository write and no session is told its mode. An install proves it
+# announces a mode, and one that does not fails the install.
+check_install_probes_session_mode() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && "$out" == *"session-mode announces a mode through the symlink"* ]]; then
+    pass "an install proves session-mode announces a mode"
+  else
+    fail "an install proves session-mode announces a mode" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
+check_silent_session_mode_fails_the_install() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  make_store "$h/share/trimtab/core"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n' > "$snap_new/hooks/session-mode.sh"
+  boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"session-mode returned 0 without announcing a mode"* ]]; then
+    pass "a session-mode hook that announces nothing fails the install"
+  else
+    fail "a session-mode hook that announces nothing fails the install" "rc=$rc"; echo "$out" | tail -6
+  fi
+}
+
 # A unit linked into a snapshot dangles when the snapshot goes, and the timer
 # silently never runs; --no-timer installs do not relink it.
 check_retention_spares_a_snapshot_systemd_links_into() {
@@ -1215,6 +1242,8 @@ check_install_probes_the_unprobed_hooks
 check_cli_reaches_sessions_by_name
 check_cli_probe_accepts_a_config_dir_with_a_trailing_slash
 check_silent_session_path_fails_the_install
+check_install_probes_session_mode
+check_silent_session_mode_fails_the_install
 check_retention_spares_a_snapshot_systemd_links_into
 check_missing_pyyaml_is_named
 check_pyyaml_hidden_from_isolated_python_is_named

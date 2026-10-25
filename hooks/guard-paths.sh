@@ -72,7 +72,8 @@ parse() {
               | map(select(type == "string" and . != "")) | .[0] // "")
              | if test("[\n\r]") then error("line break in the target path") else . end),
            ((.tool_input.command // "") | gsub("\n"; " ")),
-           ((.tool_name // "") | gsub("\n"; " "))'
+           ((.tool_name // "") | gsub("\n"; " ")),
+           ((.session_id // "") | tostring | gsub("[\n\r]"; " "))'
   elif command -v python3 >/dev/null 2>&1; then
     # -I: isolated, so a json.py in the working directory (the repository
     # under work) or a PYTHON* variable cannot stand in for the standard library.
@@ -89,6 +90,8 @@ if "\n" in target or "\r" in target:
 print(target)
 print((ti.get("command") or "").replace("\n", " "))
 print((d.get("tool_name") or "").replace("\n", " "))
+sid = d.get("session_id")
+print(str(sid).replace("\n", " ").replace("\r", " ") if sid is not None else "")
 '
   else
     return 1
@@ -114,11 +117,17 @@ fi
 file=${parsed%%$'\n'*}
 cmd=""
 tool=""
+sid=""
 if [[ "$parsed" == *$'\n'* ]]; then
   rest=${parsed#*$'\n'}
   cmd=${rest%%$'\n'*}
   if [[ "$rest" == *$'\n'* ]]; then
     tool=${rest#*$'\n'}
+    # The session id, read only by the session-mode check, follows tool_name.
+    if [[ "$tool" == *$'\n'* ]]; then
+      sid=${tool#*$'\n'}
+      sid=${sid%%$'\n'*}
+    fi
     tool=${tool%%$'\n'*}
   fi
 fi
@@ -657,7 +666,14 @@ check_path "$file" "file access"
 #    a new file there, and a file new on this branch (absent at its
 #    merge-base with origin's default branch) may be changed, but nothing
 #    may change a file already on the default branch (ADR 0040). The list
-#    cannot widen layer 1. Bash is not confined
+#    cannot widen layer 1.
+# 3. Plan scope, only in an autonomous plan run (hooks/session-mode.sh
+#    decides; ADR 0041): a write must also match the authorised plan's
+#    `.writes` declaration, read from the merge-base tree, or that plan's own
+#    progress or issue-register folder. The plan is named by the branch,
+#    `plan/<plan>/item-NN-partK`; any other branch, a plan or declaration
+#    that cannot be read, or a repository with no allowlist refuses every
+#    write. A run is always narrower than an interactive session. Bash is not confined
 #    by it: any program can write anywhere, so shell writes outside the list
 #    are left to CODEOWNERS at merge.
 #
@@ -670,7 +686,20 @@ hl_on=1
 
 # Spelt in two pieces so the base's citation test, which refuses any plans
 # directory path in a tracked file, does not read this as a citation.
-hl_plans="docs/""plans/authorised"
+hl_plans_dir="docs/""plans"
+hl_plans="$hl_plans_dir/authorised"
+
+# The session-mode classifier, shared with the SessionStart hook so the mode
+# a session is told and the mode enforced here cannot disagree (ADR 0041).
+# hooks/ is linked as one directory, so it sits beside this file. Without it
+# no write can be judged, so every write in a repository is refused.
+hl_sm_ok=0
+hl_here="${BASH_SOURCE[0]%/*}"
+# Run by a bare name (`bash guard-paths.sh` inside hooks/) there is no slash
+# to strip, and the classifier is in the current directory.
+[[ "$hl_here" == "${BASH_SOURCE[0]}" ]] && hl_here=.
+# shellcheck source=hooks/session-mode.sh
+. "$hl_here/session-mode.sh" 2>/dev/null && declare -F sm_classify >/dev/null && hl_sm_ok=1
 
 hl_root=""
 hl_find_root() {   # $1 = a normalised absolute path; sets hl_root or ""
@@ -780,16 +809,22 @@ EOF
 
 hl_allowed() {   # $1 = repository root, $2 = relative path
                  # 0 = listed, 1 = not listed, 3 = listed create-only only
-  local list="$1/.claude/write-allowlist" line pat create_only=0 is_create
+  local list="$1/.claude/write-allowlist" text
   # The list must be a regular file in the repository, where CODEOWNERS
   # reviews it. A link could point outside the reviewed tree (a world-writable
   # /tmp file would let anyone widen it), so any link refuses every write.
   if [[ -L "$list" ]]; then
     hl_deny "write allowlist is a symlink; it must be a regular file in the repository (fail closed)" "$list"
   fi
-  if [[ ! -r "$list" ]]; then
+  if [[ ! -r "$list" ]] || ! text=$(<"$list"); then
     hl_deny "write allowlist exists but cannot be read (fail closed)" "$list"
   fi
+  hl_match_lines "$text" "$2"
+}
+
+hl_match_lines() {   # $1 = list text in the allowlist's syntax, $2 = relative path
+                     # 0 = listed, 1 = not listed, 3 = listed create-only only
+  local line pat create_only=0 is_create
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%%#*}"
     line="${line#"${line%%[![:space:]]*}"}"
@@ -816,28 +851,57 @@ hl_allowed() {   # $1 = repository root, $2 = relative path
       (( is_create )) || return 0
       create_only=1
     fi
-  done < "$list"
+  done <<< "$1"
   (( create_only )) && return 3
   return 1
 }
 
 hl_in_base() {   # $1 = relative path; 0 = in the base tree, 1 = not, 2 = no base
   # The base is the merge-base of HEAD and origin's default branch: what this
-  # branch started from, so every merged file present here is in it. git runs
-  # with the caller's repository-steering variables dropped, replace refs off
-  # (a replacement could show the base with a file removed) and the path
-  # taken literally. A missing git, origin HEAD or merge-base fails closed.
-  local -a g=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE
-              -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES
-              -u GIT_COMMON_DIR -u GIT_CEILING_DIRECTORIES
-              GIT_NO_REPLACE_OBJECTS=1 GIT_LITERAL_PATHSPECS=1
-              git -C "$hl_root" -c core.fsmonitor=false)
-  local def base hit
-  def=$("${g[@]}" symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null) || return 2
-  base=$("${g[@]}" merge-base HEAD "$def" 2>/dev/null) || return 2
-  hit=$("${g[@]}" ls-tree --name-only "$base" -- "$1" 2>/dev/null) || return 2
+  # branch started from, so every merged file present here is in it (hl_base).
+  # A missing git, origin HEAD or merge-base fails closed.
+  local hit
+  hl_base || return 2
+  hit=$(sm_git "$hl_root" ls-tree --name-only "$hl_base_sha" -- "$1" 2>/dev/null) || return 2
   [[ -n "$hit" ]] && return 0
   return 1
+}
+
+hl_base_sha="" hl_base_root="" hl_base_rc=1
+hl_base() {   # sets hl_base_sha for $hl_root; 1 = no base (fail closed)
+  # sm_git (hooks/session-mode.sh) drops the caller's repository-steering
+  # variables, turns replace refs off (a replacement could show the base with
+  # a file removed) and takes pathspecs literally. Memoised per repository:
+  # one write can ask twice (plan scope, then create-only), and the base
+  # cannot change within one hook call (ENG-6.2).
+  if [[ -n "$hl_base_root" && "$hl_base_root" == "$hl_root" ]]; then
+    return "$hl_base_rc"
+  fi
+  local def
+  hl_base_root="$hl_root" hl_base_sha="" hl_base_rc=1
+  (( hl_sm_ok )) || return 1
+  def=$(sm_git "$hl_root" symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null) || return 1
+  hl_base_sha=$(sm_git "$hl_root" merge-base HEAD "$def" 2>/dev/null) || { hl_base_sha=""; return 1; }
+  [[ -n "$hl_base_sha" ]] || return 1
+  hl_base_rc=0
+}
+
+hl_plan_allowed() {   # $1 = relative path, in an autonomous plan run
+                      # 0 = in scope, 1 = not, 3 = in scope create-only,
+                      # 4 = not on a plan branch, 5 = the plan cannot be read
+  local plan writes list
+  # The plan is named by the branch the rules give its PRs. A name holding a
+  # slash, a dot-dot or anything outside this set names no plan.
+  [[ "$sm_branch_name" =~ ^plan/([A-Za-z0-9][A-Za-z0-9._-]*)/item-[0-9]+-part[0-9]+$ ]] || return 4
+  plan=${BASH_REMATCH[1]}
+  [[ "$plan" == *..* ]] && return 4
+  hl_base || return 5
+  # Both files come from the merge-base tree: what the admin merged, not what
+  # this branch may have changed (layer 1 refuses that anyway).
+  sm_git "$hl_root" cat-file -e "$hl_base_sha:$hl_plans/$plan.md" 2>/dev/null || return 5
+  writes=$(sm_git "$hl_root" show "$hl_base_sha:$hl_plans/$plan.writes" 2>/dev/null) || return 5
+  list="$writes"$'\n'"+$hl_plans_dir/progress/$plan/**"$'\n'"+$hl_plans_dir/unauthorised/$plan/**"
+  hl_match_lines "$list" "$1"
 }
 
 hl_check_abs() {   # $1 = absolute path, $2 = write tool 1/0, $3 = reason, $4 = as given
@@ -862,33 +926,56 @@ hl_check_abs() {   # $1 = absolute path, $2 = write tool 1/0, $3 = reason, $4 = 
   if (( $2 )) && [[ -L "$hl_root/.claude" ]]; then
     hl_deny "the repository's .claude is a symlink; its allowlist cannot be trusted (fail closed)" "$4"
   fi
+  # Layer 3's mode, decided once per write by the classifier the SessionStart
+  # hook also uses (ADR 0041). Without the classifier no write can be judged.
+  local auto=0 has_list=0
+  if (( $2 )); then
+    (( hl_sm_ok )) || hl_deny "the session-mode classifier (hooks/session-mode.sh) is missing, so no write can be judged (fail closed)" "$4"
+    sm_classify "$hl_root" "$sid"
+    [[ "$sm_mode" == autonomous ]] && auto=1
+    [[ -e "$hl_root/.claude/write-allowlist" || -L "$hl_root/.claude/write-allowlist" ]] && has_list=1
+    if (( auto && ! has_list )); then
+      hl_deny "autonomous plan run ($sm_signals) in a repository with no write allowlist (fail closed; ADR 0041)" "$4"
+    fi
+  fi
   # -L as well as -e: a link at the allowlist's path, dangling or not, must
   # not read as "no allowlist" and switch default-deny off; hl_allowed then
   # refuses it (fail closed).
-  if (( $2 )) && [[ -e "$hl_root/.claude/write-allowlist" || -L "$hl_root/.claude/write-allowlist" ]]; then
-    local al_rc
+  if (( $2 && has_list )); then
+    local al_rc pl_rc
     hl_allowed "$hl_root" "$rel"
     al_rc=$?
-    case "$al_rc" in
-      0) ;;
-      3)
-        # Create-only: a Write that makes a new file passes. A change to a
-        # file passes only while the file is new on this branch, absent from
-        # the tree at its merge-base with the default branch; one already
-        # there, or any change when that base cannot be found, is refused. A
-        # link is refused outright: a Write over it writes its target.
-        if [[ -L "$abs" ]]; then
-          hl_deny "write over a link on a create-only allowlist path (ADR 0040)" "$4"
-        elif [[ "$tool" != Write || -e "$abs" ]]; then
-          local base_rc
-          hl_in_base "$rel"
-          base_rc=$?
-          (( base_rc == 0 )) && hl_deny "change to a file already on the default branch, on a create-only allowlist path; new files only (ADR 0040)" "$4"
-          (( base_rc == 2 )) && hl_deny "change on a create-only allowlist path with no merge-base against origin's default branch to tell a new file from an existing one (fail closed; ADR 0040)" "$4"
-        fi
-        ;;
-      *) hl_deny "write outside the repository's write allowlist" "$4" ;;
-    esac
+    # Anything but listed (0) or listed create-only (3) is refused.
+    (( al_rc == 0 || al_rc == 3 )) || hl_deny "write outside the repository's write allowlist" "$4"
+    if (( auto )); then
+      # A run writes only inside both the allowlist and its plan's scope. A
+      # create-only entry on either side makes the path create-only.
+      hl_plan_allowed "$rel"
+      pl_rc=$?
+      case "$pl_rc" in
+        0) ;;
+        3) al_rc=3 ;;
+        4) hl_deny "autonomous plan run ($sm_signals) on branch '${sm_branch_name:-none}', which is not plan/<plan>/item-NN-partK; no write can be scoped (fail closed; ADR 0041)" "$4" ;;
+        5) hl_deny "autonomous plan run: the authorised plan or its .writes declaration cannot be read at the merge-base with origin's default branch (fail closed; ADR 0041)" "$4" ;;
+        *) hl_deny "outside the authorised plan's scope: not in its .writes declaration, nor its own progress or issue-register folder. Record it in the plan's issue register, or stop if the item needs it (ADR 0041)" "$4" ;;
+      esac
+    fi
+    if (( al_rc == 3 )); then
+      # Create-only: a Write that makes a new file passes. A change to a
+      # file passes only while the file is new on this branch, absent from
+      # the tree at its merge-base with the default branch; one already
+      # there, or any change when that base cannot be found, is refused. A
+      # link is refused outright: a Write over it writes its target.
+      if [[ -L "$abs" ]]; then
+        hl_deny "write over a link on a create-only allowlist path (ADR 0040)" "$4"
+      elif [[ "$tool" != Write || -e "$abs" ]]; then
+        local base_rc
+        hl_in_base "$rel"
+        base_rc=$?
+        (( base_rc == 0 )) && hl_deny "change to a file already on the default branch, on a create-only allowlist path; new files only (ADR 0040)" "$4"
+        (( base_rc == 2 )) && hl_deny "change on a create-only allowlist path with no merge-base against origin's default branch to tell a new file from an existing one (fail closed; ADR 0040)" "$4"
+      fi
+    fi
   fi
   return 0
 }

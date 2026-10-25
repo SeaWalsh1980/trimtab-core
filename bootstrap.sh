@@ -551,6 +551,24 @@ probe_guard guard-github.sh "a PR opened as anything but a draft" \
   '{"tool_name":"Bash","tool_input":{"command":"gh pr create --title t --body b"}}'
 unset pem
 
+# session-mode is the classifier guard-paths sources (ADR 0041). Installed
+# broken, guard-paths refuses every write inside a repository and no session
+# is told its mode, so prove it runs through the symlink and announces one.
+# No session id goes in, so the probe records nothing.
+if [[ -x "$CLAUDE_HOME/hooks/session-mode.sh" ]]; then
+  set +e
+  sm_out=$(printf '%s' '{"hook_event_name":"SessionStart","source":"startup","cwd":"/"}' \
+    | "$CLAUDE_HOME/hooks/session-mode.sh" 2>/dev/null)
+  sm_rc=$?
+  set -e
+  [[ $sm_rc -eq 0 && "$sm_out" == *"Session mode:"* ]] && ok "session-mode announces a mode through the symlink" \
+    || die "session-mode returned $sm_rc without announcing a mode — guard-paths would refuse every repository write"
+elif [[ $CHECK_ONLY -eq 1 ]]; then
+  note "session-mode.sh not linked into $CLAUDE_HOME — probe skipped"
+else
+  die "session-mode.sh not linked into $CLAUDE_HOME after section 3 — refusing to report a successful install with an unverified classifier"
+fi
+
 # guard-mcp never exits 2: it answers "ask" as JSON on exit 0, so the operator
 # approves an MCP write call by call (ADR 0013). probe_guard cannot see that
 # answer, so it gets its own probe, held to the same standard: an MCP write and

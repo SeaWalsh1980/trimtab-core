@@ -1306,6 +1306,168 @@ t guard-paths.sh 2 "create-only: no origin HEAD fails closed"      "$(e Edit "$C
 gc symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 gc checkout -q --orphan lone; gc commit -q -m lone
 t guard-paths.sh 2 "create-only: a branch unrelated to the default fails closed" "$(e Edit "$CG/records/0001-old.md")"
+
+# --- session modes and plan scope (ADR 0041) ------------------------------
+# An autonomous plan run writes only inside the allowlist AND its authorised
+# plan's .writes declaration, or that plan's own progress and register
+# folders. $PG is a real repository: plan demo declares README.md and new
+# records; plan nowrites has no declaration; branch-only exists only on its branch.
+PG="$CPTMP/plan-git"
+pg() { git -C "$PG" -c user.name=guard-tests -c user.email=guard-tests@example.invalid \
+         -c commit.gpgsign=false "$@" >/dev/null 2>&1; }
+es() { python3 -c 'import json,sys; print(json.dumps({"tool_name":sys.argv[1],"tool_input":{"file_path":sys.argv[2]},"session_id":sys.argv[3]}))' "$@"; }
+SM_CFG_SAVED="$CLAUDE_CONFIG_DIR"
+export CLAUDE_CONFIG_DIR="$CPTMP/sm-config"
+mkdir -p "$CLAUDE_CONFIG_DIR" "$PG/.claude" "$PG/src" "$PG/records" "$PG/notes" "$PG/$PL/authorised"
+printf '%s\n' 'src/**' 'README.md' '+records/**' 'notes/**' "+$PL/progress/**" "+$PL/unauthorised/**" > "$PG/.claude/write-allowlist"
+: > "$PG/README.md"; : > "$PG/src/a.py"; : > "$PG/records/r1-old.md"; : > "$PG/notes/n1.md"
+: > "$PG/$PL/authorised/demo.md"
+# records/ is create-only on the allowlist side only, notes/ on the
+# declaration side only: either side makes the path create-only.
+printf '%s\n' '# what plan demo may change' 'README.md' 'records/**' '+notes/**' > "$PG/$PL/authorised/demo.writes"
+: > "$PG/$PL/authorised/other.md"; : > "$PG/$PL/authorised/other.writes"
+: > "$PG/$PL/authorised/nowrites.md"
+pg init -q -b main; pg add -A; pg commit -q -m base
+pg update-ref refs/remotes/origin/main HEAD
+pg symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+pg checkout -q -b plan/demo/item-01-part1
+# On a plan branch the run is autonomous with no variable set (signal 2).
+t guard-paths.sh 0 "plan scope: a declared path passes"            "$(e Edit "$PG/README.md")"
+t guard-paths.sh 2 "plan scope: an allowlisted but undeclared path is refused" "$(e Edit "$PG/src/a.py")"
+t guard-paths.sh 0 "plan scope: a new file under a create-only allowlist entry passes" "$(e Write "$PG/records/r2-new.md")"
+t guard-paths.sh 2 "plan scope: a create-only allowlist entry stays so under a plain declaration" "$(e Edit "$PG/records/r1-old.md")"
+t guard-paths.sh 0 "plan scope: a new file under a create-only declaration passes" "$(e Write "$PG/notes/n2.md")"
+t guard-paths.sh 2 "plan scope: a create-only declaration alone refuses a file on main" "$(e Edit "$PG/notes/n1.md")"
+t guard-paths.sh 0 "plan scope: its own progress record passes"    "$(e Write "$PG/$PL/progress/demo/item-01-part1.md")"
+t guard-paths.sh 0 "plan scope: its own register entry passes"     "$(e Write "$PG/$PL/unauthorised/demo/item-01-part1-01.md")"
+t guard-paths.sh 2 "plan scope: another plan's progress folder is refused" "$(e Write "$PG/$PL/progress/other/item-01-part1.md")"
+t guard-paths.sh 2 "plan scope: another plan's register is refused" "$(e Write "$PG/$PL/unauthorised/other/item-01-part1-01.md")"
+t guard-paths.sh 2 "plan scope: its own declaration stays refused" "$(e Write "$PG/$PL/authorised/demo.writes")"
+t guard-paths.sh 0 "plan scope: reads are not scoped"             "$(e Read "$PG/src/a.py")"
+HOOK_ALLOW_HARNESS=1 t guard-paths.sh 0 "plan scope: the operator export lifts it" "$(e Edit "$PG/src/a.py")"
+# A merged register entry or progress record cannot be changed by a later run.
+mkdir -p "$PG/$PL/unauthorised/demo" "$PG/$PL/progress/demo"
+: > "$PG/$PL/unauthorised/demo/item-01-part1-01.md"; : > "$PG/$PL/progress/demo/item-01-part1.md"
+pg add -A; pg commit -q -m entry
+pg update-ref refs/remotes/origin/main HEAD
+pg checkout -q -b plan/demo/item-02-part1
+t guard-paths.sh 2 "plan scope: a merged register entry cannot be changed" "$(e Edit "$PG/$PL/unauthorised/demo/item-01-part1-01.md")"
+t guard-paths.sh 2 "plan scope: a merged progress record cannot be changed" "$(e Edit "$PG/$PL/progress/demo/item-01-part1.md")"
+t guard-paths.sh 0 "plan scope: a later item writes its own progress record" "$(e Write "$PG/$PL/progress/demo/item-02-part1.md")"
+pg tag plan/demo/item-02-part1
+t guard-paths.sh 2 "plan scope: a tag named like the branch does not hide it" "$(e Edit "$PG/src/a.py")"
+pg tag -d plan/demo/item-02-part1
+t guard-paths.sh 0 "plan scope: a later item adds its own entry"   "$(e Write "$PG/$PL/unauthorised/demo/item-02-part1-01.md")"
+# Off a plan branch with no signal the session is interactive: the allowlist alone.
+pg checkout -q -b feat/manual main
+t guard-paths.sh 0 "session mode: interactive keeps the allowlist" "$(e Edit "$PG/src/a.py")"
+TRIMTAB_PLAN_RUN=1 t guard-paths.sh 2 "session mode: a run on a non-plan branch is refused" "$(e Edit "$PG/src/a.py")"
+TRIMTAB_PLAN_RUN=1 HOOK_ALLOW_HARNESS=1 t guard-paths.sh 0 "session mode: the operator export lifts a run too" "$(e Edit "$PG/src/a.py")"
+TRIMTAB_PLAN_RUN=0 t guard-paths.sh 0 "session mode: TRIMTAB_PLAN_RUN other than 1 is no signal" "$(e Edit "$PG/src/a.py")"
+# The mode only tightens: a session once autonomous stays so off the plan branch.
+pg checkout -q plan/demo/item-02-part1
+t guard-paths.sh 0 "sticky: a run's write on its plan branch passes" "$(es Edit "$PG/README.md" sess-a)"
+pg checkout -q feat/manual
+t guard-paths.sh 2 "sticky: the same session off the plan branch is still a run" "$(es Edit "$PG/src/a.py" sess-a)"
+t guard-paths.sh 0 "sticky: another session there is interactive" "$(es Edit "$PG/src/a.py" sess-b)"
+t guard-paths.sh 0 "sticky: a session id that is not a plain token records nothing" "$(es Edit "$PG/src/a.py" '../sess-a')"
+# Records are named by the sha256 of the session id, as pr_monitor's lists
+# are (ADR 0028), and pruned past the same two-day TTL.
+SM_DIR="$CLAUDE_CONFIG_DIR/guard-state/session-mode"
+smh() { printf '%s' "$1" | sha256sum | cut -c1-64; }
+sm_check() { # sm_check <label> <condition result 0/1>
+  if [[ "$2" == 0 ]]; then printf 'PASS  %-14s %s\n' "session-mode" "$1"
+  else printf 'FAIL  %-14s %s\n' "session-mode" "$1"; fails=$((fails+1)); fi
+}
+[[ -f "$SM_DIR/$(smh sess-a)" && ! -e "$SM_DIR/sess-a" ]]; sm_check "a record is named by the session id's hash, not the id" $?
+rm -f "$SM_DIR/$(smh sess-a)"
+t guard-paths.sh 0 "sticky: a removed record no longer holds the session" "$(es Edit "$PG/src/a.py" sess-a)"
+mkdir -p "$CPTMP/sm-elsewhere"; ln -s "$CPTMP/sm-elsewhere" "$SM_DIR/$(smh sess-c)"
+t guard-paths.sh 2 "sticky: a link at a session's record reads as a run" "$(es Edit "$PG/src/a.py" sess-c)"
+rm -f "$SM_DIR/$(smh sess-c)"
+t guard-paths.sh 2 "sticky: the record path is refused to the session" "$(e Write "$SM_DIR/$(smh sess-d)")"
+t guard-paths.sh 2 "sticky: a shell command naming the records is refused" "$(j Bash "{\"command\":\"rm -f $SM_DIR/x\"}")"
+: > "$SM_DIR/$(smh sess-old)"; touch -d '3 days ago' "$SM_DIR/$(smh sess-old)"
+: > "$SM_DIR/$(smh sess-recent)"; touch -d '1 day ago' "$SM_DIR/$(smh sess-recent)"
+ln -s "$CPTMP/sm-elsewhere" "$SM_DIR/planted"
+pg checkout -q plan/demo/item-02-part1
+t guard-paths.sh 0 "prune: a new run's write passes"              "$(es Edit "$PG/README.md" sess-new)"
+pg checkout -q feat/manual
+[[ ! -e "$SM_DIR/$(smh sess-old)" ]]; sm_check "prune: a record past the TTL is removed when a new run records" $?
+[[ -e "$SM_DIR/$(smh sess-recent)" ]]; sm_check "prune: a record inside the TTL is kept" $?
+[[ ! -L "$SM_DIR/planted" ]]; sm_check "prune: a planted link is removed" $?
+[[ -e "$SM_DIR/$(smh sess-new)" ]]; sm_check "prune: the new run's own record stays" $?
+# Fail closed when the plan or its scope cannot be read.
+pg checkout -q -b plan/nowrites/item-01-part1 main
+t guard-paths.sh 2 "plan scope: a plan with no .writes refuses every write" "$(e Edit "$PG/README.md")"
+pg checkout -q -b plan/branch-only/item-01-part1 main
+: > "$PG/$PL/authorised/branch-only.md"; printf 'src/**\n' > "$PG/$PL/authorised/branch-only.writes"
+pg add -A; pg commit -q -m sneaked
+t guard-paths.sh 2 "plan scope: a plan that is not in the merge-base is refused" "$(e Edit "$PG/src/a.py")"
+pg checkout -q -b plan/demo main
+t guard-paths.sh 2 "plan scope: a plan branch with no item part is refused" "$(e Edit "$PG/README.md")"
+pg checkout -q -b plan/demo/item-03-part1 main
+pg symbolic-ref -d refs/remotes/origin/HEAD
+t guard-paths.sh 2 "plan scope: no origin HEAD fails closed"      "$(e Edit "$PG/README.md")"
+pg symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+t guard-paths.sh 0 "plan scope: restored origin HEAD passes again" "$(e Edit "$PG/README.md")"
+# A run in a repository with no allowlist cannot write there at all.
+PN="$CPTMP/plan-nolist"; mkdir -p "$PN/.git"
+t guard-paths.sh 0 "session mode: no allowlist, interactive: unrestricted" "$(e Write "$PN/x.md")"
+TRIMTAB_PLAN_RUN=1 t guard-paths.sh 2 "session mode: no allowlist, autonomous: refused" "$(e Write "$PN/x.md")"
+# Without the classifier beside it, guard-paths refuses every write in a repository.
+SM_NOCLS="$CPTMP/hooks-no-classifier"; mkdir -p "$SM_NOCLS"
+cp -R "$HOOKS/." "$SM_NOCLS/"; rm -f "$SM_NOCLS/session-mode.sh"
+SM_HOOKS_SAVED="$HOOKS"; HOOKS="$SM_NOCLS"
+t guard-paths.sh 2 "session mode: a missing classifier refuses writes" "$(e Edit "$PG/README.md")"
+t guard-paths.sh 0 "session mode: a missing classifier leaves reads alone" "$(e Read "$PG/README.md")"
+HOOKS="$SM_HOOKS_SAVED"
+# Run by a bare name from inside hooks/, guard-paths still finds the classifier.
+(cd "$HOOKS" && printf '%s' "$(e Edit "$PG/README.md")" | HOME="$GUARD_HOME" bash guard-paths.sh >/dev/null 2>&1)
+sm_check "session mode: guard-paths run by a bare name still finds the classifier" $?
+
+# The SessionStart announcement names the mode and the signals behind it.
+sm_start() { # sm_start <label> <want substring> <cwd> [env assignment] [session id]
+  local label="$1" want="$2" cwd="$3" sid="${5:-sess-start}" out rc verdict
+  out=$(printf '{"hook_event_name":"SessionStart","source":"startup","cwd":"%s","session_id":"%s"}' "$cwd" "$sid" \
+        | env ${4:+"$4"} bash "$HOOKS/session-mode.sh" 2>/dev/null)
+  rc=$?
+  verdict=$(printf '%s' "$out" | python3 -c '
+import json, sys
+want, rc, out = sys.argv[1], int(sys.argv[2]), sys.stdin.read()
+if rc != 0:
+    sys.exit(print("exit %d: a SessionStart hook must never fail" % rc))
+try:
+    d = json.loads(out)
+except ValueError:
+    sys.exit(print("not valid JSON: %r" % out[:80]))
+ctx = d.get("hookSpecificOutput", {})
+ok = ctx.get("hookEventName") == "SessionStart" and want in ctx.get("additionalContext", "")
+print("ok" if ok else "missing %r in %r" % (want, out[:160]))
+' "$want" "$rc")
+  if [[ "$verdict" == ok ]]; then
+    printf 'PASS  %-14s %s\n' "session-mode" "$label"
+  else
+    printf 'FAIL  %-14s %s  -- %s\n' "session-mode" "$label" "$verdict"
+    fails=$((fails+1))
+  fi
+}
+pg checkout -q feat/manual
+sm_start "interactive is announced"                 "Session mode: INTERACTIVE" "$PG"
+sm_start "the variable makes a run"                 "Session mode: AUTONOMOUS PLAN RUN (TRIMTAB_PLAN_RUN=1" "$PG" TRIMTAB_PLAN_RUN=1
+pg checkout -q plan/demo/item-03-part1
+sm_start "a plan branch makes a run, named"         "branch plan/demo/item-03-part1" "$PG"
+pg checkout -q feat/manual
+sm_start "the announced run is sticky for its session" "recorded autonomous earlier" "$PG"
+sm_start "a cwd outside any repository is interactive" "Session mode: INTERACTIVE" "$CPTMP" "" sess-fresh
+sm_out=$(printf 'not json' | bash "$HOOKS/session-mode.sh" 2>/dev/null); sm_rc=$?
+if [[ $sm_rc -eq 0 && "$sm_out" == *"Session mode:"* ]]; then
+  printf 'PASS  %-14s %s\n' "session-mode" "a garbage payload still announces a mode"
+else
+  printf 'FAIL  %-14s %s  -- rc=%s\n' "session-mode" "a garbage payload still announces a mode" "$sm_rc"
+  fails=$((fails+1))
+fi
+export CLAUDE_CONFIG_DIR="$SM_CFG_SAVED"
 chmod 000 "$AL/.claude/write-allowlist"
 if [[ -r "$AL/.claude/write-allowlist" ]]; then
   printf 'SKIP  guard-paths.sh          allowlist: unreadable list fails closed (running as root)\n'
@@ -3216,6 +3378,38 @@ lv "moved checkout: dangling rules named"    "$LV_HOME"       " rules"
 mv "$LV/moved" "$LV_REPO"
 lv "no install at all warns"                 "$LV/nowhere"    "hooks/guard-paths.sh"
 lv "restored install is silent again"        "$LV_HOME"       silent
+
+# A missing session-mode classifier leaves the guards installed: guard-paths
+# refuses every repository write instead (ADR 0041). The warning says so, and
+# does not call the session unguarded.
+if [[ " $LV_GUARDS " == *" session-mode "* ]]; then
+  rm "$LV_REPO/hooks/session-mode.sh"
+  lv_out=$(HOME="$LV_HOME" sh -c "$LIVENESS" 2>&1); lv_rc=$?
+  lv_verdict=$(printf '%s' "$lv_out" | python3 -c '
+import json, sys
+rc, out = int(sys.argv[1]), sys.stdin.read()
+try:
+    d = json.loads(out)
+except ValueError:
+    sys.exit(print("not valid JSON: %r" % out[:80]))
+ctx = d.get("hookSpecificOutput", {}).get("additionalContext", "")
+msg = d.get("systemMessage", "")
+ok = (rc == 0 and msg.startswith("SESSION MODE MISSING") and "hooks/session-mode.sh" in msg
+      and "refuses every write" in ctx and "unguarded" not in ctx and "GUARDS OFF" not in msg)
+print("ok" if ok else "wrong warning: %r" % out[:160])
+' "$lv_rc")
+  if [[ "$lv_verdict" == ok ]]; then
+    printf 'PASS  %-14s %s\n' "liveness" "a missing classifier reads SESSION MODE MISSING, not unguarded"
+  else
+    printf 'FAIL  %-14s %s  -- %s\n' "liveness" "a missing classifier reads SESSION MODE MISSING, not unguarded" "$lv_verdict"
+    fails=$((fails+1))
+  fi
+  rm "$LV_REPO/hooks/guard-mcp.sh"
+  lv "a missing guard beside a missing classifier still reads GUARDS OFF" "$LV_HOME" "hooks/session-mode.sh"
+  printf '#!/bin/sh\n' > "$LV_REPO/hooks/guard-mcp.sh"; chmod +x "$LV_REPO/hooks/guard-mcp.sh"
+  printf '#!/bin/sh\n' > "$LV_REPO/hooks/session-mode.sh"; chmod +x "$LV_REPO/hooks/session-mode.sh"
+  lv "the classifier restored is silent again"  "$LV_HOME"       silent
+fi
 
 # The soft hooks, those a HOOKS MISSING names, read from the shipped command's
 # `case` for the same reason as the guard list above: CI runs the base
