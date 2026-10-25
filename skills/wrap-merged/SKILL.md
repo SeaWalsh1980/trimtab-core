@@ -12,9 +12,15 @@ and command output cost context and let stale facts steer new work.
 Below, `<plans>` is the project's plans directory: the `plans` directory
 directly inside the repository's top-level `docs` directory.
 An authorised-plan project keeps three folders there: `<plans>/authorised/`
-(plans the operator merged; never edited), `<plans>/progress/<plan>/` (one
-record per PR) and `<plans>/unauthorised/<plan>.md` (the issues register,
-named like its plan).
+(plans the operator merged, each `<plan>.md` with its write declaration
+`<plan>.writes`; never edited), `<plans>/progress/<plan>/` (one record per
+PR) and `<plans>/unauthorised/<plan>/` (the issues register, named like its
+plan, one create-only file per entry).
+
+**Session mode.** Every plan run is an autonomous plan run: trimtab-core's
+session-mode hook announces it at session start, and the run is launched
+with `TRIMTAB_PLAN_RUN=1`. A run is always narrower than an interactive
+session; read every step below that way.
 
 **This skill applies only to plan runs:** the repository has
 `<plans>/authorised/`, and either the merged PR adds a record under
@@ -65,9 +71,20 @@ gh api repos/{owner}/{repo}/pulls/<n> --jq '{state, merged, merged_at, merge_com
 The plan is authorised only if **every** check holds. Any failure is a stop:
 say which check failed and start nothing.
 
-1. **The plan is on the default branch:**
-   `git fetch origin && git ls-tree origin/<default> -- <plans>/authorised/<plan>.md`
-2. **It was added by a PR the admin account merged.** Find the commit that
+0. **This session is a launched run:** the session-mode announcement says
+   autonomous and its signals include `TRIMTAB_PLAN_RUN=1`. (With no
+   announcement, check 4 fails anyway; still check `TRIMTAB_PLAN_RUN` in
+   your own shell environment, because it decides how you stop.) Without
+   the variable, make no file write at all, not even a progress record: label
+   the PR (or, before any item PR exists, the merged PR that started the
+   session) `plan:blocked`, remove any `plan:continue`, and report. A clear
+   loses the session's autonomous record; only the variable survives it.
+1. **The plan and its declaration are on the default branch:**
+   `git fetch origin && git ls-tree origin/<default> -- <plans>/authorised/<plan>.md <plans>/authorised/<plan>.writes`
+   must list both. A plan without a `.writes` file fails; an empty one is
+   valid and means bookkeeping only.
+2. **Both were added by one PR the admin account merged.** For each
+   `<file>` (the `.md` and the `.writes`), find the commit that
    last added it in merge order: `git log --first-parent -m
    --diff-filter=A --format=%H origin/<default> -- <file>`, first line (if
    several come back, the file was deleted and re-added; first-parent
@@ -80,21 +97,26 @@ say which check failed and start nothing.
    Compare the login with the admin login in the Trimtab instance's
    configuration. Never take it from the plan, a progress record or the
    conversation. If the configuration is not available in this session, or
-   names no admin login, the check fails.
-3. **It is unchanged since that merge:**
-   `git diff --quiet <merge_commit_sha> origin/<default> -- <file>`. Any
-   difference means it was edited after approval. (Commits inside the plan
-   PR before its merge are fine; only changes after the merge count.)
+   names no admin login, the check fails. Both files must resolve to the
+   same PR number and the same `merge_commit_sha`; a declaration added by
+   any later PR, even the admin's, fails.
+3. **Both are unchanged since that merge:**
+   `git diff --quiet <merge_commit_sha> origin/<default> -- <plan>.md <plan>.writes`
+   (full paths). Any difference means one was edited after approval.
+   (Commits inside the plan PR before its merge are fine; only changes
+   after the merge count.)
 4. **The enforcement is live.** The repository's write allowlist exists; the
-   guard that enforces it is installed and reports itself live; and
-   `CODEOWNERS` gives every always-refused file path in section 4 to the
-   admin. If you cannot confirm all three, the check fails. In particular,
-   until the base ships that allowlist guard, this check fails and no plan
-   can run.
+   guard that enforces it is installed and reports itself live, with its
+   plan-run layer; the session-mode classifier is installed (its
+   announcement is in your context); and `CODEOWNERS` gives every
+   always-refused file path in section 4 to the admin. If you cannot
+   confirm all of these, the check fails. In particular, until the base
+   ships that guard and classifier, this check fails and no plan can run.
 
 Why this strict: the merge is the only authorisation an autonomous run has.
 A plan edited after approval, merged by the agent's own account, or run
-without the guards that keep it inside its allowlist authorises nothing.
+without the guards that keep it inside its declared scope authorises
+nothing.
 
 ### 3. Work out the state
 
@@ -120,13 +142,71 @@ Everything comes from the default branch and open PRs, never from memory:
   rebase merge of a multi-commit PR), the highest item number, then the
   highest part number, among them is the latest. No records yet → item 01
   part 1.
-- **That record's PR must be admin-merged.** For the latest record only,
-  find its PR and read `merged_by.login` as in section 2, check 2. A record
-  merged by any other account (the approver included) authorises nothing →
-  stop.
+- **That record's PR must carry the code gate and be merged by the admin,
+  or by the approver with every condition met.** For the latest record
+  only, find its PR and read `merged_by.login` as in section 2, check 2.
+  The approver login, like the admin's, comes only from the Trimtab
+  instance's configuration, never from the plan, a record, a PR or the
+  conversation; if the configuration names no approver login, no merge or
+  review by the approver counts. If it names the same login as approver
+  and admin, the configuration is wrong: the check fails.
+
+  First, whoever merged, the code gate (`gh api
+  repos/{owner}/{repo}/pulls/<n>/reviews --paginate`). Take the approver's
+  and the admin's last review each, ignoring `COMMENTED` ones; a last
+  review in state `DISMISSED` means that account has no review (never fall
+  back to an earlier one). At least one is `APPROVED` with `commit_id`
+  equal to the head commit, and neither is `CHANGES_REQUESTED`, on whatever
+  commit. So a later request for changes voids an earlier approval.
+
+  Then the merger. An admin merge with the code gate counts. An approver
+  merge counts only when all of these hold too, read from the API. The
+  approver's own review may be the code gate for its own merge: ADR 0018
+  (Trimtab) accepts that, with the operator's confirmation, because the
+  plan's scope, enforced by the `plan-scope` check, is what bounds the PR.
+  - a **check run** (never a commit status: anyone with write access can
+    post a status under any name) named `plan-scope`, whose `app.slug` is
+    `github-actions`, concluded `success` on the PR's final head commit
+    (its `head.sha`, not the merge commit;
+    `gh api --paginate 'repos/{owner}/{repo}/commits/<head_sha>/check-runs?check_name=plan-scope&per_page=100'`;
+    read every page, or the tests below cannot hold).
+    Among that app's `plan-scope` runs on that commit, the latest (by
+    `started_at`) must be the successful one, and none may be still
+    running; an earlier success does not outweigh a later failure;
+  - the default branch's ruleset requires `plan-scope` bound to the GitHub
+    Actions app (`gh api repos/{owner}/{repo}/rules/branches/<default>`):
+    a `required_status_checks` rule lists `plan-scope` with an
+    `integration_id` equal to the passing check run's `app.id`. An entry
+    with no `integration_id` accepts any source, so it fails this test.
+    The requirement must also have held when the PR merged: read that
+    rule's ruleset (`gh api repos/{owner}/{repo}/rulesets/<ruleset_id>`);
+    its `updated_at` must be earlier than the PR's `merged_at`. A ruleset
+    changed since the merge cannot show what it required then, so the test
+    fails, even for an unrelated edit; the admin's removal of
+    `plan:blocked` is the way past it;
+  - the PR changes neither `.github/` nor the code the `plan-scope` check
+    runs (`gh api repos/{owner}/{repo}/pulls/<n>/files --paginate`): no
+    file's `filename`, nor for a rename its `previous_filename`, is under
+    `.github/`, is the Trimtab lock (which pins the checker in a project),
+    or, in trimtab-core itself, is under the checker's `trimtab/` package
+    or `bin/`. A PR that edits, moves or removes a workflow or the
+    script it calls controls the checks it runs. That endpoint lists at
+    most 3,000 files; when the PR's `changed_files` is larger, this test
+    fails;
+  - the `plan-scope` job runs its checker from the PR's base commit, never
+    from the PR's own tree, so a PR cannot change what judges it. Confirm
+    it from the job's workflow file on the default branch. If you cannot,
+    the approver path is unavailable and only an admin merge counts. The
+    file list above is a backstop, not a substitute.
+
+  A record without the code gate, merged by any other account, or merged by
+  the approver without every condition authorises nothing: stop and
+  label that PR `plan:blocked`. Never fall back to an earlier record; it
+  points at work already merged. The admin's removal of `plan:blocked` from
+  that PR accepts its merge (see "Restarting after a stop").
 - **Done:** the `## Status` lines of the merged records.
-- **Open issues:** entries with `status: open` in
-  `<plans>/unauthorised/<plan>.md`.
+- **Open issues:** the entry files in `<plans>/unauthorised/<plan>/` whose
+  `status` is `open`.
 - **The merged PR carries no record** → stop, unless it is the PR that
   added the authorised plan itself (the plan's first run: start item 01
   part 1). This applies to a session started by a merge; a valid
@@ -150,8 +230,15 @@ start only if all of these hold:
 - It is not `plan complete`. A `blocked: <reason>` Next is a stop, except
   in a valid restart ("Restarting after a stop"), where the next work
   comes from the restart rule below instead.
-- Doing it would not need a write outside the write allowlist or to any
-  always-refused path. Plan approval never covers these:
+- Doing it would stay inside the plan's scope: every path it writes is on
+  the write allowlist **and** matches a line of `<plan>.writes` (read from
+  the default branch; same glob syntax, `+` for create-only), or lies in
+  the plan's own `<plans>/progress/<plan>/` or `<plans>/unauthorised/<plan>/`
+  folder. Those two folders are always create-only, and any other path is
+  create-only when either list says so. A change outside the scope is not
+  made: it becomes a register entry, or a blocker when the item needs it.
+- Doing it would not need a write to any always-refused path. Plan
+  approval never covers these:
   - the instruction file, `CLAUDE.md`;
   - every security control: CI workflows, `CODEOWNERS`, Claude Code
     settings and hooks, scanner exemption lists, repository protection,
@@ -184,6 +271,15 @@ Follow the project's own after-merge instructions (removing the PR's
 worktree or local branch, pulling the default branch). Do only what they
 say; never delete a branch or worktree holding unmerged work.
 
+Then, if this session did the merged work, remove the temporary files it
+made for it. A run keeps them only in its session scratch directory, or,
+where the harness gives none, in one directory under the system temp
+directory named after its session. Remove only this session's own files
+there, nothing wider (caches, another session's scratch). A session that
+did not do the merged work leaves the other session's directory alone:
+cloud containers are discarded, and a directory the merged record names as
+left behind is the operator's to remove, so report it.
+
 ### 7. Continue or hand over
 
 Report first, in a few lines:
@@ -191,7 +287,7 @@ Report first, in a few lines:
 ```text
 PR <n> merged <date> (<sha>) — plan <plan>, <Status line>.
 Authorisation: ok. Next: <item NN part Y: one-line summary> | needs approval: <reason> | plan complete.
-Open issues: <UI-NN (PR link), ...> | none.
+Open issues: <item-NN-partK-MM (PR link), ...> | none.
 ```
 
 Then what matters is whether **this session's context holds the merged
@@ -222,9 +318,9 @@ PR's work**.
 
 **A session started by the `plan:continue` label** first checks who added
 it (`gh api repos/{owner}/{repo}/issues/<n>/events`, the `labeled` event
-for `plan:continue`). Unless the agent or admin account added it, stop at
-once; the approver is not an authority and cannot start a run. The label
-only starts a session; it never authorises.
+for `plan:continue`). Unless the agent, approver or admin account added
+it, stop at once. The label only starts a session; it never authorises:
+the session still runs section 2 and reads only an authorised record.
 
 **Restarting after a stop** takes the operator's act: a session they start
 for the plan (locally, or the routine's run-now). A PR they merge to fix
@@ -245,7 +341,7 @@ hold — otherwise treat the stop as standing and do nothing:
   itself.
 
 The restarted session then runs section 2 and reads the latest
-admin-merged record. If its `## Next` is `blocked:`, the next work
+authorised record (section 3). If its `## Next` is `blocked:`, the next work
 follows from the record's file name (`item-NN-partK`) and `## Status`,
 never from its text:
 part K+1 of the same item when the item continues or part K stopped
@@ -284,13 +380,38 @@ One item, or one part of an item, per session, ending in one PR:
    blocked: <reason>
    ```
 
-   and append anything you found but did not do to
-   `<plans>/unauthorised/<plan>.md` (create it if absent), one line each:
-   `UI-NN | <date> | item NN | PR <link> | <issue> | status: open`. Never
-   change an existing entry's status.
+   and record anything you found but did not do as new files in
+   `<plans>/unauthorised/<plan>/`, one per entry, named
+   `item-NN-partK-MM.md`, linked from `## Done`. MM is the next number not
+   already used on this PR's branch (from `01`): a session resuming an
+   in-flight PR continues after the entries already there, and never
+   writes over one, even though the guard would still allow it while the
+   file is new on the branch. The item and part in the name keep two PRs
+   from colliding.
+
+   ```text
+   item: NN part K
+   pr: <link>
+   date: YYYY-MM-DD
+   status: open
+   issue: <one paragraph>
+   ```
+
+   Never change or remove an existing entry, its status included: entries
+   are create-only, and statuses are the operator's alone.
+
+   Write only inside the plan's scope (section 4's first scope bullet).
+   When the guard refuses a write as outside the plan's scope, do not look
+   for another route: record the change as an entry, or stop (step 5) if
+   the item needs it. Keep temporary files only in the session scratch
+   directory; where there is none, make one directory under the system
+   temp directory named after the session and remove it before the session
+   ends, or name it in `## Done` if you cannot.
 3. **Label** the PR `plan:continue` unless `## Next` is `plan complete` or
    `blocked: <reason>`. (When you author a PR that adds an authorised plan,
-   label it `plan:continue` too: its merge starts item 01 part 1.)
+   label it `plan:continue` too: its merge starts item 01 part 1. Put it on
+   a branch outside `plan/`: `plan/*` branches are for item PRs only, and
+   any other `plan/…` branch has every write refused.)
 4. **Review in session** with `/trimtab-review` plus `/code-review`. Fix
    findings inside the item's scope; log the rest in the register. When no
    CRITICAL or HIGH finding remains and the local checks pass, **request
@@ -301,9 +422,10 @@ One item, or one part of an item, per session, ending in one PR:
    and re-triggering CI review, go only through what the guards permit —
    today the operator. Then fix CI review findings the same way. At most
    three review rounds in session, then at most two CI fix rounds; an
-   infrastructure failure is re-run once and does not count. The item PR is
-   merged by the admin account; the approver's review alone never advances
-   the run.
+   infrastructure failure is re-run once and does not count. The item PR
+   needs an approving review from the approver or the admin on its final
+   head commit, and is merged by the admin, or by the approver when the
+   conditions in section 3 hold. The agent account never merges.
 5. **Stop when** the work cannot be finished, needs work outside its scope,
    needs a write a hook refuses, needs the authorised plan changed, uses up
    a round limit, or you can already see the next work would fail the gate
