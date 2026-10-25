@@ -1,0 +1,92 @@
+name: plan-scope
+
+# Judges a plan run's PR diff against its plan's scope, read from the base
+# commit (ADR 0042). The skill's approver path counts only a `plan-scope`
+# check run from this job, so it relies on two properties held here:
+# - the checker runs from the PR's base commit, never from the PR's tree, so
+#   a PR cannot change what judges it;
+# - the job runs only for `plan/` heads, so a non-plan PR's run concludes
+#   `skipped`, never `success`.
+#
+# No `edited`: a title or body edit would add a `skipped` run on the same head
+# commit, and the skill reads the latest run, so one edit would void a pass.
+# A PR retargeted onto the default branch therefore needs a re-run or a push;
+# until then its last run is the failure for its old base.
+#
+# A pass is judged against the base commit of the event that started it; a
+# re-run reuses that event. Nothing here runs when the base branch moves, so
+# if the admin narrows the allowlist or withdraws the plan after the last
+# push, the old pass stands. The ruleset's "require branches to be up to
+# date" closes that: the PR must take the new base, and that push runs the
+# job against it.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Reads the repository and nothing else; it writes nothing.
+permissions:
+  contents: read
+
+jobs:
+  # The ruleset requires `plan-scope` by name, and the skill looks it up by
+  # name. Rename here, in the ruleset and in the skill together.
+  plan-scope:
+    name: plan-scope
+    # A job-level condition, not a trigger filter: a filtered-out PR would get
+    # no run at all, and a required check would wait on it forever.
+    if: ${{ startsWith(github.head_ref, 'plan/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The base commit, with full history: the checker diffs base...head and
+      # needs the merge-base. The default merge-ref checkout would be the PR's
+      # tree. The token stays in the checkout's git config for the head fetch
+      # below; it can only read, and nothing from the PR runs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+
+      # The launcher runs `python3 -I`, and the CLI imports PyYAML. Pinned by
+      # hash and written from this workflow, as ci.yml does and for its
+      # reasons. tests/trimtab/test_workflow_pins.py fails if the two
+      # requirement blocks differ.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      - name: "python: PyYAML for the checker"
+        run: |
+          set -euo pipefail
+          req="$RUNNER_TEMP/plan-scope-requirements.txt"
+          cat > "$req" <<'EOF'
+          pyyaml==6.0.3 \
+              --hash=sha256:b8bb0864c5a28024fac8a632c443c87c5aa6f215c0b126c449ae1a150412f31d \
+              --hash=sha256:10892704fc220243f5305762e276552a0395f7beb4dbf9b14ec8fd43b57f126c
+          EOF
+          python3 -I -m pip install --require-hashes --only-binary=:all: -r "$req"
+
+      # Every input comes from the event, passed through the environment and
+      # never spliced into the script, so a branch name cannot inject shell.
+      # The head's objects are fetched, never checked out: the checker reads
+      # them through git, and the working tree stays the base's.
+      - name: "plan-scope: the PR's diff is inside its plan's scope"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          checked_out=$(git rev-parse HEAD)
+          if [[ "$checked_out" != "$BASE_SHA" ]]; then
+            echo "::error::checkout is $checked_out, not the base $BASE_SHA; nothing is vouched for"
+            exit 2
+          fi
+          git fetch --no-tags --no-recurse-submodules origin "$HEAD_SHA"
+          git cat-file -e "$HEAD_SHA^{commit}"
+          ./bin/trimtab check-plan-scope \
+            --base "$BASE_SHA" --head "$HEAD_SHA" \
+            --head-ref "$HEAD_REF" --base-ref "$BASE_REF" \
+            --default-branch "$DEFAULT_BRANCH"
