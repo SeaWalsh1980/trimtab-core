@@ -194,10 +194,11 @@ Everything comes from the default branch and open PRs, never from memory:
     `.github/`, is either root file that can pin the checker,
     `.claude/trimtab.json` (the Trimtab lock) or `instance.json` (an
     instance's pin), both checked in every repository, or, in trimtab-core
-    itself, is under the checker's `trimtab/` package or `bin/`. A PR that
-    edits, moves or removes a workflow or the script it calls controls the
-    checks it runs. That endpoint lists at most 3,000 files; when the PR's
-    `changed_files` is larger, this test fails;
+    itself, is under the checker's `trimtab/` package or `bin/`, or is
+    `hooks/run_module.py`, which `bin/trimtab` runs to load the package.
+    A PR that edits, moves or removes a workflow or the script it calls
+    controls the checks it runs. That endpoint lists at most 3,000 files;
+    when the PR's `changed_files` is larger, this test fails;
   - the `plan-scope` job runs its checker from the PR's base commit, never
     from the PR's own tree, so a PR cannot change what judges it. Confirm
     it from the job's workflow file on the default branch. If you cannot,
