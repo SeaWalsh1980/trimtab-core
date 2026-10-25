@@ -140,7 +140,8 @@ def plan_scope_problem(runs: list[CheckRun]) -> str:
     failed = [r for r in ours if r.conclusion != "success"]
     if failed:
         latest = max(failed, key=lambda r: (r.started_at, r.id))
-        return (f"a {CHECK_NAME} check run on the head commit concluded {latest.conclusion or 'nothing'}; "
+        outcome = f"concluded {latest.conclusion}" if latest.conclusion else "completed with no conclusion"
+        return (f"a {CHECK_NAME} check run on the head commit {outcome}; "
                 f"any run that did not pass voids the head, so a new commit is needed to start over")
     return ""
 

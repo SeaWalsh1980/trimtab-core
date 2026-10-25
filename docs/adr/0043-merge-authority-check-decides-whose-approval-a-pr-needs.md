@@ -48,8 +48,10 @@ An approval is the account's last review that is not `COMMENTED` or
 `PENDING`, in state `APPROVED`, with `commit_id` equal to the head. A last
 review in state `DISMISSED` means no review; an earlier approval never
 stands in. A last review in state `CHANGES_REQUESTED` from either account
-fails the PR. This is the wrap-merged skill's code gate, so the gate at
-merge and the skill's check after it agree.
+fails the PR, even one where only the admin's approval counts: a request
+for changes from the approver still stops it, by design, until the approver
+approves or the review is dismissed. This is the wrap-merged skill's code
+gate, so the gate at merge and the skill's check after it agree.
 
 The logins come from the caller, never from the PR: the job passes them from
 configuration the PR cannot change. They are compared without case, as
@@ -91,6 +93,14 @@ unexpected answer, or a failed call fails closed (exit 2).
   failure later fixed on the base (the admin widens the allowlist) or a
   cancelled run; a new commit starts over. The skill still reads the latest
   run, so the gate is the stricter of the two.
+- The plan-scope gate is only as strong as the protection of the workflow
+  files. It trusts a check run by its name and by the GitHub Actions app, and
+  any workflow in the repository can create a run named `plan-scope` under
+  that app, the PR's own copy included. It holds because changing
+  `.github/` is admin-only: a layer 1 path here, so the approver path is
+  closed to it, and under narrowed code-owner review, which GitHub enforces
+  outside the PR. The CODEOWNERS PR in each repository must keep
+  `.github/` (with `.github/workflows/`) owned by the admin.
 - The admin-only lists repeat the wrap-merged skill's approver file test. A
   test fails when that test's section of the skill stops naming any of them.
 - GitHub refuses a review from a PR's author, so a non-plan PR the admin
