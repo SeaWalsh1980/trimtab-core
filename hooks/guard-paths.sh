@@ -863,17 +863,23 @@ hl_in_base() {   # $1 = relative path; 0 = in the base tree, 1 = not, 2 = no bas
   return 1
 }
 
-hl_base_sha=""
+hl_base_sha="" hl_base_root="" hl_base_rc=1
 hl_base() {   # sets hl_base_sha for $hl_root; 1 = no base (fail closed)
   # sm_git (hooks/session-mode.sh) drops the caller's repository-steering
   # variables, turns replace refs off (a replacement could show the base with
-  # a file removed) and takes pathspecs literally.
+  # a file removed) and takes pathspecs literally. Memoised per repository:
+  # one write can ask twice (plan scope, then create-only), and the base
+  # cannot change within one hook call (ENG-6.2).
+  if [[ -n "$hl_base_root" && "$hl_base_root" == "$hl_root" ]]; then
+    return "$hl_base_rc"
+  fi
   local def
-  hl_base_sha=""
+  hl_base_root="$hl_root" hl_base_sha="" hl_base_rc=1
   (( hl_sm_ok )) || return 1
   def=$(sm_git "$hl_root" symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null) || return 1
   hl_base_sha=$(sm_git "$hl_root" merge-base HEAD "$def" 2>/dev/null) || { hl_base_sha=""; return 1; }
-  [[ -n "$hl_base_sha" ]]
+  [[ -n "$hl_base_sha" ]] || return 1
+  hl_base_rc=0
 }
 
 hl_plan_allowed() {   # $1 = relative path, in an autonomous plan run
@@ -935,7 +941,8 @@ hl_check_abs() {   # $1 = absolute path, $2 = write tool 1/0, $3 = reason, $4 = 
     local al_rc pl_rc
     hl_allowed "$hl_root" "$rel"
     al_rc=$?
-    (( al_rc == 1 )) && hl_deny "write outside the repository's write allowlist" "$4"
+    # Anything but listed (0) or listed create-only (3) is refused.
+    (( al_rc == 0 || al_rc == 3 )) || hl_deny "write outside the repository's write allowlist" "$4"
     if (( auto )); then
       # A run writes only inside both the allowlist and its plan's scope. A
       # create-only entry on either side makes the path create-only.
@@ -949,26 +956,22 @@ hl_check_abs() {   # $1 = absolute path, $2 = write tool 1/0, $3 = reason, $4 = 
         *) hl_deny "outside the authorised plan's scope: not in its .writes declaration, nor its own progress or issue-register folder. Record it in the plan's issue register, or stop if the item needs it (ADR 0041)" "$4" ;;
       esac
     fi
-    case "$al_rc" in
-      0) ;;
-      3)
-        # Create-only: a Write that makes a new file passes. A change to a
-        # file passes only while the file is new on this branch, absent from
-        # the tree at its merge-base with the default branch; one already
-        # there, or any change when that base cannot be found, is refused. A
-        # link is refused outright: a Write over it writes its target.
-        if [[ -L "$abs" ]]; then
-          hl_deny "write over a link on a create-only allowlist path (ADR 0040)" "$4"
-        elif [[ "$tool" != Write || -e "$abs" ]]; then
-          local base_rc
-          hl_in_base "$rel"
-          base_rc=$?
-          (( base_rc == 0 )) && hl_deny "change to a file already on the default branch, on a create-only allowlist path; new files only (ADR 0040)" "$4"
-          (( base_rc == 2 )) && hl_deny "change on a create-only allowlist path with no merge-base against origin's default branch to tell a new file from an existing one (fail closed; ADR 0040)" "$4"
-        fi
-        ;;
-      *) hl_deny "write outside the repository's write allowlist" "$4" ;;
-    esac
+    if (( al_rc == 3 )); then
+      # Create-only: a Write that makes a new file passes. A change to a
+      # file passes only while the file is new on this branch, absent from
+      # the tree at its merge-base with the default branch; one already
+      # there, or any change when that base cannot be found, is refused. A
+      # link is refused outright: a Write over it writes its target.
+      if [[ -L "$abs" ]]; then
+        hl_deny "write over a link on a create-only allowlist path (ADR 0040)" "$4"
+      elif [[ "$tool" != Write || -e "$abs" ]]; then
+        local base_rc
+        hl_in_base "$rel"
+        base_rc=$?
+        (( base_rc == 0 )) && hl_deny "change to a file already on the default branch, on a create-only allowlist path; new files only (ADR 0040)" "$4"
+        (( base_rc == 2 )) && hl_deny "change on a create-only allowlist path with no merge-base against origin's default branch to tell a new file from an existing one (fail closed; ADR 0040)" "$4"
+      fi
+    fi
   fi
   return 0
 }

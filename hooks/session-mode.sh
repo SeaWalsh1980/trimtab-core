@@ -23,8 +23,9 @@
 #      so this catches a run whose variable was forgotten.
 #   3. This session was recorded as autonomous earlier. The mode only
 #      tightens: once a signal held, the session stays autonomous, even after
-#      it leaves the plan branch. The record lives under the config
-#      directory's guard-state/, which guard-paths refuses to every tool.
+#      it leaves the plan branch, and in every repository. The record lives
+#      under the config directory's guard-state/, which guard-paths refuses
+#      to every tool.
 # Interactive only when none holds.
 set -uo pipefail
 
@@ -58,9 +59,30 @@ sm_state_dir() {
   printf '%s/guard-state/session-mode' "$cfg"
 }
 
-# A session id names a file, so it must be a plain token (the same shape
-# trimtab/adapters/pr_monitor.py accepts).
+# Records follow trimtab/adapters/pr_monitor.py's convention (ADR 0028): the
+# session id must be a plain token, the file is named by its sha256 so no
+# state path names a session, and records older than the same two-day TTL are
+# pruned. A run refreshes its own record on every write, so only a session
+# idle that long loses its record.
+sm_ttl_minutes=2880
 sm_valid_sid() { [[ "$1" =~ ^[A-Za-z0-9_-]{1,128}$ ]]; }
+
+sm_key_for="" sm_key=""
+sm_record_name() {   # $1 = session id; sets sm_key, or returns 1
+  [[ -n "$sm_key_for" && "$sm_key_for" == "$1" ]] && return 0
+  local h _
+  sm_key="" sm_key_for=""
+  sm_valid_sid "$1" || return 1
+  if command -v sha256sum >/dev/null 2>&1; then
+    read -r h _ < <(printf '%s' "$1" | sha256sum 2>/dev/null)
+  elif command -v shasum >/dev/null 2>&1; then
+    read -r h _ < <(printf '%s' "$1" | shasum -a 256 2>/dev/null)
+  fi
+  # No hash tool: no record can be named, so the session keeps its other
+  # signals but loses stickiness.
+  [[ "${h:-}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  sm_key="$h" sm_key_for="$1"
+}
 
 sm_recorded() {   # $1 = session id; 0 = recorded autonomous (or cannot tell)
   local dir
@@ -68,17 +90,29 @@ sm_recorded() {   # $1 = session id; 0 = recorded autonomous (or cannot tell)
   dir=$(sm_state_dir) || return 1
   # A link anywhere on the record's path could point the record somewhere a
   # session can delete it. Treat that as recorded: strict, never looser.
-  [[ -L "${dir%/*}" || -L "$dir" || -L "$dir/$1" ]] && return 0
-  [[ -e "$dir/$1" ]]
+  [[ -L "${dir%/*}" || -L "$dir" ]] && return 0
+  # No record directory, no record: skip hashing (an exec) on hosts that have
+  # never recorded a run.
+  [[ -d "$dir" ]] || return 1
+  sm_record_name "$1" || return 1
+  [[ -L "$dir/$sm_key" ]] && return 0
+  [[ -e "$dir/$sm_key" ]]
 }
 
 sm_record() {   # $1 = session id; best effort, a failure only loses stickiness
-  local dir
-  sm_valid_sid "$1" || return 0
+  local dir new=0
+  sm_record_name "$1" || return 0
   dir=$(sm_state_dir) || return 0
-  [[ -L "${dir%/*}" || -L "$dir" ]] && return 0
-  [[ -e "$dir/$1" ]] && return 0
-  ( umask 077 && mkdir -p "$dir" && : > "$dir/$1" ) 2>/dev/null
+  [[ -L "${dir%/*}" || -L "$dir" || -L "$dir/$sm_key" ]] && return 0
+  [[ -e "$dir/$sm_key" ]] || new=1
+  # `: >` refreshes the record's age with no exec.
+  ( umask 077 && mkdir -p "$dir" && : > "$dir/$sm_key" ) 2>/dev/null || return 0
+  # Pruning runs once per session, when its record is created: other
+  # sessions' records past the TTL, and any planted link.
+  if (( new )); then
+    find "$dir" -mindepth 1 -maxdepth 1 \( -type l -o \( -type f -mmin "+$sm_ttl_minutes" \) \) \
+      ! -name "$sm_key" -delete 2>/dev/null
+  fi
   return 0
 }
 

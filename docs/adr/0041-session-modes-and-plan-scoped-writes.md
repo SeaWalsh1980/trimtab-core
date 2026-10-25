@@ -42,11 +42,15 @@ any one** of these holds:
    prefix on a Bash command never reaches a hook, so the agent cannot set it.
 2. The repository is on a `plan/*` branch. Plan work happens only there, so
    this catches a run whose variable was forgotten.
-3. The session was recorded as autonomous earlier. The record lives at
-   `<config dir>/guard-state/session-mode/<session_id>`, written only by
-   hooks; guard-paths refuses `guard-state/` to every tool. So the mode only
-   tightens, never loosens, within a session. A link at the record's path
-   reads as recorded.
+3. The session was recorded as autonomous earlier. So the mode only
+   tightens, never loosens, within a session.
+   - **Where:** `<config dir>/guard-state/session-mode/<sha256 of session_id>`,
+     written only by hooks. guard-paths refuses `guard-state/` to every tool.
+   - **Shared with pr_monitor (ADR 0028):** the plain-token session id, the
+     hashed name, and the two-day TTL. A run refreshes its record on every
+     write. Records past the TTL, and any planted link, are pruned once per
+     session, when its record is created.
+   - **A link** at the record's path reads as recorded.
 
 A session is interactive only when none holds. The classifier is both a
 SessionStart hook and a library that guard-paths sources:
@@ -80,12 +84,23 @@ SessionStart hook and a library that guard-paths sources:
 Once an entry merges, no run can change it, so changing an entry's status is
 left to the operator.
 
-**Cost, measured** on a workstation, 40 calls each, for an Edit in a
-repository with an allowlist:
-- main before this change: 11 ms per call;
-- this change, interactive: 14 ms;
-- this change, plan run: 23 ms. The extra is a `git symbolic-ref`, a
-  merge-base, a `cat-file` and a `show`.
+**Cost.** Per write in a repository, the hook runs:
+- **every session:** one `git symbolic-ref` to classify, plus one hash of
+  the session id when the payload carries one;
+- **a plan run:** four more `git` calls (`origin/HEAD`, merge-base,
+  `cat-file`, `show`);
+- **a create-only change in a plan run:** one more (`ls-tree`). The base is
+  memoised, so it is looked up once per write (ENG-6.2).
+
+Measured on a workstation, 40 calls each, for an Edit in a repository with
+an allowlist, after a warm-up round:
+
+| Case | ms per call |
+|---|---|
+| main before this change | 11 |
+| this change, interactive, on a host with no record directory (hashing skipped) | 15–16 |
+| this change, interactive, record directory present | 19–20 |
+| this change, plan run | 32–35 |
 
 All are far inside the hook's 10 s timeout.
 
@@ -108,13 +123,24 @@ All are far inside the hook's 10 s timeout.
   Everything else is refused at the write. The run records it as an
   issue-register entry, or stops as a blocker when the item needs it.
 - Every write in a repository now runs one more `git` call to classify the
-  session. A plan run runs about four. The measurements are above.
-- A person working interactively on a `plan/*` branch gets the strict rules
-  and keeps them for the session. Lifting them needs `HOOK_ALLOW_HARNESS=1`.
+  session, and a plan run a few more. The cost is above.
+- **The sticky record locks the whole session.** Any write in a repository
+  on a `plan/*` branch records the session as autonomous, even when it's a
+  person working interactively, for example to fix a run's CI.
+  - From then on, for the rest of that session, every write in every
+    repository is held to the run rules. On a branch that isn't
+    `plan/<plan>/item-NN-partK`, that means every write is refused.
+  - Ways out: start a new session, or relaunch with `HOOK_ALLOW_HARNESS=1`.
+    A record left idle expires after the two-day TTL.
+  - This is the price of a mode that only tightens: no signal inside the
+    session can tell a person who checked out a plan branch from a run that
+    wants to leave one.
 - A session whose payload carries no usable session id gets no record. It
   is still classified by the other signals on every call.
-- The record directory grows by one empty file per autonomous session. It is
-  not pruned yet.
+- The record directory holds one empty file per autonomous session that has
+  been active within the TTL. A host with neither `sha256sum` nor `shasum`
+  can't name a record, so its sessions keep signals 1 and 2 but lose
+  stickiness.
 - These residuals remain:
   - shell writes (ADR 0039);
   - forged local git state, such as the branch or `origin/HEAD` (ADR 0040);

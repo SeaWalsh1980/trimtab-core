@@ -1318,11 +1318,13 @@ pg() { git -C "$PG" -c user.name=guard-tests -c user.email=guard-tests@example.i
 es() { python3 -c 'import json,sys; print(json.dumps({"tool_name":sys.argv[1],"tool_input":{"file_path":sys.argv[2]},"session_id":sys.argv[3]}))' "$@"; }
 SM_CFG_SAVED="$CLAUDE_CONFIG_DIR"
 export CLAUDE_CONFIG_DIR="$CPTMP/sm-config"
-mkdir -p "$CLAUDE_CONFIG_DIR" "$PG/.claude" "$PG/src" "$PG/records" "$PG/$PL/authorised"
-printf '%s\n' 'src/**' 'README.md' '+records/**' "+$PL/progress/**" "+$PL/unauthorised/**" > "$PG/.claude/write-allowlist"
-: > "$PG/README.md"; : > "$PG/src/a.py"; : > "$PG/records/r1-old.md"
+mkdir -p "$CLAUDE_CONFIG_DIR" "$PG/.claude" "$PG/src" "$PG/records" "$PG/notes" "$PG/$PL/authorised"
+printf '%s\n' 'src/**' 'README.md' '+records/**' 'notes/**' "+$PL/progress/**" "+$PL/unauthorised/**" > "$PG/.claude/write-allowlist"
+: > "$PG/README.md"; : > "$PG/src/a.py"; : > "$PG/records/r1-old.md"; : > "$PG/notes/n1.md"
 : > "$PG/$PL/authorised/demo.md"
-printf '%s\n' '# what plan demo may change' 'README.md' '+records/**' > "$PG/$PL/authorised/demo.writes"
+# records/ is create-only on the allowlist side only, notes/ on the
+# declaration side only: either side makes the path create-only.
+printf '%s\n' '# what plan demo may change' 'README.md' 'records/**' '+notes/**' > "$PG/$PL/authorised/demo.writes"
 : > "$PG/$PL/authorised/other.md"; : > "$PG/$PL/authorised/other.writes"
 : > "$PG/$PL/authorised/nowrites.md"
 pg init -q -b main; pg add -A; pg commit -q -m base
@@ -1332,8 +1334,10 @@ pg checkout -q -b plan/demo/item-01-part1
 # On a plan branch the run is autonomous with no variable set (signal 2).
 t guard-paths.sh 0 "plan scope: a declared path passes"            "$(e Edit "$PG/README.md")"
 t guard-paths.sh 2 "plan scope: an allowlisted but undeclared path is refused" "$(e Edit "$PG/src/a.py")"
-t guard-paths.sh 0 "plan scope: a new file on a create-only declaration passes" "$(e Write "$PG/records/r2-new.md")"
-t guard-paths.sh 2 "plan scope: a create-only declaration refuses a file on main" "$(e Edit "$PG/records/r1-old.md")"
+t guard-paths.sh 0 "plan scope: a new file under a create-only allowlist entry passes" "$(e Write "$PG/records/r2-new.md")"
+t guard-paths.sh 2 "plan scope: a create-only allowlist entry stays so under a plain declaration" "$(e Edit "$PG/records/r1-old.md")"
+t guard-paths.sh 0 "plan scope: a new file under a create-only declaration passes" "$(e Write "$PG/notes/n2.md")"
+t guard-paths.sh 2 "plan scope: a create-only declaration alone refuses a file on main" "$(e Edit "$PG/notes/n1.md")"
 t guard-paths.sh 0 "plan scope: its own progress record passes"    "$(e Write "$PG/$PL/progress/demo/item-01-part1.md")"
 t guard-paths.sh 0 "plan scope: its own register entry passes"     "$(e Write "$PG/$PL/unauthorised/demo/item-01-part1-01.md")"
 t guard-paths.sh 2 "plan scope: another plan's progress folder is refused" "$(e Write "$PG/$PL/progress/other/item-01-part1.md")"
@@ -1364,10 +1368,31 @@ pg checkout -q feat/manual
 t guard-paths.sh 2 "sticky: the same session off the plan branch is still a run" "$(es Edit "$PG/src/a.py" sess-a)"
 t guard-paths.sh 0 "sticky: another session there is interactive" "$(es Edit "$PG/src/a.py" sess-b)"
 t guard-paths.sh 0 "sticky: a session id that is not a plain token records nothing" "$(es Edit "$PG/src/a.py" '../sess-a')"
-rm -f "$CLAUDE_CONFIG_DIR/guard-state/session-mode/sess-a"
-mkdir -p "$CPTMP/sm-elsewhere"; ln -s "$CPTMP/sm-elsewhere" "$CLAUDE_CONFIG_DIR/guard-state/session-mode/sess-c"
+# Records are named by the sha256 of the session id, as pr_monitor's lists
+# are (ADR 0028), and pruned past the same two-day TTL.
+SM_DIR="$CLAUDE_CONFIG_DIR/guard-state/session-mode"
+smh() { printf '%s' "$1" | sha256sum | cut -c1-64; }
+sm_check() { # sm_check <label> <condition result 0/1>
+  if [[ "$2" == 0 ]]; then printf 'PASS  %-14s %s\n' "session-mode" "$1"
+  else printf 'FAIL  %-14s %s\n' "session-mode" "$1"; fails=$((fails+1)); fi
+}
+[[ -f "$SM_DIR/$(smh sess-a)" && ! -e "$SM_DIR/sess-a" ]]; sm_check "a record is named by the session id's hash, not the id" $?
+rm -f "$SM_DIR/$(smh sess-a)"
+t guard-paths.sh 0 "sticky: a removed record no longer holds the session" "$(es Edit "$PG/src/a.py" sess-a)"
+mkdir -p "$CPTMP/sm-elsewhere"; ln -s "$CPTMP/sm-elsewhere" "$SM_DIR/$(smh sess-c)"
 t guard-paths.sh 2 "sticky: a link at a session's record reads as a run" "$(es Edit "$PG/src/a.py" sess-c)"
-t guard-paths.sh 2 "sticky: the record path is refused to the session" "$(e Write "$CLAUDE_CONFIG_DIR/guard-state/session-mode/sess-d")"
+rm -f "$SM_DIR/$(smh sess-c)"
+t guard-paths.sh 2 "sticky: the record path is refused to the session" "$(e Write "$SM_DIR/$(smh sess-d)")"
+: > "$SM_DIR/$(smh sess-old)"; touch -d '3 days ago' "$SM_DIR/$(smh sess-old)"
+: > "$SM_DIR/$(smh sess-recent)"; touch -d '1 day ago' "$SM_DIR/$(smh sess-recent)"
+ln -s "$CPTMP/sm-elsewhere" "$SM_DIR/planted"
+pg checkout -q plan/demo/item-02-part1
+t guard-paths.sh 0 "prune: a new run's write passes"              "$(es Edit "$PG/README.md" sess-new)"
+pg checkout -q feat/manual
+[[ ! -e "$SM_DIR/$(smh sess-old)" ]]; sm_check "prune: a record past the TTL is removed when a new run records" $?
+[[ -e "$SM_DIR/$(smh sess-recent)" ]]; sm_check "prune: a record inside the TTL is kept" $?
+[[ ! -L "$SM_DIR/planted" ]]; sm_check "prune: a planted link is removed" $?
+[[ -e "$SM_DIR/$(smh sess-new)" ]]; sm_check "prune: the new run's own record stays" $?
 # Fail closed when the plan or its scope cannot be read.
 pg checkout -q -b plan/nowrites/item-01-part1 main
 t guard-paths.sh 2 "plan scope: a plan with no .writes refuses every write" "$(e Edit "$PG/README.md")"
