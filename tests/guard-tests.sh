@@ -1181,8 +1181,18 @@ ln "$HL/.claude/settings.json" "$AL/src/hard.json"
 t guard-paths.sh 2 "bypass: a hard link to a protected file"   "$(e Edit "$AL/src/hard.json")"
 : > "$AL/src/plain.py"
 t guard-paths.sh 0 "control: an existing file with one link"   "$(e Edit "$AL/src/plain.py")"
-t guard-paths.sh 2 "cap: a glob with too many wildcard parts is refused" "$(bsh 'ls /*/*/*/*')" "$HL"
-t guard-paths.sh 0 "cap: three wildcard parts are still checked" "$(bsh 'ls src/*/*/*')" "$HL"
+t guard-paths.sh 2 "cap: a glob with too many wildcard parts is refused" "$(bsh 'ls src/*/*/*')" "$HL"
+t guard-paths.sh 0 "cap: two wildcard parts are still checked" "$(bsh 'ls src/*/*')" "$HL"
+# A dangling link where the allowlist should be must not switch default-deny
+# off: it is an allowlist that cannot be read.
+DL="$CPTMP/dl-repo"
+mkdir -p "$DL/.git" "$DL/.claude" "$DL/src"
+ln -s "$CPTMP/no-such-allowlist" "$DL/.claude/write-allowlist"
+t guard-paths.sh 2 "allowlist: a dangling link at its path fails closed" "$(e Edit "$DL/src/a.py")"
+# Accepted residual: a shell command reaching a protected file through a hard
+# link is judged at its spelt path; the link-count check runs for Edit and
+# Write only (ADR 0039, Consequences).
+t guard-paths.sh 0 "residual: a shell write through a hard link" "$(bsh 'sed -i s/a/b/ src/hard.json')" "$AL"
 # Accepted residuals, pinned as they stand so a change to either is seen
 # (ADR 0039, Consequences). A shell write through a symlinked directory is
 # judged at its spelt path, and dotglob spelt so the text check misses it

@@ -113,11 +113,23 @@ out of that repository's allowlist and by CODEOWNERS.
   `cat *.md` or `git add *` in a directory holding `CLAUDE.md`. A glob that
   matches nothing names nothing (the shell keeps it literal) and passes.
 - The harness layer's own glob expansion is bounded: a word with more than
-  three wildcard path components (`/*/*/*/*`), or one that expands to more
-  than 2,000 matches, is refused as too broad to check (fail closed). This
+  two wildcard path components (`/*/*/*`), or one that expands to more than
+  1,000 matches, is refused as too broad to check (fail closed). The bound
+  matters because the hook's registered timeout is not a safe backstop: a
+  hook that is killed does not exit 2, and Claude Code treats that as
+  non-blocking, so a slow expansion would let the command through. This
   does not bound the guard's older token loop, which has always let bash
   expand each unquoted word as it splits the command; that cost predates
   this change and is out of its scope.
+- A dangling link where `.claude/write-allowlist` should be counts as an
+  allowlist that cannot be read, and refuses every write; it does not
+  switch default-deny off.
+- Accepted residual: a shell command that reaches a protected file through
+  a hard link (`sed -i … src/hard.json`) is judged at its spelt path. The
+  link-count check costs a `stat` per call and runs for Edit and Write only;
+  running it for every path-shaped shell word would cost one per word.
+  CODEOWNERS at merge is the backstop, and the matrix pins this as a
+  residual case.
 - Accepted residual: a shell write through a symlinked directory inside the
   repository (`sed -i … src/cfg/settings.json` with `src/cfg ->
   ../.claude`) is judged at its spelt path. Edit and Write resolve the

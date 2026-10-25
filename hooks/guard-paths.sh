@@ -706,13 +706,16 @@ hl_refused() {   # $1 = a path relative to its repository root
 # of any path guard; ADR 0039 records that residual.
 hl_dotglob=0
 [[ "$cmd" == *dotglob* || "$cmd" == *GLOBIGNORE* ]] && hl_dotglob=1
-# Expansion runs in this process with no timeout, so its cost is bounded
-# before it starts: a word with more than hl_glob_max_parts wildcard path
-# components (`/*/*/*/*`) is refused as too broad to check, and more than
-# hl_glob_max_hits matches are refused rather than judged one by one. Both
-# fail closed; a real command rarely needs either.
-hl_glob_max_parts=3
-hl_glob_max_hits=2000
+# Expansion runs in this process, and the hook's registered timeout (10 s in
+# settings.base.json) is not a safe backstop: a hook that is killed does not
+# exit 2, and Claude Code treats that as non-blocking, so a slow expansion
+# would let the command through. The cost is therefore bounded before it
+# starts: a word with more than hl_glob_max_parts wildcard path components
+# (`/*/*/*`) is refused as too broad to check, and more than hl_glob_max_hits
+# matches are refused rather than judged one by one. Both fail closed; a real
+# command rarely needs either.
+hl_glob_max_parts=2
+hl_glob_max_hits=1000
 hl_glob_hits() {   # $1 = an absolute path containing * ? or [
                    # 0 = a match is refused, 1 = none is, 2 = too broad to check
   local -a hits=() parts=()
@@ -803,7 +806,10 @@ hl_check_abs() {   # $1 = absolute path, $2 = write tool 1/0, $3 = reason, $4 = 
   [[ "$abs" == "$hl_root" ]] && return 0
   rel="${abs#"$hl_root"/}"
   hl_refused "$rel" && hl_deny "$3 (repository harness or control)" "$4"
-  if (( $2 )) && [[ -e "$hl_root/.claude/write-allowlist" ]]; then
+  # -L as well as -e: a dangling link at the allowlist's path must not read
+  # as "no allowlist" and switch default-deny off; hl_allowed then finds it
+  # unreadable and refuses (fail closed).
+  if (( $2 )) && [[ -e "$hl_root/.claude/write-allowlist" || -L "$hl_root/.claude/write-allowlist" ]]; then
     hl_allowed "$hl_root" "$rel" || hl_deny "write outside the repository's write allowlist" "$4"
   fi
   return 0
