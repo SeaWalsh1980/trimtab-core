@@ -125,6 +125,11 @@ def refused(path: str) -> bool:
     return base in ("claude.md", "claude.local.md")
 
 
+def targets_default(base_ref: str, default_branch: str) -> bool:
+    """Whether a PR's base branch is the default branch, each named bare or as a full ref."""
+    return base_ref.removeprefix(HEADS) == default_branch.removeprefix(HEADS)
+
+
 class Ref(Enum):
     PLAN = "plan"
     NOT_PLAN = "not a plan branch"
@@ -174,31 +179,31 @@ def judge(changes: list[Change], allowlist: tuple[Entry, ...], plan_scope: tuple
     """
     problems = []
     for c in changes:
-        shown = _shown(c.path)
+        label = shown(c.path)
         if refused(c.path):
-            problems.append(f"{shown}: a repository harness or control path; no plan covers it")
+            problems.append(f"{label}: a repository harness or control path; no plan covers it")
             continue
         listed = match(allowlist, c.path)
         if listed is Listed.NO:
-            problems.append(f"{shown}: outside the base commit's write allowlist")
+            problems.append(f"{label}: outside the base commit's write allowlist")
             continue
         in_plan = match(plan_scope, c.path)
         if in_plan is Listed.NO:
-            problems.append(f"{shown}: outside the plan's scope (its .writes declaration, and this PR's own "
+            problems.append(f"{label}: outside the plan's scope (its .writes declaration, and this PR's own "
                             f"progress record and register entries)")
             continue
         if c.status != "D" and c.mode not in REGULAR_MODES:
-            problems.append(f"{shown}: a link or submodule (mode {c.mode}); a plan run writes regular files only")
+            problems.append(f"{label}: a link or submodule (mode {c.mode}); a plan run writes regular files only")
             continue
         if create_only(allowlist, plan_scope, c.path):
             if c.status != "A":
-                problems.append(f"{shown}: {_verb(c.status)} a file already in the base, on a create-only path")
+                problems.append(f"{label}: {_verb(c.status)} a file already in the base, on a create-only path")
             elif c.path in in_base:
-                problems.append(f"{shown}: added on a create-only path where the base commit already has it")
+                problems.append(f"{label}: added on a create-only path where the base commit already has it")
     return problems
 
 
-def _shown(path: str) -> str:
+def shown(path: str) -> str:
     """A path safe to print: one holding a newline or another control character is escaped, so it
     cannot forge a log line or a CI runner's workflow command."""
     return path if path.isprintable() else ascii(path)
@@ -307,7 +312,7 @@ def check(repo: str, *, base: str, head: str, head_ref: str, base_ref: str, defa
     if branch.ref is not Ref.PLAN:
         return Result(branch.ref, "", ())
     plan = branch.plan
-    if base_ref.removeprefix(HEADS) != default_branch.removeprefix(HEADS):
+    if not targets_default(base_ref, default_branch):
         return Result(branch.ref, plan, (f"the PR targets {base_ref!r}, not the default branch "
                                          f"{default_branch!r}; only the default branch's lists can scope it",))
     base_sha, head_sha = _commit(repo, base), _commit(repo, head)
