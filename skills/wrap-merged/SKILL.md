@@ -161,7 +161,13 @@ start only if all of these hold:
   - `<plans>/authorised/`.
 
 If the gate fails: say "needs approval: <reason>", list the open issues
-with their PR links, propose ways forward, and stop. If `## Next` is
+with their PR links, propose ways forward, and stop.
+
+**A stop before any item PR exists** — the authorisation check (section 2)
+or this gate failing at the start of a session — labels the merged PR
+that started the session `plan:blocked` (through `gh api` if `gh pr` is
+blocked), so every stop leaves a label the admin can remove to allow a
+restart. A valid restart session has no such PR and labels nothing. If `## Next` is
 `plan complete`, say so and stop.
 
 ### 5. Record
@@ -232,8 +238,11 @@ hold — otherwise treat the stop as standing and do nothing:
 - **The admin account removed `plan:blocked`** from the stopped PR. Check
   it like the `plan:continue` actor: the `unlabeled` event for
   `plan:blocked` in `gh api repos/{owner}/{repo}/issues/<n>/events` must be
-  the admin's, and the label must still be absent. This is the part the
-  session can verify for itself.
+  the admin's, and the label must still be absent. The stopped PR is the
+  one with the plan's most recent `plan:blocked` label event, and the
+  admin's removal must come after that event — an older removal from an
+  earlier stop does not count. This is the part the session can verify for
+  itself.
 
 The restarted session then runs section 2 and reads the latest
 admin-merged record. If its `## Next` is `blocked:`, the next work
