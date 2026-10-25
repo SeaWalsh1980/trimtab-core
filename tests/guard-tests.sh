@@ -1345,12 +1345,15 @@ t guard-paths.sh 2 "plan scope: another plan's register is refused" "$(e Write "
 t guard-paths.sh 2 "plan scope: its own declaration stays refused" "$(e Write "$PG/$PL/authorised/demo.writes")"
 t guard-paths.sh 0 "plan scope: reads are not scoped"             "$(e Read "$PG/src/a.py")"
 HOOK_ALLOW_HARNESS=1 t guard-paths.sh 0 "plan scope: the operator export lifts it" "$(e Edit "$PG/src/a.py")"
-# A merged register entry cannot be changed by a later run.
-mkdir -p "$PG/$PL/unauthorised/demo"
-: > "$PG/$PL/unauthorised/demo/item-01-part1-01.md"; pg add -A; pg commit -q -m entry
+# A merged register entry or progress record cannot be changed by a later run.
+mkdir -p "$PG/$PL/unauthorised/demo" "$PG/$PL/progress/demo"
+: > "$PG/$PL/unauthorised/demo/item-01-part1-01.md"; : > "$PG/$PL/progress/demo/item-01-part1.md"
+pg add -A; pg commit -q -m entry
 pg update-ref refs/remotes/origin/main HEAD
 pg checkout -q -b plan/demo/item-02-part1
 t guard-paths.sh 2 "plan scope: a merged register entry cannot be changed" "$(e Edit "$PG/$PL/unauthorised/demo/item-01-part1-01.md")"
+t guard-paths.sh 2 "plan scope: a merged progress record cannot be changed" "$(e Edit "$PG/$PL/progress/demo/item-01-part1.md")"
+t guard-paths.sh 0 "plan scope: a later item writes its own progress record" "$(e Write "$PG/$PL/progress/demo/item-02-part1.md")"
 pg tag plan/demo/item-02-part1
 t guard-paths.sh 2 "plan scope: a tag named like the branch does not hide it" "$(e Edit "$PG/src/a.py")"
 pg tag -d plan/demo/item-02-part1
@@ -1383,6 +1386,7 @@ mkdir -p "$CPTMP/sm-elsewhere"; ln -s "$CPTMP/sm-elsewhere" "$SM_DIR/$(smh sess-
 t guard-paths.sh 2 "sticky: a link at a session's record reads as a run" "$(es Edit "$PG/src/a.py" sess-c)"
 rm -f "$SM_DIR/$(smh sess-c)"
 t guard-paths.sh 2 "sticky: the record path is refused to the session" "$(e Write "$SM_DIR/$(smh sess-d)")"
+t guard-paths.sh 2 "sticky: a shell command naming the records is refused" "$(j Bash "{\"command\":\"rm -f $SM_DIR/x\"}")"
 : > "$SM_DIR/$(smh sess-old)"; touch -d '3 days ago' "$SM_DIR/$(smh sess-old)"
 : > "$SM_DIR/$(smh sess-recent)"; touch -d '1 day ago' "$SM_DIR/$(smh sess-recent)"
 ln -s "$CPTMP/sm-elsewhere" "$SM_DIR/planted"

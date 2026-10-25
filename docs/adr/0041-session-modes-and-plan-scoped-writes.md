@@ -156,9 +156,21 @@ All are far inside the hook's 10 s timeout.
 - These residuals remain:
   - shell writes (ADR 0039);
   - forged local git state, such as the branch or `origin/HEAD` (ADR 0040);
-  - a shell route to the record through a path built at run time.
+  - a shell route to the record through a path built at run time. A shell
+    command that names `guard-state/` is refused like every other control
+    path, so only a path assembled at run time can reach the record. A run
+    that deleted its record that way, and had already left its plan branch,
+    would be classed interactive.
 
   The worst case of a forged branch is another admin-authorised plan's scope.
   A server-side plan-scope check on the PR's diff is the gate for all three,
   with code-owner review at merge until it is required.
+- **Until then, `TRIMTAB_PLAN_RUN=1` is the control that matters.** Neither a
+  record deletion nor a clear can remove it. The launchers should refuse to
+  start a run without it: the cloud setup script (the next harness step) for
+  cloud runs, and the instance's rule for local runs.
+- **A run can write only in its own plan checkout.** The mode is per session,
+  but the plan is read from each target repository's branch. So a run's
+  write into a second checkout on a non-plan branch is refused, like every
+  other write a run's scope doesn't cover. This is deliberate.
 - A cloud-session marker, as a fourth signal, waits on the cloud spike.
