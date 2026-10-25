@@ -1189,6 +1189,10 @@ DL="$CPTMP/dl-repo"
 mkdir -p "$DL/.git" "$DL/.claude" "$DL/src"
 ln -s "$CPTMP/no-such-allowlist" "$DL/.claude/write-allowlist"
 t guard-paths.sh 2 "allowlist: a dangling link at its path fails closed" "$(e Edit "$DL/src/a.py")"
+printf 'src/**\n' > "$CPTMP/outside-allowlist"
+rm -f "$DL/.claude/write-allowlist"
+ln -s "$CPTMP/outside-allowlist" "$DL/.claude/write-allowlist"
+t guard-paths.sh 2 "allowlist: a link to a readable list outside the repo fails closed" "$(e Edit "$DL/src/a.py")"
 # Accepted residual: a shell command reaching a protected file through a hard
 # link is judged at its spelt path; the link-count check runs for Edit and
 # Write only (ADR 0039, Consequences).

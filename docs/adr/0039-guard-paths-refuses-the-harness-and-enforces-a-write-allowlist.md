@@ -115,15 +115,19 @@ out of that repository's allowlist and by CODEOWNERS.
 - The harness layer's own glob expansion is bounded: a word with more than
   two wildcard path components (`/*/*/*`), or one that expands to more than
   1,000 matches, is refused as too broad to check (fail closed). The bound
-  matters because the hook's registered timeout is not a safe backstop: a
-  hook that is killed does not exit 2, and Claude Code treats that as
-  non-blocking, so a slow expansion would let the command through. This
-  does not bound the guard's older token loop, which has always let bash
-  expand each unquoted word as it splits the command; that cost predates
-  this change and is out of its scope.
-- A dangling link where `.claude/write-allowlist` should be counts as an
-  allowlist that cannot be read, and refuses every write; it does not
-  switch default-deny off.
+  matters because the hook's registered timeout is not a safe backstop.
+  Claude Code's hooks reference (code.claude.com/docs/en/hooks) documents
+  that a PreToolUse command hook killed at its timeout does not block the
+  call unless the handler sets `onFailure: "block"`, which
+  `settings.base.json` does not, so a slow expansion would let the command
+  through. The harness check runs inside the whole-command scan, before the
+  guard's older token loop, and a glob over the cap exits there; only words
+  within the cap reach the token loop, which has always let bash expand each
+  unquoted word as it splits the command.
+- A link where `.claude/write-allowlist` should be, dangling or not,
+  refuses every write: the list must be a regular file inside the reviewed
+  tree, or a link to a world-writable file elsewhere could widen it. It does
+  not switch default-deny off.
 - Accepted residual: a shell command that reaches a protected file through
   a hard link (`sed -i … src/hard.json`) is judged at its spelt path. The
   link-count check costs a `stat` per call and runs for Edit and Write only;

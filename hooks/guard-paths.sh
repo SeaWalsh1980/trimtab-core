@@ -707,9 +707,11 @@ hl_refused() {   # $1 = a path relative to its repository root
 hl_dotglob=0
 [[ "$cmd" == *dotglob* || "$cmd" == *GLOBIGNORE* ]] && hl_dotglob=1
 # Expansion runs in this process, and the hook's registered timeout (10 s in
-# settings.base.json) is not a safe backstop: a hook that is killed does not
-# exit 2, and Claude Code treats that as non-blocking, so a slow expansion
-# would let the command through. The cost is therefore bounded before it
+# settings.base.json) is not a safe backstop: Claude Code's hooks reference
+# (code.claude.com/docs/en/hooks) documents that a PreToolUse command hook
+# killed at its timeout does not block the call, unless the handler sets
+# `onFailure: "block"`, which settings.base.json does not. A slow expansion
+# would therefore let the command through. The cost is therefore bounded before it
 # starts: a word with more than hl_glob_max_parts wildcard path components
 # (`/*/*/*`) is refused as too broad to check, and more than hl_glob_max_hits
 # matches are refused rather than judged one by one. Both fail closed; a real
@@ -772,6 +774,12 @@ EOF
 
 hl_allowed() {   # $1 = repository root, $2 = relative path; 0 = listed
   local list="$1/.claude/write-allowlist" line pat
+  # The list must be a regular file in the repository, where CODEOWNERS
+  # reviews it. A link could point outside the reviewed tree (a world-writable
+  # /tmp file would let anyone widen it), so any link refuses every write.
+  if [[ -L "$list" ]]; then
+    hl_deny "write allowlist is a symlink; it must be a regular file in the repository (fail closed)" "$list"
+  fi
   if [[ ! -r "$list" ]]; then
     hl_deny "write allowlist exists but cannot be read (fail closed)" "$list"
   fi
@@ -806,9 +814,9 @@ hl_check_abs() {   # $1 = absolute path, $2 = write tool 1/0, $3 = reason, $4 = 
   [[ "$abs" == "$hl_root" ]] && return 0
   rel="${abs#"$hl_root"/}"
   hl_refused "$rel" && hl_deny "$3 (repository harness or control)" "$4"
-  # -L as well as -e: a dangling link at the allowlist's path must not read
-  # as "no allowlist" and switch default-deny off; hl_allowed then finds it
-  # unreadable and refuses (fail closed).
+  # -L as well as -e: a link at the allowlist's path, dangling or not, must
+  # not read as "no allowlist" and switch default-deny off; hl_allowed then
+  # refuses it (fail closed).
   if (( $2 )) && [[ -e "$hl_root/.claude/write-allowlist" || -L "$hl_root/.claude/write-allowlist" ]]; then
     hl_allowed "$hl_root" "$rel" || hl_deny "write outside the repository's write allowlist" "$4"
   fi
