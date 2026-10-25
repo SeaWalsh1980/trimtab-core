@@ -21,6 +21,10 @@ def requirements_of(text: str) -> list[str]:
     return [" ".join(block.split()) for block in REQUIREMENTS.findall(text)]
 
 
+def workflow_requirements(name: str) -> list[str]:
+    return requirements_of((WORKFLOWS / name).read_text(encoding="utf-8"))
+
+
 class RequirementsParserTest(unittest.TestCase):
     def test_reads_the_heredoc_body_ignoring_indentation(self):
         self.assertEqual(requirements_of(WORKFLOW_TEXT), ["pyyaml==6.0.3 \\ --hash=sha256:aaaa"])
@@ -33,8 +37,7 @@ class RequirementsParserTest(unittest.TestCase):
 
 class WorkflowPinsConsistencyTest(unittest.TestCase):
     def test_plan_scope_installs_the_same_pyyaml_as_ci(self):
-        read = lambda name: requirements_of((WORKFLOWS / name).read_text(encoding="utf-8"))
-        ci, plan_scope = read("ci.yml"), read("plan-scope.yml")
+        ci, plan_scope = workflow_requirements("ci.yml"), workflow_requirements("plan-scope.yml")
 
         self.assertEqual(len(ci), 1)
         self.assertEqual(plan_scope, ci)
