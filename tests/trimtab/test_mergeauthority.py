@@ -112,10 +112,10 @@ class PlanPrs(unittest.TestCase):
 
         self.assertIn("concluded failure", decided(review(APPROVER), runs=runs).problems[0])
 
-    def test_a_later_success_outweighs_an_earlier_failure(self):
+    def test_a_later_success_does_not_clear_an_earlier_failure(self):
         runs = [run("failure", id=1), run(started="2026-10-25T11:00:00Z", id=2)]
 
-        self.assertEqual(decided(review(APPROVER), runs=runs).problems, ())
+        self.assertIn("a new commit is needed", decided(review(APPROVER), runs=runs).problems[0])
 
     def test_a_run_from_another_app_does_not_count(self):
         result = decided(review(APPROVER), runs=[run(app=OTHER_APP)])
@@ -229,11 +229,13 @@ class Reviews(unittest.TestCase):
 class AgreesWithTheSkill(unittest.TestCase):
     """The wrap-merged skill's approver file test reads the same lists after the merge; they must not drift."""
 
-    def test_the_skill_names_every_admin_only_pin_and_checker_path(self):
+    def test_the_skills_approver_file_test_names_every_admin_only_pin_and_checker_path(self):
         skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
+        start = skill.index("the PR changes neither `.github/`")
+        section = skill[start:skill.index("the `plan-scope` job runs its checker", start)]
         paths = (*mergeauthority.PIN_FILES, *mergeauthority.CHECKER_DIRS, *mergeauthority.CHECKER_FILES, ".github/")
 
-        self.assertEqual([p for p in paths if f"`{p}`" not in skill], [])
+        self.assertEqual([p for p in paths if f"`{p}`" not in section], [])
 
 
 class Configuration(unittest.TestCase):

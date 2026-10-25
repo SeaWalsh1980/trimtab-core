@@ -125,6 +125,11 @@ def refused(path: str) -> bool:
     return base in ("claude.md", "claude.local.md")
 
 
+def targets_default(base_ref: str, default_branch: str) -> bool:
+    """Whether a PR's base branch is the default branch, each named bare or as a full ref."""
+    return base_ref.removeprefix(HEADS) == default_branch.removeprefix(HEADS)
+
+
 class Ref(Enum):
     PLAN = "plan"
     NOT_PLAN = "not a plan branch"
@@ -307,7 +312,7 @@ def check(repo: str, *, base: str, head: str, head_ref: str, base_ref: str, defa
     if branch.ref is not Ref.PLAN:
         return Result(branch.ref, "", ())
     plan = branch.plan
-    if base_ref.removeprefix(HEADS) != default_branch.removeprefix(HEADS):
+    if not targets_default(base_ref, default_branch):
         return Result(branch.ref, plan, (f"the PR targets {base_ref!r}, not the default branch "
                                          f"{default_branch!r}; only the default branch's lists can scope it",))
     base_sha, head_sha = _commit(repo, base), _commit(repo, head)

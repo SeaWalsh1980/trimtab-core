@@ -7,8 +7,9 @@ Accepted on merge. Builds on ADR 0041
 (`docs/adr/0042-plan-scope-check-judges-the-pr-diff.md`); neither is edited.
 This change adds the checker only. The workflow job that runs it changes a
 security control and lands in its own PR in each repository (SEC-7). Making
-it a required check, and then dropping code-owner review, is the operator's
-ruleset change.
+it a required check is the operator's ruleset change. Code-owner review
+stays required; narrowing CODEOWNERS to the admin-only paths is a further
+control change, in its own SEC-7 PR in each repository.
 
 ## Context
 
@@ -27,7 +28,9 @@ let the approver approve plan PRs and nothing else.
 
 - from a branch outside `plan/`: the admin approved it;
 - from `plan/`: a `plan-scope` check run from the GitHub Actions app passed
-  on the head commit (the latest by `started_at`, none still running), and
+  on the head commit, with none still running and none concluded otherwise
+  (a re-run reuses its old event's base, so a re-run of an earlier pass must
+  not outweigh a later failure; a new commit starts over), and
   the admin approved it, or the approver did when all of these hold: the
   branch is `plan/<plan>/item-NN-partK`, its head is in this repository,
   the PR targets the default branch, and it changes no admin-only path.
@@ -62,21 +65,34 @@ unexpected answer, or a failed call fails closed (exit 2).
 |---|---|
 | Keep code-owner review and give the approver a CODEOWNERS entry | CODEOWNERS matches paths, not branches; an approver who owns a path can approve any PR touching it, plan run or not |
 | Drop the review requirement and rely on the skill's `merged_by` check alone | The skill only stops the next session; nothing at merge would stop any account from merging an unapproved PR |
-| Read the PR's changed files from the REST files endpoint | It lists at most 3,000 files and reports a rename as one entry; the job already has both commits, and git has neither limit |
+| Read the PR's changed files from the REST files endpoint | It lists at most 3,000 files; the job already has both commits, and git has no such limit |
+| Make merge-authority the only gate and drop code-owner review | A `pull_request` job runs the PR's own copy of its workflow, so a PR that edits the workflow can make the job pass with no approval at all; only a rule GitHub enforces outside the PR can require the admin for those paths |
+| Run the job from the base with `pull_request_target` and drop code-owner review | Review events have no base-run form, and a base-run job that fetches the PR's head handles untrusted input with a write-capable token; narrowed code-owner review closes the gap without either |
+| The latest plan-scope run by `started_at` decides, as the skill reads it | A re-run of an earlier passing run reuses that event's base and becomes the latest, outweighing a failure judged against the current base |
 | Take the plan-scope result from the job that ran it, as a workflow output | Within one workflow run that works, but a review event starts a new run; reading the check runs on the head covers both and is what the skill reads |
 | Logins in a file in the base commit | Possible, and the job may still choose it; the checker takes them as arguments so where they live is the job's decision, made in its own SEC-7 PR |
 
 ## Consequences
 
-- The gate at merge becomes our own check instead of GitHub's code-owner
-  rule. Its tests cover each route, stale, dismissed and voided reviews,
-  every admin-only path kind, and the REST paging. A mutation trial broke
+- Two gates at merge. Code-owner review, with CODEOWNERS narrowed to the
+  admin-only paths (workflows, pin files, checker code, authorised plans and
+  the other layer 1 paths), requires the admin for any PR touching them,
+  whatever the PR's copy of a workflow reports. merge-authority decides
+  everything else. Until CODEOWNERS is narrowed the admin still owns every
+  path, so every PR still needs the admin.
+- The gate for most PRs becomes our own check. Its tests cover each route,
+  stale, dismissed and voided reviews, every admin-only path kind, and the
+  REST paging. A mutation trial broke
   nine decision lines one at a time (the head-commit match, the
   change-request veto, `filter=all`, the not-completed test, the app filter,
   the fork test, the pin files, counting dismissals, ordering by id); a test
   failed for each. Editing the job's workflow is itself a SEC-7 change.
+- Any plan-scope run on the head that did not pass voids it, including a
+  failure later fixed on the base (the admin widens the allowlist) or a
+  cancelled run; a new commit starts over. The skill still reads the latest
+  run, so the gate is the stricter of the two.
 - The admin-only lists repeat the wrap-merged skill's approver file test. A
-  test fails when the skill stops naming any of them.
+  test fails when that test's section of the skill stops naming any of them.
 - GitHub refuses a review from a PR's author, so a non-plan PR the admin
   opens can never pass. That is no worse than today's code-owner review,
   which the admin's own PRs cannot meet either: the admin merges them by

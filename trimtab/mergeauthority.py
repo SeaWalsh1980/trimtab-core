@@ -2,7 +2,8 @@
 
 GitHub's code-owner rule works by path, not by the branch a PR comes from, so
 it cannot let the approver account approve plan run PRs and nothing else.
-This check, made a required check in place of code-owner review, can:
+This check, made a required check beside code-owner review narrowed to the
+admin-only paths below, can:
 
 - a PR from a branch outside `plan/` needs the admin's approval;
 - a PR from `plan/` needs a `plan-scope` check run by GitHub Actions that
@@ -134,9 +135,13 @@ def plan_scope_problem(runs: list[CheckRun]) -> str:
         return f"no {CHECK_NAME} check run from GitHub Actions on the head commit"
     if any(r.status != "completed" for r in ours):
         return f"a {CHECK_NAME} check run on the head commit has not completed"
-    latest = max(ours, key=lambda r: (r.started_at, r.id))
-    if latest.conclusion != "success":
-        return f"the latest {CHECK_NAME} check run on the head commit concluded {latest.conclusion or 'nothing'}"
+    # Every run, not the latest: a re-run reuses its old event's base, so a re-run of an earlier pass could
+    # otherwise outweigh a later failure judged against the current base. A new commit starts over.
+    failed = [r for r in ours if r.conclusion != "success"]
+    if failed:
+        latest = max(failed, key=lambda r: (r.started_at, r.id))
+        return (f"a {CHECK_NAME} check run on the head commit concluded {latest.conclusion or 'nothing'}; "
+                f"any run that did not pass voids the head, so a new commit is needed to start over")
     return ""
 
 
@@ -177,7 +182,7 @@ def admin_reason(pr: Pr, branch: planscope.Branch, held: list[str]) -> str:
         return "the head is under plan/ but is not plan/<plan>/item-NN-partK"
     if pr.head_repo.casefold() != pr.repository.casefold():
         return f"the head is in {pr.head_repo!r}, not this repository"
-    if pr.base_ref.removeprefix(planscope.HEADS) != pr.default_branch.removeprefix(planscope.HEADS):
+    if not planscope.targets_default(pr.base_ref, pr.default_branch):
         return f"the PR targets {pr.base_ref!r}, not the default branch"
     if held:
         shown = ", ".join(planscope.shown(p) for p in held[:SHOWN_PATHS])
