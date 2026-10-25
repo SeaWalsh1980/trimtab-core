@@ -1,11 +1,11 @@
 ---
 name: wrap-merged
-description: Close out a merged pull request and move to what comes next. In a repository that runs authorised plans, verify the plan, take the next work from the merged progress record, then continue, hand over to a fresh session, or stop on a blocker. In any other session, record the finished work in memory and the plan and hand over a clean context. Use whenever a PR is reported merged ("merged", "it landed", "PR is in"), when a session starts from a merge or a routine ("continue the plan", "next plan item"), when you start or open the PR for a plan item, and when the user asks to wrap up or get ready for the next task — even if they never mention plans, memory or compaction.
+description: Run an authorised plan across merges. In a repository with an operator-merged plan under its plans directory, verify the plan when a plan PR merges, take the next work from the merged progress record, then continue, hand over to a fresh session, or stop on a blocker; and follow the plan-item rules when opening a plan item's PR. Use whenever a plan PR is reported merged, when a session starts from a merge or a routine ("continue the plan", "next plan item", a `plan:continue` merge), when the operator restarts a stopped plan run, and when you start or open the PR for a plan item. Not for merges outside an authorised plan.
 ---
 
-# Wrap up a merged PR
+# Wrap up a merged plan PR
 
-When a PR merges, its history belongs in durable records and the live
+When a plan PR merges, its history belongs in durable records and the next
 session should carry only what comes next. Leftover review rounds, dead ends
 and command output cost context and let stale facts steer new work.
 
@@ -15,15 +15,14 @@ An authorised-plan project keeps three folders there: `<plans>/authorised/`
 record per PR) and `<plans>/unauthorised/<plan>.md` (the issues register,
 named like its plan).
 
-There are two situations. Decide which one you are in first:
-
-- **Plan run** — the repository has `<plans>/authorised/`, and any of these
-  holds: the merged PR adds a record under `<plans>/progress/`, adds a plan
-  under `<plans>/authorised/`, or carries a `plan:*` label; or the session
-  was started to continue a plan. Follow **Part A**. A PR with a `plan:*`
-  label but no record is a plan PR missing its record: Part A stops on it
-  (A3), it does not fall back to Part B.
-- **Ordinary session** — anything else. Follow **Part B**.
+**This skill applies only to plan runs:** the repository has
+`<plans>/authorised/`, and either the merged PR adds a record under
+`<plans>/progress/`, adds a plan under `<plans>/authorised/`, or carries a
+`plan:*` label, or the session was started to continue or restart a plan.
+A PR with a `plan:*` label but no record is a plan PR missing its record:
+it is a stop (A3). Any other merge is outside this skill: say so in one
+line and do nothing here. In particular, never edit anything under
+`<plans>/` for a merge that is not a plan run.
 
 `gh pr ...` subcommands use GraphQL, which some environments (the cloud
 GitHub proxy) block. If one fails, use REST through `gh api` instead, for
@@ -32,7 +31,7 @@ is never a reason to find another route to the same thing.
 
 ---
 
-## Part A — Plan run
+## The run
 
 The plan is a contract the operator approved by merging it. Your job is to
 verify that contract, find exactly what it says comes next, and then
@@ -40,9 +39,9 @@ continue, hand over, or stop and explain. You never widen it: a hand-over
 cannot create work, nothing found along the way gets done without a new
 plan, and you never edit an authorised plan or an earlier progress record.
 
-**Every stop** in Part A reports the blocker and proposes one to three ways
-forward for the operator (for example: approve a new plan covering it, make
-the guarded change by hand, or correct the record in a reviewed PR).
+**Every stop** reports the blocker and proposes one to three ways forward
+for the operator (for example: approve a new plan covering it, make the
+guarded change by hand, or correct the record in a reviewed PR).
 
 ### A1. Confirm the merge
 
@@ -192,8 +191,11 @@ PR's work**.
   2. **Desktop app:** tell the user the next turn starts from that `## Next`,
      then clear this session (`clear_session` with `"self"`), if the tool is
      available.
-  3. **Otherwise (plain CLI):** give a paste-ready `/compact` line (see B4) —
-     you cannot run `/compact` yourself.
+  3. **Otherwise (plain CLI):** give a paste-ready line — you cannot run
+     `/compact` yourself — of the form `/compact Focus on <plan> item NN
+     part Y. Run the authorisation check first; the next work is the latest
+     merged record's ## Next.` plus the plan path, and nothing about the
+     finished PR beyond its number and merge SHA.
 
   In the cloud there is nothing to hand over: the next merge, labelled
   `plan:continue`, starts the next session.
@@ -278,63 +280,3 @@ One item, or one part of an item, per session, ending in one PR:
 
 The session ends once ready is requested and any CI rounds it can act on
 are done, or it has stopped. The PR's merge starts the session after.
-
----
-
-## Part B — Ordinary session
-
-### B1. Confirm the merge
-
-As in A1. Not merged → say so in one line, record nothing as done, stop.
-`gh` unavailable → say the merge is unverified and mark the record so.
-
-### B2. Decide what is worth keeping
-
-- **Already durable — point, don't copy:** the diff, commit messages, the PR
-  body, review threads, decision records.
-- **Would be lost — record it:** reasons not written anywhere else, traps
-  and how they were avoided, things deliberately left out and where they
-  went, follow-ups promised.
-- **Noise — drop it:** review-round blow-by-blow, command output, retries.
-
-Name the **next task** from the plan or the conversation: what it is,
-whether the user has authorised it (quote their words), and its starting
-state (repository, branch or worktree, base commit, files). If nothing is
-queued, say "none" rather than inventing one.
-
-### B3. Update memory and the plan
-
-- **Memory** (if the session has one): update the existing memory for this
-  work stream in place — mark the PR merged (number, SHA, absolute date),
-  add the lessons, rewrite the status line, and refresh the index hook. One
-  "next" line, never three. Never copy credentials or private data.
-- **Plan** (if the session has one; do not invent one): one `## Next` at
-  the top; the finished item collapses to
-  `DONE <date> — <what changed> — PR <link> (<sha>)`; stale breadcrumbs go.
-  A plan committed to a repository is a repository change: follow that
-  project's rules for it.
-
-### B4. Hand over
-
-Do the tidy step (A6), then end in the first way that applies:
-
-1. **Started by a parent session:** report and stop.
-2. **Desktop app:** once the records are saved, offer to clear the session
-   (`clear_session` with `"self"`); the next turn starts from the plan's
-   `## Next`.
-3. **Otherwise:** a paste-ready `/compact` line. Its focus text starts with
-   `Focus on <next task>.`, then the authorisation (quoted, or "not yet
-   authorised"), the starting state with absolute paths, constraints not
-   already in always-loaded files, pointers to the plan and memory file,
-   and one clause on the finished work. Under about 1,500 characters;
-   longer means finished work is leaking in. No next task → `/compact`
-   naming the memory file and plan, and "no task in progress".
-
-```text
-Recorded PR <n> (merged <date>, <sha>): memory `<file>` updated, plan pruned (Next: <task>).
-
-Paste this:
-/compact Focus on <next task>. ...
-```
-
-Then stop.
