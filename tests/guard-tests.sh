@@ -1256,6 +1256,22 @@ mkdir -p "$CB/.git" "$CB/.claude" "$CB/src"
 printf '%s\n' '+' '+ # a note' 'src/**' > "$CB/.claude/write-allowlist"
 t guard-paths.sh 0 "create-only: a bare + line is skipped, the rest still applies" "$(e Edit "$CB/src/a.py")"
 t guard-paths.sh 2 "create-only: a bare + line grants nothing"     "$(e Write "$CB/notes.md")"
+# An allowlist that covers the authorised plans cannot open them: the
+# always-refused paths are checked before the list is read. A plain entry
+# and a create-only one both name the plans directory here, and the
+# create-only Write of a new plan is the case that would pass if the order
+# were reversed.
+AP="$CPTMP/ap-repo"
+mkdir -p "$AP/.git" "$AP/.claude" "$AP/$PL/authorised"
+: > "$AP/$PL/authorised/0001-old.md"
+printf '%s\n' "$PL/**" > "$AP/.claude/write-allowlist"
+t guard-paths.sh 0 "allowlisted plans: the plain entry is in effect" "$(e Edit "$AP/$PL/progress/item-01-part1.md")"
+t guard-paths.sh 2 "allowlisted plans: an Edit of an authorised plan is still refused" "$(e Edit "$AP/$PL/authorised/0001-old.md")"
+t guard-paths.sh 2 "allowlisted plans: a new authorised plan is still refused" "$(e Write "$AP/$PL/authorised/0002-new.md")"
+printf '%s\n' "+$PL/**" > "$AP/.claude/write-allowlist"
+t guard-paths.sh 0 "allowlisted plans: the create-only entry is in effect" "$(e Write "$AP/$PL/progress/item-01-part1.md")"
+t guard-paths.sh 2 "allowlisted plans: a create-only Write of a new authorised plan is refused" "$(e Write "$AP/$PL/authorised/0002-new.md")"
+t guard-paths.sh 2 "allowlisted plans: the refusal ignores case"   "$(e Write "$AP/$PL/AUTHORISED/0003-new.md")"
 # A file new on this branch, absent at its merge-base with origin's default
 # branch, may be changed; one already on the default branch may not. $CG is a
 # real repository: 0001 on main, 0002 committed on a branch, 0003 untracked.
