@@ -191,13 +191,13 @@ Everything comes from the default branch and open PRs, never from memory:
   - the PR changes neither `.github/` nor the code the `plan-scope` check
     runs (`gh api repos/{owner}/{repo}/pulls/<n>/files --paginate`): no
     file's `filename`, nor for a rename its `previous_filename`, is under
-    `.github/`, is a file that pins the checker (the Trimtab lock in a
-    project; `instance.json` in an instance, whose `base.sha` the job
-    checks out), or, in trimtab-core itself, is under the checker's
-    `trimtab/` package or `bin/`. A PR that edits, moves or removes a
-    workflow or the script it calls controls the checks it runs. That
-    endpoint lists at most 3,000 files; when the PR's `changed_files` is
-    larger, this test fails;
+    `.github/`, is either root file that can pin the checker,
+    `.claude/trimtab.json` (the Trimtab lock) or `instance.json` (an
+    instance's pin), both checked in every repository, or, in trimtab-core
+    itself, is under the checker's `trimtab/` package or `bin/`. A PR that
+    edits, moves or removes a workflow or the script it calls controls the
+    checks it runs. That endpoint lists at most 3,000 files; when the PR's
+    `changed_files` is larger, this test fails;
   - the `plan-scope` job runs its checker from the PR's base commit, never
     from the PR's own tree, so a PR cannot change what judges it. Confirm
     it from the job's workflow file on the default branch. If you cannot,
@@ -249,7 +249,8 @@ start only if all of these hold:
     settings and hooks, scanner exemption lists, repository protection,
     Actions configuration, repository access;
   - the harness: the rules directory (or the lock's `rules_dir`, with its
-    `overrides.md`), the Trimtab lock, agent, command and skill definitions;
+    `overrides.md`), the Trimtab lock, an instance's `instance.json`, agent,
+    command and skill definitions;
   - `<plans>/authorised/`.
 
 If the gate fails: say "needs approval: <reason>", list the open issues
