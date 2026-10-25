@@ -2,7 +2,7 @@
 # repository. guard-paths refuses every other path (ADR 0039). One glob per
 # line, relative to the repository root; `**` and `*` both span directories.
 # A line starting `+` is create-only: new files may be written there, existing
-# ones may not be changed (ADR 0040).
+# ones may not be changed (guard-paths' create-only entries).
 #
 # No autonomous runs work in this repository, so the list is minimal: new
 # decision records (an accepted one is rewritten only at a person's request)
