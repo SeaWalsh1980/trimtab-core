@@ -848,8 +848,8 @@ def cmd_scrub(args) -> int:
 
 def cmd_check_plan_scope(args) -> int:
     try:
-        result = planscope.check(args.repo, args.base, args.head, args.head_ref, args.base_ref,
-                                 args.default_branch)
+        result = planscope.check(args.repo, base=args.base, head=args.head, head_ref=args.head_ref,
+                                 base_ref=args.base_ref, default_branch=args.default_branch)
     except planscope.PlanScopeError as err:
         print(f"error: {err}; nothing is vouched for", file=sys.stderr)
         return 2

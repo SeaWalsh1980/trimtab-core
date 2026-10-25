@@ -274,8 +274,9 @@ class Repository(unittest.TestCase):
         git(self.repo, "commit", "-q", "-m", message)
         return git(self.repo, "rev-parse", "HEAD")
 
-    def check(self, head_ref=PLAN_REF, base_ref=DEFAULT):
-        return planscope.check(str(self.repo), self.base, "HEAD", head_ref, base_ref, DEFAULT)
+    def check(self, head_ref=PLAN_REF, base_ref=DEFAULT, head="HEAD", repo=None):
+        return planscope.check(str(repo or self.repo), base=self.base, head=head, head_ref=head_ref,
+                               base_ref=base_ref, default_branch=DEFAULT)
 
     def test_an_in_scope_pr_passes(self):
         self.write("README.md", "changed\n")
@@ -313,7 +314,7 @@ class Repository(unittest.TestCase):
         self.write(NEW_ADR, "# theirs\n")
         self.base = self.commit("main moves")
 
-        problems = planscope.check(str(self.repo), self.base, PLAN_REF, PLAN_REF, DEFAULT, DEFAULT).problems
+        problems = self.check(head=PLAN_REF).problems
 
         self.assertTrue(any("base commit already has it" in p for p in problems))
 
@@ -333,11 +334,15 @@ class Repository(unittest.TestCase):
 
         self.assertIn("not the default branch", problems[0])
 
+    def test_check_refuses_positional_refs(self):
+        with self.assertRaises(TypeError):
+            planscope.check(str(self.repo), self.base, "HEAD", PLAN_REF, DEFAULT, DEFAULT)
+
     def test_full_refs_name_the_same_default_branch(self):
         self.write(NEW_ADR, "# new\n")
         self.commit("item")
 
-        result = planscope.check(str(self.repo), self.base, "HEAD", PLAN_REF, "refs/heads/" + DEFAULT, DEFAULT)
+        result = self.check(base_ref="refs/heads/" + DEFAULT)
 
         self.assertEqual(result.problems, ())
 
@@ -348,7 +353,7 @@ class Repository(unittest.TestCase):
         self.write("src/app.py", "x = 2\n")
         self.commit("item")
 
-        problems = planscope.check(str(self.repo / "docs"), self.base, "HEAD", PLAN_REF, DEFAULT, DEFAULT).problems
+        problems = self.check(repo=self.repo / "docs").problems
 
         self.assertTrue(any("src/app.py" in p for p in problems))
 

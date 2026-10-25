@@ -164,8 +164,8 @@ def judge(changes: list[Change], allowlist: tuple[Entry, ...], plan_scope: tuple
           in_base: frozenset[str]) -> list[str]:
     """Every problem with a plan PR's changes; none means in scope.
 
-    in_base holds the changed paths present in the base commit, so a create-only
-    path the PR adds is refused when the base already has it.
+    in_base holds the create-only paths the PR adds that the base commit already
+    has, so they are refused; other paths need not be in it.
     """
     problems = []
     for c in changes:
@@ -295,7 +295,7 @@ def present(repo: str, sha: str, paths: list[str]) -> frozenset[str]:
     return frozenset(os.fsdecode(p) for p in out.split(b"\0") if p)
 
 
-def check(repo: str, base: str, head: str, head_ref: str, base_ref: str, default_branch: str) -> Result:
+def check(repo: str, *, base: str, head: str, head_ref: str, base_ref: str, default_branch: str) -> Result:
     """Judge a PR. base, head_ref, base_ref and default_branch come from the platform's event; head is
     the PR's head commit, always named: the job runs from a base checkout, where HEAD is the base."""
     branch = plan_of(head_ref)
@@ -314,7 +314,10 @@ def check(repo: str, base: str, head: str, head_ref: str, base_ref: str, default
         return Result(branch.ref, plan, tuple(f"{m} is not a regular file in the base commit; nothing can be "
                                               f"scoped" for m in missing))
     found = changes(repo, base_sha, head_sha)
-    added = [c.path for c in found if c.status == "A"]
-    problems = judge(found, parse_list(texts[ALLOWLIST]), scope(texts[writes_path], plan, branch.item),
-                     present(repo, base_sha, added))
+    allowlist, plan_scope = parse_list(texts[ALLOWLIST]), scope(texts[writes_path], plan, branch.item)
+    # Only a create-only addition needs the base lookup; passing every addition could overrun the
+    # command line on a large PR and fail it for no scope reason.
+    added = [c.path for c in found if c.status == "A"
+             and Listed.CREATE_ONLY in (match(allowlist, c.path), match(plan_scope, c.path))]
+    problems = judge(found, allowlist, plan_scope, present(repo, base_sha, added))
     return Result(branch.ref, plan, tuple(problems))
