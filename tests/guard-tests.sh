@@ -1183,6 +1183,32 @@ t guard-paths.sh 2 "bypass: a hard link to a protected file"   "$(e Edit "$AL/sr
 t guard-paths.sh 0 "control: an existing file with one link"   "$(e Edit "$AL/src/plain.py")"
 t guard-paths.sh 2 "cap: a glob with too many wildcard parts is refused" "$(bsh 'ls /*/*/*/*')" "$HL"
 t guard-paths.sh 0 "cap: three wildcard parts are still checked" "$(bsh 'ls src/*/*/*')" "$HL"
+# Links where the allowlist should be must not switch default-deny off, nor
+# let the list live outside the reviewed tree. One repository per case.
+printf 'src/**\n' > "$CPTMP/outside-allowlist"
+DL1="$CPTMP/dl-dangling"; mkdir -p "$DL1/.git" "$DL1/.claude" "$DL1/src"
+ln -s "$CPTMP/no-such-allowlist" "$DL1/.claude/write-allowlist"
+t guard-paths.sh 2 "allowlist: a dangling link at its path fails closed (Edit)" "$(e Edit "$DL1/src/a.py")"
+t guard-paths.sh 2 "allowlist: a dangling link at its path fails closed (Write)" "$(e Write "$DL1/src/b.py")"
+DL2="$CPTMP/dl-outside"; mkdir -p "$DL2/.git" "$DL2/.claude" "$DL2/src"
+ln -s "$CPTMP/outside-allowlist" "$DL2/.claude/write-allowlist"
+t guard-paths.sh 2 "allowlist: a link to a list outside the repo fails closed (Edit)" "$(e Edit "$DL2/src/a.py")"
+t guard-paths.sh 2 "allowlist: a link to a list outside the repo fails closed (Write)" "$(e Write "$DL2/src/b.py")"
+DL3="$CPTMP/dl-linked-dir"; mkdir -p "$DL3/.git" "$DL3/src" "$CPTMP/elsewhere-claude"
+printf 'src/**\n' > "$CPTMP/elsewhere-claude/write-allowlist"
+ln -s "$CPTMP/elsewhere-claude" "$DL3/.claude"
+t guard-paths.sh 2 "allowlist: a symlinked .claude directory fails closed (Write)" "$(e Write "$DL3/src/a.py")"
+t guard-paths.sh 2 "allowlist: a symlinked .claude directory fails closed (Edit)" "$(e Edit "$DL3/src/b.py")"
+DL4="$CPTMP/dl-linked-noallow"; mkdir -p "$DL4/.git" "$DL4/src" "$CPTMP/elsewhere-empty"
+ln -s "$CPTMP/elsewhere-empty" "$DL4/.claude"
+t guard-paths.sh 2 "allowlist: a symlinked .claude with no allowlist also fails closed" "$(e Edit "$DL4/src/a.py")"
+# The allowlist never confines Bash (ADR 0039); CODEOWNERS covers shell
+# writes. Pinned so a change to that is seen.
+t guard-paths.sh 0 "allowlist: a shell write is not judged against it" "$(bsh 'sed -i s/a/b/ src/a.py')" "$DL2"
+# Accepted residual: a shell command reaching a protected file through a hard
+# link is judged at its spelt path; the link-count check runs for Edit and
+# Write only (ADR 0039, Consequences).
+t guard-paths.sh 0 "residual: a shell write through a hard link" "$(bsh 'sed -i s/a/b/ src/hard.json')" "$AL"
 # Accepted residuals, pinned as they stand so a change to either is seen
 # (ADR 0039, Consequences). A shell write through a symlinked directory is
 # judged at its spelt path, and dotglob spelt so the text check misses it

@@ -706,13 +706,20 @@ hl_refused() {   # $1 = a path relative to its repository root
 # of any path guard; ADR 0039 records that residual.
 hl_dotglob=0
 [[ "$cmd" == *dotglob* || "$cmd" == *GLOBIGNORE* ]] && hl_dotglob=1
-# Expansion runs in this process with no timeout, so its cost is bounded
-# before it starts: a word with more than hl_glob_max_parts wildcard path
-# components (`/*/*/*/*`) is refused as too broad to check, and more than
-# hl_glob_max_hits matches are refused rather than judged one by one. Both
-# fail closed; a real command rarely needs either.
+# Expansion runs in this process, and the hook's registered timeout (10 s in
+# settings.base.json) is not a safe backstop: Claude Code's hooks reference
+# (code.claude.com/docs/en/hooks) documents that a PreToolUse command hook
+# killed at its timeout does not block the call, unless the handler sets
+# `onFailure: "block"`, which settings.base.json does not. A slow expansion
+# would therefore let the command through. Two bounds, both failing closed: a
+# word with more than hl_glob_max_parts wildcard path components (`/*/*/*/*`)
+# is refused before expanding, and more than hl_glob_max_hits matches are
+# refused rather than judged one by one. Measured on a workstation (ADR 0039):
+# expanding `/*/*/*` over the whole filesystem (26,678 matches) took about
+# 50 ms, far inside the timeout, and the match cap already refuses it; cost
+# follows directory size, not part count, so the part limit stays at three.
 hl_glob_max_parts=3
-hl_glob_max_hits=2000
+hl_glob_max_hits=1000
 hl_glob_hits() {   # $1 = an absolute path containing * ? or [
                    # 0 = a match is refused, 1 = none is, 2 = too broad to check
   local -a hits=() parts=()
@@ -769,6 +776,12 @@ EOF
 
 hl_allowed() {   # $1 = repository root, $2 = relative path; 0 = listed
   local list="$1/.claude/write-allowlist" line pat
+  # The list must be a regular file in the repository, where CODEOWNERS
+  # reviews it. A link could point outside the reviewed tree (a world-writable
+  # /tmp file would let anyone widen it), so any link refuses every write.
+  if [[ -L "$list" ]]; then
+    hl_deny "write allowlist is a symlink; it must be a regular file in the repository (fail closed)" "$list"
+  fi
   if [[ ! -r "$list" ]]; then
     hl_deny "write allowlist exists but cannot be read (fail closed)" "$list"
   fi
@@ -803,7 +816,17 @@ hl_check_abs() {   # $1 = absolute path, $2 = write tool 1/0, $3 = reason, $4 = 
   [[ "$abs" == "$hl_root" ]] && return 0
   rel="${abs#"$hl_root"/}"
   hl_refused "$rel" && hl_deny "$3 (repository harness or control)" "$4"
-  if (( $2 )) && [[ -e "$hl_root/.claude/write-allowlist" ]]; then
+  # A .claude directory that is itself a link puts the allowlist (and the
+  # rest of the harness) outside the reviewed tree, where a regular file at
+  # the end of the link would pass the check below. Refuse every write in
+  # such a repository rather than trust it (fail closed).
+  if (( $2 )) && [[ -L "$hl_root/.claude" ]]; then
+    hl_deny "the repository's .claude is a symlink; its allowlist cannot be trusted (fail closed)" "$4"
+  fi
+  # -L as well as -e: a link at the allowlist's path, dangling or not, must
+  # not read as "no allowlist" and switch default-deny off; hl_allowed then
+  # refuses it (fail closed).
+  if (( $2 )) && [[ -e "$hl_root/.claude/write-allowlist" || -L "$hl_root/.claude/write-allowlist" ]]; then
     hl_allowed "$hl_root" "$rel" || hl_deny "write outside the repository's write allowlist" "$4"
   fi
   return 0

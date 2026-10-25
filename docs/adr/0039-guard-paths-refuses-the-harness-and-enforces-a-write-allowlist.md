@@ -114,10 +114,46 @@ out of that repository's allowlist and by CODEOWNERS.
   matches nothing names nothing (the shell keeps it literal) and passes.
 - The harness layer's own glob expansion is bounded: a word with more than
   three wildcard path components (`/*/*/*/*`), or one that expands to more
-  than 2,000 matches, is refused as too broad to check (fail closed). This
-  does not bound the guard's older token loop, which has always let bash
-  expand each unquoted word as it splits the command; that cost predates
-  this change and is out of its scope.
+  than 1,000 matches, is refused as too broad to check (fail closed). The
+  bound matters because the hook's registered timeout is not a safe backstop.
+  Claude Code's hooks reference (code.claude.com/docs/en/hooks) documents
+  that a PreToolUse command hook killed at its timeout does not block the
+  call unless the handler sets `onFailure: "block"`, which
+  `settings.base.json` does not, so a slow expansion would let the command
+  through. The harness check runs inside the whole-command scan, before the
+  guard's older token loop, and a glob over the cap exits there; only words
+  within the cap reach the token loop, which has always let bash expand each
+  unquoted word as it splits the command.
+- Measurement behind the part limit (2026-10-25, a Debian workstation,
+  bash 5.2, in-process expansion with `nocaseglob` and `nullglob`):
+
+  | Glob | Wildcard parts | Matches | Time |
+  |---|---|---|---|
+  | `/*/*` | 2 | 3,412 | 9 ms |
+  | `/*/*/*` | 3 | 26,678 | 51 ms |
+  | `/usr/*/*/*` | 3 | 14,360 | 41 ms |
+  | `~/*/*/*` | 3 | 121 | 2 ms |
+
+  The worst realistic three-part glob costs about 50 ms against a 10 s
+  timeout, and both whole-filesystem globs above already exceed the match
+  cap. Cost follows directory size, not the number of wildcard parts: only a
+  tree of millions of entries, or a slow network mount, would approach the
+  timeout, and a two-part glob over it would be as slow. A two-part limit
+  was tried after review and reverted: it refused ordinary commands such as
+  `ls tests/*/*/*.py` and bought no measurable time, and the base branch's
+  guard matrix pins three parts as allowed.
+- A link where `.claude/write-allowlist` should be, dangling or not,
+  refuses every write: the list must be a regular file inside the reviewed
+  tree, or a link to a world-writable file elsewhere could widen it. It does
+  not switch default-deny off. For the same reason, a repository whose
+  `.claude` directory is itself a link refuses every write: the allowlist
+  at the end of that link is outside the reviewed tree.
+- Accepted residual: a shell command that reaches a protected file through
+  a hard link (`sed -i … src/hard.json`) is judged at its spelt path. The
+  link-count check costs a `stat` per call and runs for Edit and Write only;
+  running it for every path-shaped shell word would cost one per word.
+  CODEOWNERS at merge is the backstop, and the matrix pins this as a
+  residual case.
 - Accepted residual: a shell write through a symlinked directory inside the
   repository (`sed -i … src/cfg/settings.json` with `src/cfg ->
   ../.claude`) is judged at its spelt path. Edit and Write resolve the
