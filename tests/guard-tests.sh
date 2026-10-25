@@ -1221,6 +1221,25 @@ t guard-paths.sh 0 "allowlist: a CRLF line still matches"      "$(e Edit "$AL/sr
 t guard-paths.sh 0 "allowlist: a leading ./ is ignored"        "$(e Edit "$AL/tools/x.sh")"
 t guard-paths.sh 0 "allowlist: a trailing slash covers the directory" "$(e Write "$AL/notes/deep/n.txt")"
 t guard-paths.sh 2 "allowlist: still default-deny elsewhere"   "$(e Edit "$AL/Makefile")"
+# Create-only entries (ADR 0040): a leading `+` lets a Write make a new file
+# but refuses any change to one that already exists. A plain entry for the
+# same path wins, since it grants more.
+CO="$CPTMP/co-repo"
+mkdir -p "$CO/.git" "$CO/.claude" "$CO/records" "$CO/notes"
+printf '%s\n' '+records/**' ' + notes/** ' 'notes/free/**' > "$CO/.claude/write-allowlist"
+: > "$CO/records/0001-old.md"
+: > "$CO/notes/old.md"
+t guard-paths.sh 0 "create-only: a Write making a new file passes" "$(e Write "$CO/records/0002-new.md")"
+t guard-paths.sh 2 "create-only: a Write over an existing file is refused" "$(e Write "$CO/records/0001-old.md")"
+t guard-paths.sh 2 "create-only: an Edit of an existing file is refused" "$(e Edit "$CO/records/0001-old.md")"
+t guard-paths.sh 2 "create-only: an Edit is refused even for a new path" "$(e Edit "$CO/records/0003-x.md")"
+t guard-paths.sh 2 "create-only: MultiEdit is refused"            "$(e MultiEdit "$CO/records/0001-old.md")"
+t guard-paths.sh 0 "create-only: spaces around the + are ignored" "$(e Write "$CO/notes/new.md")"
+t guard-paths.sh 2 "create-only: spaced entry still refuses edits" "$(e Edit "$CO/notes/old.md")"
+mkdir -p "$CO/notes/free"; : > "$CO/notes/free/f.md"
+t guard-paths.sh 0 "create-only: a plain entry for the path wins"  "$(e Edit "$CO/notes/free/f.md")"
+HOOK_ALLOW_HARNESS=1 t guard-paths.sh 0 "create-only: the operator export lifts it" "$(e Edit "$CO/records/0001-old.md")"
+t guard-paths.sh 2 "create-only: still default-deny elsewhere"    "$(e Write "$CO/Makefile")"
 chmod 000 "$AL/.claude/write-allowlist"
 if [[ -r "$AL/.claude/write-allowlist" ]]; then
   printf 'SKIP  guard-paths.sh          allowlist: unreadable list fails closed (running as root)\n'

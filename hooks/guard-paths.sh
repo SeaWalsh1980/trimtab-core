@@ -653,7 +653,9 @@ check_path "$file" "file access"
 #    an Edit, Write, MultiEdit or NotebookEdit outside the listed globs is
 #    refused. One glob per line, relative to the repository root, `#`
 #    comments and blank lines ignored, `**` read as `*` (which already spans
-#    directories here). The list cannot widen layer 1. Bash is not confined
+#    directories here). A line starting `+` is create-only: a Write may make
+#    a new file there, but nothing may change a file that already exists
+#    (ADR 0040). The list cannot widen layer 1. Bash is not confined
 #    by it: any program can write anywhere, so shell writes outside the list
 #    are left to CODEOWNERS at merge.
 #
@@ -774,8 +776,9 @@ EOF
   exit 2
 }
 
-hl_allowed() {   # $1 = repository root, $2 = relative path; 0 = listed
-  local list="$1/.claude/write-allowlist" line pat
+hl_allowed() {   # $1 = repository root, $2 = relative path
+                 # 0 = listed, 1 = not listed, 3 = listed create-only only
+  local list="$1/.claude/write-allowlist" line pat create_only=0 is_create
   # The list must be a regular file in the repository, where CODEOWNERS
   # reviews it. A link could point outside the reviewed tree (a world-writable
   # /tmp file would let anyone widen it), so any link refuses every write.
@@ -790,14 +793,26 @@ hl_allowed() {   # $1 = repository root, $2 = relative path; 0 = listed
     line="${line#"${line%%[![:space:]]*}"}"
     line="${line%"${line##*[![:space:]]}"}"   # trailing space and a CRLF's \r
     [[ -z "$line" ]] && continue
+    # A leading `+` marks the entry create-only (ADR 0040): a new file may be
+    # written there, an existing one may not be changed.
+    is_create=0
+    if [[ "$line" == +* ]]; then
+      is_create=1
+      line="${line#+}"
+      line="${line#"${line%%[![:space:]]*}"}"
+    fi
     pat="${line//\*\*/*}"
     pat="${pat#/}"
     pat="${pat#./}"
     # A trailing slash means "this directory": everything under it.
     [[ "$pat" == */ ]] && pat="${pat}*"
     # shellcheck disable=SC2053
-    [[ "$2" == $pat ]] && return 0
+    if [[ "$2" == $pat ]]; then
+      (( is_create )) || return 0
+      create_only=1
+    fi
   done < "$list"
+  (( create_only )) && return 3
   return 1
 }
 
@@ -827,7 +842,21 @@ hl_check_abs() {   # $1 = absolute path, $2 = write tool 1/0, $3 = reason, $4 = 
   # not read as "no allowlist" and switch default-deny off; hl_allowed then
   # refuses it (fail closed).
   if (( $2 )) && [[ -e "$hl_root/.claude/write-allowlist" || -L "$hl_root/.claude/write-allowlist" ]]; then
-    hl_allowed "$hl_root" "$rel" || hl_deny "write outside the repository's write allowlist" "$4"
+    local al_rc
+    hl_allowed "$hl_root" "$rel"
+    al_rc=$?
+    case "$al_rc" in
+      0) ;;
+      3)
+        # Create-only: a Write that makes a new file passes; an Edit,
+        # MultiEdit or NotebookEdit, or a Write over an existing file (or a
+        # link), changes what is already there and is refused.
+        if [[ "$tool" != Write || -e "$abs" || -L "$abs" ]]; then
+          hl_deny "change to an existing file on a create-only allowlist path; new files only (ADR 0040)" "$4"
+        fi
+        ;;
+      *) hl_deny "write outside the repository's write allowlist" "$4" ;;
+    esac
   fi
   return 0
 }
