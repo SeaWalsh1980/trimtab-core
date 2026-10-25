@@ -11,7 +11,8 @@ name: plan-scope
 # `edited` re-judges a plan PR against the base its event carries, so a PR
 # retargeted onto the default branch is checked again without a push. A title
 # or body edit re-runs the same check, which costs a minute and changes
-# nothing unless the base moved. `edited` also fires on a merged PR, and the
+# nothing unless the base moved; a push followed by a body update, as a plan
+# run's checkpoint does, therefore costs two runs. `edited` also fires on a merged PR, and the
 # skill reads the latest run after the merge, so a later edit re-judges the
 # merged head against the base as it is then; if the scope has narrowed, the
 # chain stops (admin: remove `plan:blocked` to accept). Every event adds a run
