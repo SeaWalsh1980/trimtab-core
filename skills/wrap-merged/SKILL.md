@@ -164,6 +164,10 @@ Everything comes from the default branch and open PRs, never from memory:
   approver's own review may be the code gate for its own merge: ADR 0018
   (Trimtab) accepts that, with the operator's confirmation, because the
   plan's scope, enforced by the `plan-scope` check, is what bounds the PR.
+  - the PR's `head.ref` is `plan/<plan>/item-NN-partK` for this plan, with
+    the item and part of the record it carries, and its `base.ref` is the
+    default branch. The checker passes any other head without judging it,
+    so a `plan-scope` success on a non-plan PR proves nothing;
   - a **check run** (never a commit status: anyone with write access can
     post a status under any name) named `plan-scope`, whose `app.slug` is
     `github-actions`, concluded `success` on the PR's final head commit
