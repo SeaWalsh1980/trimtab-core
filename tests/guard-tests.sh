@@ -1418,6 +1418,9 @@ SM_HOOKS_SAVED="$HOOKS"; HOOKS="$SM_NOCLS"
 t guard-paths.sh 2 "session mode: a missing classifier refuses writes" "$(e Edit "$PG/README.md")"
 t guard-paths.sh 0 "session mode: a missing classifier leaves reads alone" "$(e Read "$PG/README.md")"
 HOOKS="$SM_HOOKS_SAVED"
+# Run by a bare name from inside hooks/, guard-paths still finds the classifier.
+(cd "$HOOKS" && printf '%s' "$(e Edit "$PG/README.md")" | HOME="$GUARD_HOME" bash guard-paths.sh >/dev/null 2>&1)
+sm_check "session mode: guard-paths run by a bare name still finds the classifier" $?
 
 # The SessionStart announcement names the mode and the signals behind it.
 sm_start() { # sm_start <label> <want substring> <cwd> [env assignment] [session id]
@@ -3371,6 +3374,38 @@ lv "moved checkout: dangling rules named"    "$LV_HOME"       " rules"
 mv "$LV/moved" "$LV_REPO"
 lv "no install at all warns"                 "$LV/nowhere"    "hooks/guard-paths.sh"
 lv "restored install is silent again"        "$LV_HOME"       silent
+
+# A missing session-mode classifier leaves the guards installed: guard-paths
+# refuses every repository write instead (ADR 0041). The warning says so, and
+# does not call the session unguarded.
+if [[ " $LV_GUARDS " == *" session-mode "* ]]; then
+  rm "$LV_REPO/hooks/session-mode.sh"
+  lv_out=$(HOME="$LV_HOME" sh -c "$LIVENESS" 2>&1); lv_rc=$?
+  lv_verdict=$(printf '%s' "$lv_out" | python3 -c '
+import json, sys
+rc, out = int(sys.argv[1]), sys.stdin.read()
+try:
+    d = json.loads(out)
+except ValueError:
+    sys.exit(print("not valid JSON: %r" % out[:80]))
+ctx = d.get("hookSpecificOutput", {}).get("additionalContext", "")
+msg = d.get("systemMessage", "")
+ok = (rc == 0 and msg.startswith("SESSION MODE MISSING") and "hooks/session-mode.sh" in msg
+      and "refuses every write" in ctx and "unguarded" not in ctx and "GUARDS OFF" not in msg)
+print("ok" if ok else "wrong warning: %r" % out[:160])
+' "$lv_rc")
+  if [[ "$lv_verdict" == ok ]]; then
+    printf 'PASS  %-14s %s\n' "liveness" "a missing classifier reads SESSION MODE MISSING, not unguarded"
+  else
+    printf 'FAIL  %-14s %s  -- %s\n' "liveness" "a missing classifier reads SESSION MODE MISSING, not unguarded" "$lv_verdict"
+    fails=$((fails+1))
+  fi
+  rm "$LV_REPO/hooks/guard-mcp.sh"
+  lv "a missing guard beside a missing classifier still reads GUARDS OFF" "$LV_HOME" "hooks/session-mode.sh"
+  printf '#!/bin/sh\n' > "$LV_REPO/hooks/guard-mcp.sh"; chmod +x "$LV_REPO/hooks/guard-mcp.sh"
+  printf '#!/bin/sh\n' > "$LV_REPO/hooks/session-mode.sh"; chmod +x "$LV_REPO/hooks/session-mode.sh"
+  lv "the classifier restored is silent again"  "$LV_HOME"       silent
+fi
 
 # The soft hooks, those a HOOKS MISSING names, read from the shipped command's
 # `case` for the same reason as the guard list above: CI runs the base

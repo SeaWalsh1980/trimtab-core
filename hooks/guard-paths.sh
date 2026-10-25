@@ -694,8 +694,12 @@ hl_plans="$hl_plans_dir/authorised"
 # hooks/ is linked as one directory, so it sits beside this file. Without it
 # no write can be judged, so every write in a repository is refused.
 hl_sm_ok=0
+hl_here="${BASH_SOURCE[0]%/*}"
+# Run by a bare name (`bash guard-paths.sh` inside hooks/) there is no slash
+# to strip, and the classifier is in the current directory.
+[[ "$hl_here" == "${BASH_SOURCE[0]}" ]] && hl_here=.
 # shellcheck source=hooks/session-mode.sh
-. "${BASH_SOURCE[0]%/*}/session-mode.sh" 2>/dev/null && declare -F sm_classify >/dev/null && hl_sm_ok=1
+. "$hl_here/session-mode.sh" 2>/dev/null && declare -F sm_classify >/dev/null && hl_sm_ok=1
 
 hl_root=""
 hl_find_root() {   # $1 = a normalised absolute path; sets hl_root or ""

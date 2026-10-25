@@ -24,9 +24,14 @@
 #   3. This session was recorded as autonomous earlier. The mode only
 #      tightens: once a signal held, the session stays autonomous, even after
 #      it leaves the plan branch, and in every repository. The record lives
-#      under the config directory's guard-state/, which guard-paths refuses
-#      to every tool.
+#      under the config directory's guard-state/, where guard-paths refuses
+#      every write by a tool (reads are allowed; the records are empty).
 # Interactive only when none holds.
+#
+# A record is per session id, and a clear (/clear, or a parent clearing its
+# worker) starts a new one. So a run must not rely on signals 2 and 3 alone:
+# every autonomous run, local as well as cloud, is launched with
+# TRIMTAB_PLAN_RUN=1, which no clear removes.
 set -uo pipefail
 
 sm_git() {   # $1 = a directory in the repository, then git's arguments
@@ -49,15 +54,12 @@ sm_branch() {   # $1 = a directory; prints the branch name, or nothing
   [[ "$ref" == refs/heads/* ]] && printf '%s' "${ref#refs/heads/}"
 }
 
-# Where the per-session record lives. Only hooks write it.
-sm_state_dir() {
-  local cfg
-  if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then cfg="${CLAUDE_CONFIG_DIR%/}"
-  elif [[ -n "${HOME:-}" ]]; then cfg="${HOME%/}/.claude"
-  else return 1
-  fi
-  printf '%s/guard-state/session-mode' "$cfg"
-}
+# Where the per-session records live; only hooks write them. Set once, with
+# no subshell: this runs on every write.
+sm_dir=""
+if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then sm_dir="${CLAUDE_CONFIG_DIR%/}/guard-state/session-mode"
+elif [[ -n "${HOME:-}" ]]; then sm_dir="${HOME%/}/.claude/guard-state/session-mode"
+fi
 
 # Records follow trimtab/adapters/pr_monitor.py's convention (ADR 0028): the
 # session id must be a plain token, the file is named by its sha256 so no
@@ -85,9 +87,9 @@ sm_record_name() {   # $1 = session id; sets sm_key, or returns 1
 }
 
 sm_recorded() {   # $1 = session id; 0 = recorded autonomous (or cannot tell)
-  local dir
+  local dir="$sm_dir"
   sm_valid_sid "$1" || return 1
-  dir=$(sm_state_dir) || return 1
+  [[ -n "$dir" ]] || return 1
   # A link anywhere on the record's path could point the record somewhere a
   # session can delete it. Treat that as recorded: strict, never looser.
   [[ -L "${dir%/*}" || -L "$dir" ]] && return 0
@@ -100,9 +102,9 @@ sm_recorded() {   # $1 = session id; 0 = recorded autonomous (or cannot tell)
 }
 
 sm_record() {   # $1 = session id; best effort, a failure only loses stickiness
-  local dir new=0
+  local dir="$sm_dir" new=0
+  [[ -n "$dir" ]] || return 0
   sm_record_name "$1" || return 0
-  dir=$(sm_state_dir) || return 0
   [[ -L "${dir%/*}" || -L "$dir" || -L "$dir/$sm_key" ]] && return 0
   [[ -e "$dir/$sm_key" ]] || new=1
   # `: >` refreshes the record's age with no exec.
@@ -128,8 +130,8 @@ sm_classify() {
   sm_recorded "$sid" && why+=("recorded autonomous earlier in this session")
   if (( ${#why[@]} )); then
     sm_mode=autonomous
-    sm_signals=$(IFS=';'; printf '%s' "${why[*]}")
-    sm_signals=${sm_signals//;/; }
+    printf -v sm_signals '%s; ' "${why[@]}"
+    sm_signals=${sm_signals%; }
     sm_record "$sid"
   else
     sm_mode=interactive

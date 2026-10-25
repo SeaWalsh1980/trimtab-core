@@ -45,7 +45,14 @@ any one** of these holds:
 3. The session was recorded as autonomous earlier. So the mode only
    tightens, never loosens, within a session.
    - **Where:** `<config dir>/guard-state/session-mode/<sha256 of session_id>`,
-     written only by hooks. guard-paths refuses `guard-state/` to every tool.
+     written only by hooks. guard-paths refuses every write to `guard-state/`
+     by a tool. Reads are allowed, and the records are empty.
+   - **A clear starts a new session id,** whether `/clear` or a parent
+     clearing its worker, so the record does not survive it. That's why
+     every autonomous run, local as well as cloud, must be launched with
+     `TRIMTAB_PLAN_RUN=1`: no clear removes it. A run relying on signals 2
+     and 3 alone is interactive again after a clear, once it is off its plan
+     branch.
    - **Shared with pr_monitor (ADR 0028):** the plain-token session id, the
      hashed name, and the two-day TTL. A run refreshes its record on every
      write. Records past the TTL, and any planted link, are pruned once per
@@ -137,6 +144,11 @@ All are far inside the hook's 10 s timeout.
     wants to leave one.
 - A session whose payload carries no usable session id gets no record. It
   is still classified by the other signals on every call.
+- A missing classifier leaves the guards installed, but guard-paths refuses
+  every write inside a repository. The SessionStart liveness check reports
+  this as SESSION MODE MISSING, not GUARDS OFF, so the warning says what
+  actually happens. bootstrap probes the classifier through the symlink and
+  fails an install whose classifier announces no mode.
 - The record directory holds one empty file per autonomous session that has
   been active within the TTL. A host with neither `sha256sum` nor `shasum`
   can't name a record, so its sessions keep signals 1 and 2 but lose
