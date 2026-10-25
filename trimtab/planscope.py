@@ -174,31 +174,31 @@ def judge(changes: list[Change], allowlist: tuple[Entry, ...], plan_scope: tuple
     """
     problems = []
     for c in changes:
-        shown = _shown(c.path)
+        label = shown(c.path)
         if refused(c.path):
-            problems.append(f"{shown}: a repository harness or control path; no plan covers it")
+            problems.append(f"{label}: a repository harness or control path; no plan covers it")
             continue
         listed = match(allowlist, c.path)
         if listed is Listed.NO:
-            problems.append(f"{shown}: outside the base commit's write allowlist")
+            problems.append(f"{label}: outside the base commit's write allowlist")
             continue
         in_plan = match(plan_scope, c.path)
         if in_plan is Listed.NO:
-            problems.append(f"{shown}: outside the plan's scope (its .writes declaration, and this PR's own "
+            problems.append(f"{label}: outside the plan's scope (its .writes declaration, and this PR's own "
                             f"progress record and register entries)")
             continue
         if c.status != "D" and c.mode not in REGULAR_MODES:
-            problems.append(f"{shown}: a link or submodule (mode {c.mode}); a plan run writes regular files only")
+            problems.append(f"{label}: a link or submodule (mode {c.mode}); a plan run writes regular files only")
             continue
         if create_only(allowlist, plan_scope, c.path):
             if c.status != "A":
-                problems.append(f"{shown}: {_verb(c.status)} a file already in the base, on a create-only path")
+                problems.append(f"{label}: {_verb(c.status)} a file already in the base, on a create-only path")
             elif c.path in in_base:
-                problems.append(f"{shown}: added on a create-only path where the base commit already has it")
+                problems.append(f"{label}: added on a create-only path where the base commit already has it")
     return problems
 
 
-def _shown(path: str) -> str:
+def shown(path: str) -> str:
     """A path safe to print: one holding a newline or another control character is escaped, so it
     cannot forge a log line or a CI runner's workflow command."""
     return path if path.isprintable() else ascii(path)

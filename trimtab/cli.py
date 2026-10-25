@@ -15,7 +15,7 @@ from pathlib import Path
 from trimtab import bump
 from trimtab import config as project_config
 from trimtab import dependabot
-from trimtab import instance, planscope, propose, roots, routines, scrub, upstream
+from trimtab import instance, mergeauthority, planscope, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
 from trimtab.ids import ID_SHAPE
@@ -864,6 +864,23 @@ def cmd_check_plan_scope(args) -> int:
     return 1 if result.problems else 0
 
 
+def cmd_check_merge_authority(args) -> int:
+    pr = mergeauthority.Pr(repository=args.repository, head_repo=args.head_repo, head_ref=args.head_ref,
+                           head=args.head, base_ref=args.base_ref, default_branch=args.default_branch)
+    try:
+        who = mergeauthority.accounts(args.admin, args.approver)
+        result = mergeauthority.check(args.repo, pr, args.pr, args.base, who)
+    except mergeauthority.MergeAuthorityError as err:
+        print(f"error: {err}; nothing is vouched for", file=sys.stderr)
+        return 2
+    if result.problems:
+        _print_problems(result.problems)
+        print(f"merge-authority: {len(result.problems)} problem(s) for PR {args.pr}")
+        return 1
+    print(f"merge-authority: PR {args.pr} approved by {result.approved_by} on {args.head[:12]}")
+    return 0
+
+
 def cmd_routine_render(args) -> int:
     pairs = {}
     for item in args.set or []:
@@ -1133,6 +1150,26 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the repository's default branch, from the event; a plan PR targeting another fails")
     ps.add_argument("--repo", default=".", metavar="DIR", help="the repository (default: .)")
     ps.set_defaults(func=cmd_check_plan_scope)
+
+    ma = sub.add_parser("check-merge-authority",
+                        help="fail a PR that lacks the approval its branch and paths need: the admin's, or for a "
+                             "plan run's PR the approver's with a passing plan-scope check (ADR 0043)")
+    ma.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository, from the event")
+    ma.add_argument("--pr", required=True, type=int, metavar="N", help="the PR's number, from the event")
+    ma.add_argument("--base", required=True, metavar="SHA", help="the PR's base commit, from the event")
+    ma.add_argument("--head", required=True, metavar="SHA", help="the PR's head commit, from the event")
+    ma.add_argument("--head-ref", required=True, metavar="BRANCH", help="the PR's head branch, from the event")
+    ma.add_argument("--head-repo", required=True, metavar="OWNER/NAME",
+                    help="the repository the head branch is in, from the event; a fork's PR needs the admin")
+    ma.add_argument("--base-ref", required=True, metavar="BRANCH", help="the branch the PR targets, from the event")
+    ma.add_argument("--default-branch", required=True, metavar="BRANCH",
+                    help="the repository's default branch, from the event")
+    ma.add_argument("--admin", required=True, metavar="LOGIN",
+                    help="the admin login, from configuration the PR cannot change")
+    ma.add_argument("--approver", metavar="LOGIN",
+                    help="the approver login, from the same configuration; without it no approver review counts")
+    ma.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout (default: .)")
+    ma.set_defaults(func=cmd_check_merge_authority)
 
     rt = sub.add_parser("routine", help="routine specs")
     rts = rt.add_subparsers(dest="routine_command", required=True)
