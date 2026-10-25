@@ -711,12 +711,14 @@ hl_dotglob=0
 # (code.claude.com/docs/en/hooks) documents that a PreToolUse command hook
 # killed at its timeout does not block the call, unless the handler sets
 # `onFailure: "block"`, which settings.base.json does not. A slow expansion
-# would therefore let the command through. The cost is therefore bounded before it
-# starts: a word with more than hl_glob_max_parts wildcard path components
-# (`/*/*/*`) is refused as too broad to check, and more than hl_glob_max_hits
-# matches are refused rather than judged one by one. Both fail closed; a real
-# command rarely needs either.
-hl_glob_max_parts=2
+# would therefore let the command through. Two bounds, both failing closed: a
+# word with more than hl_glob_max_parts wildcard path components (`/*/*/*/*`)
+# is refused before expanding, and more than hl_glob_max_hits matches are
+# refused rather than judged one by one. Measured on a workstation (ADR 0039):
+# expanding `/*/*/*` over the whole filesystem (26,678 matches) took about
+# 50 ms, far inside the timeout, and the match cap already refuses it; cost
+# follows directory size, not part count, so the part limit stays at three.
+hl_glob_max_parts=3
 hl_glob_max_hits=1000
 hl_glob_hits() {   # $1 = an absolute path containing * ? or [
                    # 0 = a match is refused, 1 = none is, 2 = too broad to check
