@@ -192,10 +192,15 @@ Everything comes from the default branch and open PRs, never from memory:
     or `bin/`. A PR that edits, moves or removes a workflow or the
     script it calls controls the checks it runs. That endpoint lists at
     most 3,000 files; when the PR's `changed_files` is larger, this test
-    fails.
+    fails;
+  - the `plan-scope` job runs its checker from the PR's base commit, never
+    from the PR's own tree, so a PR cannot change what judges it. Confirm
+    it from the job's workflow file on the default branch. If you cannot,
+    the approver path is unavailable and only an admin merge counts. The
+    file list above is a backstop, not a substitute.
 
   A record without the code gate, merged by any other account, or merged by
-  the approver without all three conditions authorises nothing: stop and
+  the approver without every condition authorises nothing: stop and
   label that PR `plan:blocked`. Never fall back to an earlier record; it
   points at work already merged. The admin's removal of `plan:blocked` from
   that PR accepts its merge (see "Restarting after a stop").
