@@ -557,6 +557,9 @@ cp_scan_cmd() {
     # word like `hooks`, and blocking those would block the English word.
     [[ "$frag" == *[/.]* ]] || continue
     cp_check "$frag" "shell command referencing the live control plane"
+    # The harness layer is defined further down; it runs here too, so a path
+    # welded into `python3 -c "open('.claude/settings.json','w')"` is seen.
+    hl_check "$frag" 0 "shell command referencing"
   done
   (( reset_f )) && set +f
   return 0
@@ -630,6 +633,171 @@ esac
 
 check_path "$file" "file access"
 
+# ---- harness and write allowlist ---------------------------------------
+# Two layers, both inside a git repository (the nearest ancestor holding a
+# .git file or directory, so a worktree is its own repository):
+#
+# 1. Always refused, in every repository and for every tool but Read: the
+#    repository's harness and controls. .claude/ (settings, hooks, the
+#    project's rules directory, agents, commands, skills, the Trimtab lock,
+#    the write allowlist itself) except .claude/worktrees/; CLAUDE.md and
+#    CLAUDE.local.md at any depth; .github/; CODEOWNERS (root and docs/);
+#    the scanner exemption lists; and the authorised plans. A Bash command
+#    naming one of these paths is refused the same way, reads included: as
+#    with the control plane, a path set is enumerable and a verb set is not.
+# 2. Default-deny, only where the repository has .claude/write-allowlist:
+#    an Edit, Write, MultiEdit or NotebookEdit outside the listed globs is
+#    refused. One glob per line, relative to the repository root, `#`
+#    comments and blank lines ignored, `**` read as `*` (which already spans
+#    directories here). The list cannot widen layer 1. Bash is not confined
+#    by it: any program can write anywhere, so shell writes outside the list
+#    are left to CODEOWNERS at merge.
+#
+# The operator lifts both layers for a session that develops the harness by
+# exporting HOOK_ALLOW_HARNESS=1 before launching claude. The other checks in
+# this guard stay on. See
+# docs/adr/0039-guard-paths-refuses-the-harness-and-enforces-a-write-allowlist.md.
+hl_on=1
+[[ "${HOOK_ALLOW_HARNESS:-0}" == "1" ]] && hl_on=0
+
+# Spelt in two pieces so the base's citation test, which refuses any plans
+# directory path in a tracked file, does not read this as a citation.
+hl_plans="docs/""plans/authorised"
+
+hl_root=""
+hl_find_root() {   # $1 = a normalised absolute path; sets hl_root or ""
+  local d="$1"
+  hl_root=""
+  while [[ -n "$d" ]]; do
+    if [[ -e "$d/.git" ]]; then hl_root="$d"; return 0; fi
+    d="${d%/*}"
+  done
+  return 1
+}
+
+hl_refused() {   # $1 = a path relative to its repository root
+  # Compared lower-cased: on a case-insensitive filesystem (macOS by default)
+  # `Claude.md` or `.GitHub/` names the same file as the protected spelling.
+  local rel="${1,,}" base plans="${hl_plans,,}"
+  base="${rel##*/}"
+  case "$rel" in
+    .claude/worktrees|.claude/worktrees/*) return 1 ;;
+    .claude|.claude/*|.github|.github/*) return 0 ;;
+    codeowners|docs/codeowners) return 0 ;;
+    .gitleaks.toml|.trivyignore|.bandit-allowlist.yml) return 0 ;;
+  esac
+  [[ "$rel" == "$plans" || "$rel" == "$plans"/* ]] && return 0
+  [[ "$base" == claude.md || "$base" == claude.local.md ]] && return 0
+  return 1
+}
+
+# A Bash fragment holding glob characters names whatever the shell expands it
+# to, which the literal checks above never see (`.cla*/settings.json`). Refuse
+# it when the pattern could match a protected path. Variables built at run time
+# stay out of reach of any path guard; ADR 0039 records that residual.
+hl_probes=( ".claude/settings.json" ".claude/x" ".github/workflows/x" \
+            "CLAUDE.md" "CLAUDE.local.md" "CODEOWNERS" "docs/CODEOWNERS" \
+            ".gitleaks.toml" ".trivyignore" ".bandit-allowlist.yml" "$hl_plans/x" )
+hl_glob_refused() {   # $1 = a relative path containing * ? or [
+  local p
+  shopt -s nocasematch
+  for p in "${hl_probes[@]}"; do
+    # shellcheck disable=SC2053
+    if [[ "$p" == $1 ]]; then shopt -u nocasematch; return 0; fi
+  done
+  shopt -u nocasematch
+  return 1
+}
+
+hl_deny() {
+  cat >&2 <<EOF
+BLOCKED by guard-paths: $1
+Target: $2
+
+This path is part of the repository's harness or controls (or outside its
+write allowlist). Plan approval never covers these, and neither does a task
+that merely involves them.
+
+If the change is genuinely needed, stop and ask the operator, naming the file.
+The operator lifts this check for a harness-development session by exporting
+HOOK_ALLOW_HARNESS=1 before launching claude. Do not set it yourself, and do
+not look for another route.
+EOF
+  exit 2
+}
+
+hl_allowed() {   # $1 = repository root, $2 = relative path; 0 = listed
+  local list="$1/.claude/write-allowlist" line pat
+  if [[ ! -r "$list" ]]; then
+    hl_deny "write allowlist exists but cannot be read (fail closed)" "$list"
+  fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"   # trailing space and a CRLF's \r
+    [[ -z "$line" ]] && continue
+    pat="${line//\*\*/*}"
+    pat="${pat#/}"
+    pat="${pat#./}"
+    # A trailing slash means "this directory": everything under it.
+    [[ "$pat" == */ ]] && pat="${pat}*"
+    # shellcheck disable=SC2053
+    [[ "$2" == $pat ]] && return 0
+  done < "$list"
+  return 1
+}
+
+hl_check_abs() {   # $1 = absolute path, $2 = write tool 1/0, $3 = reason, $4 = as given
+  local abs="$1" rel
+  hl_find_root "$abs" || return 0
+  [[ "$abs" == "$hl_root" ]] && return 0
+  rel="${abs#"$hl_root"/}"
+  hl_refused "$rel" && hl_deny "$3 (repository harness or control)" "$4"
+  if (( ! $2 )) && [[ "$rel" == *[\*\?\[]* ]] && hl_glob_refused "$rel"; then
+    hl_deny "$3 (a glob that can expand to a repository harness or control path)" "$4"
+  fi
+  if (( $2 )) && [[ -e "$hl_root/.claude/write-allowlist" ]]; then
+    hl_allowed "$hl_root" "$rel" || hl_deny "write outside the repository's write allowlist" "$4"
+  fi
+  return 0
+}
+
+hl_check() {   # $1 = path as given, $2 = 1 for a write tool, $3 = reason
+  (( hl_on )) || return 0
+  [[ -z "$1" ]] && return 0
+  cp_norm "$1"
+  local spelt="$cp_n" anc rest="" phys
+  hl_check_abs "$spelt" "$2" "$3" "$1"
+  (( $2 )) || return 0
+  # A write lands where the kernel resolves the path, which a symlink inside an
+  # allowlisted directory can point into .claude/ or another refused path.
+  # Resolve the deepest existing ancestor physically (one `cd -P`, as for the
+  # snapshot store above) and judge that path too. One that does not resolve
+  # blocks.
+  anc="$spelt"
+  while [[ -n "$anc" && ! -d "$anc" ]]; do
+    # A link on the way that does not resolve to a directory (dangling, a
+    # loop, or a link to a file above the target) hides where the write would
+    # go, or where a later mkdir would put it: block.
+    if [[ -L "$anc" && "$anc" != "$spelt" ]]; then
+      hl_deny "$3 (a symlink on the path that does not resolve to a directory)" "$1"
+    fi
+    rest="/${anc##*/}$rest"
+    anc="${anc%/*}"
+  done
+  if ! phys=$(cd -P "${anc:-/}" 2>/dev/null && pwd -P); then
+    hl_deny "$3 (cannot resolve the target's physical path; fail closed)" "$1"
+  fi
+  phys="${phys%/}$rest"
+  [[ "$phys" != "$spelt" ]] && hl_check_abs "$phys" "$2" "$3" "$1"
+  return 0
+}
+
+case "$tool" in
+  Read) ;;
+  *)    hl_check "$file" 1 "write to" ;;
+esac
+
 # ---- bash commands -----------------------------------------------------
 # Don't basename a whole command line — that only ever inspects the last
 # token. Pull out every path-shaped argument and check each one.
@@ -668,6 +836,7 @@ if [[ -n "$cmd" ]]; then
     # scan above cannot do.
     cp_check "$tok" "shell command referencing"
     check_path "$tok" "shell command referencing"
+    hl_check "$tok" 0 "shell command referencing"
   done
 fi
 
