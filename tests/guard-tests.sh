@@ -1467,6 +1467,78 @@ else
   printf 'FAIL  %-14s %s  -- rc=%s\n' "session-mode" "a garbage payload still announces a mode" "$sm_rc"
   fails=$((fails+1))
 fi
+
+# session-scratch (ADR 0049): a run's scratch is made at start and removed at
+# end; nothing else is touched. TMPDIR points into the fixture, and the hook
+# looks only under TMPDIR, so the live harness directory is never read.
+SS_TMP="$CPTMP/ss-tmp"; mkdir -p "$SS_TMP"
+SS_BASE="$SS_TMP/trimtab-run-$UID"; SS_ROOT="$SS_TMP/claude-$UID"
+ss_sid() { printf 'guard-tests-ss-%s-%s' "$$" "$1"; }
+ss() { # ss <start|end> <session id> [env assignment]  — sets SS_OUT and SS_RC
+  SS_OUT=$(printf '{"cwd":"%s","session_id":"%s"}' "$PG" "$2" \
+           | env TMPDIR="$SS_TMP" ${3:+"$3"} bash "$HOOKS/session-scratch.sh" "$1" 2>/dev/null)
+  SS_RC=$?
+}
+ss_check() { # ss_check <label> <condition result 0/1>
+  if [[ "$2" == 0 && "$SS_RC" == 0 ]]; then printf 'PASS  %-14s %s\n' "session-scratch" "$1"
+  else printf 'FAIL  %-14s %s  -- rc=%s\n' "session-scratch" "$1" "$SS_RC"; fails=$((fails+1)); fi
+}
+ss_pad() { # ss_pad <session id> [project dir name]  — a harness scratchpad with a file in it
+  mkdir -p "$SS_ROOT/${2:--home-x}/$1/scratchpad" && : > "$SS_ROOT/${2:--home-x}/$1/scratchpad/f"
+}
+pg checkout -q feat/manual
+SA=$(ss_sid a)
+ss start "$SA" TRIMTAB_PLAN_RUN=1
+[[ -d "$SS_BASE/$SA" && ! -L "$SS_BASE/$SA" ]]; ss_check "start: a run gets its own directory" $?
+[[ "$(stat -c %a "$SS_BASE" 2>/dev/null || stat -f %Lp "$SS_BASE")" == 700 ]]
+ss_check "start: the per-user directory is private" $?
+[[ "$SS_OUT" == *"$SS_BASE/$SA"* && "$SS_OUT" == *'"hookEventName":"SessionStart"'* ]]
+ss_check "start: the run is told where to keep temporary files" $?
+chmod 755 "$SS_BASE"; ss start "$(ss_sid w)" TRIMTAB_PLAN_RUN=1
+[[ "$(stat -c %a "$SS_BASE" 2>/dev/null || stat -f %Lp "$SS_BASE")" == 700 ]]
+ss_check "start: a per-user directory made with wider access is narrowed" $?
+SN=$(ss_sid n); ss_pad "$SN"
+ss end "$SN" TRIMTAB_PLAN_RUN=1
+[[ ! -e "$SS_ROOT/-home-x/$SN/scratchpad" && ! -e "$SM_DIR/$(smh "$SN")" ]]
+ss_check "end: a run is cleaned up without being recorded" $?
+SI=$(ss_sid i)
+ss start "$SI"
+[[ ! -e "$SS_BASE/$SI" && -z "$SS_OUT" ]]; ss_check "start: an interactive session gets nothing" $?
+ss_pad "$SI"; mkdir -p "$SS_BASE/$SI"
+ss end "$SI"
+[[ -e "$SS_ROOT/-home-x/$SI/scratchpad/f" && -d "$SS_BASE/$SI" ]]
+ss_check "end: an interactive session's scratch is kept" $?
+ss_pad "$SA"; : > "$SS_ROOT/-home-x/$SA/keep"; SB=$(ss_sid b); ss_pad "$SB"
+ss end "$SA"
+[[ ! -e "$SS_BASE/$SA" ]]; ss_check "end: a run's own directory is removed (sticky, off the plan branch)" $?
+[[ ! -e "$SS_ROOT/-home-x/$SA/scratchpad" ]]; ss_check "end: a run's harness scratchpad is removed" $?
+[[ -e "$SS_ROOT/-home-x/$SA/keep" ]]; ss_check "end: the rest of the session's harness directory is kept" $?
+[[ -e "$SS_ROOT/-home-x/$SB/scratchpad/f" ]]; ss_check "end: another session's scratchpad is kept" $?
+[[ -z "$SS_OUT" ]]; ss_check "end: prints nothing" $?
+pg checkout -q plan/demo/item-03-part1
+SC=$(ss_sid c); mkdir -p "$CPTMP/ss-target"; : > "$CPTMP/ss-target/f"
+mkdir -p "$SS_ROOT/-home-x/$SC"; ln -s "$CPTMP/ss-target" "$SS_ROOT/-home-x/$SC/scratchpad"
+ss_pad "$SC" plain-name
+ss end "$SC"
+[[ -e "$CPTMP/ss-target/f" && -L "$SS_ROOT/-home-x/$SC/scratchpad" ]]
+ss_check "end: a scratchpad that is a link is left, and so is its target" $?
+[[ -e "$SS_ROOT/plain-name/$SC/scratchpad/f" ]]
+ss_check "end: a project directory without the harness's leading dash is left" $?
+SD=$(ss_sid d); ss_pad "$SD" -linked-real; ln -s "$SS_ROOT/-linked-real" "$SS_ROOT/-linked"
+ss end "$SD"
+[[ ! -e "$SS_ROOT/-linked-real/$SD/scratchpad" ]]
+ss_check "end: the real project directory's scratchpad goes; its link is skipped" $?
+SL_TMP="$CPTMP/ss-linked-tmp"; mkdir -p "$SL_TMP" "$CPTMP/ss-elsewhere/$(ss_sid e)"
+ln -s "$CPTMP/ss-elsewhere" "$SL_TMP/trimtab-run-$UID"
+SS_OUT=$(printf '{"cwd":"%s","session_id":"%s"}' "$PG" "$(ss_sid e)" \
+         | TMPDIR="$SL_TMP" bash "$HOOKS/session-scratch.sh" end 2>/dev/null); SS_RC=$?
+[[ -d "$CPTMP/ss-elsewhere/$(ss_sid e)" ]]; ss_check "end: a per-user directory that is a link is not followed" $?
+ss end '../x' TRIMTAB_PLAN_RUN=1
+[[ -z "$SS_OUT" ]]; ss_check "end: a session id that is not a plain token does nothing" $?
+SS_OUT=$(printf 'not json' | TMPDIR="$SS_TMP" TRIMTAB_PLAN_RUN=1 bash "$HOOKS/session-scratch.sh" start 2>/dev/null)
+SS_RC=$?
+[[ -z "$SS_OUT" ]]; ss_check "a garbage payload does nothing and exits 0" $?
+pg checkout -q feat/manual
 export CLAUDE_CONFIG_DIR="$SM_CFG_SAVED"
 chmod 000 "$AL/.claude/write-allowlist"
 if [[ -r "$AL/.claude/write-allowlist" ]]; then

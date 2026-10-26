@@ -118,11 +118,12 @@ sm_record() {   # $1 = session id; best effort, a failure only loses stickiness
   return 0
 }
 
-# sm_classify <directory> <session id>
+# sm_classify <directory> <session id> [record: 1|0]
 # Sets sm_mode (interactive|autonomous), sm_signals (why) and sm_branch_name.
-# Records the session when it is autonomous, so the mode only tightens.
+# Records the session when it is autonomous, so the mode only tightens,
+# unless record is 0 (a session that is ending has nothing left to tighten).
 sm_classify() {
-  local dir="$1" sid="${2:-}"
+  local dir="$1" sid="${2:-}" record="${3:-1}"
   local -a why=()
   sm_branch_name=$(sm_branch "$dir")
   [[ "${TRIMTAB_PLAN_RUN:-}" == "1" ]] && why+=("TRIMTAB_PLAN_RUN=1")
@@ -132,18 +133,18 @@ sm_classify() {
     sm_mode=autonomous
     printf -v sm_signals '%s; ' "${why[@]}"
     sm_signals=${sm_signals%; }
-    sm_record "$sid"
+    [[ "$record" == 0 ]] || sm_record "$sid"
   else
     sm_mode=interactive
     sm_signals="no autonomous-run signal"
   fi
 }
 
-# ---- SessionStart hook ----------------------------------------------------
-# Never blocks and always exits 0: SessionStart is not a gate. The guard
-# enforces the mode on every write whatever this announcement said.
-sm_main() {
-  local payload cwd="" sid="" ctx msg
+# sm_payload: reads a session hook's payload on stdin and sets sm_cwd and
+# sm_sid, each "" when absent or unreadable. hooks/session-scratch.sh reads
+# its payload the same way.
+sm_payload() {
+  local payload cwd="" sid=""
   payload=$(cat 2>/dev/null) || payload=""
   if command -v jq >/dev/null 2>&1; then
     cwd=$(printf '%s' "$payload" | jq -r '(.cwd // "") | tostring' 2>/dev/null) || cwd=""
@@ -161,8 +162,18 @@ for k in ("cwd", "session_id"):
     print(v.replace("\n", " ") if isinstance(v, str) else "")
 ' 2>/dev/null)
   fi
+  sm_cwd="$cwd" sm_sid="$sid"
+}
+
+# ---- SessionStart hook ----------------------------------------------------
+# Never blocks and always exits 0: SessionStart is not a gate. The guard
+# enforces the mode on every write whatever this announcement said.
+sm_main() {
+  local cwd ctx msg
+  sm_payload
+  cwd="$sm_cwd"
   [[ -n "$cwd" && -d "$cwd" ]] || cwd="$PWD"
-  sm_classify "$cwd" "$sid"
+  sm_classify "$cwd" "$sm_sid"
   # The signals hold a branch name, which may carry a quote or a backslash.
   local s="$sm_signals"
   s=${s//\\/\\\\}; s=${s//\"/\\\"}
