@@ -279,10 +279,13 @@ worktree or local branch, pulling the default branch). Do only what they
 say; never delete a branch or worktree holding unmerged work.
 
 Then, if this session did the merged work, remove the temporary files it
-made for it. A run keeps them only in its session scratch directory, or,
-where the harness gives none, in one directory under the system temp
-directory named after its session. Remove only this session's own files
-there, nothing wider (caches, another session's scratch). A session that
+made for it. A run keeps them only in its session scratch directory: the
+one the session-scratch hook named at session start, or the harness's
+scratchpad (ADR 0049), or, where neither exists, one directory under the
+system temp directory named after its session. The hook removes the first
+two when the session ends; tidying now keeps the next item's session
+clear of them. Remove only this session's own files there, nothing wider
+(caches, another session's scratch). A session that
 did not do the merged work leaves the other session's directory alone:
 cloud containers are discarded, and a directory the merged record names as
 left behind is the operator's to remove, so report it.
@@ -411,9 +414,12 @@ One item, or one part of an item, per session, ending in one PR:
    When the guard refuses a write as outside the plan's scope, do not look
    for another route: record the change as an entry, or stop (step 5) if
    the item needs it. Keep temporary files only in the session scratch
-   directory; where there is none, make one directory under the system
+   directory: the one the session-scratch hook named at session start, or
+   the harness's scratchpad; the hook removes both when the session ends
+   (ADR 0049). Where neither exists, make one directory under the system
    temp directory named after the session and remove it before the session
-   ends, or name it in `## Done` if you cannot.
+   ends. Name in `## Done` anything you leave that the hook does not
+   remove.
 3. **Label** the PR `plan:continue` unless `## Next` is `plan complete` or
    `blocked: <reason>`. (When you author a PR that adds an authorised plan,
    label it `plan:continue` too: its merge starts item 01 part 1. Put it on
