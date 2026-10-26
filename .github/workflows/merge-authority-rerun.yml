@@ -1,0 +1,76 @@
+name: merge-authority-rerun
+
+# A review changes nothing on the head commit, and GitHub keeps a required
+# check per triggering event: a `merge-authority` run started by a review
+# event sits beside the `pull_request` one and never replaces it, so the
+# failed `pull_request` run keeps blocking (ADR 0045). This workflow judges
+# nothing. On a review it re-runs the `merge-authority` job of plan-scope.yml's
+# latest `pull_request` run on the head; that job reads the reviews again, and
+# its result replaces the one the ruleset reads.
+#
+# The job here is not named `merge-authority`, so its own check never counts
+# for the ruleset. It fails when it cannot re-run; the required check then
+# stays as it was, which is not a pass. A fork's PR gets a read-only token,
+# so its re-run fails: it needs the admin, who bypasses (ADR 0043).
+#
+# Like every `pull_request_review` job, it runs the PR's own copy of this
+# file, with the token permissions it asks for. A branch in this repository
+# could already ask for those in any workflow; code-owner review on `.github/`
+# keeps a changed copy from merging (ADR 0043).
+on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+
+permissions:
+  contents: read
+
+jobs:
+  rerun:
+    name: merge-authority-rerun
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Re-running a job needs `actions: write`; it reads and re-runs, nothing
+    # else.
+    permissions:
+      actions: write
+    steps:
+      # Inputs come from the event, through the environment. The run must be
+      # finished to be re-run, so wait for it, at most 5 minutes; a run still
+      # going then fails this job, and the next review or push decides. Any
+      # failed call fails the step.
+      - name: "merge-authority: re-run it on the head's latest pull_request run"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          runs="repos/$REPOSITORY/actions/workflows/plan-scope.yml/runs"
+          for _ in $(seq 1 20); do
+            # A command substitution, not a process substitution: a failed
+            # call must fail the step under `set -e`.
+            latest=$(gh api "$runs?event=pull_request&head_sha=$HEAD_SHA&per_page=100" \
+              --jq '.workflow_runs | sort_by(.created_at) | last | "\(.id // "") \(.status // "")"')
+            read -r run_id status <<< "$latest" || true
+            if [[ -z "$run_id" ]]; then
+              echo "::error::no plan-scope pull_request run on $HEAD_SHA; push or edit the PR to start one"
+              exit 1
+            fi
+            if [[ "$status" == completed ]]; then
+              break
+            fi
+            echo "plan-scope run $run_id is $status; waiting"
+            sleep 15
+          done
+          if [[ "$status" != completed ]]; then
+            echo "::error::plan-scope run $run_id still $status after 5 minutes; not re-run"
+            exit 1
+          fi
+          job_id=$(gh api "repos/$REPOSITORY/actions/runs/$run_id/jobs?filter=latest&per_page=100" \
+            --jq '[.jobs[] | select(.name == "merge-authority") | .id] | first // ""')
+          if [[ -z "$job_id" ]]; then
+            echo "::error::run $run_id has no merge-authority job"
+            exit 1
+          fi
+          gh api -X POST "repos/$REPOSITORY/actions/jobs/$job_id/rerun" --silent
+          echo "re-ran merge-authority (job $job_id) in run $run_id for $HEAD_SHA"

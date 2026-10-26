@@ -34,17 +34,14 @@ name: plan-scope
 # push a new commit to the plan branch, or close the other PR and re-run.
 #
 # The merge-authority job (ADR 0043) decides whose approval a PR needs. An
-# approval changes nothing on the head commit, so review events start this
-# workflow too, or an approval given after the last push would never be
-# judged. plan-scope runs on review events as well: skipping it there would
-# add a `skipped` run on the head, which merge-authority counts as not
-# passed. So each review on a plan PR costs one more plan-scope run, and a
-# review on a merged plan PR re-judges it, as `edited` does.
+# approval changes nothing on the head commit, and GitHub keeps a required
+# check per triggering event, so a run started by a review event would never
+# replace this workflow's failed `pull_request` run. Instead
+# merge-authority-rerun.yml re-runs this run's merge-authority job when a
+# review arrives (ADR 0045). Only `pull_request` starts this workflow.
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
-  pull_request_review:
-    types: [submitted, edited, dismissed]
 
 # Reads the repository and nothing else; it writes nothing. merge-authority
 # also reads reviews and check runs, and asks for that in its own job.
@@ -60,8 +57,9 @@ jobs:
     # no run at all, and a required check would wait on it forever.
     # `startsWith` ignores case, so `Plan/x` gets here too; the step below
     # fails it rather than let the checker skip it with a `success`.
-    # The context's `head_ref` and `base_ref` are empty on review events, so
-    # both refs come from the PR in the event, which both events carry.
+    # Both refs come from the PR in the event rather than the context's
+    # `head_ref` and `base_ref`, which are empty on events other than
+    # `pull_request` (ADR 0044).
     if: ${{ startsWith(github.event.pull_request.head.ref, 'plan/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -127,7 +125,7 @@ jobs:
             --default-branch "$DEFAULT_BRANCH"
 
 
-  # Whose approval the PR needs (ADR 0043, ADR 0044): the admin's, or on a
+  # Whose approval the PR needs (ADR 0043, ADR 0044, ADR 0045): the admin's, or on a
   # plan run's PR the approver's with every plan-scope run on the head
   # passed. The ruleset requires `merge-authority` by name; rename here and
   # there together.
@@ -153,10 +151,10 @@ jobs:
       checks: read
     steps:
       # The base branch's tip as the job starts, not the event's base commit:
-      # a review event carries the base GitHub last recorded for the PR, which
-      # can predate a change to the admin-only paths or the checker. The tip
-      # is the newest rule, and the checker diffs from the merge-base, so the
-      # PR's own changes are what it reads either way.
+      # a re-run after a review reuses its old event, whose base can predate
+      # a change to the admin-only paths or the checker. The tip is the newest
+      # rule, and the checker diffs from the merge-base, so the PR's own
+      # changes are what it reads either way.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.ref }}
@@ -165,7 +163,7 @@ jobs:
       - *setup-python
       - *pyyaml
 
-      # Two runs on one head can overlap: a push and a review moments apart.
+      # Two runs on one head can overlap: a push and an edit moments apart.
       # Judging while the other run's plan-scope is still going fails, and a
       # red run costs an autonomous run a fix round. So wait for every
       # plan-scope run on the head to finish, at most 5 minutes; after that
