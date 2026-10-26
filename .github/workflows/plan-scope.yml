@@ -32,11 +32,22 @@ name: plan-scope
 # same commit as a plan PR's adds a `skipped` run there, which becomes the
 # latest; the skill reads the latest, so that voids the pass. It fails safe:
 # push a new commit to the plan branch, or close the other PR and re-run.
+#
+# The merge-authority job (ADR 0043) decides whose approval a PR needs. An
+# approval changes nothing on the head commit, so review events start this
+# workflow too, or an approval given after the last push would never be
+# judged. plan-scope runs on review events as well: skipping it there would
+# add a `skipped` run on the head, which merge-authority counts as not
+# passed. So each review on a plan PR costs one more plan-scope run, and a
+# review on a merged plan PR re-judges it, as `edited` does.
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
 
-# Reads the repository and nothing else; it writes nothing.
+# Reads the repository and nothing else; it writes nothing. merge-authority
+# also reads reviews and check runs, and asks for that in its own job.
 permissions:
   contents: read
 
@@ -49,7 +60,9 @@ jobs:
     # no run at all, and a required check would wait on it forever.
     # `startsWith` ignores case, so `Plan/x` gets here too; the step below
     # fails it rather than let the checker skip it with a `success`.
-    if: ${{ startsWith(github.head_ref, 'plan/') }}
+    # The context's `head_ref` and `base_ref` are empty on review events, so
+    # both refs come from the PR in the event, which both events carry.
+    if: ${{ startsWith(github.event.pull_request.head.ref, 'plan/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -65,15 +78,18 @@ jobs:
       # The launcher runs `python3 -I`, and the CLI imports PyYAML. Pinned by
       # hash and written from this workflow, as ci.yml does and for its
       # reasons. tests/trimtab/test_workflow_pins.py fails if the two
-      # requirement blocks differ.
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # requirement blocks differ. merge-authority reuses both steps by
+      # anchor, so the pin is written once in this file.
+      - &setup-python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
 
-      - name: "python: PyYAML for the checker"
+      - &pyyaml
+        name: "python: PyYAML for the checker"
         run: |
           set -euo pipefail
-          req="$RUNNER_TEMP/plan-scope-requirements.txt"
+          req="$RUNNER_TEMP/checker-requirements.txt"
           cat > "$req" <<'EOF'
           pyyaml==6.0.3 \
               --hash=sha256:b8bb0864c5a28024fac8a632c443c87c5aa6f215c0b126c449ae1a150412f31d \
@@ -89,8 +105,8 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HEAD_REF: ${{ github.head_ref }}
-          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
@@ -109,3 +125,104 @@ jobs:
             --base "$BASE_SHA" --head "$HEAD_SHA" \
             --head-ref "$HEAD_REF" --base-ref "$BASE_REF" \
             --default-branch "$DEFAULT_BRANCH"
+
+
+  # Whose approval the PR needs (ADR 0043, ADR 0044): the admin's, or on a
+  # plan run's PR the approver's with every plan-scope run on the head
+  # passed. The ruleset requires `merge-authority` by name; rename here and
+  # there together.
+  #
+  # It runs for every PR, after plan-scope, whatever plan-scope concluded:
+  # the checker reads plan-scope's runs on the head itself, so a skipped or
+  # failed plan-scope cannot pass a plan PR. `!cancelled()` rather than
+  # `always()`, so a cancelled workflow stays cancelled, which is not a pass.
+  #
+  # This job runs the PR's own copy of this workflow, as every `pull_request`
+  # job does, so a PR that edits it could make it pass. Code-owner review on
+  # `.github/` closes that: GitHub enforces it outside the PR (ADR 0043).
+  merge-authority:
+    name: merge-authority
+    needs: plan-scope
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Reviews and check runs through the REST API; it writes nothing.
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    steps:
+      # The base branch's tip as the job starts, not the event's base commit:
+      # a review event carries the base GitHub last recorded for the PR, which
+      # can predate a change to the admin-only paths or the checker. The tip
+      # is the newest rule, and the checker diffs from the merge-base, so the
+      # PR's own changes are what it reads either way.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      - *setup-python
+      - *pyyaml
+
+      # Two runs on one head can overlap: a push and a review moments apart.
+      # Judging while the other run's plan-scope is still going fails, and a
+      # red run costs an autonomous run a fix round. So wait for every
+      # plan-scope run on the head to finish, at most 5 minutes; after that
+      # the checker judges and fails on the one still running. No
+      # `concurrency:` group: it would cancel a plan-scope run, and a
+      # cancelled run voids the head until the next push. A failed call
+      # fails the step, which is not a pass.
+      - name: "merge-authority: wait for plan-scope on the head"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 20); do
+            running=$(gh api \
+              "repos/$REPOSITORY/commits/$HEAD_SHA/check-runs?check_name=plan-scope&filter=all&per_page=100" \
+              --jq '[.check_runs[] | select(.app.slug == "github-actions" and .status != "completed")] | length')
+            if [[ "$running" == 0 ]]; then
+              exit 0
+            fi
+            echo "plan-scope: $running run(s) still going on $HEAD_SHA; waiting"
+            sleep 15
+          done
+          echo "::warning::plan-scope is still running after 5 minutes; judging now"
+
+      # Inputs come from the event, through the environment, as in plan-scope.
+      # The logins come from the repository's Actions variables, which a PR
+      # cannot change (ADR 0044). TRIMTAB_APPROVER unset means no approver
+      # review counts.
+      - name: "merge-authority: the PR has the approval it needs"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          ADMIN: ${{ vars.TRIMTAB_ADMIN }}
+          APPROVER: ${{ vars.TRIMTAB_APPROVER }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$ADMIN" ]]; then
+            # A fork's PR may get no variables; the admin then bypasses, as
+            # for the admin's own PRs (ADR 0044).
+            echo "::error::TRIMTAB_ADMIN is empty: unset, or withheld from a fork's run; nothing is vouched for"
+            exit 2
+          fi
+          base_sha=$(git rev-parse HEAD)
+          echo "judging against $BASE_REF at $base_sha"
+          git fetch --no-tags --no-recurse-submodules origin "$HEAD_SHA"
+          git cat-file -e "$HEAD_SHA^{commit}"
+          ./bin/trimtab check-merge-authority \
+            --repository "$REPOSITORY" --pr "$PR_NUMBER" \
+            --base "$base_sha" --head "$HEAD_SHA" \
+            --head-ref "$HEAD_REF" --head-repo "$HEAD_REPO" \
+            --base-ref "$BASE_REF" --default-branch "$DEFAULT_BRANCH" \
+            --admin "$ADMIN" --approver "$APPROVER"

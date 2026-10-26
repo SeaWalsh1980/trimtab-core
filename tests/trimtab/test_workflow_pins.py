@@ -40,6 +40,7 @@ class WorkflowPinsConsistencyTest(unittest.TestCase):
         ci, plan_scope = workflow_requirements("ci.yml"), workflow_requirements("plan-scope.yml")
 
         self.assertEqual(len(ci), 1)
+        # merge-authority reuses plan-scope's step by anchor: one block.
         self.assertEqual(plan_scope, ci)
 
 
