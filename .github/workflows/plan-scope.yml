@@ -8,18 +8,12 @@ name: plan-scope
 # - the job runs only for `plan/` heads, so a non-plan PR's run concludes
 #   `skipped`, never `success`.
 #
-# `edited` re-judges a plan PR against the base its event carries, so a PR
-# retargeted onto the default branch is checked again without a push. A title
-# or body edit re-runs the same check, which costs a minute and changes
-# nothing unless the base moved; a push followed by a body update, as a plan
-# run's checkpoint does, therefore costs two runs.
-#
-# `edited` also fires on a merged PR, and the skill reads the latest run after
-# the merge, so a later edit re-judges the merged head against the base as it
-# is then; if the scope has narrowed, the chain stops (admin: remove
-# `plan:blocked` to accept). Every event adds a run record, so no `if:` can
-# avoid this: a skipped run would stop it just the same. Leave a merged plan
-# PR's title and body alone.
+# `edited` is not a trigger (ADR 0047). A title or body edit would re-run
+# both jobs to the same result, and on a merged PR it would re-judge the
+# merged head and could stop the chain. Retargeting a PR is an edit too, so
+# it re-runs nothing: a plan PR moved onto the default branch keeps its runs
+# judged against the old base, which failed, and a failed run voids the
+# head. To re-judge, close and reopen the PR (`reopened`) or push.
 #
 # A pass is judged against the base commit of the event that started it; a
 # re-run reuses that event. Nothing here runs when the base branch moves, so
@@ -41,7 +35,7 @@ name: plan-scope
 # review arrives (ADR 0045). Only `pull_request` starts this workflow.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
 
 # Reads the repository and nothing else; it writes nothing. merge-authority
 # also reads reviews and check runs, and asks for that in its own job.
@@ -163,7 +157,7 @@ jobs:
       - *setup-python
       - *pyyaml
 
-      # Two runs on one head can overlap: a push and an edit moments apart.
+      # Two runs on one head can overlap: a push and a reopen moments apart.
       # Judging while the other run's plan-scope is still going fails, and a
       # red run costs an autonomous run a fix round. So wait for every
       # plan-scope run on the head to finish, at most 5 minutes; after that

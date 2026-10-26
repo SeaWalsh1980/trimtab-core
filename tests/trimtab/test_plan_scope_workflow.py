@@ -40,6 +40,13 @@ class PlanScopeWorkflowTest(unittest.TestCase):
         # pull_request one, which never replaces it (ADR 0045).
         self.assertEqual(set(self.workflow[True]), {"pull_request"})
 
+    def test_an_edit_of_a_pr_starts_nothing(self):
+        # An edit would re-run both jobs to the same result, and re-judge a
+        # merged PR; reopening re-runs them when wanted (ADR 0047).
+        types = self.workflow[True]["pull_request"]["types"]
+
+        self.assertEqual(set(types), {"opened", "synchronize", "reopened"})
+
     def test_refs_come_from_the_event_pr_not_the_context(self):
         text = WORKFLOW.read_text(encoding="utf-8")
 
