@@ -25,9 +25,13 @@ whole directory.
 - `~/.claude/skills` stays a real directory. Each base skill is linked into
   it by name, `skills/<name>` to the base's `skills/<name>`.
 - An entry with a base skill's name that no install made (a real directory,
-  a file, or a link outside the store and the base) is the operator's. The
-  install refuses, names it, and stops before writing anything (section
-  1c), so a clash never leaves a half-switched install.
+  a file, or a link outside the store, this base and any other
+  trimtab-core tree) is the operator's. The install refuses, names it, and
+  stops before writing anything (section 1b, ahead of `machine.json`), so a
+  clash never leaves a half-switched install. A link into another core tree
+  counts as an install's: an earlier install from a core checkout made it,
+  and the install record names no base path. The tree is recognised by its
+  `settings.base.json`, `hooks/guard-paths.sh` and `bootstrap.sh`.
 - An earlier install's whole-directory link (into the store or the base) is
   replaced by a real directory. A `skills/` link the operator made is
   refused, not replaced.
@@ -57,4 +61,7 @@ whole directory.
   directory, the operator's skill kept, an install's whole-directory link
   replaced, a clash refused with nothing written, an operator's whole
   `skills/` link refused, a stale install link removed while the operator's
-  link stays, and `--check` leaving a whole-directory link in place.
+  link stays, `--check` leaving a whole-directory link in place, a
+  dangling whole-directory link into a deleted snapshot replaced, and links
+  into another core checkout (one skill, or the whole directory) relinked
+  to this base.

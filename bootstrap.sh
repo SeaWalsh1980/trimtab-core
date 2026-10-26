@@ -246,21 +246,7 @@ ok "doctrine registry check passed"
 values=$(bash "$TRIMTAB_BIN" instance --json --instance "$INSTANCE") \
   || die "could not read the instance's values (instance.json is invalid, or the checker could not run; see above); nothing was changed"
 
-# ---- 1b. machine.json ---------------------------------------------------
-# Lives in the instance: it is this machine's values for that instance. Created
-# only once the registry check has passed.
-if [[ ! -f "$INSTANCE/machine.json" ]]; then
-  if [[ $CHECK_ONLY -eq 1 ]]; then
-    note "machine.json missing"
-  else
-    sed "s|/home/CHANGEME/|$HOME/|g" "$BASE/machine.example.json" > "$INSTANCE/machine.json"
-    note "created machine.json from example — edit it for this host"
-  fi
-else
-  ok "machine.json present"
-fi
-
-# ---- 1c. skills: refuse a clash before anything is written (ADR 0050) ----
+# ---- 1b. skills: refuse a clash before anything is written (ADR 0050) ----
 # ~/.claude/skills is the operator's as well as the base's: Claude Code loads
 # every skill under it, and operators install their own there. So it stays a
 # real directory and section 3b links each base skill into it by name. An
@@ -271,11 +257,20 @@ fi
 # compared by its path as written.
 store_phys=$(cd -P "$STORE" 2>/dev/null && pwd -P || printf '%s' "${STORE%/}")
 base_phys=$(cd -P "$BASE" && pwd -P)
-made_by_install() {   # $1 = a link; 0 when it points into the store or this base
+is_core_base() {   # $1 = a directory; 0 when it is a trimtab-core tree
+  [[ -f "$1/settings.base.json" && -f "$1/hooks/guard-paths.sh" && -f "$1/bootstrap.sh" ]]
+}
+made_by_install() {   # $1 = a link; 0 when it points into the store, this base, or another core tree
   local t
   # A link into a deleted snapshot does not resolve; its text still names it.
   t=$(readlink -f "$1" 2>/dev/null) || t=$(readlink "$1")
-  [[ -n "$store_phys" && "$t" == "$store_phys"/* ]] || [[ "$t" == "$base_phys"/* ]]
+  if [[ -n "$store_phys" && "$t" == "$store_phys"/* ]] || [[ "$t" == "$base_phys"/* ]]; then
+    return 0
+  fi
+  # An earlier install from a core checkout linked its skills/, or one skill
+  # in it; the install record names no base path, so the tree says it.
+  [[ "$t" == */skills ]] && is_core_base "${t%/skills}" && return 0
+  [[ "${t%/*}" == */skills ]] && is_core_base "${t%/*/*}"
 }
 skills_src="$BASE/skills"
 skills_dst="$CLAUDE_HOME/skills"
@@ -300,8 +295,23 @@ if (( ${#skills_clash[@]} )); then
   if [[ $CHECK_ONLY -eq 1 ]]; then
     for c in "${skills_clash[@]}"; do note "$c is the operator's, where a base skill goes"; done
   else
-    die "the operator's entries are where base skills go: ${skills_clash[*]}. Rename or move them, then re-run; nothing was changed"
+    why="the operator's entries are where base skills go: ${skills_clash[*]}."
+    die "$why Rename or move them, then re-run; nothing was changed"
   fi
+fi
+
+# ---- 1c. machine.json ---------------------------------------------------
+# Lives in the instance: it is this machine's values for that instance. Created
+# only once the registry check and the skills check have passed.
+if [[ ! -f "$INSTANCE/machine.json" ]]; then
+  if [[ $CHECK_ONLY -eq 1 ]]; then
+    note "machine.json missing"
+  else
+    sed "s|/home/CHANGEME/|$HOME/|g" "$BASE/machine.example.json" > "$INSTANCE/machine.json"
+    note "created machine.json from example — edit it for this host"
+  fi
+else
+  ok "machine.json present"
 fi
 
 # ---- 2. generate settings.json ----------------------------------------
@@ -464,12 +474,14 @@ for dir in hooks bin rules commands agents output-styles; do
 done
 
 # ---- 3b. skills, one link per skill (ADR 0050) -------------------------
-# Section 1c refused any clash. An earlier install linked the whole directory;
+# Section 1b refused any clash. An earlier install linked the whole directory;
 # that link is replaced by a real directory. A link an install made whose
 # skill the base no longer ships is removed; the operator's entries stay.
 if [[ -d "$skills_src" ]]; then
   if [[ $CHECK_ONLY -eq 1 ]]; then
-    if [[ -L "$skills_dst" ]]; then
+    if (( ${#skills_clash[@]} )); then
+      :   # section 1b named each clash; an install would stop there
+    elif [[ -L "$skills_dst" ]]; then
       note "skills/ is still one link; an install makes it a directory of per-skill links"
     else
       for s in "$skills_src"/*/; do

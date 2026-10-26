@@ -1011,6 +1011,67 @@ check_skills_check_reports_and_changes_nothing() {
   fi
 }
 
+check_skills_replace_a_dangling_link_into_a_deleted_snapshot() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  mkdir -p "$h/.claude"; ln -s "$(old_snap "$h")/skills" "$h/.claude/skills"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 ]] && skill_linked "$h"; then
+    pass "skills: a whole-directory link into a deleted snapshot is replaced"
+  else
+    fail "skills: a whole-directory link into a deleted snapshot is replaced" "rc=$rc"
+  fi
+}
+
+fake_core() { # fake_core <dir>: a tree that reads as a trimtab-core checkout
+  mkdir -p "$1/hooks" "$1/skills/wrap-merged"
+  : > "$1/settings.base.json"; : > "$1/hooks/guard-paths.sh"; : > "$1/bootstrap.sh"
+}
+
+check_skills_relink_from_another_core_checkout() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  fake_core "$h/core-checkout"
+  mkdir -p "$h/.claude/skills"; ln -s "$h/core-checkout/skills/wrap-merged" "$h/.claude/skills/wrap-merged"
+  boot "$h" "$live" --instance "$inst"
+  local one=$rc
+  local h2 inst2
+  h2=$(new_home); inst2=$(inst_of "$h2")
+  fake_core "$h2/core-checkout"
+  mkdir -p "$h2/.claude"; ln -s "$h2/core-checkout/skills" "$h2/.claude/skills"
+  boot "$h2" "$live" --instance "$inst2"
+  if [[ $one -eq 0 && $rc -eq 0 ]] && skill_linked "$h" && skill_linked "$h2"; then
+    pass "skills: links into another core checkout are an install's, and relinked"
+  else
+    fail "skills: links into another core checkout are an install's, and relinked" "rc=$one/$rc"
+  fi
+}
+
+check_skills_clash_writes_no_machine_json() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  rm -f "$inst/machine.json"
+  mkdir -p "$h/.claude/skills/wrap-merged"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -ne 0 && ! -e "$inst/machine.json" ]]; then
+    pass "skills: a clash is refused before machine.json is created"
+  else
+    fail "skills: a clash is refused before machine.json is created" "rc=$rc"
+  fi
+}
+
+check_skills_check_names_an_operator_link_once() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  mkdir -p "$h/dotfiles/skills" "$h/.claude"; ln -s "$h/dotfiles/skills" "$h/.claude/skills"
+  boot "$h" "$live" --instance "$inst" --check
+  if [[ "$out" == *"is the operator's"* && "$out" != *"an install makes it a directory"* ]]; then
+    pass "skills: --check names an operator's skills/ link as a clash, without promising to convert it"
+  else
+    fail "skills: --check names an operator's skills/ link as a clash, without promising to convert it" "rc=$rc"
+  fi
+}
+
 check_instance_without_claude_md_drops_a_link_into_the_store() {
   local h inst snap
   h=$(new_home); inst=$(inst_of "$h")
@@ -1364,6 +1425,10 @@ check_skills_clash_is_refused_before_anything_is_written
 check_skills_refuse_a_whole_directory_link_no_install_made
 check_skills_drop_a_stale_link_and_keep_the_operators
 check_skills_check_reports_and_changes_nothing
+check_skills_replace_a_dangling_link_into_a_deleted_snapshot
+check_skills_relink_from_another_core_checkout
+check_skills_clash_writes_no_machine_json
+check_skills_check_names_an_operator_link_once
 
 if [[ $fails -ne 0 ]]; then
   echo "$fails check(s) FAILED"
