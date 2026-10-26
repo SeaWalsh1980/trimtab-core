@@ -3,10 +3,10 @@ name: merge-authority-rerun
 # A review changes nothing on the head commit, and GitHub keeps a required
 # check per triggering event: a `merge-authority` run started by a review
 # event sits beside the `pull_request` one and never replaces it, so the
-# failed `pull_request` run keeps blocking (ADR 0045). This workflow judges
-# nothing. On a review it re-runs the `merge-authority` job of plan-scope.yml's
-# latest `pull_request` run on the head; that job reads the reviews again, and
-# its result replaces the one the ruleset reads.
+# failed `pull_request` run keeps blocking (ADR 0045, ADR 0046).
+# This workflow judges nothing. On a review it re-runs the `merge-authority`
+# job of plan-scope.yml's latest `pull_request` run on the head; that job
+# reads the reviews again, and its result replaces the one the ruleset reads.
 #
 # The job here is not named `merge-authority`, so its own check never counts
 # for the ruleset. It fails when it cannot re-run; the required check then
@@ -17,20 +17,41 @@ name: merge-authority-rerun
 # file, with the token permissions it asks for. A branch in this repository
 # could already ask for those in any workflow; code-owner review on `.github/`
 # keeps a changed copy from merging (ADR 0043).
+#
+# Only reviews that can change the outcome re-run it: an approval, a request
+# for changes, a dismissal. The checker ignores comment reviews, and editing
+# a review's text never changes its state, so neither costs a run.
+#
+# Changing TRIMTAB_ADMIN or TRIMTAB_APPROVER starts nothing: a pass judged
+# under the old logins stands until the PR's next event or review. After a
+# login change, re-run `merge-authority` on every open PR (ADR 0046).
 on:
   pull_request_review:
-    types: [submitted, edited, dismissed]
+    types: [submitted, dismissed]
 
-permissions:
-  contents: read
+# Nothing at the workflow level: the one job asks for exactly what it needs.
+permissions: {}
+
+# One re-run per PR at a time, queued rather than cancelled. Two reviews
+# seconds apart would otherwise both find the run finished and both ask for a
+# re-run; the second request fails while the first runs, and a review that
+# came after the first re-run read the reviews would never be judged. Queued,
+# the second waits for the first, then finds the re-run going, waits for it
+# and re-runs again. GitHub keeps one pending run per group; a newer review
+# replaces an older pending one, which is enough, since a re-run reads every
+# review.
+concurrency:
+  group: merge-authority-rerun-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
 
 jobs:
   rerun:
     name: merge-authority-rerun
+    if: ${{ github.event.review.state != 'commented' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Re-running a job needs `actions: write`; it reads and re-runs, nothing
-    # else.
+    # Re-running a job needs `actions: write`; it reads runs and re-runs a
+    # job, nothing else, and it has no contents access.
     permissions:
       actions: write
     steps:
@@ -43,17 +64,31 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           runs="repos/$REPOSITORY/actions/workflows/plan-scope.yml/runs"
-          for _ in $(seq 1 20); do
-            # A command substitution, not a process substitution: a failed
-            # call must fail the step under `set -e`.
+          # This PR's runs only: another PR on the same head commit has runs
+          # here too, and re-running its job would leave this PR's entry as it
+          # was. The number reaches jq through the environment, never spliced
+          # into the filter. A merged PR's runs list no PR, so a review after
+          # the merge finds none and fails here, which changes nothing. A
+          # command substitution, not a process substitution, so a failed call
+          # fails the step under `set -e`.
+          latest_run() {
+            local latest
             latest=$(gh api "$runs?event=pull_request&head_sha=$HEAD_SHA&per_page=100" \
-              --jq '.workflow_runs | sort_by(.created_at) | last | "\(.id // "") \(.status // "")"')
+              --jq '(env.PR_NUMBER | tonumber) as $pr
+                | [.workflow_runs[] | select(any(.pull_requests[]?; .number == $pr))]
+                | sort_by(.created_at) | last | "\(.id // "") \(.status // "")"')
             read -r run_id status <<< "$latest" || true
+          }
+          for _ in $(seq 1 20); do
+            latest_run
             if [[ -z "$run_id" ]]; then
-              echo "::error::no plan-scope pull_request run on $HEAD_SHA; push or edit the PR to start one"
+              echo "::error::no plan-scope pull_request run lists PR $PR_NUMBER on $HEAD_SHA." \
+                "A fork's PR lists none and needs the admin's bypass (ADR 0043);" \
+                "otherwise the PR's next event starts one"
               exit 1
             fi
             if [[ "$status" == completed ]]; then
@@ -62,6 +97,11 @@ jobs:
             echo "plan-scope run $run_id is $status; waiting"
             sleep 15
           done
+          # One last look: a run that finished during the last wait must not
+          # be reported as still going.
+          if [[ "$status" != completed ]]; then
+            latest_run
+          fi
           if [[ "$status" != completed ]]; then
             echo "::error::plan-scope run $run_id still $status after 5 minutes; not re-run"
             exit 1
@@ -74,3 +114,14 @@ jobs:
           fi
           gh api -X POST "repos/$REPOSITORY/actions/jobs/$job_id/rerun" --silent
           echo "re-ran merge-authority (job $job_id) in run $run_id for $HEAD_SHA"
+          # Hold the concurrency group until the re-run shows as started, so a
+          # queued re-run after this one sees it going and waits, rather than
+          # finding the run still marked finished. At most a minute.
+          for _ in $(seq 1 12); do
+            latest_run
+            if [[ "$status" != completed ]]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::warning::run $run_id still shows finished a minute after the re-run request"
