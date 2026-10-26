@@ -90,17 +90,18 @@ class MergeAuthorityRerunWorkflowTest(unittest.TestCase):
         self.job = self.workflow["jobs"]["rerun"]
         self.script = self.job["steps"][0]["run"]
 
-    def test_review_events_start_it(self):
+    def test_only_reviews_that_can_change_the_outcome_start_it(self):
         triggers = self.workflow[True]
 
         self.assertEqual(set(triggers), {"pull_request_review"})
-        self.assertEqual(set(triggers["pull_request_review"]["types"]), {"submitted", "edited", "dismissed"})
+        self.assertEqual(set(triggers["pull_request_review"]["types"]), {"submitted", "dismissed"})
+        self.assertEqual(self.job["if"], "${{ github.event.review.state != 'commented' }}")
 
     def test_its_check_is_not_the_required_one(self):
         self.assertNotEqual(self.job["name"], "merge-authority")
 
     def test_it_may_only_re_run_jobs(self):
-        self.assertEqual(self.workflow["permissions"], {"contents": "read"})
+        self.assertEqual(self.workflow["permissions"], {})
         self.assertEqual(self.job["permissions"], {"actions": "write"})
 
     def test_it_re_runs_the_merge_authority_job_of_a_pull_request_run_of_plan_scope(self):
@@ -108,6 +109,11 @@ class MergeAuthorityRerunWorkflowTest(unittest.TestCase):
         self.assertIn("?event=pull_request&head_sha=$HEAD_SHA", self.script)
         self.assertIn('select(.name == "merge-authority")', self.script)
         self.assertIn("actions/jobs/$job_id/rerun", self.script)
+
+    def test_it_picks_this_prs_run_with_the_number_from_the_environment(self):
+        self.assertEqual(self.job["steps"][0]["env"]["PR_NUMBER"], "${{ github.event.pull_request.number }}")
+        self.assertIn("(env.PR_NUMBER | tonumber) as $pr", self.script)
+        self.assertIn(".number == $pr", self.script)
 
     def test_a_failed_api_call_fails_the_step(self):
         self.assertTrue(self.script.startswith("set -euo pipefail"))
