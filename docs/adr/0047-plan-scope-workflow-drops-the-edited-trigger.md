@@ -44,4 +44,14 @@ re-judge a PR without a push, close and reopen it.
   (plan-scope requires the default branch), and a failed run voids the head
   until a push or a reopen. A PR moved off the default branch leaves its
   ruleset. Neither can pass by being retargeted.
+- A `merge-authority` pass judged against another base and carried onto the
+  default branch by a retarget was always the admin's approval. The
+  checker's result depends on the base ref in one place only: the
+  approver's approval counts only when the PR targets the default branch
+  (ADR 0043). Against any other base, a non-plan PR needs the admin
+  anyway, and a plan PR also fails plan-scope, which voids its head. So no
+  approver approval, and no pass without the admin, survives a retarget. A
+  re-run after the retarget reuses the old event's base, so the approver's
+  approval still does not count until a push or a reopen starts a new
+  event.
 - `tests/trimtab/test_plan_scope_workflow.py` pins the three triggers.
