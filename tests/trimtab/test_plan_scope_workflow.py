@@ -6,6 +6,11 @@ property whose loss would go unnoticed: the checker's tests cannot see how the
 job calls it, and a broken wiring fails closed, so CI stays green.
 """
 
+import json
+import os
+import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -109,6 +114,34 @@ class MergeAuthorityRerunWorkflowTest(unittest.TestCase):
         self.assertIn("?event=pull_request&head_sha=$HEAD_SHA", self.script)
         self.assertIn('select(.name == "merge-authority")', self.script)
         self.assertIn("actions/jobs/$job_id/rerun", self.script)
+
+    def test_reviews_on_one_pr_queue_rather_than_cancel(self):
+        concurrency = self.workflow["concurrency"]
+
+        self.assertIn("github.event.pull_request.number", concurrency["group"])
+        self.assertIs(concurrency["cancel-in-progress"], False)
+
+    @unittest.skipUnless(shutil.which("jq"), "jq is not installed")
+    def test_the_run_filter_picks_this_prs_latest_run(self):
+        # The workflow's own filter, run by jq on a runs payload. gh evaluates
+        # it with gojq; both read `env` and `any/2` the same way.
+        runs_filter = re.search(r"--jq '(\(env\.PR_NUMBER.*?)'\)", self.script, re.S).group(1)
+        payload = {"workflow_runs": [
+            {"id": 1, "status": "completed", "created_at": "2026-10-26T10:00:00Z", "pull_requests": [{"number": 7}]},
+            {"id": 2, "status": "in_progress", "created_at": "2026-10-26T10:05:00Z",
+             "pull_requests": [{"number": 8}, {"number": 7}]},
+            {"id": 3, "status": "completed", "created_at": "2026-10-26T10:09:00Z", "pull_requests": [{"number": 9}]},
+            {"id": 4, "status": "completed", "created_at": "2026-10-26T10:10:00Z", "pull_requests": []},
+        ]}
+
+        def pick(number: str) -> str:
+            env = {**os.environ, "PR_NUMBER": number}
+            out = subprocess.run(["jq", "-r", runs_filter], input=json.dumps(payload), env=env,
+                                 capture_output=True, text=True, check=True)
+            return out.stdout.strip()
+
+        self.assertEqual(pick("7"), "2 in_progress")
+        self.assertEqual(pick("5"), "")
 
     def test_it_picks_this_prs_run_with_the_number_from_the_environment(self):
         self.assertEqual(self.job["steps"][0]["env"]["PR_NUMBER"], "${{ github.event.pull_request.number }}")

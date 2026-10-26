@@ -21,12 +21,28 @@ name: merge-authority-rerun
 # Only reviews that can change the outcome re-run it: an approval, a request
 # for changes, a dismissal. The checker ignores comment reviews, and editing
 # a review's text never changes its state, so neither costs a run.
+#
+# Changing TRIMTAB_ADMIN or TRIMTAB_APPROVER starts nothing: a pass judged
+# under the old logins stands until the PR's next event or review. After a
+# login change, re-run `merge-authority` on every open PR (ADR 0046).
 on:
   pull_request_review:
     types: [submitted, dismissed]
 
 # Nothing at the workflow level: the one job asks for exactly what it needs.
 permissions: {}
+
+# One re-run per PR at a time, queued rather than cancelled. Two reviews
+# seconds apart would otherwise both find the run finished and both ask for a
+# re-run; the second request fails while the first runs, and a review that
+# came after the first re-run read the reviews would never be judged. Queued,
+# the second waits for the first, then finds the re-run going, waits for it
+# and re-runs again. GitHub keeps one pending run per group; a newer review
+# replaces an older pending one, which is enough, since a re-run reads every
+# review.
+concurrency:
+  group: merge-authority-rerun-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
 
 jobs:
   rerun:
@@ -70,7 +86,9 @@ jobs:
           for _ in $(seq 1 20); do
             latest_run
             if [[ -z "$run_id" ]]; then
-              echo "::error::no plan-scope pull_request run for PR $PR_NUMBER on $HEAD_SHA; a new event starts one"
+              echo "::error::no plan-scope pull_request run lists PR $PR_NUMBER on $HEAD_SHA." \
+                "A fork's PR lists none and needs the admin's bypass (ADR 0043);" \
+                "otherwise the PR's next event starts one"
               exit 1
             fi
             if [[ "$status" == completed ]]; then
@@ -96,3 +114,14 @@ jobs:
           fi
           gh api -X POST "repos/$REPOSITORY/actions/jobs/$job_id/rerun" --silent
           echo "re-ran merge-authority (job $job_id) in run $run_id for $HEAD_SHA"
+          # Hold the concurrency group until the re-run shows as started, so a
+          # queued re-run after this one sees it going and waits, rather than
+          # finding the run still marked finished. At most a minute.
+          for _ in $(seq 1 12); do
+            latest_run
+            if [[ "$status" != completed ]]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::warning::run $run_id still shows finished a minute after the re-run request"
