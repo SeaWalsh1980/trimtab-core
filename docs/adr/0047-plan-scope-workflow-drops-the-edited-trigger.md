@@ -4,8 +4,10 @@
 
 Accepted on merge. Changes the triggers chosen in trimtab-core#112 (ADR
 0042, `docs/adr/0042-plan-scope-check-judges-the-pr-diff.md`, which is not
-edited). A security control (SEC-7). Trimtab drops `edited` the same way in
-Trimtab#167 (Trimtab ADR 0019).
+edited). Supersedes, on this point only, ADR 0044's Consequences line that
+a review on a merged plan PR re-judges it "as an `edited` event already
+does": no edit re-judges anything now. A security control (SEC-7). Trimtab
+dropped `edited` the same way in Trimtab#167 (Trimtab ADR 0019).
 
 ## Context
 
