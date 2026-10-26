@@ -118,11 +118,12 @@ sm_record() {   # $1 = session id; best effort, a failure only loses stickiness
   return 0
 }
 
-# sm_classify <directory> <session id>
+# sm_classify <directory> <session id> [record: 1|0]
 # Sets sm_mode (interactive|autonomous), sm_signals (why) and sm_branch_name.
-# Records the session when it is autonomous, so the mode only tightens.
+# Records the session when it is autonomous, so the mode only tightens,
+# unless record is 0 (a session that is ending has nothing left to tighten).
 sm_classify() {
-  local dir="$1" sid="${2:-}"
+  local dir="$1" sid="${2:-}" record="${3:-1}"
   local -a why=()
   sm_branch_name=$(sm_branch "$dir")
   [[ "${TRIMTAB_PLAN_RUN:-}" == "1" ]] && why+=("TRIMTAB_PLAN_RUN=1")
@@ -132,7 +133,7 @@ sm_classify() {
     sm_mode=autonomous
     printf -v sm_signals '%s; ' "${why[@]}"
     sm_signals=${sm_signals%; }
-    sm_record "$sid"
+    [[ "$record" == 0 ]] || sm_record "$sid"
   else
     sm_mode=interactive
     sm_signals="no autonomous-run signal"

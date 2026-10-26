@@ -9,7 +9,10 @@
 #                              the scratchpad its harness gives it.
 #   session-scratch.sh end     SessionEnd. For a run, remove that directory and
 #                              the harness's scratchpad for this session,
-#                              <tmp>/claude-<uid>/<project>/<session id>/scratchpad.
+#                              $TMPDIR/claude-<uid>/<project>/<session id>/scratchpad.
+#
+# $TMPDIR is /tmp when unset or not absolute; the harness takes its temp
+# directory from the same variable.
 #
 # Interactive sessions are left alone: a person may want their scratch kept.
 # The mode is hooks/session-mode.sh's, so a session that was a run at any
@@ -52,30 +55,31 @@ ss_json() {   # $1 = text; prints it escaped for a JSON string
 
 ss_start() {
   local dir="$ss_base/$sm_sid" ctx
-  ( umask 077 && mkdir -p "$ss_base" && { [[ -d "$dir" ]] || mkdir "$dir"; } ) 2>/dev/null
+  # A base made earlier with wider access is narrowed before it is used.
+  ( umask 077 && mkdir -p "$ss_base" ) 2>/dev/null
+  ss_own "$ss_base" && chmod 700 "$ss_base" 2>/dev/null \
+    && ( umask 077 && { [[ -d "$dir" ]] || mkdir "$dir"; } ) 2>/dev/null
   if ss_own "$ss_base" && ss_own "$dir"; then
-    ctx="Session scratch: keep temporary files only in the scratchpad your harness gives you or, where it gives none, in $dir. Both are removed when this session ends."
+    ctx="Session scratch: keep temporary files only in $dir or in the scratchpad your harness gives you."
+    ctx+=" $dir is removed when this session ends, and so is the harness scratchpad where its layout is"
+    ctx+=" the one this hook knows; name anything left elsewhere in the progress record."
   else
-    ctx="Session scratch: could not create a private directory at $dir. Keep temporary files only in the scratchpad your harness gives you; where it gives none, name what you leave behind in the progress record."
+    ctx="Session scratch: could not create a private directory at $dir. Keep temporary files only in the"
+    ctx+=" scratchpad your harness gives you; where it gives none, name what you leave behind in the progress record."
   fi
   printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$(ss_json "$ctx")"
 }
 
 ss_end() {
-  local root project pad
-  local -a roots=("$ss_tmp")
-  [[ "$ss_tmp" == /tmp ]] || roots+=(/tmp)
+  local root="$ss_tmp/claude-$UID" project pad
   if ss_own "$ss_base" && ss_own "$ss_base/$sm_sid"; then
     ss_remove "$ss_base/$sm_sid"
   fi
+  ss_own "$root" || return 0
   shopt -s nullglob
-  for root in "${roots[@]}"; do
-    root="$root/claude-$UID"
-    ss_own "$root" || continue
-    for project in "$root"/-*; do
-      pad="$project/$sm_sid/scratchpad"
-      ss_own "$project" && ss_own "$project/$sm_sid" && ss_own "$pad" && ss_remove "$pad"
-    done
+  for project in "$root"/-*; do
+    pad="$project/$sm_sid/scratchpad"
+    ss_own "$project" && ss_own "$project/$sm_sid" && ss_own "$pad" && ss_remove "$pad"
   done
 }
 
@@ -85,7 +89,9 @@ ss_main() {
   sm_valid_sid "$sm_sid" || return 0
   cwd="$sm_cwd"
   [[ -n "$cwd" && -d "$cwd" ]] || cwd="$PWD"
-  sm_classify "$cwd" "$sm_sid"
+  # Only the start records the session; at its end there is nothing left to
+  # tighten, and a record would outlive the session for the full TTL.
+  sm_classify "$cwd" "$sm_sid" "$([[ "$event" == start ]] && echo 1 || echo 0)"
   [[ "$sm_mode" == autonomous ]] || return 0
   case "$event" in
     start) ss_start ;;

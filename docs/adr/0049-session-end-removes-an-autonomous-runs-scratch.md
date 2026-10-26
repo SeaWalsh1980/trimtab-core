@@ -31,10 +31,13 @@ path, but no scratch directory, and the desktop app's scratchpad layout
 its end):
 
 - **SessionStart (`start`)** creates `$TMPDIR/trimtab-run-<uid>/<session
-  id>`, mode 700, and tells the session to keep temporary files in its
-  harness's scratchpad or, where it has none, there.
+  id>`, narrowing the per-user directory to mode 700 if it existed wider,
+  and tells the session to keep temporary files there or in its harness's
+  scratchpad, and to name anything left elsewhere in its progress record.
 - **SessionEnd (`end`)** removes that directory and the harness's
-  scratchpad for this session, under `$TMPDIR` and `/tmp`. A directory is
+  scratchpad for this session, under `$TMPDIR` only (`/tmp` when unset):
+  the harness takes its temp directory from the same variable. It reads
+  the mode without recording the session, which is over. A directory is
   removed only when every directory on its path is real (no link) and owned
   by this user, the session id is a plain token, and the project directory's
   name starts with the harness's `-`. Nothing else goes: not the session's
@@ -65,12 +68,17 @@ payload. The liveness check names the new hook.
   fails toward leaving files, never toward removing the wrong ones.
 - A `/clear` ends the session and starts a new id, so the old session's
   scratch goes at the clear. A run keeps nothing across a clear by design.
+- `SessionEnd` cannot tell an exit that will be resumed from one that will
+  not, so a run resumed with the same session id finds its scratch gone.
+  Accepted: a run restarts from its PR and progress record, never from
+  temporary files.
 - A run that leaves its plan branch keeps its scratch removal, through the
   session-mode record. A session whose record was pruned (idle past two
   days) and that has no other signal is taken for interactive at its end,
   and its scratch stays.
-- `tests/guard-tests.sh` covers: creation and its mode, the announcement,
-  interactive sessions untouched, removal off the plan branch (sticky),
+- `tests/guard-tests.sh` covers: creation and its mode, a wider per-user
+  directory narrowed, the announcement, interactive sessions untouched, a
+  run cleaned up without being recorded, removal off the plan branch (sticky),
   the rest of the session's harness directory and another session's
   scratchpad kept, a linked scratchpad, a linked project directory, a
   linked per-user directory, a project name without the dash, a session id

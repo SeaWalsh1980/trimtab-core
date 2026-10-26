@@ -1469,9 +1469,8 @@ else
 fi
 
 # session-scratch (ADR 0049): a run's scratch is made at start and removed at
-# end; nothing else is touched. TMPDIR points into the fixture. The hook also
-# looks under the real /tmp/claude-<uid>, but only for these session ids,
-# which no real session has.
+# end; nothing else is touched. TMPDIR points into the fixture, and the hook
+# looks only under TMPDIR, so the live harness directory is never read.
 SS_TMP="$CPTMP/ss-tmp"; mkdir -p "$SS_TMP"
 SS_BASE="$SS_TMP/trimtab-run-$UID"; SS_ROOT="$SS_TMP/claude-$UID"
 ss_sid() { printf 'guard-tests-ss-%s-%s' "$$" "$1"; }
@@ -1495,6 +1494,13 @@ ss start "$SA" TRIMTAB_PLAN_RUN=1
 ss_check "start: the per-user directory is private" $?
 [[ "$SS_OUT" == *"$SS_BASE/$SA"* && "$SS_OUT" == *'"hookEventName":"SessionStart"'* ]]
 ss_check "start: the run is told where to keep temporary files" $?
+chmod 755 "$SS_BASE"; ss start "$(ss_sid w)" TRIMTAB_PLAN_RUN=1
+[[ "$(stat -c %a "$SS_BASE" 2>/dev/null || stat -f %Lp "$SS_BASE")" == 700 ]]
+ss_check "start: a per-user directory made with wider access is narrowed" $?
+SN=$(ss_sid n); ss_pad "$SN"
+ss end "$SN" TRIMTAB_PLAN_RUN=1
+[[ ! -e "$SS_ROOT/-home-x/$SN/scratchpad" && ! -e "$SM_DIR/$(smh "$SN")" ]]
+ss_check "end: a run is cleaned up without being recorded" $?
 SI=$(ss_sid i)
 ss start "$SI"
 [[ ! -e "$SS_BASE/$SI" && -z "$SS_OUT" ]]; ss_check "start: an interactive session gets nothing" $?
