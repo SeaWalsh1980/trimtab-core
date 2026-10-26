@@ -277,9 +277,10 @@ skills_dst="$CLAUDE_HOME/skills"
 skills_clash=()
 if [[ -d "$skills_src" ]]; then
   if [[ -L "$skills_dst" ]]; then
-    made_by_install "$skills_dst" || skills_clash+=("skills/ links to $(readlink "$skills_dst")")
+    made_by_install "$skills_dst" \
+      || skills_clash+=("skills/ links to $(readlink "$skills_dst"), which no install made; make it a directory")
   elif [[ -e "$skills_dst" && ! -d "$skills_dst" ]]; then
-    skills_clash+=("skills is not a directory")
+    skills_clash+=("skills is a file, not a directory; move it")
   elif [[ -d "$skills_dst" ]]; then
     for s in "$skills_src"/*/; do
       [[ -d "$s" ]] || continue   # no match: the pattern itself
@@ -287,16 +288,16 @@ if [[ -d "$skills_src" ]]; then
       d="$skills_dst/$n"
       [[ -e "$d" || -L "$d" ]] || continue
       [[ -L "$d" ]] && made_by_install "$d" && continue
-      skills_clash+=("skills/$n")
+      skills_clash+=("skills/$n is the operator's, where a base skill goes; rename or move it")
     done
   fi
 fi
 if (( ${#skills_clash[@]} )); then
   if [[ $CHECK_ONLY -eq 1 ]]; then
-    for c in "${skills_clash[@]}"; do note "$c is the operator's, where a base skill goes"; done
+    for c in "${skills_clash[@]}"; do note "$c"; done
   else
-    why="the operator's entries are where base skills go: ${skills_clash[*]}."
-    die "$why Rename or move them, then re-run; nothing was changed"
+    why=$(printf '%s; ' "${skills_clash[@]}")
+    die "${why%; }. Then re-run; nothing was changed"
   fi
 fi
 
@@ -513,6 +514,10 @@ if [[ -d "$skills_src" ]]; then
     done
     for d in "$skills_dst"/*; do
       [[ -L "$d" ]] && made_by_install "$d" || continue
+      # An install names each link after its skill; one named otherwise (an
+      # alias) is the operator's.
+      t=$(readlink "$d"); t="${t%/}"
+      [[ "${t##*/}" == "$(basename "$d")" ]] || continue
       [[ -d "$skills_src/$(basename "$d")" ]] && continue
       rm -f "$d"; note "removed skills/$(basename "$d"), which the base no longer ships"
     done

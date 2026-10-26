@@ -36,7 +36,9 @@ whole directory.
   replaced by a real directory. A `skills/` link the operator made is
   refused, not replaced.
 - A link an install made whose skill the base no longer ships is removed.
-  The operator's entries are never touched.
+  An install names each link after its skill, so a link named otherwise (an
+  operator's alias to a base skill) is the operator's. The operator's
+  entries are never touched.
 - `--check` reports each state without changing it.
 
 ## Options considered

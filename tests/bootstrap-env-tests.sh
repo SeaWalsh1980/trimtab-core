@@ -1065,10 +1065,39 @@ check_skills_check_names_an_operator_link_once() {
   h=$(new_home); inst=$(inst_of "$h")
   mkdir -p "$h/dotfiles/skills" "$h/.claude"; ln -s "$h/dotfiles/skills" "$h/.claude/skills"
   boot "$h" "$live" --instance "$inst" --check
-  if [[ "$out" == *"is the operator's"* && "$out" != *"an install makes it a directory"* ]]; then
+  if [[ "$out" == *"which no install made; make it a directory"* \
+        && "$out" != *"an install makes it a directory"* ]]; then
     pass "skills: --check names an operator's skills/ link as a clash, without promising to convert it"
   else
     fail "skills: --check names an operator's skills/ link as a clash, without promising to convert it" "rc=$rc"
+  fi
+}
+
+check_skills_keep_sibling_links_and_aliases() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  # gstack's layout: one skill folder, with links to its parts beside it.
+  mkdir -p "$h/.claude/skills/gstack/qa"
+  ln -s "$h/.claude/skills/gstack/qa" "$h/.claude/skills/qa"
+  # An operator's alias to a base skill, under another name.
+  ln -s "$base_skill" "$h/.claude/skills/wm"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && -L "$h/.claude/skills/qa" && -L "$h/.claude/skills/wm" ]] && skill_linked "$h"; then
+    pass "skills: an operator's sibling link and alias stay"
+  else
+    fail "skills: an operator's sibling link and alias stay" "rc=$rc"
+  fi
+}
+
+check_skills_check_words_a_file_clash() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  mkdir -p "$h/.claude"; : > "$h/.claude/skills"
+  boot "$h" "$live" --instance "$inst" --check
+  if [[ "$out" == *"skills is a file, not a directory; move it"* && "$out" != *"directory is the operator's"* ]]; then
+    pass "skills: --check words a file at skills/ as its own clash"
+  else
+    fail "skills: --check words a file at skills/ as its own clash" "rc=$rc"
   fi
 }
 
@@ -1429,6 +1458,8 @@ check_skills_replace_a_dangling_link_into_a_deleted_snapshot
 check_skills_relink_from_another_core_checkout
 check_skills_clash_writes_no_machine_json
 check_skills_check_names_an_operator_link_once
+check_skills_keep_sibling_links_and_aliases
+check_skills_check_words_a_file_clash
 
 if [[ $fails -ne 0 ]]; then
   echo "$fails check(s) FAILED"
