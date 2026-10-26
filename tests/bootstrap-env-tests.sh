@@ -914,6 +914,103 @@ check_instance_without_claude_md_drops_a_dangling_link() {
   fi
 }
 
+# Skills (ADR 0050): ~/.claude/skills is a real directory the operator's own
+# skills share, with one link per base skill. The checkout is the base here.
+base_skill="$repo/skills/wrap-merged"
+skill_linked() { # skill_linked <home>: the base skill is linked from a real skills/ directory
+  [[ -d "$1/.claude/skills" && ! -L "$1/.claude/skills" && -L "$1/.claude/skills/wrap-merged" \
+     && "$(readlink -f "$1/.claude/skills/wrap-merged")" == "$(readlink -f "$base_skill")" ]]
+}
+old_snap() { printf '%s/share/trimtab/core/%040d' "$1" 7; }
+
+check_skills_are_linked_one_by_one() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 ]] && skill_linked "$h"; then
+    pass "skills: each base skill is linked into a real skills/ directory"
+  else
+    fail "skills: each base skill is linked into a real skills/ directory" "rc=$rc"
+  fi
+}
+
+check_skills_keep_the_operators_own() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  mkdir -p "$h/.claude/skills/mine"; echo "mine" > "$h/.claude/skills/mine/SKILL.md"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && -f "$h/.claude/skills/mine/SKILL.md" ]] && skill_linked "$h"; then
+    pass "skills: the operator's own skill stays beside the base's"
+  else
+    fail "skills: the operator's own skill stays beside the base's" "rc=$rc"
+  fi
+}
+
+check_skills_replace_an_installs_whole_directory_link() {
+  local h inst snap
+  h=$(new_home); inst=$(inst_of "$h")
+  snap=$(old_snap "$h"); mkdir -p "$snap/skills/wrap-merged" "$h/.claude"
+  ln -s "$snap/skills" "$h/.claude/skills"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && -d "$snap/skills/wrap-merged" ]] && skill_linked "$h"; then
+    pass "skills: an earlier install's whole-directory link becomes a directory of links"
+  else
+    fail "skills: an earlier install's whole-directory link becomes a directory of links" "rc=$rc"
+  fi
+}
+
+check_skills_clash_is_refused_before_anything_is_written() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  mkdir -p "$h/.claude/skills/wrap-merged"; echo "operator's" > "$h/.claude/skills/wrap-merged/SKILL.md"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"skills/wrap-merged"* && ! -e "$h/.claude/settings.json" ]] \
+     && no_links "$h" && [[ "$(cat "$h/.claude/skills/wrap-merged/SKILL.md")" == "operator's" ]]; then
+    pass "skills: an operator's entry with a base skill's name is refused, nothing written"
+  else
+    fail "skills: an operator's entry with a base skill's name is refused, nothing written" "rc=$rc"
+  fi
+}
+
+check_skills_refuse_a_whole_directory_link_no_install_made() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  mkdir -p "$h/dotfiles/skills" "$h/.claude"; ln -s "$h/dotfiles/skills" "$h/.claude/skills"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -ne 0 && -L "$h/.claude/skills" && ! -e "$h/.claude/settings.json" ]]; then
+    pass "skills: a skills/ link the operator made is refused, not replaced"
+  else
+    fail "skills: a skills/ link the operator made is refused, not replaced" "rc=$rc"
+  fi
+}
+
+check_skills_drop_a_stale_link_and_keep_the_operators() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  mkdir -p "$h/.claude/skills" "$h/elsewhere/other"
+  ln -s "$(old_snap "$h")/skills/gone" "$h/.claude/skills/gone"
+  ln -s "$h/elsewhere/other" "$h/.claude/skills/other"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && ! -L "$h/.claude/skills/gone" && -L "$h/.claude/skills/other" ]] && skill_linked "$h"; then
+    pass "skills: a stale link an install made goes; the operator's link stays"
+  else
+    fail "skills: a stale link an install made goes; the operator's link stays" "rc=$rc"
+  fi
+}
+
+check_skills_check_reports_and_changes_nothing() {
+  local h inst snap
+  h=$(new_home); inst=$(inst_of "$h")
+  snap=$(old_snap "$h"); mkdir -p "$snap/skills" "$h/.claude"
+  ln -s "$snap/skills" "$h/.claude/skills"
+  boot "$h" "$live" --instance "$inst" --check
+  if [[ -L "$h/.claude/skills" && "$out" == *"skills/ is still one link"* ]]; then
+    pass "skills: --check reports a whole-directory link and leaves it"
+  else
+    fail "skills: --check reports a whole-directory link and leaves it" "rc=$rc"
+  fi
+}
+
 check_instance_without_claude_md_drops_a_link_into_the_store() {
   local h inst snap
   h=$(new_home); inst=$(inst_of "$h")
@@ -1260,6 +1357,13 @@ check_check_is_the_retention_dry_run
 check_red_run_deletes_nothing
 check_no_instance_is_refused
 check_observer_probe
+check_skills_are_linked_one_by_one
+check_skills_keep_the_operators_own
+check_skills_replace_an_installs_whole_directory_link
+check_skills_clash_is_refused_before_anything_is_written
+check_skills_refuse_a_whole_directory_link_no_install_made
+check_skills_drop_a_stale_link_and_keep_the_operators
+check_skills_check_reports_and_changes_nothing
 
 if [[ $fails -ne 0 ]]; then
   echo "$fails check(s) FAILED"
