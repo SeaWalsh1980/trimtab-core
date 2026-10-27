@@ -12,6 +12,7 @@
 #                              $TMPDIR/claude-<uid>/<project>/<session id>/scratchpad.
 #
 # Any other argument does nothing, and returns before the payload is read.
+#
 # $TMPDIR is /tmp when unset or not absolute; the harness takes its temp
 # directory from the same variable.
 #
