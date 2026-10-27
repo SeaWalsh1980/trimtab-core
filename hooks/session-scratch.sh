@@ -11,6 +11,8 @@
 #                              the harness's scratchpad for this session,
 #                              $TMPDIR/claude-<uid>/<project>/<session id>/scratchpad.
 #
+# Any other argument does nothing, and returns before the payload is read.
+#
 # $TMPDIR is /tmp when unset or not absolute; the harness takes its temp
 # directory from the same variable.
 #
@@ -85,6 +87,9 @@ ss_end() {
 
 ss_main() {
   local event="${1:-}" cwd
+  # Any other event has nothing to do, so it costs neither the payload read
+  # nor the classifier's git calls.
+  [[ "$event" == start || "$event" == end ]] || return 0
   sm_payload
   sm_valid_sid "$sm_sid" || return 0
   cwd="$sm_cwd"

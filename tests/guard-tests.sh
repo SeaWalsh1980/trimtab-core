@@ -1533,6 +1533,10 @@ ln -s "$CPTMP/ss-elsewhere" "$SL_TMP/trimtab-run-$UID"
 SS_OUT=$(printf '{"cwd":"%s","session_id":"%s"}' "$PG" "$(ss_sid e)" \
          | TMPDIR="$SL_TMP" bash "$HOOKS/session-scratch.sh" end 2>/dev/null); SS_RC=$?
 [[ -d "$CPTMP/ss-elsewhere/$(ss_sid e)" ]]; ss_check "end: a per-user directory that is a link is not followed" $?
+SU=$(ss_sid u); ss_pad "$SU"; mkdir -p "$SS_BASE/$SU"
+ss stop "$SU" TRIMTAB_PLAN_RUN=1
+[[ -z "$SS_OUT" && -d "$SS_BASE/$SU" && -e "$SS_ROOT/-home-x/$SU/scratchpad/f" && ! -e "$SM_DIR/$(smh "$SU")" ]]
+ss_check "an unknown event does nothing, even for a run" $?
 ss end '../x' TRIMTAB_PLAN_RUN=1
 [[ -z "$SS_OUT" ]]; ss_check "end: a session id that is not a plain token does nothing" $?
 SS_OUT=$(printf 'not json' | TMPDIR="$SS_TMP" TRIMTAB_PLAN_RUN=1 bash "$HOOKS/session-scratch.sh" start 2>/dev/null)
