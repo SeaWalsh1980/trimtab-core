@@ -88,11 +88,13 @@ different name.
   as a whole-directory link did.
 - The known limit above stands: an operator's same-named link into another
   core tree is relinked or removed.
-- `tests/bootstrap-env-tests.sh` adds six cases:
+- `tests/bootstrap-env-tests.sh` adds seven cases:
   - commands and agents linked one by one beside the operator's own;
   - an install's whole-directory `commands/` link replaced;
   - an operator's agent file with a base agent's name refused, with nothing
     written;
+  - an operator's directory with a base command's name refused the same
+    way;
   - a stale command link removed while the operator's link stays;
   - links into the same directory of a core checkout relinked, while a link
     into another directory of it stays;

@@ -529,7 +529,7 @@ for k in "${per_entry[@]}"; do
       # alias) is the operator's.
       t=$(readlink "$d"); t="${t%/}"
       [[ "${t##*/}" == "$(basename "$d")" ]] || continue
-      [[ -e "$k_src/$(basename "$d")" ]] && continue
+      entry_ok "$k" "$k_src/$(basename "$d")" && continue
       rm -f "$d"; note "removed $k/$(basename "$d"), which the base no longer ships"
     done
   fi

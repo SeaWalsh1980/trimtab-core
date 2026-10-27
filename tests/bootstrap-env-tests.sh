@@ -1150,6 +1150,19 @@ check_agents_clash_is_refused_before_anything_is_written() {
   fi
 }
 
+check_commands_clash_with_a_real_directory_is_refused() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  mkdir -p "$h/.claude/commands/trimtab-plan.md"; echo "operator's" > "$h/.claude/commands/trimtab-plan.md/notes"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"commands/trimtab-plan.md is the operator's"* && ! -e "$h/.claude/settings.json" ]] \
+     && no_links "$h" && [[ "$(cat "$h/.claude/commands/trimtab-plan.md/notes")" == "operator's" ]]; then
+    pass "commands: an operator's directory with a base command's name is refused, nothing written"
+  else
+    fail "commands: an operator's directory with a base command's name is refused, nothing written" "rc=$rc"
+  fi
+}
+
 check_commands_relink_from_another_core_checkout() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
@@ -1558,6 +1571,7 @@ check_commands_agents_are_linked_one_by_one
 check_commands_replace_an_installs_whole_directory_link
 check_agents_clash_is_refused_before_anything_is_written
 check_commands_drop_a_stale_link_and_keep_the_operators
+check_commands_clash_with_a_real_directory_is_refused
 check_commands_relink_from_another_core_checkout
 check_commands_check_reports_and_changes_nothing
 
