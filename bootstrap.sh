@@ -261,22 +261,25 @@ base_phys=$(cd -P "$BASE" && pwd -P)
 is_core_base() {   # $1 = a directory; 0 when it is a trimtab-core tree
   [[ -f "$1/settings.base.json" && -f "$1/hooks/guard-paths.sh" && -f "$1/bootstrap.sh" ]]
 }
-made_by_install() {   # $1 = a link; 0 when it points into the store, this base, or another core tree
+# $1 = a link, $2 = the directory it sits in (skills, commands or agents).
+# 0 when it points into the store, this base, or the same directory of
+# another core tree.
+made_by_install() {
   local t
   # A link into a deleted snapshot does not resolve; its text still names it.
   t=$(readlink -f "$1" 2>/dev/null) || t=$(readlink "$1")
   if [[ -n "$store_phys" && "$t" == "$store_phys"/* ]] || [[ "$t" == "$base_phys"/* ]]; then
     return 0
   fi
-  # An earlier install from a core checkout linked one of these directories,
-  # or one entry in it; the install record names no base path, so the tree
-  # says it.
-  local k
-  for k in "${per_entry[@]}"; do
-    [[ "$t" == */"$k" ]] && is_core_base "${t%/"$k"}" && return 0
-    [[ "${t%/*}" == */"$k" ]] && is_core_base "${t%/*/*}" && return 0
-  done
-  return 1
+  # An earlier install from a core checkout linked the directory, or one
+  # entry in it; the install record names no base path, so the tree says it.
+  [[ "$t" == */"$2" ]] && is_core_base "${t%/"$2"}" && return 0
+  [[ "${t%/*}" == */"$2" ]] && is_core_base "${t%/*/*}"
+}
+entry_ok() {   # $1 = skills, commands or agents; $2 = a glob match in the base's
+  # A skill is a directory; a command or agent is any entry. A pattern that
+  # matched nothing is the pattern itself.
+  if [[ "$1" == skills ]]; then [[ -d "$2" ]]; else [[ -e "$2" ]]; fi
 }
 per_entry=(skills commands agents)
 entry_clash=()
@@ -284,17 +287,17 @@ for k in "${per_entry[@]}"; do
   k_src="$BASE/$k"; k_dst="$CLAUDE_HOME/$k"
   [[ -d "$k_src" ]] || continue
   if [[ -L "$k_dst" ]]; then
-    made_by_install "$k_dst" \
+    made_by_install "$k_dst" "$k" \
       || entry_clash+=("$k/ links to $(readlink "$k_dst"), which no install made; make it a directory")
   elif [[ -e "$k_dst" && ! -d "$k_dst" ]]; then
     entry_clash+=("$k is a file, not a directory; move it")
   elif [[ -d "$k_dst" ]]; then
     for s in "$k_src"/*; do
-      [[ -e "$s" ]] || continue   # no match: the pattern itself
+      entry_ok "$k" "$s" || continue
       n=$(basename "$s")
       d="$k_dst/$n"
       [[ -e "$d" || -L "$d" ]] || continue
-      [[ -L "$d" ]] && made_by_install "$d" && continue
+      [[ -L "$d" ]] && made_by_install "$d" "$k" && continue
       entry_clash+=("$k/$n is the operator's, where the base's $k/$n goes; rename or move it")
     done
   fi
@@ -495,7 +498,7 @@ for k in "${per_entry[@]}"; do
       note "$k/ is still one link; an install makes it a directory of per-entry links"
     else
       for s in "$k_src"/*; do
-        [[ -e "$s" ]] || continue
+        entry_ok "$k" "$s" || continue
         n=$(basename "$s")
         if [[ -L "$k_dst/$n" && "$(readlink -f "$k_dst/$n")" == "$(readlink -f "$s")" ]]; then
           ok "$k/$n linked"
@@ -511,7 +514,7 @@ for k in "${per_entry[@]}"; do
     fi
     mkdir -p "$k_dst"
     for s in "$k_src"/*; do
-      [[ -e "$s" ]] || continue
+      entry_ok "$k" "$s" || continue
       n=$(basename "$s")
       d="$k_dst/$n"
       if [[ -L "$d" && "$(readlink -f "$d")" == "$(readlink -f "$s")" ]]; then
@@ -521,7 +524,7 @@ for k in "${per_entry[@]}"; do
       fi
     done
     for d in "$k_dst"/*; do
-      [[ -L "$d" ]] && made_by_install "$d" || continue
+      [[ -L "$d" ]] && made_by_install "$d" "$k" || continue
       # An install names each link after its entry; one named otherwise (an
       # alias) is the operator's.
       t=$(readlink "$d"); t="${t%/}"

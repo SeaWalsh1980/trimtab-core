@@ -1150,6 +1150,36 @@ check_agents_clash_is_refused_before_anything_is_written() {
   fi
 }
 
+check_commands_relink_from_another_core_checkout() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  fake_core "$h/core-checkout"; mkdir -p "$h/core-checkout/commands" "$h/core-checkout/agents/x"
+  mkdir -p "$h/.claude/agents"
+  ln -s "$h/core-checkout/commands" "$h/.claude/commands"
+  ln -s "$h/core-checkout/agents/x" "$h/.claude/agents/x"
+  ln -s "$h/core-checkout/skills/wrap-merged" "$h/.claude/agents/wrap-merged"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && ! -L "$h/.claude/agents/x" && -L "$h/.claude/agents/wrap-merged" ]] \
+     && entries_linked "$h" commands && entries_linked "$h" agents; then
+    pass "commands, agents: links into the same directory of a core checkout are an install's; others stay"
+  else
+    fail "commands, agents: links into the same directory of a core checkout are an install's; others stay" "rc=$rc"
+  fi
+}
+
+check_commands_check_reports_and_changes_nothing() {
+  local h inst snap
+  h=$(new_home); inst=$(inst_of "$h")
+  snap=$(old_snap "$h"); mkdir -p "$snap/commands" "$h/.claude"
+  ln -s "$snap/commands" "$h/.claude/commands"
+  boot "$h" "$live" --instance "$inst" --check
+  if [[ -L "$h/.claude/commands" && "$out" == *"commands/ is still one link"* ]]; then
+    pass "commands: --check reports a whole-directory link and leaves it"
+  else
+    fail "commands: --check reports a whole-directory link and leaves it" "rc=$rc"
+  fi
+}
+
 check_commands_drop_a_stale_link_and_keep_the_operators() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
@@ -1528,6 +1558,8 @@ check_commands_agents_are_linked_one_by_one
 check_commands_replace_an_installs_whole_directory_link
 check_agents_clash_is_refused_before_anything_is_written
 check_commands_drop_a_stale_link_and_keep_the_operators
+check_commands_relink_from_another_core_checkout
+check_commands_check_reports_and_changes_nothing
 
 if [[ $fails -ne 0 ]]; then
   echo "$fails check(s) FAILED"

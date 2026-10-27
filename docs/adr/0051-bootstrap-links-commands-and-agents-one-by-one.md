@@ -50,9 +50,13 @@ same.
   `~/.claude/output-styles`, so a base that ships one should move it to
   per-entry links first, in its own change.
 
+- A link counts as an install's when it points into the same directory of
+  another core tree: a link in `agents/` into a core tree's `agents/`. A
+  link in `agents/` into a core tree's `skills/` is the operator's.
+
 **Known limit, for all three directories.** Suppose the operator links an
-entry into a trimtab-core tree (a fork or a second checkout), and the link
-is named after its target. The installer takes it for an install's. Two
+entry into the same directory of a trimtab-core tree (a fork or a second
+checkout), and the link is named after its target. The installer takes it for an install's. Two
 outcomes follow:
 
 - the base ships an entry with that name: the link is relinked to this base;
@@ -84,11 +88,14 @@ different name.
   as a whole-directory link did.
 - The known limit above stands: an operator's same-named link into another
   core tree is relinked or removed.
-- `tests/bootstrap-env-tests.sh` adds four cases:
+- `tests/bootstrap-env-tests.sh` adds six cases:
   - commands and agents linked one by one beside the operator's own;
   - an install's whole-directory `commands/` link replaced;
   - an operator's agent file with a base agent's name refused, with nothing
     written;
-  - a stale command link removed while the operator's link stays.
+  - a stale command link removed while the operator's link stays;
+  - links into the same directory of a core checkout relinked, while a link
+    into another directory of it stays;
+  - `--check` reporting a whole-directory `commands/` link and leaving it.
 
   0050's skills cases run unchanged through the same code.
