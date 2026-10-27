@@ -85,6 +85,9 @@ ss_end() {
 
 ss_main() {
   local event="${1:-}" cwd
+  # Any other event has nothing to do, so it costs neither the payload read
+  # nor the classifier's git calls.
+  [[ "$event" == start || "$event" == end ]] || return 0
   sm_payload
   sm_valid_sid "$sm_sid" || return 0
   cwd="$sm_cwd"
