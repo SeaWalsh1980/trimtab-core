@@ -1101,6 +1101,113 @@ check_skills_check_words_a_file_clash() {
   fi
 }
 
+# Commands and agents (ADR 0051): the same per-entry links as skills.
+entries_linked() { # entries_linked <home> <kind>: every base entry of <kind> is linked from a real directory
+  local e
+  [[ -d "$1/.claude/$2" && ! -L "$1/.claude/$2" ]] || return 1
+  for e in "$repo/$2"/*; do
+    [[ -L "$1/.claude/$2/${e##*/}" && "$(readlink -f "$1/.claude/$2/${e##*/}")" == "$(readlink -f "$e")" ]] || return 1
+  done
+}
+
+check_commands_agents_are_linked_one_by_one() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  mkdir -p "$h/.claude/commands" "$h/.claude/agents"
+  echo "mine" > "$h/.claude/commands/mine.md"; echo "mine" > "$h/.claude/agents/mine.md"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && -f "$h/.claude/commands/mine.md" && -f "$h/.claude/agents/mine.md" ]] \
+     && entries_linked "$h" commands && entries_linked "$h" agents; then
+    pass "commands, agents: each base entry is linked beside the operator's own"
+  else
+    fail "commands, agents: each base entry is linked beside the operator's own" "rc=$rc"
+  fi
+}
+
+check_commands_replace_an_installs_whole_directory_link() {
+  local h inst snap
+  h=$(new_home); inst=$(inst_of "$h")
+  snap=$(old_snap "$h"); mkdir -p "$snap/commands" "$h/.claude"
+  ln -s "$snap/commands" "$h/.claude/commands"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && -d "$snap/commands" ]] && entries_linked "$h" commands; then
+    pass "commands: an earlier install's whole-directory link becomes a directory of links"
+  else
+    fail "commands: an earlier install's whole-directory link becomes a directory of links" "rc=$rc"
+  fi
+}
+
+check_agents_clash_is_refused_before_anything_is_written() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  mkdir -p "$h/.claude/agents"; echo "operator's" > "$h/.claude/agents/trimtab-planner.md"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"agents/trimtab-planner.md is the operator's"* && ! -e "$h/.claude/settings.json" ]] \
+     && no_links "$h" && [[ "$(cat "$h/.claude/agents/trimtab-planner.md")" == "operator's" ]]; then
+    pass "agents: an operator's file with a base agent's name is refused, nothing written"
+  else
+    fail "agents: an operator's file with a base agent's name is refused, nothing written" "rc=$rc"
+  fi
+}
+
+check_commands_clash_with_a_real_directory_is_refused() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  mkdir -p "$h/.claude/commands/trimtab-plan.md"; echo "operator's" > "$h/.claude/commands/trimtab-plan.md/notes"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -ne 0 && "$out" == *"commands/trimtab-plan.md is the operator's"* && ! -e "$h/.claude/settings.json" ]] \
+     && no_links "$h" && [[ "$(cat "$h/.claude/commands/trimtab-plan.md/notes")" == "operator's" ]]; then
+    pass "commands: an operator's directory with a base command's name is refused, nothing written"
+  else
+    fail "commands: an operator's directory with a base command's name is refused, nothing written" "rc=$rc"
+  fi
+}
+
+check_commands_relink_from_another_core_checkout() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  fake_core "$h/core-checkout"; mkdir -p "$h/core-checkout/commands" "$h/core-checkout/agents/x"
+  mkdir -p "$h/.claude/agents"
+  ln -s "$h/core-checkout/commands" "$h/.claude/commands"
+  ln -s "$h/core-checkout/agents/x" "$h/.claude/agents/x"
+  ln -s "$h/core-checkout/skills/wrap-merged" "$h/.claude/agents/wrap-merged"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && ! -L "$h/.claude/agents/x" && -L "$h/.claude/agents/wrap-merged" ]] \
+     && entries_linked "$h" commands && entries_linked "$h" agents; then
+    pass "commands, agents: links into the same directory of a core checkout are an install's; others stay"
+  else
+    fail "commands, agents: links into the same directory of a core checkout are an install's; others stay" "rc=$rc"
+  fi
+}
+
+check_commands_check_reports_and_changes_nothing() {
+  local h inst snap
+  h=$(new_home); inst=$(inst_of "$h")
+  snap=$(old_snap "$h"); mkdir -p "$snap/commands" "$h/.claude"
+  ln -s "$snap/commands" "$h/.claude/commands"
+  boot "$h" "$live" --instance "$inst" --check
+  if [[ -L "$h/.claude/commands" && "$out" == *"commands/ is still one link"* ]]; then
+    pass "commands: --check reports a whole-directory link and leaves it"
+  else
+    fail "commands: --check reports a whole-directory link and leaves it" "rc=$rc"
+  fi
+}
+
+check_commands_drop_a_stale_link_and_keep_the_operators() {
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  mkdir -p "$h/.claude/commands" "$h/elsewhere"; : > "$h/elsewhere/other.md"
+  ln -s "$(old_snap "$h")/commands/gone.md" "$h/.claude/commands/gone.md"
+  ln -s "$h/elsewhere/other.md" "$h/.claude/commands/other.md"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && ! -L "$h/.claude/commands/gone.md" && -L "$h/.claude/commands/other.md" ]] \
+     && entries_linked "$h" commands; then
+    pass "commands: a stale link an install made goes; the operator's link stays"
+  else
+    fail "commands: a stale link an install made goes; the operator's link stays" "rc=$rc"
+  fi
+}
+
 check_instance_without_claude_md_drops_a_link_into_the_store() {
   local h inst snap
   h=$(new_home); inst=$(inst_of "$h")
@@ -1460,6 +1567,13 @@ check_skills_clash_writes_no_machine_json
 check_skills_check_names_an_operator_link_once
 check_skills_keep_sibling_links_and_aliases
 check_skills_check_words_a_file_clash
+check_commands_agents_are_linked_one_by_one
+check_commands_replace_an_installs_whole_directory_link
+check_agents_clash_is_refused_before_anything_is_written
+check_commands_drop_a_stale_link_and_keep_the_operators
+check_commands_clash_with_a_real_directory_is_refused
+check_commands_relink_from_another_core_checkout
+check_commands_check_reports_and_changes_nothing
 
 if [[ $fails -ne 0 ]]; then
   echo "$fails check(s) FAILED"
