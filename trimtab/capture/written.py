@@ -15,6 +15,11 @@ body but in place of its last line, the run's own attribution line. Either foote
 in that place (IN_PLACE) has deleted text the run sent, so it is always written
 back, session link or not, and the body must come back as sent or with only the
 generic footer after it.
+
+A later run still (2026-10-24) saw the generic footer take the line's place again
+on that write-back, having stood there on the first read too. With no session
+link on either read, it is left as the generic footer after the body is: it
+names nothing, and another write would only bring it back.
 """
 
 from __future__ import annotations
@@ -61,6 +66,8 @@ class Readback(enum.Enum):
                          "restored, and the platform's generic footer follows it")
     IN_PLACE_GENERIC_KEPT = ("the platform's generic footer, linking no session, stood in place of the body's "
                              "attribution line; the line is restored, and that footer follows it")
+    IN_PLACE_GENERIC_AGAIN = ("the platform's generic footer, linking no session, stood in place of the body's "
+                              "attribution line, and took its place again when the body sent was written back")
     DIFFERS = "the body differs from the one sent, other than by the platform's footer"
 
 
@@ -83,8 +90,8 @@ def compare(sent: str, found: str) -> Readback:
     when that footer stands where `sent`'s last line, the run's attribution line, was; else DIFFERS.
 
     The rule is tried both ways, so a body that itself ends with a `---` rule keeps it. Never REPLACED,
-    IN_PLACE_REPLACED or IN_PLACE_GENERIC_KEPT: those are what a write-back came to, which only `verify_bodies`
-    knows.
+    IN_PLACE_REPLACED, IN_PLACE_GENERIC_KEPT or IN_PLACE_GENERIC_AGAIN: those are what a write-back came to, which
+    only `verify_bodies` knows.
     """
     sent, found = _plain(sent), _plain(found)
     if found == sent:
@@ -119,7 +126,8 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
     IN_PLACE_GENERIC), wait once more, and require them identical, or carrying only the generic footer after the
     body sent: REPLACED, IN_PLACE_REPLACED or IN_PLACE_GENERIC_KEPT, by what the first read found. A generic footer
     found after the body on the first read is left alone (GENERIC): it names nothing, and a write would only bring
-    it back. Any other change, or a run reference, fails, but only after every target has been checked and every
+    it back. So is the generic footer in place of the attribution line on both reads (IN_PLACE_GENERIC_AGAIN); a
+    session link on either read never is. Any other change, or a run reference, fails, but only after every target has been checked and every
     body due a write-back written: one WrittenBodyError names each target that failed. A read or write that fails
     (GitHub) does not stop the others either. If that is all that failed, the first such error is raised as it
     came; if a body also failed, the WrittenBodyError names both, each by its target. The caller supplies the wait
@@ -190,6 +198,9 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
             else:
                 failures.append(((kind, number), "the platform's session footer came back when the body sent was "
                                                  "written back"))
+        elif again is Readback.IN_PLACE_GENERIC and outcomes[(kind, number)] is Readback.IN_PLACE_GENERIC:
+            # No session link on either read; another write would only bring the generic footer back.
+            outcomes[(kind, number)] = Readback.IN_PLACE_GENERIC_AGAIN
         elif again in IN_PLACE_OUTCOMES:
             first = outcomes[(kind, number)]
             repeat = " again" if first in IN_PLACE_OUTCOMES else ""

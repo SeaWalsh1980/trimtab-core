@@ -21,6 +21,11 @@ the platform answers the write-back with a footer that links no session, and
 the run now accepts that one. Still proposed; the trial is run again on a base
 carrying the amendment.
 
+2026-10-28: amended by the operator after two retro runs stopped on a
+rewritten attribution line (see "Third and fourth trials"): the generic
+footer standing in place of that line on both reads is left, and exits 0.
+Still accepted.
+
 ## Context
 
 ADR 0022's trial (2026-10-14) ran a per-project routine on a base whose
@@ -73,7 +78,9 @@ The upstream retro also comments on issues.
   sent, and says when it took the footer off; 1 is any other change, or a
   footer that came back; 2 is that it could not read or write. (Amended
   2026-10-15: the platform's generic footer, on the first read or after the
-  write-back, is exit 0 too; see "The generic footer is accepted" below.)
+  write-back, is exit 0 too; see "The generic footer is accepted" below.
+  Amended 2026-10-28: so is the generic footer in place of the attribution
+  line on both reads; see "The generic footer in place again is left".)
   Every call is repository-scoped REST (ADR 0021).
 - **The commands chain it after the POST**, on the same command line
   (`N=$(gh api -X POST … --jq .number) && trimtab verify-body … --pull "$N"`),
@@ -122,13 +129,27 @@ The upstream retro also comments on issues.
   - After the write-back, the body must be as sent, or as sent with the
     generic footer after it (`IN_PLACE_REPLACED` or `IN_PLACE_GENERIC_KEPT`,
     by which footer stood in place). A footer in place of the line again
-    fails.
+    fails. (Amended 2026-10-28: except the generic footer on both reads; see
+    the next bullet.)
   - The line is one constant, `ATTRIBUTION_LINE`, matched only as a whole
     line; tests hold every command and routine prompt to it.
   - Only that one line, matched by its exact text, is recognised. A footer
     in place of any other text is a difference. This is not the rejected
     "strip whatever follows the `🤖 Generated with` line" below: nothing
     unrecognised is deleted, and the write-back restores the line.
+- **The generic footer in place again is left** (amendment, 2026-10-28, the
+  operator's decision). A retro draft PR came back with the generic footer in
+  place of the attribution line; the write-back brought the same footer back
+  in the same place, with the rest of the body as sent and no session link.
+  `verify-body` exited 1 and the run stopped before most of its drafts.
+  - The generic footer in place of the line on the first read and again after
+    the write-back is `IN_PLACE_GENERIC_AGAIN`: exit 0, with a report saying
+    the footer was left and the body lacks its attribution line. It names
+    nothing, and another write would only bring it back.
+  - Only that pair passes. A session link on either read, in place or after
+    the body, still fails, as does `DIFFERS` and any other difference. The
+    generic footer in place only after a write-back that took a session
+    footer off also fails.
 
 ## Options considered
 
@@ -179,6 +200,16 @@ The upstream retro also comments on issues.
 - **Fall back to routines that push branches only.** Not needed: it was kept
   for a footer that could not be taken off, and the one that stays names
   nothing.
+- **Keep failing on the generic footer in place again, and have the run go on
+  past a failed body** (2026-10-28). Rejected by the operator: it leaves every
+  routine-opened PR failed for a platform behaviour that publishes nothing.
+- **Write back until the attribution line holds** (2026-10-28). Rejected, as
+  "Write back until no footer is left" above: each write is answered the same
+  way, so it need not end, and each try is one more edit and notification.
+- **Pass the generic footer in place after the write-back whatever the first
+  read held** (2026-10-28). Rejected: the operator's decision passes only a
+  body that showed no session link on either read, the case observed. After
+  a session footer, a body short of its line is left to the operator.
 
 ## Consequences
 
@@ -203,6 +234,10 @@ The upstream retro also comments on issues.
 - Accepted (2026-10-15): every PR, issue and comment a run creates keeps the
   platform's generic footer after its own closing line. It links Claude
   Code's site, not the run.
+- Accepted (2026-10-28): a body that got `IN_PLACE_GENERIC_AGAIN` ends with
+  the generic footer where its attribution line was, so that line is
+  missing from it. `check-pr` does not require the line, so a consumer's CI
+  does not fail on it.
 
 ## Trial, still open
 
@@ -258,3 +293,23 @@ opened a draft PR.
 Result: passed. The footer there to take off was the session footer, on both
 PRs; the generic footer stayed. The edit history of both PRs keeps the
 session footer, as the Consequences accept.
+
+## Third and fourth trials (2026-10-17 and 2026-10-24)
+
+Two per-project retro runs on a consumer project, each read from the run's
+own log.
+
+- **ControlTower#953** (retro 2026-10-17, pin `48d74fc6`). The session
+  footer stood in place of the attribution line. `verify-body` exited 1,
+  correctly: the pin predated the 2026-10-17 amendment, which this case
+  prompted. The PR merged with the session link in its body; removing it is
+  the operator's edit.
+- **ControlTower#1022** (retro 2026-10-24, pin `5d35421b`, which carries the
+  2026-10-17 amendment). `verify-body` wrote back the body sent; the re-check
+  found the generic footer in place of the attribution line again, no
+  session link, and the rest as sent. It exited 1, and the run stopped with
+  five of its six planned drafts unopened.
+
+Result: the 2026-10-28 amendment. #953's case still fails today if its
+write-back is answered with any footer in place; #1022's passes as
+`IN_PLACE_GENERIC_AGAIN`.
