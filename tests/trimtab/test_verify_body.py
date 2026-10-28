@@ -832,7 +832,8 @@ fi
 
 
 class VerifyBodyCli(unittest.TestCase):
-    """`trimtab verify-body`: exit 0 when the body is the one sent, 1 when it is not, 2 when it cannot tell."""
+    """`trimtab verify-body`: exit 0 when the body is the one sent or changed only by the platform's footer as the
+    report says, 1 when it is changed otherwise, 2 when it cannot tell."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

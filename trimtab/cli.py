@@ -188,7 +188,8 @@ VERIFY_BODY_REPORTS = {
 
 
 def cmd_verify_body(args) -> int:
-    """A body a run created, read back (ADR 0024): 0 as sent, 1 changed otherwise, 2 could not tell."""
+    """A body a run created, read back (ADR 0024): 0 as sent or changed only by the platform's footer as the report
+    says, 1 changed otherwise, 2 could not tell."""
     sent = args.body if args.body is not None else _text_of(args.body_file)
     if sent is None:
         return 2
