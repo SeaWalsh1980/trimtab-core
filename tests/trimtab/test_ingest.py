@@ -42,17 +42,19 @@ def body(feedback_id="TST-2"):
 class FakeGitHub:
     """A true external system (GitHub via gh), so a fake is allowed."""
 
-    def __init__(self, pulls, fail_label_once=None):
+    def __init__(self, pulls, fail_label_once=None, counts_left=True):
         self.pulls = {p.number: p for p in pulls}
         self.labels = {p.number: set() for p in pulls}
         self.fail_label_once = fail_label_once
+        # False: a read that stopped at the limit and could not count the rest, as GhSource's backfill.
+        self.counts_left = counts_left
 
     def unlabelled_merged(self, label, merged_since, limit, above=None):
         todo = [p for n, p in sorted(self.pulls.items()) if label not in self.labels[n]
                 and (merged_since is None or p.merged_at[:10] >= merged_since)]
         below = tuple(p.number for p in todo if above is not None and p.number <= above)
         todo = [p for p in todo if p.number not in below]
-        return Unlabelled(tuple(todo[:limit]), below, max(len(todo) - limit, 0))
+        return Unlabelled(tuple(todo[:limit]), below, max(len(todo) - limit, 0) if self.counts_left else None)
 
     def add_label(self, number, label):
         if self.fail_label_once == number:
@@ -236,6 +238,13 @@ class LimitAndBaseline(unittest.TestCase):
         todo = self.ingest_of(self.RECORDED_THEN + self.LEFT_OUT_THEN)
 
         self.assertEqual(todo.left, 0)
+
+    def test_a_read_that_could_not_count_what_it_left_is_carried_into_the_plan(self):
+        github = FakeGitHub(prs_after_baseline(LIMIT_THEN + self.LEFT_OUT_THEN), counts_left=False)
+
+        todo = plan(github, Ledger(), CONFIG, REGISTRY, limit=LIMIT_THEN)
+
+        self.assertIsNone(todo.left)
 
     def test_every_baseline_pr_read_is_still_counted(self):
         todo = self.ingest_of(LIMIT_THEN + self.LEFT_OUT_THEN)

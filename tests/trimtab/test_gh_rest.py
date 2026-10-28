@@ -337,6 +337,21 @@ class TheClosedPullsScan(unittest.TestCase):
 
         self.assertEqual(read.left, 1)
 
+    def test_prs_at_or_below_the_floor_number_are_listed_in_number_order(self):
+        # Read newest updated first, so the page's order is not the number order.
+        gh = FakeGh(default=page(pull(2), pull(4), pull(1), pull(3)))
+
+        read = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50, above=3)
+
+        self.assertEqual(read.below, (1, 2, 3))
+
+    def test_a_dated_read_within_its_limit_leaves_none(self):
+        gh = FakeGh(default=page(pull(1), pull(2)))
+
+        read = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
+
+        self.assertEqual(read.left, 0)
+
     def test_a_dated_read_counts_the_prs_its_limit_left(self):
         gh = FakeGh(default=page(pull(1), pull(2), pull(3)))
 
@@ -448,6 +463,13 @@ class WithoutAFloor(unittest.TestCase):
         read = GhSource(REPO, run=gh).unlabelled_merged(LABEL, None, 50)
 
         self.assertIsNone(read.left)
+
+    def test_a_backfill_that_read_every_page_within_its_limit_leaves_none(self):
+        gh = FakeGh(default=page(pull(1), pull(2)))
+
+        read = GhSource(REPO, run=gh).unlabelled_merged(LABEL, None, 50)
+
+        self.assertEqual(read.left, 0)
 
     def test_a_backfill_that_read_every_page_counts_what_it_left(self):
         gh = FakeGh(default=page(pull(1), pull(2), pull(3)))

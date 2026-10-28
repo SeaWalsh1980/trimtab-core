@@ -301,13 +301,16 @@ def _print_floor(floor) -> None:
         print(f"ingest floor: PRs merged before {floor} are not read (--ingest-weeks)")
 
 
-def _print_limit(todo, limit) -> None:
+def _print_limit(todo, limit, propose: bool = False) -> None:
     if todo.left != 0:
         # Stated whenever the limit cut PRs off: this run's counts are not the
         # whole window. The PRs stay unlabelled, but only a run that reads them
-        # before they pass the floor records them (trimtab-core ADR 0021).
-        more = "more PRs may remain" if todo.left is None else f"{todo.left} more PRs not recorded"
-        print(f"limit {limit} reached: {more}; a later --apply run reads them while they are inside the "
+        # before they pass the floor records them (trimtab-core ADR 0021). Only
+        # `ingest --apply` records: `propose --apply` opens issues and labels no PR.
+        missed, later = (("counted", "trimtab ingest --apply run records") if propose
+                         else ("recorded", "--apply run reads"))
+        more = "more PRs may remain" if todo.left is None else f"{todo.left} more PRs not {missed}"
+        print(f"limit {limit} reached: {more}; a later {later} them while they are inside the "
               "--ingest-weeks floor (--limit)")
 
 
@@ -474,7 +477,7 @@ def cmd_propose(args) -> int:
         print(f"error: {err}", file=sys.stderr)
         return 2
     _print_floor(_floor(args))
-    _print_limit(todo, args.limit)  # a cut-off run's tally is short, so a proposal can be missing
+    _print_limit(todo, args.limit, propose=True)  # a cut-off run's tally is short, so a proposal can be missing
     proposals = candidates(tally(ingest.all_records(ledger, todo), since=_since(args)), threshold=args.threshold)
     project = args.repo or config.id_prefix
     drafts = [render(p, registry, project=project) for p in proposals]
