@@ -146,7 +146,8 @@ Otherwise, on a branch `trimtab/upstream-<ID>-<YYYY-MM-DD>` from `main` (prefix
    which prints its number `<N>`; once it has, run
    `REPO=$(gh api 'repos/{owner}/{repo}' --jq .full_name) && trimtab verify-body --repo "$REPO" --pull <N> --body-file <file>`
    as a command of its own, with the number written out: guard-github refuses
-   one command that names the body file twice.
+   one command that names the body file twice. If the create exits non-zero
+   or prints no number, no PR was opened: stop and report it.
 6. Comment on each `harness-feedback` issue it answers with the PR's link
    (`REPO=$(gh api 'repos/{owner}/{repo}' --jq .full_name) && C=$(gh api -X POST "repos/$REPO/issues/<n>/comments" -f body="<PR link>" --jq .id) && trimtab verify-body --repo "$REPO" --comment "$C" --body "<PR link>"`). Do
    not close the issue. `verify-body` reads each PR and comment back: exit 1

@@ -181,7 +181,8 @@ trimtab propose --dry-run --check-open --repo "$REPO" --ledger-from-labels \
   which prints its number `<N>`; once it has, run
   `trimtab verify-body --repo "$REPO" --pull <N> --body-file <file>` as a
   command of its own, with the number written out: guard-github refuses one
-  command that names the body file twice.
+  command that names the body file twice. If the create exits non-zero or
+  prints no number, no PR was opened: stop and report it.
   `verify-body` reads the PR back: exit 1 or 2: stop and report it. Never mark
   it ready.
 - Treat each step 3 candidate the same way, from its `--- also checked:` line:

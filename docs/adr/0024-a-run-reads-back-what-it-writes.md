@@ -151,9 +151,14 @@ The upstream retro also comments on issues.
   - A body given inline (`-f body="…"` with `--body "…"`) names no file, and
     its chain stays as it was.
   - The static test holds the read-back to the same step: later on the
-    POST's command line, or in a later command before the next blank line.
-    It counts only a call with options, so a prose mention does not satisfy
-    it.
+    POST's command line, or in a later command before a blank line, the next
+    list item or a code fence ends the step. It counts only a call with
+    options that reads back the same kind (`--pull` for a PR, `--comment` for
+    a comment), so a prose mention, a shell comment or another write's
+    read-back does not satisfy it. A second test fails any command line that
+    names one body file both as `body=@` and as `--body-file`, so the chain
+    guard-github refuses cannot come back, with the path written out or as a
+    variable.
 
 ## Options considered
 
