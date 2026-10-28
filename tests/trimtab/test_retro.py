@@ -362,7 +362,7 @@ class AFixtureRow(unittest.TestCase):
                                          "merged_at": "2026-09-10T00:00:00Z", "labels": []}]))
             source = FixtureSource(path)
 
-            evidence = source.unlabelled_merged(LABEL, "2026-09-01", 10)
+            evidence = list(source.unlabelled_merged(LABEL, "2026-09-01", 10).pulls)
             states = [(p.number, p.state, p.merged_at) for p in source.recent_pulls("2026-09-01")]
 
         self.assertEqual((evidence, states), ([], [(7, "open", "")]))

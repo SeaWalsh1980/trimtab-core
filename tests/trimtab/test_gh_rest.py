@@ -289,21 +289,21 @@ class TheClosedPullsScan(unittest.TestCase):
     def test_a_closed_pr_that_was_not_merged_is_left_out(self):
         gh = FakeGh(default=page(pull(1), pull(2, merged_at=None)))
 
-        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
+        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50).pulls
 
         self.assertEqual([p.number for p in pulls], [1])
 
     def test_a_pr_merged_before_the_floor_and_updated_after_it_is_left_out(self):
         gh = FakeGh(default=page(pull(1), pull(2, merged_at=BEFORE_SINCE, updated_at=AFTER_SINCE)))
 
-        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
+        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50).pulls
 
         self.assertEqual([p.number for p in pulls], [1])
 
     def test_ingest_leaves_out_prs_already_labelled(self):
         gh = FakeGh(default=page(pull(1, labels=[LABEL]), pull(2, labels=[OTHER_LABEL])))
 
-        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
+        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50).pulls
 
         self.assertEqual([p.number for p in pulls], [2])
 
@@ -318,9 +318,24 @@ class TheClosedPullsScan(unittest.TestCase):
         gh = FakeGh(default=page(pull(3, "2026-09-12T00:00:00Z"), pull(1, "2026-09-14T00:00:00Z"),
                                  pull(2, "2026-09-11T00:00:00Z")))
 
-        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 2)
+        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 2).pulls
 
         self.assertEqual([p.number for p in pulls], [2, 3])
+
+    def test_prs_at_or_below_the_floor_number_take_no_place_in_the_limit(self):
+        gh = FakeGh(default=page(pull(1, "2026-09-11T00:00:00Z"), pull(2, "2026-09-12T00:00:00Z"),
+                                 pull(3, "2026-09-13T00:00:00Z"), pull(4, "2026-09-14T00:00:00Z")))
+
+        read = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 1, above=2)
+
+        self.assertEqual(([p.number for p in read.pulls], read.below), ([3], (1, 2)))
+
+    def test_a_dated_read_counts_the_prs_its_limit_left(self):
+        gh = FakeGh(default=page(pull(1), pull(2), pull(3)))
+
+        read = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 1)
+
+        self.assertEqual(read.left, 2)
 
     def test_the_ledger_rebuild_takes_the_newest_merged_first_up_to_its_limit(self):
         gh = FakeGh(default=page(pull(3, "2026-09-12T00:00:00Z", labels=[LABEL]),
@@ -337,21 +352,21 @@ class TheClosedPullsScan(unittest.TestCase):
         second = page(pull(99), pull(100, BEFORE_SINCE))
         gh = FakeGh(answers={PULLS: [first, second]})
 
-        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 500)
+        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 500).pulls
 
         self.assertEqual(len(pulls), 100)
 
     def test_a_pr_keeps_number_body_and_merge_time(self):
         gh = FakeGh(default=page(pull(7, "2026-10-02T08:00:00Z", body="the body")))
 
-        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
+        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50).pulls
 
         self.assertEqual([(p.number, p.body, p.merged_at) for p in pulls], [(7, "the body", "2026-10-02T08:00:00Z")])
 
     def test_a_null_body_reads_as_empty(self):
         gh = FakeGh(default=page(pull(7, body=None)))
 
-        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50)
+        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 50).pulls
 
         self.assertEqual(pulls[0].body, "")
 
@@ -389,7 +404,7 @@ class TheClosedPullsScan(unittest.TestCase):
         source = GhSource(REPO, run=gh)
 
         rebuilt = source.labelled_merged(LABEL, WINDOW_START, 500)
-        todo = source.unlabelled_merged(LABEL, SINCE, 50)
+        todo = source.unlabelled_merged(LABEL, SINCE, 50).pulls
 
         self.assertEqual(([p.number for p in rebuilt], [p.number for p in todo], len(gh.calls)), ([1], [2], 1))
 
@@ -408,9 +423,23 @@ class WithoutAFloor(unittest.TestCase):
     def test_reading_stops_once_the_limit_is_met(self):
         gh = FakeGh(answers={PULLS: [full_page(0, labels=[LABEL]), full_page(100)]}, default=full_page(200))
 
-        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, None, 50)
+        pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, None, 50).pulls
 
         self.assertEqual(([p.number for p in pulls][:2], len(pulls), len(gh.calls)), ([100, 101], 50, 2))
+
+    def test_a_backfill_stopped_at_its_limit_cannot_count_what_it_left(self):
+        gh = FakeGh(default=full_page(0))
+
+        read = GhSource(REPO, run=gh).unlabelled_merged(LABEL, None, 50)
+
+        self.assertIsNone(read.left)
+
+    def test_a_backfill_that_read_every_page_counts_what_it_left(self):
+        gh = FakeGh(default=page(pull(1), pull(2), pull(3)))
+
+        read = GhSource(REPO, run=gh).unlabelled_merged(LABEL, None, 1)
+
+        self.assertEqual(read.left, 2)
 
     def test_a_scan_past_its_bound_is_refused_not_cut_off(self):
         gh = FakeGh(default=full_page(0, labels=[LABEL]))

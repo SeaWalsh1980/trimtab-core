@@ -31,7 +31,7 @@ from trimtab.registry import harness, rules_for
 from trimtab.registry.lookup import project_items, registry_for
 from trimtab.score import THRESHOLD, WINDOW_WEEKS, candidates, tally
 
-DEFAULT_LIMIT = 50  # every run is bounded; the watermark carries the rest
+DEFAULT_LIMIT = 100  # every run is bounded; the watermark carries the rest
 HISTORY_LIMIT = 500  # bounded: labelled PRs a ledger rebuild reads, newest first (ADR 0006)
 INGEST_WEEKS = 2  # bounded: an ingest reads PRs merged this recently (ADR 0021)
 
@@ -297,7 +297,7 @@ def _print_floor(floor) -> None:
         print(f"ingest floor: PRs merged before {floor} are not read (--ingest-weeks)")
 
 
-def _report(config, todo, records, since, floor) -> None:
+def _report(config, todo, records, since, floor, limit) -> None:
     t = tally(records, since=since)
     valid, total = t.coverage
     share = f" ({100 * valid // total}%)" if total else ""
@@ -305,6 +305,11 @@ def _report(config, todo, records, since, floor) -> None:
     print(f"to record: {len(todo.records)} PRs"
           + (f" ({len(todo.already_recorded)} recorded before an interrupted label step)"
              if todo.already_recorded else ""))
+    if todo.left != 0:
+        # Stated whenever the limit cut PRs off: they stay unlabelled and the next
+        # run reads them, but this run's counts are not the whole window.
+        more = "more PRs may remain" if todo.left is None else f"{todo.left} more PRs not recorded"
+        print(f"limit {limit} reached: {more}; the next run continues (--limit)")
     if config.baseline_pr:
         # Stated every run, not only when a baseline PR was seen: a date-bounded
         # query usually never returns them, and the reader still needs to know.
@@ -363,7 +368,7 @@ def cmd_ingest(args) -> int:
     token = ingest.confirmation(todo)
     if not args.apply:
         print("ingest --dry-run: nothing recorded, nothing labelled")
-        _report(config, todo, ingest.all_records(ledger, todo), since, _floor(args))
+        _report(config, todo, ingest.all_records(ledger, todo), since, _floor(args), args.limit)
         if todo.records:
             if not (args.ledger or args.ledger_from_labels):
                 print("to apply, add --ledger <path> or --ledger-from-labels")
@@ -383,7 +388,7 @@ def cmd_ingest(args) -> int:
         print(f"error after recording: {err}. Re-run: the record is kept and counts once.", file=sys.stderr)
         return 2
     print(f"recorded and labelled {len(done)} PRs")
-    _report(config, todo, store.load().records.values(), since, _floor(args))
+    _report(config, todo, store.load().records.values(), since, _floor(args), args.limit)
     return 0
 
 

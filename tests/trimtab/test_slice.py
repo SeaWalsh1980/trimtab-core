@@ -77,6 +77,20 @@ class Slice(unittest.TestCase):
         self.assertIn("TST-2: 2", out)
         self.assertIn("PRs at or below #100", out)
 
+    def test_a_run_cut_off_by_its_limit_says_how_many_it_left(self):
+        after_baseline = 3  # 101-103 in the fixture
+        limit = after_baseline - 1
+
+        out = self.trimtab("ingest", "--dry-run", *self.source(), "--limit", str(limit)).stdout
+
+        self.assertIn(f"limit {limit} reached: {after_baseline - limit} more PRs not recorded; the next run continues",
+                      out)
+
+    def test_a_run_within_its_limit_prints_no_limit_note(self):
+        out = self.trimtab("ingest", "--dry-run", *self.source()).stdout
+
+        self.assertNotIn("the next run continues", out)
+
     def test_propose_prints_exactly_one_upstream_issue(self):
         out = self.trimtab("propose", "--dry-run", *self.source()).stdout
 
