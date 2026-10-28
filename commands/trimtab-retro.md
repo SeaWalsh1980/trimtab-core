@@ -90,13 +90,15 @@ trimtab ingest --dry-run --repo "$REPO" --ledger-from-labels
 
 It reads PRs merged in the last 2 weeks (`--ingest-weeks`), never before the
 adoption, and prints that floor, what it would record, the coverage (the share
-of ingested PRs with a valid block), the adoption baseline, and feedback per
-ID. Then apply with the
+of ingested PRs with a valid block), the adoption baseline, the limit note when
+the limit cut PRs off, and feedback per ID. Then apply with the
 printed command (it ends in `--apply --confirm <token>`). A run killed half-way
 is safe: the next run finds the unlabelled PRs again and counts each once.
 
 If the rebuild reports that it hit its limit, say so: older evidence in the
-window was not read.
+window was not read. If the ingest reports `limit N reached`, say so with the
+count it gives (or "more PRs may remain"): those PRs are not in this run's
+counts, and they are read only while inside the `--ingest-weeks` floor.
 
 ## 2. claude-review findings (a fourth reviewer)
 
@@ -220,7 +222,8 @@ always-loaded**, whatever the size.
 
 End with one report, in the final message and (in a routine) nowhere else:
 
-- window, coverage, PRs recorded, the baseline note;
+- window, coverage, PRs recorded, the baseline note, and the limit note when
+  printed;
 - feedback per ID, and which proposals were opened, skipped as already open,
   resolved by a merged fix, or left below the threshold;
 - claude-review yield; conformance candidates;
