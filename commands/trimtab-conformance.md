@@ -311,8 +311,12 @@ appears only in that section, never as a severity.
   Check it with `trimtab check-pr --body-file <file>` and fix what it reports.
 - Push the branch and open a **draft** PR titled
   `review(conformance): weekly sweep <TODAY>`, with
-  `N=$(gh api -X POST "repos/$REPO/pulls" -f title="review(conformance): weekly sweep $TODAY" -f head="reviews/conformance-$TODAY" -f base="$DEFAULT" -F draft=true -F body=@<file> --jq .number) && trimtab verify-body --repo "$REPO" --pull "$N" --body-file <file>`;
-  the PR is `https://github.com/$REPO/pull/$N`. `verify-body` reads the PR
+  `gh api -X POST "repos/$REPO/pulls" -f title="review(conformance): weekly sweep $TODAY" -f head="reviews/conformance-$TODAY" -f base="$DEFAULT" -F draft=true -F body=@<file> --jq .number`,
+  which prints the PR's number `<N>`; the PR is
+  `https://github.com/$REPO/pull/<N>`. Once it has printed one, run
+  `trimtab verify-body --repo "$REPO" --pull <N> --body-file <file>` as a
+  command of its own, with the number written out: guard-github refuses one
+  command that names the body file twice. `verify-body` reads the PR
   back: exit 0 is the body sent (it may say it took the platform's session
   footer off, or restored a line a footer had replaced, or that the platform's
   generic footer, linking no session, follows it); exit 1 or 2: stop and report
