@@ -55,7 +55,7 @@ READ_BACK = {kind: re.compile(rf"\btrimtab\s+verify-body(?=\s+--)[^`&;|]*\s--{fl
 STEP_ENDS = re.compile(r"\s*(?:$|[-*+]\s|\d+[.)]\s|```|~~~)")
 SHELL_COMMENT = re.compile(r"\s*#")
 # `-F body=@<file>`, quoted or not, and the same file read back by name.
-BODY_FILE = re.compile(r"""\bbody=@(["']?)([^\s"'`)]+)\1""")
+BODY_FILE = re.compile(r"""\bbody=@(["']?)([^\s"'`);,|&]+)\1""")
 # A shipped file that commits has the run check what it commits first.
 COMMITS = re.compile(r"\bgit\s+commit\b")
 # The commands that commit in prose ("Commit only the report") as well as by
@@ -231,7 +231,7 @@ def body_file_named_twice(text):
     """First file lines of command lines that send a body from a file and name that file again as `--body-file`."""
     found = []
     for n, line in command_lines(text):
-        if any(re.search(rf"""--body-file\s+["']?{re.escape(m.group(2))}["']?(?![^\s`)])""", line)
+        if any(re.search(rf"""--body-file\s+["']?{re.escape(m.group(2))}["']?(?![^\s`);,|&])""", line)
                for m in BODY_FILE.finditer(line)):
             found.append(n)
     return found
@@ -253,8 +253,9 @@ class EveryPrOrCommentARunCreatesIsReadBack(unittest.TestCase):
         self.assertEqual(unverified_writes("\n\n".join(lines)), [1, 3, 5, 7])
 
     def test_the_check_lets_a_write_followed_by_its_read_back_through(self):
-        text = ("N=$(gh api -X POST \"repos/$REPO/pulls\" -F body=@f --jq .number) \\\n"
-                "  && trimtab verify-body --repo \"$REPO\" --pull \"$N\" --body-file f\n"
+        # A body given inline names no file, so its read-back may stay chained (ADR 0024, amended 2026-10-28).
+        text = ("C=$(gh api -X POST \"repos/$REPO/issues/5/comments\" -f body=x --jq .id) \\\n"
+                "  && trimtab verify-body --repo \"$REPO\" --comment \"$C\" --body x\n"
                 "gh api -X POST repos/o/r/issues/5/labels -f labels[]=x")
 
         self.assertEqual(unverified_writes(text), [])
@@ -274,20 +275,39 @@ class EveryPrOrCommentARunCreatesIsReadBack(unittest.TestCase):
 
         self.assertEqual(unverified_writes(text), [4])
 
-    def test_the_next_list_item_ends_the_reach_of_a_read_back(self):
-        text = ("5. Open it: `gh api -X POST repos/o/r/pulls -F body=@f --jq .number`.\n"
-                "6. Comment: `C=$(gh api -X POST repos/o/r/issues/2/comments -f body=x --jq .id)"
-                " && trimtab verify-body --repo r --comment \"$C\" --body x`.")
+    # Each step end below has a read-back of the right kind past it, so only the step end can report the write.
+    def test_the_next_numbered_item_ends_the_reach_of_a_read_back(self):
+        for marker in ("6.", "6)"):
+            with self.subTest(marker=marker):
+                text = ("5. Open it: `gh api -X POST repos/o/r/pulls -F body=@f --jq .number`.\n"
+                        f"{marker} Read it back: `trimtab verify-body --repo r --pull <N> --body-file f`.")
 
-        self.assertEqual(unverified_writes(text), [1])
+                self.assertEqual(unverified_writes(text), [1])
+
+    def test_the_next_bullet_ends_the_reach_of_a_read_back(self):
+        for marker in ("-", "*", "+"):
+            with self.subTest(marker=marker):
+                text = (f"{marker} Open it: `gh api -X POST repos/o/r/pulls -F body=@f --jq .number`.\n"
+                        f"  {marker} Read it back: `trimtab verify-body --repo r --pull <N> --body-file f`.")
+
+                self.assertEqual(unverified_writes(text), [1])
 
     def test_a_code_fence_ends_the_reach_of_a_read_back(self):
-        text = ("```bash\n"
-                "gh api -X POST repos/o/r/pulls -F body=@f --jq .number\n"
-                "```\n"
-                "Then `trimtab verify-body --repo r --pull <N> --body-file f`.")
+        for fence in ("```", "~~~"):
+            with self.subTest(fence=fence):
+                text = (f"{fence}bash\n"
+                        "gh api -X POST repos/o/r/pulls -F body=@f --jq .number\n"
+                        f"{fence}\n"
+                        "Then `trimtab verify-body --repo r --pull <N> --body-file f`.")
 
-        self.assertEqual(unverified_writes(text), [2])
+                self.assertEqual(unverified_writes(text), [2])
+
+    def test_a_whitespace_only_line_ends_the_reach_of_a_read_back(self):
+        text = ("gh api -X POST repos/o/r/pulls -F body=@f --jq .number\n"
+                "   \n"
+                "trimtab verify-body --repo r --pull <N> --body-file f")
+
+        self.assertEqual(unverified_writes(text), [1])
 
     def test_a_read_back_after_a_shell_comment_in_the_same_block_counts(self):
         text = ("```bash\n"
@@ -334,6 +354,11 @@ class NoCommandNamesItsBodyFileTwice(unittest.TestCase):
     def test_the_check_catches_the_chain_when_the_path_is_a_variable(self):
         text = ('N=$(gh api -X POST "repos/$R/pulls" -F body=@"$BODY" --jq .number)'
                 ' && trimtab verify-body --repo "$R" --pull "$N" --body-file "$BODY"')
+
+        self.assertEqual(body_file_named_twice(text), [1])
+
+    def test_the_check_reads_a_file_name_up_to_the_punctuation_after_it(self):
+        text = "gh api -X POST repos/o/r/pulls -F body=@f; trimtab verify-body --repo r --pull 3 --body-file f"
 
         self.assertEqual(body_file_named_twice(text), [1])
 
