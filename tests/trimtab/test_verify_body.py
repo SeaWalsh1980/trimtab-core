@@ -7,8 +7,9 @@ anything else it did not send. The platform's generic footer, which links no
 session and comes back on every edit, is accepted and left when it follows the
 body sent. Either footer standing in place of the run's attribution line has
 deleted text the run sent, so the body is written back whichever it is. If the
-generic footer takes the line's place again on that write, it is left: it names
-nothing, and another write would only bring it back (2026-10-28).
+generic footer stood there on the first read and takes the line's place again on
+that write, it is left: it names nothing, and another write would only bring it
+back (2026-10-28). A session link on either read still fails.
 """
 
 import contextlib
@@ -237,9 +238,10 @@ class VerifyBody(unittest.TestCase):
 
     def test_the_generic_footer_in_place_again_after_the_write_back_passes_and_is_left(self):
         # ControlTower#1022 (2026-10-24): the generic footer stood in place of the line on both reads.
-        for second in (GENERIC, GENERIC.replace("\n---", "")):
-            with self.subTest(rule="---" in second):
-                bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, GENERIC),
+        ruleless = GENERIC.replace("\n---", "")
+        for first, second in ((GENERIC, GENERIC), (GENERIC, ruleless), (ruleless, GENERIC)):
+            with self.subTest(first_rule="---" in first, second_rule="---" in second):
+                bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, first),
                                         then=in_place_of_attribution(SENT, second))
 
                 outcome = verify(bodies, SENT)
@@ -520,8 +522,8 @@ class VerifyBodies(unittest.TestCase):
         self.assertEqual(outcomes, [Readback.REPLACED, Readback.SAME, Readback.FOOTER, Readback.GENERIC])
 
     def test_a_generic_footer_in_place_again_passes_beside_the_rest_of_the_batch(self):
-        repo = GenericInPlaceOnEditRepository({("issue", 1): in_place_of_attribution(SENT, GENERIC), ("issue", 2): SENT},
-                                              generic_in_place_on_edit=[("issue", 1)])
+        repo = GenericInPlaceOnEditRepository({("issue", 1): in_place_of_attribution(SENT, GENERIC),
+                                               ("issue", 2): SENT}, generic_in_place_on_edit=[("issue", 1)])
 
         outcomes = verify_bodies(repo, self.targets(1, 2), settle_seconds=0, sleep=repo.sleep)
 
