@@ -6,6 +6,11 @@ Accepted (2026-10-16), by the operator: the trial, run again on a base
 carrying the 2026-10-15 amendment, passed on two routines (see "Second
 trial"). The notes below are kept as they were written.
 
+2026-10-28: amended, still accepted: the read-back runs as a command of its
+own, after the create, because guard-github refuses one command that names
+the body file twice (see "The read-back is a command of its own" under
+Decision).
+
 Proposed (2026-10-14). Becomes accepted once a guarded cloud routine on a base
 carrying this change opens a PR, `trimtab verify-body` exits 0, and the PR's
 body, read afterwards, holds no reference to the run (see "Trial, still
@@ -86,7 +91,9 @@ The upstream retro also comments on issues.
   (`N=$(gh api -X POST … --jq .number) && trimtab verify-body … --pull "$N"`),
   so it runs only when the PR was created and cannot be forgotten as a later
   step. The PR-body hook still reads the POST inside the substitution. A static test fails if
-  a shipped file POSTs a PR or a comment without it.
+  a shipped file POSTs a PR or a comment without it. (Amended 2026-10-28: for
+  a body sent from a file, the read-back is a command of its own; see "The
+  read-back is a command of its own" below.)
 - **`propose --apply` reads back every issue it files**, together, after
   filing them all: one shared wait, then one more only if a footer was taken
   off, however many issues there are. Issues are filed only inside the
@@ -150,6 +157,29 @@ The upstream retro also comments on issues.
     the body, still fails, as does `DIFFERS` and any other difference. The
     generic footer in place only after a write-back that took a session
     footer off also fails.
+- **The read-back is a command of its own** (amendment, 2026-10-28). A
+  consumer project's conformance routine pushed its report branch and opened
+  no PR: guard-github refused the chained command, because it reads a request
+  file before the command runs and refuses one whose name appears anywhere
+  else in the command (ADR 0037), and `--body-file` names it a second time.
+  The retro's identical chain had passed only because its run wrote the path
+  as a variable, which the guard does not read (ADR 0037, Residuals).
+  - A command that sends a body from a file (`-F body=@<file>`) only creates:
+    `gh api -X POST … --jq .number` prints the number. Once it has, the run
+    reads back with `trimtab verify-body --repo "$REPO" --pull <N>
+    --body-file <file>` as a command of its own, the number written out.
+    The exit codes are read as before.
+  - A body given inline (`-f body="…"` with `--body "…"`) names no file, and
+    its chain stays as it was.
+  - The static test holds the read-back to the same step: later on the
+    POST's command line, or in a later command before a blank line, the next
+    list item or a code fence ends the step. It counts only a call with
+    options that reads back the same kind (`--pull` for a PR, `--comment` for
+    a comment), so a prose mention, a shell comment or another write's
+    read-back does not satisfy it. A second test fails any command line that
+    names one body file both as `body=@` and as `--body-file`, so the chain
+    guard-github refuses cannot come back, with the path written out or as a
+    variable.
 
 ## Options considered
 
@@ -210,6 +240,18 @@ The upstream retro also comments on issues.
   read held** (2026-10-28). Rejected: the operator's decision passes only a
   body that showed no session link on either read, the case observed. After
   a session footer, a body short of its line is left to the operator.
+- **Keep the chain and write the body path as a variable** (2026-10-28).
+  Rejected: it passes only through a gap guard-github records as a residual;
+  closing the gap would break every command again, and the commands would be
+  written to rely on a guard not reading them.
+- **Let guard-github pass a file the read-back names** (2026-10-28).
+  Rejected for this change: the guard is a security control, changed only by
+  the operator, and the refusal exists because a later word in the command
+  can rewrite the file before gh reads it. Telling a harmless second name
+  from a rewrite is the guard's own decision to make, not the commands'.
+- **Pipe the number into the read-back** (`… --jq .number | xargs …`).
+  Rejected: guard-github refuses gh run under `xargs`, and a pipe still puts
+  both names in one command.
 
 ## Consequences
 
@@ -238,6 +280,15 @@ The upstream retro also comments on issues.
   the generic footer where its attribution line was, so that line is
   missing from it. `check-pr` does not require the line, so a consumer's CI
   does not fail on it.
+- Accepted (2026-10-28): a read-back that is a command of its own is no
+  longer tied to the create by `&&`. The command's text tells the run to run
+  it once the create has printed a number, and the static test keeps it in
+  the same step, but nothing in the shell stops a run that skips it.
+  `check-pr` in a consumer's CI remains the check after the fact.
+- Accepted (2026-10-28): the number is written out by hand. A wrong number
+  reads back another PR, whose body is not the one sent, so `verify-body`
+  exits 1 and the run stops; it writes back only a body that is the one sent
+  plus a footer, so it does not edit that PR.
 
 ## Trial, still open
 
