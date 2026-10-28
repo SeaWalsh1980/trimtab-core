@@ -16,10 +16,11 @@ in that place (IN_PLACE) has deleted text the run sent, so it is always written
 back, session link or not, and the body must come back as sent or with only the
 generic footer after it.
 
-A later run still (2026-10-24) saw the generic footer take the line's place again
-on that write-back, having stood there on the first read too. With no session
-link on either read, it is left as the generic footer after the body is: it
-names nothing, and another write would only bring it back.
+A run on 2026-10-24 saw the generic footer take the line's place again on that
+write-back, having stood there on the first read too. With no session link on
+either read, it is left where it stands, and the body goes without its
+attribution line (IN_PLACE_GENERIC_AGAIN): the footer names nothing, and
+another write would only bring it back.
 """
 
 from __future__ import annotations
@@ -127,11 +128,11 @@ def verify_bodies(bodies: Bodies, targets: list[Target], *,
     body sent: REPLACED, IN_PLACE_REPLACED or IN_PLACE_GENERIC_KEPT, by what the first read found. A generic footer
     found after the body on the first read is left alone (GENERIC): it names nothing, and a write would only bring
     it back. So is the generic footer in place of the attribution line on both reads (IN_PLACE_GENERIC_AGAIN); a
-    session link on either read never is. Any other change, or a run reference, fails, but only after every target has been checked and every
-    body due a write-back written: one WrittenBodyError names each target that failed. A read or write that fails
-    (GitHub) does not stop the others either. If that is all that failed, the first such error is raised as it
-    came; if a body also failed, the WrittenBodyError names both, each by its target. The caller supplies the wait
-    (`sleep`): waiting is the outer layer's."""
+    session link on either read never is. Any other change, or a run reference, fails, but only after every target
+    has been checked and every body due a write-back written: one WrittenBodyError names each target that failed. A
+    read or write that fails (GitHub) does not stop the others either. If that is all that failed, the first such
+    error is raised as it came; if a body also failed, the WrittenBodyError names both, each by its target. The
+    caller supplies the wait (`sleep`): waiting is the outer layer's."""
 
     def wait() -> None:
         if settle_seconds > 0:

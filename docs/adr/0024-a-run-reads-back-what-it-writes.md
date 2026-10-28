@@ -300,10 +300,9 @@ Two per-project retro runs on a consumer project, each read from the run's
 own log.
 
 - **ControlTower#953** (retro 2026-10-17, pin `48d74fc6`). The session
-  footer stood in place of the attribution line. `verify-body` exited 1,
-  correctly: the pin predated the 2026-10-17 amendment, which this case
-  prompted. The PR merged with the session link in its body; removing it is
-  the operator's edit.
+  footer replaced the attribution line. `verify-body` exited 1, correctly:
+  the pin predated the 2026-10-17 amendment. The PR merged with the session
+  link in its body; removing it is the operator's edit.
 - **ControlTower#1022** (retro 2026-10-24, pin `5d35421b`, which carries the
   2026-10-17 amendment). `verify-body` wrote back the body sent; the re-check
   found the generic footer in place of the attribution line again, no
