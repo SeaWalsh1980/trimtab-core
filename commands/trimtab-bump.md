@@ -68,8 +68,12 @@ trimtab ids --staged && git commit -m "chore(trimtab): move the lock to <new sho
   && REPO=$(gh api 'repos/{owner}/{repo}' --jq .full_name) \
   && N=$(gh api -X POST "repos/$REPO/pulls" -f title="chore(trimtab): move the lock to <new short SHA>" \
     -f head="$(git branch --show-current)" -f base="$DEFAULT" -F draft=true -F body=@"$BODY" --jq .number) \
-  && echo "https://github.com/$REPO/pull/$N" \
-  && trimtab verify-body --repo "$REPO" --pull "$N" --body-file "$BODY"
+  && echo "https://github.com/$REPO/pull/$N"
+# Only once that has printed the PR's URL: the read-back, a command of its own
+# (guard-github refuses one command that names the body file twice), with the
+# number from the URL written out and the repository read again.
+REPO=$(gh api 'repos/{owner}/{repo}' --jq .full_name) \
+  && trimtab verify-body --repo "$REPO" --pull <N> --body-file "$BODY"
 ```
 
 `verify-body` reads the PR back: exit 0 is the body sent (it may say it took

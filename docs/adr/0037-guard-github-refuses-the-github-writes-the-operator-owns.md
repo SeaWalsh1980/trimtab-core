@@ -213,5 +213,15 @@ The guard reads the command text, so it does not see:
   another link to the same file. Matching those would mean refusing every
   command that names a glob or a variable beside a file read, which refuses
   ordinary calls; it takes deliberate evasion, which the server still stops.
+- a `-F key=@file` field whose path is a variable (`-F body=@"$F"`), recorded
+  2026-10-28. Unlike an `--input` file, whose path in a variable refuses, the
+  field is left unknown rather than read. That refuses only when the decision
+  needs the field (`draft`); one it does not need, such as `body`, passes
+  unread, so the check that refuses a request file named elsewhere in the
+  command never applies to it. The same command is refused with the path
+  written out and passes with the path in a variable: ADR 0024's 2026-10-28
+  amendment records a shipped command that passed only this way, and the
+  shipped commands no longer rely on it. Closing it is a change to this guard,
+  for the operator.
 
 Each is a reason the server stays the boundary.
