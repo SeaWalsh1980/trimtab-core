@@ -6,7 +6,10 @@ the run reads each body back, removes exactly that footer, and fails on
 anything else it did not send. The platform's generic footer, which links no
 session and comes back on every edit, is accepted and left when it follows the
 body sent. Either footer standing in place of the run's attribution line has
-deleted text the run sent, so the body is written back whichever it is.
+deleted text the run sent, so the body is written back whichever it is. If the
+generic footer stood there on the first read and takes the line's place again on
+that write, it is left: it names nothing, and another write would only bring it
+back (2026-10-28). A session link on either read still fails.
 """
 
 import contextlib
@@ -224,15 +227,41 @@ class VerifyBody(unittest.TestCase):
 
                 self.assertEqual((bodies.writes, bodies.found), ([SENT], SENT))
 
-    def test_a_footer_in_place_again_after_the_write_back_fails(self):
-        for first in (FOOTER, GENERIC):
-            for second in (FOOTER, GENERIC):
-                with self.subTest(first_generic=first is GENERIC, second_generic=second is GENERIC):
-                    bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, first),
-                                            then=in_place_of_attribution(SENT, second))
+    def test_a_footer_in_place_again_after_the_write_back_fails_when_either_linked_a_session(self):
+        for first, second in ((FOOTER, FOOTER), (FOOTER, GENERIC), (GENERIC, FOOTER)):
+            with self.subTest(first_generic=first is GENERIC, second_generic=second is GENERIC):
+                bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, first),
+                                        then=in_place_of_attribution(SENT, second))
 
-                    with self.assertRaisesRegex(WrittenBodyError, "replaced the attribution line again"):
-                        verify(bodies, SENT)
+                with self.assertRaisesRegex(WrittenBodyError, "replaced the attribution line again"):
+                    verify(bodies, SENT)
+
+    def test_the_generic_footer_in_place_again_after_the_write_back_passes_and_is_left(self):
+        # ControlTower#1022 (2026-10-24): the generic footer stood in place of the line on both reads.
+        ruleless = GENERIC.replace("\n---", "")
+        for first, second in ((GENERIC, GENERIC), (GENERIC, ruleless), (ruleless, GENERIC)):
+            with self.subTest(first_rule="---" in first, second_rule="---" in second):
+                bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, first),
+                                        then=in_place_of_attribution(SENT, second))
+
+                outcome = verify(bodies, SENT)
+
+                self.assertEqual((outcome, bodies.writes), (Readback.IN_PLACE_GENERIC_AGAIN, [SENT]))
+
+    def test_the_generic_footer_in_place_after_a_session_footer_in_place_fails(self):
+        # A session link on the first read: only the generic footer on both reads is left.
+        bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, FOOTER),
+                                then=in_place_of_attribution(SENT, GENERIC))
+
+        with self.assertRaisesRegex(WrittenBodyError, "replaced the attribution line again"):
+            verify(bodies, SENT)
+
+    def test_a_body_changed_otherwise_after_a_generic_footer_in_place_fails(self):
+        changed = in_place_of_attribution(SENT, GENERIC).replace("Nothing to raise.", "Something to raise.")
+        bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, GENERIC), then=changed)
+
+        with self.assertRaisesRegex(WrittenBodyError, "differs from the one sent after it was written again"):
+            verify(bodies, SENT)
 
     def test_a_session_footer_after_the_restored_line_came_back_when_one_stood_in_place(self):
         bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, FOOTER), then=with_footer(SENT))
@@ -259,7 +288,7 @@ class VerifyBody(unittest.TestCase):
         self.assertIn("a session link is now published", str(raised.exception))
 
     def test_a_footer_in_place_names_no_new_session_link_unless_one_appeared(self):
-        for first, second in ((FOOTER, FOOTER), (FOOTER, GENERIC), (GENERIC, GENERIC)):
+        for first, second in ((FOOTER, FOOTER), (FOOTER, GENERIC)):
             with self.subTest(first_generic=first is GENERIC, second_generic=second is GENERIC):
                 bodies = InMemoryBodies(("pull", PR), in_place_of_attribution(SENT, first),
                                         then=in_place_of_attribution(SENT, second))
@@ -444,6 +473,20 @@ class GenericOnEditRepository(InMemoryRepository):
             self.found[(kind, number)] = with_generic(body)
 
 
+class GenericInPlaceOnEditRepository(InMemoryRepository):
+    """The platform as ControlTower#1022 saw it: each edit to these bodies gets the generic footer in place of the
+    attribution line."""
+
+    def __init__(self, found, generic_in_place_on_edit):
+        super().__init__(found)
+        self.generic_in_place_on_edit = set(generic_in_place_on_edit)
+
+    def write(self, kind, number, body):
+        super().write(kind, number, body)
+        if (kind, number) in self.generic_in_place_on_edit:
+            self.found[(kind, number)] = in_place_of_attribution(body, GENERIC)
+
+
 class VerifyBodies(unittest.TestCase):
     def targets(self, *numbers):
         return [("issue", n, SENT) for n in numbers]
@@ -477,6 +520,14 @@ class VerifyBodies(unittest.TestCase):
         outcomes = verify_bodies(repo, self.targets(1, 2, 3, 4), settle_seconds=0, sleep=repo.sleep)
 
         self.assertEqual(outcomes, [Readback.REPLACED, Readback.SAME, Readback.FOOTER, Readback.GENERIC])
+
+    def test_a_generic_footer_in_place_again_passes_beside_the_rest_of_the_batch(self):
+        repo = GenericInPlaceOnEditRepository({("issue", 1): in_place_of_attribution(SENT, GENERIC),
+                                               ("issue", 2): SENT}, generic_in_place_on_edit=[("issue", 1)])
+
+        outcomes = verify_bodies(repo, self.targets(1, 2), settle_seconds=0, sleep=repo.sleep)
+
+        self.assertEqual((outcomes, repo.writes), ([Readback.IN_PLACE_GENERIC_AGAIN, Readback.SAME], [("issue", 1)]))
 
     def test_the_error_names_the_body_that_differs(self):
         repo = InMemoryRepository({("issue", 1): SENT, ("issue", 2): SENT + "\nappended"})
@@ -783,7 +834,8 @@ fi
 
 
 class VerifyBodyCli(unittest.TestCase):
-    """`trimtab verify-body`: exit 0 when the body is the one sent, 1 when it is not, 2 when it cannot tell."""
+    """`trimtab verify-body`: exit 0 when the body is the one sent or changed only by the platform's footer as the
+    report says, 1 when it is changed otherwise, 2 when it cannot tell."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -861,6 +913,20 @@ class VerifyBodyCli(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("session footer had replaced", done.stdout)
         self.assertIn("generic footer, linking no session, after it", done.stdout)
+
+    def test_a_generic_footer_in_place_again_exits_0_and_says_the_line_is_missing(self):
+        done = self.run_in_place(GENERIC, in_place_of_attribution(SENT, GENERIC))
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("replaced the attribution line again", done.stdout)
+        self.assertIn("the body lacks its attribution line", done.stdout)
+        self.assertNotIn("session footer", done.stdout)
+
+    def test_a_generic_footer_in_place_after_a_session_footer_in_place_exits_1_without_quoting_it(self):
+        done = self.run_in_place(FOOTER, in_place_of_attribution(SENT, GENERIC))
+
+        self.assertEqual(done.returncode, 1)
+        self.assertNotIn(SESSION_TAIL, done.stdout + done.stderr)
 
     def test_a_session_footer_replaced_by_the_generic_one_exits_0_and_says_so(self):
         # ADR 0024's first trial: the run report records which footer was there and which one stayed.
