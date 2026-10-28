@@ -39,8 +39,21 @@ class PullRequest:
     merged_at: str
 
 
+@dataclass(frozen=True)
+class Unlabelled:
+    """One bounded read of merged PRs not yet labelled: the first `limit` oldest merged, numbered above `above`
+    when it is given, and what the read left out."""
+    pulls: tuple[PullRequest, ...]
+    # Numbered at or below `above`: left out before the limit, so they take up none of its places.
+    below: tuple[int, ...]
+    # Past the limit, for the next run; None when the read stopped at the limit and could not count them.
+    # No default: a source states what it cut, never claims by omission that it cut nothing.
+    left: int | None
+
+
 class PullRequestSource(Protocol):
-    def unlabelled_merged(self, label: str, merged_since: str | None, limit: int) -> list[PullRequest]: ...
+    def unlabelled_merged(self, label: str, merged_since: str | None, limit: int,
+                          above: int | None = None) -> Unlabelled: ...
 
     def labelled_merged(self, label: str, merged_since: str, limit: int) -> list[PullRequest]: ...
 
@@ -135,6 +148,8 @@ class IngestPlan:
     records: tuple[Record, ...]
     baseline_skipped: tuple[int, ...]
     already_recorded: tuple[int, ...]
+    # Cut off by the limit and left to the next run; None when the read could not count them.
+    left: int | None
     # Written in a block version this Trimtab does not read (ADR 0007): neither
     # recorded nor labelled, so a newer Trimtab still finds and counts them.
     newer_version: tuple[int, ...] = ()
@@ -163,14 +178,16 @@ def plan(source: PullRequestSource, ledger: Ledger, config: ProjectConfig,
     """
     bounds = [] if backfill else [d for d in (config.adopted_at[:10] if config.adopted_at else None, floor) if d]
     since = max(bounds) if bounds else None
-    pulls = source.unlabelled_merged(LABEL, since, limit)
-    skipped = tuple(p.number for p in pulls if p.number <= config.baseline_pr and not backfill)
-    newer = tuple(p.number for p in pulls if p.number not in skipped and _too_new(p.body))
-    todo = [p for p in pulls if p.number not in skipped and p.number not in newer]
+    # Baseline PRs are left out by number before the limit, so they never take
+    # up a place a PR to record needs (a backfill reads them as any other).
+    read = source.unlabelled_merged(LABEL, since, limit, above=None if backfill else config.baseline_pr)
+    newer = tuple(p.number for p in read.pulls if _too_new(p.body))
+    todo = [p for p in read.pulls if p.number not in newer]
     # Recorded but not labelled: a crash between the two steps. Re-recording is
     # idempotent (keyed by number), and it lets the label step finish.
     again = tuple(p.number for p in todo if p.number in ledger.records)
-    return IngestPlan(tuple(record_of(p, registry, backfill) for p in todo), skipped, again, newer)
+    return IngestPlan(tuple(record_of(p, registry, backfill) for p in todo), baseline_skipped=read.below,
+                      already_recorded=again, left=read.left, newer_version=newer)
 
 
 def _too_new(body: str) -> bool:

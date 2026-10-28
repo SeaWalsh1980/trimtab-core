@@ -362,10 +362,31 @@ class AFixtureRow(unittest.TestCase):
                                          "merged_at": "2026-09-10T00:00:00Z", "labels": []}]))
             source = FixtureSource(path)
 
-            evidence = source.unlabelled_merged(LABEL, "2026-09-01", 10)
+            evidence = list(source.unlabelled_merged(LABEL, "2026-09-01", 10).pulls)
             states = [(p.number, p.state, p.merged_at) for p in source.recent_pulls("2026-09-01")]
 
         self.assertEqual((evidence, states), ([], [(7, "open", "")]))
+
+
+class AFixtureLimit(unittest.TestCase):
+    """A scratch run's PRs at or below a number take no place in the limit, and what the limit left is counted."""
+
+    def read(self, above, limit):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pulls.json"
+            path.write_text(json.dumps([{"number": n, "title": "t", "body": "", "merged_at": "2026-09-10T00:00:00Z",
+                                         "labels": []} for n in (1, 2, 3, 4)]))
+            return FixtureSource(path).unlabelled_merged(LABEL, "2026-09-01", limit, above=above)
+
+    def test_prs_at_or_below_the_number_are_left_out_before_the_limit(self):
+        read = self.read(above=2, limit=1)
+
+        self.assertEqual(([p.number for p in read.pulls], read.below), ([3], (1, 2)))
+
+    def test_what_the_limit_left_is_counted(self):
+        read = self.read(above=2, limit=1)
+
+        self.assertEqual(read.left, 1)
 
 
 class AFixtureDecline(unittest.TestCase):

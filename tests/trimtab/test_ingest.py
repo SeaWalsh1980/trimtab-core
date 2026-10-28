@@ -1,10 +1,14 @@
 """Ingest by watermark, tally per ID, and propose (ADR 0005)."""
 
+import contextlib
+import io
 import unittest
 
 from trimtab.capture.ingest import (
-    LABEL, InMemoryLedgerStore, Ledger, PullRequest, StalePlan, apply, confirmation, plan,
+    LABEL, IngestPlan, InMemoryLedgerStore, Ledger, PullRequest, StalePlan, Unlabelled, apply, confirmation,
+    plan,
 )
+from trimtab.cli import _print_limit
 from trimtab.config import ProjectConfig
 from trimtab.items import Item, Strength
 from trimtab.propose import render
@@ -38,15 +42,19 @@ def body(feedback_id="TST-2"):
 class FakeGitHub:
     """A true external system (GitHub via gh), so a fake is allowed."""
 
-    def __init__(self, pulls, fail_label_once=None):
+    def __init__(self, pulls, fail_label_once=None, counts_left=True):
         self.pulls = {p.number: p for p in pulls}
         self.labels = {p.number: set() for p in pulls}
         self.fail_label_once = fail_label_once
+        # False: a read that stopped at the limit and could not count the rest, as GhSource's backfill.
+        self.counts_left = counts_left
 
-    def unlabelled_merged(self, label, merged_since, limit):
+    def unlabelled_merged(self, label, merged_since, limit, above=None):
         todo = [p for n, p in sorted(self.pulls.items()) if label not in self.labels[n]
                 and (merged_since is None or p.merged_at[:10] >= merged_since)]
-        return todo[:limit]
+        below = tuple(p.number for p in todo if above is not None and p.number <= above)
+        todo = [p for p in todo if p.number not in below]
+        return Unlabelled(tuple(todo[:limit]), below, max(len(todo) - limit, 0) if self.counts_left else None)
 
     def add_label(self, number, label):
         if self.fail_label_once == number:
@@ -173,6 +181,88 @@ class IngestFloor(unittest.TestCase):
         todo = plan(self.github, Ledger(), CONFIG, REGISTRY, limit=50, backfill=True, floor="2026-10-01")
 
         self.assertEqual([r.number for r in todo.records], [11, 12])
+
+    def test_a_backfill_records_prs_at_or_below_the_baseline(self):
+        github = FakeGitHub([PullRequest(CONFIG.baseline_pr, body(), "2026-09-26T00:00:00Z")])
+
+        todo = plan(github, Ledger(), CONFIG, REGISTRY, limit=50, backfill=True)
+
+        self.assertEqual([r.number for r in todo.records], [CONFIG.baseline_pr])
+
+
+LIMIT_THEN = 50  # the default --limit of the 10-24 run
+
+
+def merged_prs(first, count):
+    """`count` merged PRs numbered from `first`, all after the adoption."""
+    return [PullRequest(n, body(), "2026-09-28T00:00:00Z") for n in range(first, first + count)]
+
+
+def baseline_prs(count):
+    """PRs at or below CONFIG's baseline, merged after the adoption: never labelled, so every read finds them."""
+    return merged_prs(CONFIG.baseline_pr - count + 1, count)
+
+
+def prs_after_baseline(count):
+    return merged_prs(CONFIG.baseline_pr + 1, count)
+
+
+class LimitAndBaseline(unittest.TestCase):
+    """The 10-24 run: 9 baseline PRs took 9 of the 50 places, so 41 were recorded and 7 left unread, unreported."""
+
+    BASELINE_SEEN = 9
+    RECORDED_THEN = 41
+    LEFT_OUT_THEN = 7
+
+    def ingest_of(self, after_baseline):
+        github = FakeGitHub(baseline_prs(self.BASELINE_SEEN) + prs_after_baseline(after_baseline))
+        return plan(github, Ledger(), CONFIG, REGISTRY, limit=LIMIT_THEN)
+
+    def test_baseline_prs_take_no_place_in_the_limit(self):
+        todo = self.ingest_of(self.RECORDED_THEN + self.LEFT_OUT_THEN)
+
+        self.assertEqual(len(todo.records), self.RECORDED_THEN + self.LEFT_OUT_THEN)
+
+    def test_a_run_past_the_limit_records_the_limit_from_prs_after_the_baseline(self):
+        todo = self.ingest_of(LIMIT_THEN + self.LEFT_OUT_THEN)
+
+        self.assertEqual([r.number for r in todo.records],
+                         [p.number for p in prs_after_baseline(LIMIT_THEN)])
+
+    def test_a_run_past_the_limit_counts_the_prs_it_left(self):
+        todo = self.ingest_of(LIMIT_THEN + self.LEFT_OUT_THEN)
+
+        self.assertEqual(todo.left, self.LEFT_OUT_THEN)
+
+    def test_a_run_within_the_limit_leaves_none(self):
+        todo = self.ingest_of(self.RECORDED_THEN + self.LEFT_OUT_THEN)
+
+        self.assertEqual(todo.left, 0)
+
+    def test_a_read_that_could_not_count_what_it_left_is_carried_into_the_plan(self):
+        github = FakeGitHub(prs_after_baseline(LIMIT_THEN + self.LEFT_OUT_THEN), counts_left=False)
+
+        todo = plan(github, Ledger(), CONFIG, REGISTRY, limit=LIMIT_THEN)
+
+        self.assertIsNone(todo.left)
+
+    def test_every_baseline_pr_read_is_still_counted(self):
+        todo = self.ingest_of(LIMIT_THEN + self.LEFT_OUT_THEN)
+
+        self.assertEqual(todo.baseline_skipped, tuple(p.number for p in baseline_prs(self.BASELINE_SEEN)))
+
+
+class LimitNote(unittest.TestCase):
+    """The CLI's note for a run the limit cut off."""
+
+    def test_a_read_that_could_not_count_what_it_left_says_more_may_remain(self):
+        todo = IngestPlan(records=(), baseline_skipped=(), already_recorded=(), left=None)
+        out = io.StringIO()
+
+        with contextlib.redirect_stdout(out):
+            _print_limit(todo, LIMIT_THEN)
+
+        self.assertIn(f"limit {LIMIT_THEN} reached: more PRs may remain;", out.getvalue())
 
 
 class BlockVersion(unittest.TestCase):

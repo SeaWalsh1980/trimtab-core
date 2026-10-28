@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Callable, Iterator, Mapping
 from urllib.parse import quote, unquote, urlencode
 
-from trimtab.capture.ingest import PullRequest
+from trimtab.capture.ingest import PullRequest, Unlabelled
 from trimtab.capture.written import SETTLE_SECONDS, WrittenBodyError, verify_bodies
 from trimtab.ids import ANY_ID_SHAPE
 from trimtab.dependabot import CiRun, HostError, PullRequestView
@@ -170,6 +170,11 @@ def _within_scan(limit: int) -> None:
         raise SourceError(f"a scan of closed PRs reads at most {SCAN_LIMIT}; lower the limit")
 
 
+def _above(number: int, above: int | None) -> bool:
+    """Whether a PR is read past the number floor: every PR when there is none."""
+    return above is None or number > above
+
+
 def _window_day(merged_at: str, closed_at: str, updated_at: str) -> str:
     """The day that puts a closed PR in the window: a merged one by when it merged, one closed unmerged by when it
     closed (else its last update). A later comment or label brings neither back."""
@@ -208,18 +213,25 @@ class GhSource:
         self._pages: list[list[_PullRow]] = []
         self._exhausted = False
 
-    def unlabelled_merged(self, label: str, merged_since: str | None, limit: int) -> list[PullRequest]:
+    def unlabelled_merged(self, label: str, merged_since: str | None, limit: int,
+                          above: int | None = None) -> Unlabelled:
         # Oldest merged first (ADR 0005), so a bounded run makes progress rather
         # than re-reading the newest PRs. A backfill (no date) returns the first
         # `limit` found oldest created first, then sorted by merge time: not the
-        # oldest merged overall, but each run still moves forward.
+        # oldest merged overall, but each run still moves forward. A dated read
+        # holds the whole window, so it counts what the limit left; a backfill
+        # stops reading at the limit, so unless it read every page it cannot.
         _within_scan(limit)
         if merged_since is None:
-            rows = self._oldest_unlabelled(label, limit)
+            rows, complete = self._oldest_unlabelled(label, limit, above)
         else:
             rows = [r for r in self._closed_since(merged_since)
                     if r.merged_at and r.merged_at[:10] >= merged_since and label not in r.labels]
-        return [r.pull() for r in sorted(rows, key=lambda r: (r.merged_at, r.number))[:limit]]
+            complete = True
+        below = tuple(sorted(r.number for r in rows if not _above(r.number, above)))
+        rows = sorted((r for r in rows if _above(r.number, above)), key=lambda r: (r.merged_at, r.number))
+        left = max(len(rows) - limit, 0) if complete else None
+        return Unlabelled(tuple(r.pull() for r in rows[:limit]), below, left)
 
     def labelled_merged(self, label: str, merged_since: str, limit: int) -> list[PullRequest]:
         # Newest first: the window is recent history, and a run that hits the
@@ -275,8 +287,9 @@ class GhSource:
                 found.setdefault(r.number, r)
         return list(found.values())
 
-    def _oldest_unlabelled(self, label: str, limit: int) -> list[_PullRow]:
-        """With no date, the oldest created first, until `limit` unlabelled merged PRs are found."""
+    def _oldest_unlabelled(self, label: str, limit: int, above: int | None) -> tuple[list[_PullRow], bool]:
+        """With no date, the oldest created first, until `limit` unlabelled merged PRs numbered above `above` are
+        found; and whether every page was read."""
         found: dict[int, _PullRow] = {}
         page = 1
         while True:
@@ -284,8 +297,10 @@ class GhSource:
             for r in batch:
                 if r.merged_at and label not in r.labels:
                     found.setdefault(r.number, r)
-            if len(found) >= limit or len(batch) < PER_PAGE:
-                return list(found.values())
+            if len(batch) < PER_PAGE:
+                return list(found.values()), True
+            if sum(_above(n, above) for n in found) >= limit:
+                return list(found.values()), False
             if page * PER_PAGE >= SCAN_LIMIT:
                 raise SourceError(f"more than {SCAN_LIMIT} closed PRs on {self.repo} precede the oldest {limit} "
                                   f"not labelled {label}; a lower limit will not help: give the read a date "
@@ -321,11 +336,15 @@ class FixtureSource:
         """A row marked open is open, whatever else it carries: never merged evidence."""
         return bool(r.get("merged_at")) and r.get("state") != "open"
 
-    def unlabelled_merged(self, label: str, merged_since: str | None, limit: int) -> list[PullRequest]:
+    def unlabelled_merged(self, label: str, merged_since: str | None, limit: int,
+                          above: int | None = None) -> Unlabelled:
         rows = sorted(self._rows(), key=lambda r: r["number"])
         todo = [r for r in rows if self._merged(r) and label not in r.get("labels", [])
                 and (merged_since is None or r["merged_at"][:10] >= merged_since)]
-        return [PullRequest(r["number"], r.get("body", ""), r["merged_at"]) for r in todo[:limit]]
+        below = tuple(r["number"] for r in todo if not _above(r["number"], above))
+        todo = [r for r in todo if _above(r["number"], above)]
+        return Unlabelled(tuple(PullRequest(r["number"], r.get("body", ""), r["merged_at"]) for r in todo[:limit]),
+                          below, max(len(todo) - limit, 0))
 
     def labelled_merged(self, label: str, merged_since: str, limit: int) -> list[PullRequest]:
         rows = sorted(self._rows(), key=lambda r: r["number"], reverse=True)

@@ -26,6 +26,7 @@ CONFIG = {
 
 
 AS_OF = "2026-10-01"
+AFTER_BASELINE = 3  # 101-103 in Slice's fixture
 # The tail of a routine, environment or session ID; tests prepend the prefix.
 RUN_ID_TAIL = "01" + "A1b2C3d4E5f6G7h8J9k0"
 
@@ -77,6 +78,45 @@ class Slice(unittest.TestCase):
         self.assertIn("TST-2: 2", out)
         self.assertIn("PRs at or below #100", out)
 
+    def test_a_run_cut_off_by_its_limit_says_how_many_it_left(self):
+        limit = AFTER_BASELINE - 1
+
+        out = self.trimtab("ingest", "--dry-run", *self.source(), "--limit", str(limit)).stdout
+
+        self.assertIn(f"limit {limit} reached: {AFTER_BASELINE - limit} more PRs not recorded;", out)
+
+    def test_a_propose_run_cut_off_by_its_limit_says_so(self):
+        limit = AFTER_BASELINE - 1
+
+        out = self.trimtab("propose", "--dry-run", *self.source(), "--limit", str(limit)).stdout
+
+        self.assertIn(f"limit {limit} reached: {AFTER_BASELINE - limit} more PRs not counted; "
+                      "a later trimtab ingest --apply run records them", out)
+
+    def test_a_limit_below_one_is_refused(self):
+        done = self.trimtab("ingest", "--dry-run", *self.source(), "--limit", "0", ok=False)
+
+        self.assertEqual((done.returncode, "0 is below 1" in done.stderr), (2, True))
+
+    def test_a_limit_that_is_not_a_number_is_refused(self):
+        done = self.trimtab("ingest", "--dry-run", *self.source(), "--limit", "ten", ok=False)
+
+        self.assertEqual((done.returncode, "'ten' is not a whole number" in done.stderr), (2, True))
+
+    def test_a_run_within_its_limit_prints_no_limit_note(self):
+        limit = AFTER_BASELINE
+
+        out = self.trimtab("ingest", "--dry-run", *self.source(), "--limit", str(limit)).stdout
+
+        self.assertNotIn(f"limit {limit} reached", out)
+
+    def test_a_propose_run_within_its_limit_prints_no_limit_note(self):
+        limit = AFTER_BASELINE
+
+        out = self.trimtab("propose", "--dry-run", *self.source(), "--limit", str(limit)).stdout
+
+        self.assertNotIn(f"limit {limit} reached", out)
+
     def test_propose_prints_exactly_one_upstream_issue(self):
         out = self.trimtab("propose", "--dry-run", *self.source()).stdout
 
@@ -114,6 +154,13 @@ class Slice(unittest.TestCase):
                               capture_output=True, text=True, cwd=self.project, env=self.env)
 
         self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_an_apply_cut_off_by_its_limit_says_how_many_it_left(self):
+        limit = AFTER_BASELINE - 2
+
+        out = self.apply(limit=str(limit))
+
+        self.assertIn(f"limit {limit} reached: {AFTER_BASELINE - limit} more PRs not recorded;", out)
 
     def test_a_stopped_run_resumes_without_double_counting(self):
         self.apply(limit="1")
