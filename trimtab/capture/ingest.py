@@ -45,9 +45,10 @@ class Unlabelled:
     when it is given, and what the read left out."""
     pulls: tuple[PullRequest, ...]
     # Numbered at or below `above`: left out before the limit, so they take up none of its places.
-    below: tuple[int, ...] = ()
+    below: tuple[int, ...]
     # Past the limit, for the next run; None when the read stopped at the limit and could not count them.
-    left: int | None = 0
+    # No default: a source states what it cut, never claims by omission that it cut nothing.
+    left: int | None
 
 
 class PullRequestSource(Protocol):
@@ -147,11 +148,11 @@ class IngestPlan:
     records: tuple[Record, ...]
     baseline_skipped: tuple[int, ...]
     already_recorded: tuple[int, ...]
+    # Cut off by the limit and left to the next run; None when the read could not count them.
+    left: int | None
     # Written in a block version this Trimtab does not read (ADR 0007): neither
     # recorded nor labelled, so a newer Trimtab still finds and counts them.
     newer_version: tuple[int, ...] = ()
-    # Cut off by the limit and left to the next run; None when the read could not count them.
-    left: int | None = 0
 
 
 def record_of(pr: PullRequest, registry: Mapping[str, Item], backfill: bool = False) -> Record:
@@ -185,7 +186,8 @@ def plan(source: PullRequestSource, ledger: Ledger, config: ProjectConfig,
     # Recorded but not labelled: a crash between the two steps. Re-recording is
     # idempotent (keyed by number), and it lets the label step finish.
     again = tuple(p.number for p in todo if p.number in ledger.records)
-    return IngestPlan(tuple(record_of(p, registry, backfill) for p in todo), read.below, again, newer, read.left)
+    return IngestPlan(tuple(record_of(p, registry, backfill) for p in todo), baseline_skipped=read.below,
+                      already_recorded=again, left=read.left, newer_version=newer)
 
 
 def _too_new(body: str) -> bool:

@@ -1,10 +1,14 @@
 """Ingest by watermark, tally per ID, and propose (ADR 0005)."""
 
+import contextlib
+import io
 import unittest
 
 from trimtab.capture.ingest import (
-    LABEL, InMemoryLedgerStore, Ledger, PullRequest, StalePlan, Unlabelled, apply, confirmation, plan,
+    LABEL, IngestPlan, InMemoryLedgerStore, Ledger, PullRequest, StalePlan, Unlabelled, apply, confirmation,
+    plan,
 )
+from trimtab.cli import _print_limit
 from trimtab.config import ProjectConfig
 from trimtab.items import Item, Strength
 from trimtab.propose import render
@@ -176,6 +180,13 @@ class IngestFloor(unittest.TestCase):
 
         self.assertEqual([r.number for r in todo.records], [11, 12])
 
+    def test_a_backfill_records_prs_at_or_below_the_baseline(self):
+        github = FakeGitHub([PullRequest(CONFIG.baseline_pr, body(), "2026-09-26T00:00:00Z")])
+
+        todo = plan(github, Ledger(), CONFIG, REGISTRY, limit=50, backfill=True)
+
+        self.assertEqual([r.number for r in todo.records], [CONFIG.baseline_pr])
+
 
 LIMIT_THEN = 50  # the default --limit of the 10-24 run
 
@@ -230,6 +241,19 @@ class LimitAndBaseline(unittest.TestCase):
         todo = self.ingest_of(LIMIT_THEN + self.LEFT_OUT_THEN)
 
         self.assertEqual(todo.baseline_skipped, tuple(p.number for p in baseline_prs(self.BASELINE_SEEN)))
+
+
+class LimitNote(unittest.TestCase):
+    """The CLI's note for a run the limit cut off."""
+
+    def test_a_read_that_could_not_count_what_it_left_says_more_may_remain(self):
+        todo = IngestPlan(records=(), baseline_skipped=(), already_recorded=(), left=None)
+        out = io.StringIO()
+
+        with contextlib.redirect_stdout(out):
+            _print_limit(todo, LIMIT_THEN)
+
+        self.assertIn(f"limit {LIMIT_THEN} reached: more PRs may remain;", out.getvalue())
 
 
 class BlockVersion(unittest.TestCase):

@@ -83,13 +83,25 @@ class Slice(unittest.TestCase):
 
         out = self.trimtab("ingest", "--dry-run", *self.source(), "--limit", str(limit)).stdout
 
-        self.assertIn(f"limit {limit} reached: {after_baseline - limit} more PRs not recorded; the next run continues",
-                      out)
+        self.assertIn(f"limit {limit} reached: {after_baseline - limit} more PRs not recorded;", out)
+
+    def test_a_propose_run_cut_off_by_its_limit_says_so(self):
+        limit = 2  # below the 3 PRs after the baseline in the fixture
+
+        out = self.trimtab("propose", "--dry-run", *self.source(), "--limit", str(limit)).stdout
+
+        self.assertIn(f"limit {limit} reached:", out)
+
+    def test_a_limit_below_one_is_refused(self):
+        done = self.trimtab("ingest", "--dry-run", *self.source(), "--limit", "0", ok=False)
+
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("--limit", done.stderr)
 
     def test_a_run_within_its_limit_prints_no_limit_note(self):
         out = self.trimtab("ingest", "--dry-run", *self.source()).stdout
 
-        self.assertNotIn("the next run continues", out)
+        self.assertNotIn("(--limit)", out)
 
     def test_propose_prints_exactly_one_upstream_issue(self):
         out = self.trimtab("propose", "--dry-run", *self.source()).stdout
@@ -128,6 +140,13 @@ class Slice(unittest.TestCase):
                               capture_output=True, text=True, cwd=self.project, env=self.env)
 
         self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_an_apply_cut_off_by_its_limit_says_how_many_it_left(self):
+        limit = 1  # the fixture has 3 PRs after the baseline
+
+        out = self.apply(limit=str(limit))
+
+        self.assertIn(f"limit {limit} reached: 2 more PRs not recorded;", out)
 
     def test_a_stopped_run_resumes_without_double_counting(self):
         self.apply(limit="1")

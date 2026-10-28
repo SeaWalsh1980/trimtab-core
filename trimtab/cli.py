@@ -297,6 +297,16 @@ def _print_floor(floor) -> None:
         print(f"ingest floor: PRs merged before {floor} are not read (--ingest-weeks)")
 
 
+def _print_limit(todo, limit) -> None:
+    if todo.left != 0:
+        # Stated whenever the limit cut PRs off: this run's counts are not the
+        # whole window. The PRs stay unlabelled, but only a run that reads them
+        # before they pass the floor records them (trimtab-core ADR 0021).
+        more = "more PRs may remain" if todo.left is None else f"{todo.left} more PRs not recorded"
+        print(f"limit {limit} reached: {more}; a later --apply run reads them while they are inside the "
+              "--ingest-weeks floor (--limit)")
+
+
 def _report(config, todo, records, since, floor, limit) -> None:
     t = tally(records, since=since)
     valid, total = t.coverage
@@ -305,11 +315,7 @@ def _report(config, todo, records, since, floor, limit) -> None:
     print(f"to record: {len(todo.records)} PRs"
           + (f" ({len(todo.already_recorded)} recorded before an interrupted label step)"
              if todo.already_recorded else ""))
-    if todo.left != 0:
-        # Stated whenever the limit cut PRs off: they stay unlabelled and the next
-        # run reads them, but this run's counts are not the whole window.
-        more = "more PRs may remain" if todo.left is None else f"{todo.left} more PRs not recorded"
-        print(f"limit {limit} reached: {more}; the next run continues (--limit)")
+    _print_limit(todo, limit)
     if config.baseline_pr:
         # Stated every run, not only when a baseline PR was seen: a date-bounded
         # query usually never returns them, and the reader still needs to know.
@@ -464,6 +470,7 @@ def cmd_propose(args) -> int:
         print(f"error: {err}", file=sys.stderr)
         return 2
     _print_floor(_floor(args))
+    _print_limit(todo, args.limit)  # a cut-off run's tally is short, so a proposal can be missing
     proposals = candidates(tally(ingest.all_records(ledger, todo), since=_since(args)), threshold=args.threshold)
     project = args.repo or config.id_prefix
     drafts = [render(p, registry, project=project) for p in proposals]
@@ -966,6 +973,17 @@ def cmd_lint(args) -> int:
 
 # ---- parser ----------------------------------------------------------------
 
+def _positive_int(text: str) -> int:
+    """A count of at least 1: a run that records nothing, or slices from the end, is refused."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a whole number") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{value} is below 1")
+    return value
+
+
 def _ingest_options(p) -> None:
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--repo", help="owner/name of the project's GitHub repository")
@@ -975,7 +993,7 @@ def _ingest_options(p) -> None:
     led.add_argument("--ledger", help="ledger JSON file")
     led.add_argument("--ledger-from-labels", action="store_true",
                      help="rebuild the ledger from PRs already labelled, within the window (routines: trimtab-core ADR 0006)")
-    p.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help=f"PRs per run (default {DEFAULT_LIMIT})")
+    p.add_argument("--limit", type=_positive_int, default=DEFAULT_LIMIT, help=f"PRs per run (default {DEFAULT_LIMIT})")
     p.add_argument("--history-limit", type=int, default=HISTORY_LIMIT,
                    help=f"labelled PRs read by --ledger-from-labels (default {HISTORY_LIMIT})")
     p.add_argument("--window-weeks", type=int, default=WINDOW_WEEKS,

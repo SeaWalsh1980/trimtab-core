@@ -330,6 +330,13 @@ class TheClosedPullsScan(unittest.TestCase):
 
         self.assertEqual(([p.number for p in read.pulls], read.below), ([3], (1, 2)))
 
+    def test_a_dated_read_does_not_count_prs_at_or_below_the_floor_number_as_left(self):
+        gh = FakeGh(default=page(pull(1), pull(2), pull(3), pull(4)))
+
+        read = GhSource(REPO, run=gh).unlabelled_merged(LABEL, SINCE, 1, above=2)
+
+        self.assertEqual(read.left, 1)
+
     def test_a_dated_read_counts_the_prs_its_limit_left(self):
         gh = FakeGh(default=page(pull(1), pull(2), pull(3)))
 
@@ -426,6 +433,14 @@ class WithoutAFloor(unittest.TestCase):
         pulls = GhSource(REPO, run=gh).unlabelled_merged(LABEL, None, 50).pulls
 
         self.assertEqual(([p.number for p in pulls][:2], len(pulls), len(gh.calls)), ([100, 101], 50, 2))
+
+    def test_a_backfill_reads_past_prs_at_or_below_the_floor_number(self):
+        # The floor-numbered first page must not end the read: they take no place in the limit.
+        gh = FakeGh(answers={PULLS: [full_page(0), full_page(100)]}, default=full_page(200))
+
+        read = GhSource(REPO, run=gh).unlabelled_merged(LABEL, None, 50, above=99)
+
+        self.assertEqual(([p.number for p in read.pulls][:2], len(read.pulls), len(gh.calls)), ([100, 101], 50, 2))
 
     def test_a_backfill_stopped_at_its_limit_cannot_count_what_it_left(self):
         gh = FakeGh(default=full_page(0))
