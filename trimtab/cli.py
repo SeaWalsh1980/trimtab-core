@@ -178,6 +178,9 @@ VERIFY_BODY_REPORTS = {
     Readback.IN_PLACE_GENERIC_KEPT: ("restored the attribution line the platform's generic footer, linking no "
                                      "session, had replaced; that footer follows it; it names nothing, so it was "
                                      "left"),
+    Readback.IN_PLACE_GENERIC_AGAIN: ("the platform's generic footer, linking no session, replaced the attribution "
+                                      "line again when the body sent was written back; it names nothing, and a write "
+                                      "would only bring it back, so it was left; the body lacks its attribution line"),
     Readback.REPLACED: ("removed the platform's session footer; the platform added its generic footer, linking no "
                         "session, in its place; GitHub's edit history still holds the session footer"),
     Readback.GENERIC: "the body is the one sent, then the platform's generic footer, linking no session; left as it is",
@@ -185,7 +188,8 @@ VERIFY_BODY_REPORTS = {
 
 
 def cmd_verify_body(args) -> int:
-    """A body a run created, read back (ADR 0024): 0 as sent, 1 changed otherwise, 2 could not tell."""
+    """A body a run created, read back (ADR 0024): 0 as sent or changed only by the platform's footer as the report
+    says, 1 changed otherwise, 2 could not tell."""
     sent = args.body if args.body is not None else _text_of(args.body_file)
     if sent is None:
         return 2
