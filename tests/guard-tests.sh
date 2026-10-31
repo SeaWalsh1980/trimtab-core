@@ -2040,6 +2040,32 @@ tm ask  "create: a draft on a lookalike server"  "$(j mcp__xgithub__create_pull_
 tm deny "create: draft false with an unknown argument" "$(j $GH_CREATE_NAME "{$CR,\"draft\":false,\"labels\":[\"x\"]}")" "$PATH" . "not a draft"
 tm deny "create: true then false, the last key decides" '{"tool_name":"mcp__github__create_pull_request","tool_input":{"owner":"o","repo":"r","draft":true,"draft":false}}' "$PATH" . "not a draft"
 pin_list PR_CREATE "$GH_CREATE_NAME"
+# The pass reads draft itself: a copy of the guard that lost the deny's list
+# must still refuse a non-draft, not pass it.
+NODENY=$(mktemp -d "$CPTMP/nodeny.XXXXXX")
+sed -e '/^GH_CREATE=($/,/^)$/{/create_pull_request/d}' "$HOOKS/guard-mcp.sh" > "$NODENY/guard-mcp.sh"
+if ! sed -n '/^GH_CREATE=($/,/^)$/p' "$NODENY/guard-mcp.sh" | grep -q create_pull_request; then
+  TM_HOOK="$NODENY/guard-mcp.sh"
+  tm deny "create: with the deny's list emptied, a non-draft is still refused" "$(j $GH_CREATE_NAME "{$CR,\"draft\":false}")" "$PATH" . "not a draft"
+  tm pass "create: with the deny's list emptied, a draft still passes" "$(j $GH_CREATE_NAME "{$CR,\"draft\":true}")"
+  unset TM_HOOK
+else
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "create: could not empty the deny's list in a copy of the guard"; fails=$((fails+1))
+fi
+# The argument lists are pinned as the names are: a key added to one must be
+# reviewed here too.
+for keys in \
+  "'[\"owner\",\"repo\",\"pullNumber\",\"title\",\"body\",\"reviewers\",\"draft\"]'" \
+  "'[\"owner\",\"repo\",\"title\",\"body\",\"head\",\"base\",\"draft\"]'" \
+  "'[\"owner\",\"repo\",\"issue_number\",\"body\"]'" \
+  "'[\"owner\",\"repo\",\"pullNumber\",\"commentId\",\"body\"]'"; do
+  if [[ $(grep -cF "pr_args_answer $keys" "$HOOKS/guard-mcp.sh") -ne 1 ]]; then
+    printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "argument list changed: $keys"; fails=$((fails+1))
+  fi
+done
+if [[ $(grep -c "pr_args_answer '\[" "$HOOKS/guard-mcp.sh") -ne 4 ]]; then
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "an argument list this matrix does not pin"; fails=$((fails+1))
+fi
 # A comment or a reply passes with its own arguments; a reaction asks. A body
 # that says resolve or approve is only text.
 GH_COMMENT_NAME=mcp__github__add_issue_comment

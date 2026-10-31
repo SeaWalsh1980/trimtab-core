@@ -24,10 +24,12 @@ unattended run could not finish a PR at all.
 ADR 0038 already reads `draft` and denies anything but the JSON `true`. A draft
 create only reached the ask because nothing passed it.
 
-Marking a PR ready starts a billed review. ADR 0034 kept that behind an ask, on
-the reading that it is the operator's step. ADR 0038 calls it the agent's own
-step, and AgentWorkflows forbids a run marking ready only "other than through
-what the guards permit". The operator has decided it should not stop a run.
+Marking a PR ready starts a billed review. ADR 0034 kept that behind an ask, and
+recorded that this ask is what enforces draft-until-final through the MCP route.
+ADR 0038 calls ready the agent's own step. AgentWorkflows forbids a run marking
+ready "other than through what the guards permit", and adds "(today the operator
+does both)". The operator has decided it should not stop a run, and accepts that
+the guard no longer holds draft-until-final on this route.
 
 ## Decision
 
@@ -48,6 +50,15 @@ create is denied before these checks, as before.
 
 The answer is the same in an interactive session and an autonomous run. guard-mcp
 does not read the mode.
+
+The routine templates list the four tools in `disallowed_tools`, so routines keep
+today's refusal. Their prompts forbid marking a PR ready and writing outside the
+project, and on the MCP route the ask was what held that. Routines work through
+REST (ADR 0021), so they lose nothing. A live routine keeps its old list until it
+is updated from its render.
+
+The create pass reads `draft` again rather than rely on the deny before it, so a
+guard that lost the deny refuses a non-draft instead of passing it.
 
 Still denied: a merge, a non-draft create, an approval, and resolving a thread,
 including the `resolve_thread` method of `pull_request_review_write`, which the
@@ -98,11 +109,12 @@ cases; the pr-monitor cases also fail on a copy, for the reason in ADR 0034.
   object, and the rest of its ask cases.
 - The reply's key list ignored: reaction, unknown argument.
 - `state` added to the edit's list: closing, a draft with a close.
-- The create deny removed: every non-draft case, on every server.
+- The create deny's list emptied, before the pass read `draft` itself: a
+  non-draft create passed silently. It is now refused, and the matrix holds that.
 - A `<tool>`-part match on the create: other server, lookalike server.
 
-On the shipped lists the matrix passes, 1,528 cases, with its jq-only and
-python3-only groups. The base branch's matrix goes red on 11 cases, by design:
+On the shipped lists the matrix passes, with its jq-only and python3-only groups,
+and pins the four argument lists. The base branch's matrix goes red on 11 cases, by design:
 the ready toggle and draft create pins that used to ask (with their jq-only,
 python3-only and planted-module versions), and the order check's line count.
 
@@ -118,6 +130,9 @@ python3-only and planted-module versions), and the order check's line count.
 
 ## Consequences
 
+- Rule text and the plan-run skill have not moved. `rules/AgentWorkflows.md`
+  (in the instance) and `skills/wrap-merged/SKILL.md` still tell a run to leave
+  ready to the operator, so a run will not use the ready pass until both change.
 - A guarded session opens a draft, comments, replies and toggles ready with no
   stop from guard-mcp, attended or not.
 - Accepted, unless the reach check says otherwise: injected text can post chosen

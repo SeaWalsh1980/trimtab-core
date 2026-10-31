@@ -360,13 +360,16 @@ for allowed in "${PR_EDIT[@]}"; do
   [[ "$name" == "$allowed" ]] \
     && pr_args_answer '["owner","repo","pullNumber","title","body","reviewers","draft"]' "the title, body, reviewers or draft flag (state, base or another)"
 done
-# Opening a PR. Only a draft gets here: the deny above refuses anything else.
+# Opening a PR. The deny above refuses anything but a draft; this pass asks the
+# same question again, so a guard that lost that deny cannot pass a non-draft.
 PR_CREATE=(
   mcp__github__create_pull_request
 )
 for allowed in "${PR_CREATE[@]}"; do
-  [[ "$name" == "$allowed" ]] \
-    && pr_args_answer '["owner","repo","title","body","head","base","draft"]' "the repository, title, body, branches or draft flag (maintainer_can_modify, reviewers or another)"
+  [[ "$name" == "$allowed" ]] || continue
+  [[ "$(gh_args create)" == draft ]] \
+    || deny "$name is not a draft whose arguments could be read, so it is denied (fail closed, ADR 0052)."
+  pr_args_answer '["owner","repo","title","body","head","base","draft"]' "the repository, title, body, branches or draft flag (maintainer_can_modify, reviewers or another)"
 done
 # A comment on a PR or issue, and a reply to a review comment. A reaction, or a
 # comment_id that aims one, is not on the lists and asks.
