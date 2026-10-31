@@ -43,9 +43,21 @@
 #   a full name on the desktop app's exact-name list
 #   (CCD_ALLOW below, ADR 0027)                     -> pass
 #   [args] mcp__github__update_pull_request
-#   (PR_EDIT below, ADR 0034)                       -> pass when it sets only
-#                                                      title, body or reviewers;
-#                                                      ask otherwise
+#   (PR_EDIT below, ADR 0034, ADR 0052)             -> pass when it sets only
+#                                                      title, body, reviewers or
+#                                                      the draft flag; ask
+#                                                      otherwise
+#   [args] mcp__github__create_pull_request
+#   (PR_CREATE below, ADR 0052)                     -> a draft, the denies above
+#                                                      having refused any other:
+#                                                      pass when every argument
+#                                                      is on its list; ask
+#                                                      otherwise
+#   [args] mcp__github__add_issue_comment,
+#   mcp__github__add_reply_to_pull_request_comment
+#   (PR_COMMENT, PR_REPLY below, ADR 0052)          -> pass when every argument
+#                                                      is on its list; ask
+#                                                      otherwise
 #   a full name on the PR-workflow exact-name list
 #   (PR_WORKFLOW_ALLOW below, ADR 0034)             -> pass
 #   a <tool> part on the verb-last read list, on any
@@ -302,22 +314,18 @@ for allowed in "${CCD_ALLOW[@]}"; do
   [[ "$name" == "$allowed" ]] && exit 0
 done
 
-# A PR edit passes, by exact full name, only when it changes nothing but the
-# title, body or reviewers (ADR 0034). Any other argument, draft, state, base
-# or one this guard does not know, asks: marking a draft ready starts review,
-# so it stays the operator's. The check runs inside the parser, so a key is
-# never split or printed here, and nothing from the arguments reaches a reason.
-PR_EDIT=(
-  mcp__github__update_pull_request
-)
-pr_edit_args='["owner","repo","pullNumber","title","body","reviewers"]'
-for edit in "${PR_EDIT[@]}"; do
-  [[ "$name" == "$edit" ]] || continue
+# PR work that passes by exact full name, only when every argument is on its
+# list (ADR 0034, ADR 0052). Any other argument, or one this guard does not
+# know, asks. The check runs inside the parser, so a key is never split or
+# printed here, and nothing from the arguments reaches a reason.
+# pr_args_answer <allowed keys, JSON> <what they set, for the reason>
+pr_args_answer() {
+  local verdict rc
   # pass, no-object (tool_input missing or not an object) or extra (a key off
   # the list). Anything else, an empty answer included, means the parser did
   # not finish, and asks as unreadable.
   if command -v jq >/dev/null 2>&1; then
-    verdict=$(printf '%s' "$payload" | jq -r --argjson ok "$pr_edit_args" \
+    verdict=$(printf '%s' "$payload" | jq -r --argjson ok "$1" \
       'if (.tool_input | type) != "object" then "no-object" elif ((.tool_input | keys) - $ok | length) == 0 then "pass" else "extra" end' 2>/dev/null)
     rc=$?
   else
@@ -326,7 +334,7 @@ import json, sys
 ok = set(json.loads(sys.argv[1]))
 a = json.load(sys.stdin).get("tool_input")
 sys.stdout.write("no-object" if not isinstance(a, dict) else "pass" if set(a) <= ok else "extra")
-' "$pr_edit_args" 2>/dev/null)
+' "$1" 2>/dev/null)
     rc=$?
   fi
   # A verdict counts only from a parser that finished: one that printed and
@@ -336,12 +344,45 @@ sys.stdout.write("no-object" if not isinstance(a, dict) else "pass" if set(a) <=
     pass)
       exit 0 ;;
     extra)
-      ask "$name sets an argument other than the title, body or reviewers (draft, state, base or another), so it asks (ADR 0034). Approve it only if you intended this change." ;;
+      ask "$name sets an argument other than $2, so it asks (ADR 0052). Approve it only if you intended this change." ;;
     no-object)
-      ask "$name carries no argument object, so its arguments cannot be checked and it asks (ADR 0034). Approve it only if you intended this call." ;;
+      ask "$name carries no argument object, so its arguments cannot be checked and it asks (ADR 0052). Approve it only if you intended this call." ;;
     *)
-      ask "$name could not have its arguments read, so it asks (fail closed, ADR 0034). This says nothing about what the call changes. Approve it only if you intended this call." ;;
+      ask "$name could not have its arguments read, so it asks (fail closed, ADR 0052). This says nothing about what the call changes. Approve it only if you intended this call." ;;
   esac
+}
+# A PR edit: the title, body, reviewers or the draft flag, either way. Closing
+# it, a new base and the maintainer flag ask.
+PR_EDIT=(
+  mcp__github__update_pull_request
+)
+for allowed in "${PR_EDIT[@]}"; do
+  [[ "$name" == "$allowed" ]] \
+    && pr_args_answer '["owner","repo","pullNumber","title","body","reviewers","draft"]' "the title, body, reviewers or draft flag (state, base or another)"
+done
+# Opening a PR. Only a draft gets here: the deny above refuses anything else.
+PR_CREATE=(
+  mcp__github__create_pull_request
+)
+for allowed in "${PR_CREATE[@]}"; do
+  [[ "$name" == "$allowed" ]] \
+    && pr_args_answer '["owner","repo","title","body","head","base","draft"]' "the repository, title, body, branches or draft flag (maintainer_can_modify, reviewers or another)"
+done
+# A comment on a PR or issue, and a reply to a review comment. A reaction, or a
+# comment_id that aims one, is not on the lists and asks.
+PR_COMMENT=(
+  mcp__github__add_issue_comment
+)
+for allowed in "${PR_COMMENT[@]}"; do
+  [[ "$name" == "$allowed" ]] \
+    && pr_args_answer '["owner","repo","issue_number","body"]' "the comment's target and body (a reaction or another)"
+done
+PR_REPLY=(
+  mcp__github__add_reply_to_pull_request_comment
+)
+for allowed in "${PR_REPLY[@]}"; do
+  [[ "$name" == "$allowed" ]] \
+    && pr_args_answer '["owner","repo","pullNumber","commentId","body"]' "the reply's target and body (a reaction or another)"
 done
 
 # Writes that drive a session's PR work pass by exact full name, server part

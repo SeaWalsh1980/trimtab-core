@@ -759,10 +759,10 @@ probe_pass() {
 probe_pass "a desktop-app tool on its exact-name list" \
   '{"tool_name":"mcp__ccd_turn__wrap_up","tool_input":{}}' \
   "the app's UI tools will prompt every turn"
-# A PR edit that marks a draft ready must still ask (ADR 0034): if the argument
-# check stopped running, draft-until-final would lose its enforcement.
-probe_ask guard-mcp.sh "a PR edit that marks a draft ready" \
-  '{"tool_name":"mcp__github__update_pull_request","tool_input":{"owner":"o","repo":"r","pullNumber":1,"draft":false}}'
+# A PR edit that closes the PR must still ask (ADR 0034, ADR 0052): if the
+# argument check stopped running, the tool would pass whatever it was asked.
+probe_ask guard-mcp.sh "a PR edit that closes the PR" \
+  '{"tool_name":"mcp__github__update_pull_request","tool_input":{"owner":"o","repo":"r","pullNumber":1,"state":"closed"}}'
 probe_pass "a PR title edit" \
   '{"tool_name":"mcp__github__update_pull_request","tool_input":{"owner":"o","repo":"r","pullNumber":1,"title":"t"}}' \
   "every PR body or title edit will prompt"
