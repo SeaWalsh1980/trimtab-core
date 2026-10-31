@@ -73,7 +73,8 @@ class Render(unittest.TestCase):
             "mcp__github__add_issue_comment", "mcp__github__add_reply_to_pull_request_comment",
         }
         for name in ("conformance", "retro", "upstream-retro"):
-            spec = routines.render(name, routines.values(self.inst, {"environment_id": ENV_ID}))
+            given = {"environment_id": ENV_ID, "project_repo": "owner/project"}
+            spec = routines.render(name, routines.values(self.inst, given))
 
             refused = spec["job_config"]["ccr"]["session_context"]["disallowed_tools"]
             self.assertTrue(passed <= set(refused), name)
