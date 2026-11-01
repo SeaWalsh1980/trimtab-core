@@ -5,7 +5,7 @@
 Accepted on merge. A security control (SEC-7): the operator authorised the
 changes to `.github/workflows/ci.yml` and
 `.github/workflows/claude-code-review.yml` in chat, and set the rule that
-`lint-test` is never skipped. Reverses, for this repository, the instance's
+`lint-test`, then `claude-review`, is never skipped. Reverses, for this repository, the instance's
 standing text that CI still runs on drafts; that text and the instance's
 records are not edited here.
 
@@ -27,8 +27,8 @@ The constraints:
   green. A review of the first version of this change found the same routes
   here: re-running a draft-era run could put a skip over a red `lint-test` on a
   ready PR, and a lost or late event could leave a ready PR on a skip.
-- The operator's rule: `lint-test` is only ever Expected, in progress, failed
-  or passed. It is never skipped.
+- The operator's rule: `lint-test` and `claude-review` are only ever Expected,
+  in progress, failed or passed. Neither is skipped.
 - Cancelling takes a new run in the same concurrency group, so
   `converted_to_draft` has to be a trigger even though that run does no work.
 - The ruleset requires `lint-test`, `claude-review`, `plan-scope`,
@@ -49,7 +49,8 @@ The constraints:
   in progress. A push to `main` has no PR number, so each is its own group and
   none is cancelled.
 - `claude-code-review.yml` also runs on `converted_to_draft`. Its job already
-  skipped drafts and its group already cancelled. Its skip is unchanged.
+  skipped drafts and its group already cancelled. Its name becomes the same kind
+  of expression, so `claude-review` stays Expected on a draft too.
 - `plan-scope.yml` and `merge-authority-rerun.yml` do not change. `plan-scope`
   and `merge-authority` still run on a draft.
 
@@ -76,8 +77,6 @@ The constraints:
   Closing and reopening the PR starts a run.
 - A PR that returns to draft after its run passed keeps that pass on the head;
   a run cancelled by the return reads cancelled, which does not pass.
-- `claude-review` still reads `skipped` on a draft, the gap `lint-test` no
-  longer has. It is the operator's to change.
 - A draft still runs `merge-authority` on each push, and `plan-scope` on a
   `plan/` head.
 - A broken head surfaces only at ready, the moment the billed `claude-review`
@@ -112,3 +111,7 @@ The group and trigger are the same as `ci.yml`'s. A re-run of a draft-era run an
 out-of-order events were not trialled: the skip no longer carries the required
 name, and a cancel reads `cancelled`, which does not pass. A `lint-test` pass and
 a push to `main` follow when this PR is marked ready and merged.
+
+The `claude-review` name came after this trial. Its first ready run on this PR is
+what shows it reporting as `claude-review`; until then it is the `lint-test`
+result applied to a second job, and a wrong name would leave the check Expected.

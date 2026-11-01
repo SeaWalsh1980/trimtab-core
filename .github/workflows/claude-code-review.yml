@@ -34,7 +34,11 @@ concurrency:
 
 jobs:
   claude-review:
-    # Skip drafts — review once the PR is ready.
+    # Skip drafts — review once the PR is ready. A skipped check named
+    # `claude-review` would pass the ruleset, so on a draft the job takes another
+    # name: the required check stays Expected until a ready run reports it
+    # (ADR 0053).
+    name: ${{ github.event.pull_request.draft && 'claude-review (draft, not run)' || 'claude-review' }}
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     # Runaway cap. An unbounded agent job inherits GitHub's 6-hour default, so

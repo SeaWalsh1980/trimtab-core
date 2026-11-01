@@ -59,6 +59,10 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
     def test_the_run_that_cancels_does_not_review(self):
         self.assertEqual(self.workflow["jobs"]["claude-review"]["if"], "github.event.pull_request.draft == false")
 
+    def test_the_skipped_job_never_reports_as_the_required_check(self):
+        self.assertEqual(self.workflow["jobs"]["claude-review"]["name"],
+                         "${{ github.event.pull_request.draft && 'claude-review (draft, not run)' || 'claude-review' }}")
+
 
 if __name__ == "__main__":
     unittest.main()
