@@ -191,8 +191,8 @@ a pass is enough there.
   tell the two apart from a number. So closing or reopening a PR, retitling it, and
   setting its labels pass on this route, while closing it through
   `update_pull_request` still asks. Labels include `plan:continue`, which starts a
-  session, and `plan:blocked`; ADR 0018's check on who removed that label still
-  applies. Read from the README, not tried. Merge, approval and resolving are not
+  session, and `plan:blocked`; a restart still checks that the admin account removed
+  that label. Read from the README, not tried. Merge, approval and resolving are not
   on this tool's list of methods and stay denied.
 - Accepted: an issue write can trigger automation that reacts to issue events. In
   ControlTower only `claude.yml` does (`issues: opened`, `issue_comment: created`).
