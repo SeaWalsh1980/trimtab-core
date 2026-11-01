@@ -20,7 +20,10 @@ reads its arguments, passes an edit of only the title, body or reviewers,
 and asks on anything else. Amended by
 [ADR 0038](0038-guard-mcp-denies-the-pull-request-writes-the-operator-owns.md):
 a merge, a pull request opened without `draft` true, an approving review and
-resolving a review thread are denied, on any server, before any pass.
+resolving a review thread are denied, on any server, before any pass. Amended by
+[ADR 0052](0052-guard-mcp-passes-draft-creates-and-comments-by-exact-name.md):
+a draft create, a comment, a reply and the ready toggle pass by exact full name
+and their arguments.
 
 ## Context
 

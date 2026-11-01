@@ -2,6 +2,8 @@
 
 ## Status
 
+Amended by [ADR 0052](0052-guard-mcp-passes-draft-creates-and-comments-by-exact-name.md): a draft create now passes instead of asking.
+
 Accepted on merge. Amends ADR 0013
 (`docs/adr/0013-guard-mcp-asks-before-mcp-tools-that-may-write.md`): four
 kinds of MCP call that it asked about are now denied, and the deny runs before

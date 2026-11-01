@@ -20,8 +20,11 @@ switch (`set_monitor`) passes only for a PR the session itself created, as a
 PostToolUse recorder (`hooks/pr-monitor-record.sh`) saw it, and is otherwise
 denied rather than asked, so an unattended session carries on (ADR 0028).
 GitHub's `update_pull_request` passes only when it edits nothing but a PR's
-title, body or reviewers, and asks otherwise, so marking a draft ready stays
-the operator's (ADR 0034).
+title, body, reviewers or draft flag, and asks otherwise (ADR 0034, ADR 0052).
+`create_pull_request` passes for a draft, and `add_issue_comment` and
+`add_reply_to_pull_request_comment` pass for a comment, and `issue_write` passes
+for its create and update methods, each only with the arguments on its list
+(ADR 0052).
 The same pull-request writes guard-github refuses in a shell are denied as
 MCP calls, on any server, before any pass can answer: a merge, a PR opened
 without `draft` set to true, an approving review, and resolving a review

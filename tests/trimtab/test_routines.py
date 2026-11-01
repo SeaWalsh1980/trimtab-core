@@ -65,6 +65,21 @@ class Render(unittest.TestCase):
         refused = spec["job_config"]["ccr"]["session_context"]["disallowed_tools"]
         self.assertTrue({REMOTE_SESSION_SERVER, REMOTE_SUBSCRIBE} <= set(refused))
 
+    def test_every_routine_refuses_the_github_writes_guard_mcp_passes(self):
+        # A routine works through REST, and its prompt forbids marking a PR ready
+        # and writing outside the project (ADR 0052).
+        passed = {
+            "mcp__github__create_pull_request", "mcp__github__update_pull_request",
+            "mcp__github__add_issue_comment", "mcp__github__add_reply_to_pull_request_comment",
+            "mcp__github__issue_write",
+        }
+        for name in ("conformance", "retro", "upstream-retro"):
+            given = {"environment_id": ENV_ID, "project_repo": "owner/project"}
+            spec = routines.render(name, routines.values(self.inst, given))
+
+            refused = spec["job_config"]["ccr"]["session_context"]["disallowed_tools"]
+            self.assertTrue(passed <= set(refused), name)
+
     def test_the_session_names_no_model_so_it_runs_the_platform_default(self):
         spec = routines.render("upstream-retro", routines.values(self.inst, {"environment_id": ENV_ID}))
 
