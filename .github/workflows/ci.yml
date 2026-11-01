@@ -4,13 +4,20 @@ on:
   push:
     branches: [main]
   pull_request:
-    # No `ready_for_review`: it does not change the head commit, yet it re-ran
-    # every check on a commit already tested.
-    types: [opened, synchronize, reopened]
+    # A draft runs nothing (ADR 0053): `ready_for_review` is the run that tests
+    # its head, and `converted_to_draft` starts a run only so that the
+    # concurrency group below cancels the one in progress.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
 
 # Nothing here writes, and no step reads the PR through the API.
 permissions:
   contents: read
+
+# One run per PR: a newer event cancels the one in progress. A push to main has
+# no PR number, so each run is its own group and is never cancelled.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   # The single required context for these checks, and the only job in this
@@ -25,7 +32,14 @@ jobs:
   # job silently un-requires every check in it. Rename here and in the ruleset
   # together.
   lint-test:
-    name: lint-test
+    # A trigger cannot filter on draft, so a draft's run skips this job. A skipped
+    # check named `lint-test` would pass the ruleset, so on a draft the job takes
+    # another name: `lint-test` itself is never skipped. It stays Expected and
+    # blocks until a ready run reports it, even if that run never starts or a
+    # draft-era run is re-run (ADR 0053). A push has no PR, so it runs as
+    # `lint-test`.
+    name: ${{ github.event.pull_request.draft && 'lint-test (draft, not run)' || 'lint-test' }}
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
