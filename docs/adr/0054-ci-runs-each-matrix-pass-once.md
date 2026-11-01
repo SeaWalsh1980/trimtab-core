@@ -42,17 +42,20 @@ pass by 18-20 s.
 
 ## Decision
 
-**When a pull request leaves the git tree entry of `tests/guard-tests.sh` (mode and
-blob) the same as the base branch's, the later `guard matrix: jq present` and
-`guard matrix: python3 fallback` steps do not run, nor does `remove jq`.** The
+**When a pull request leaves `tests/guard-tests.sh` unchanged, the later `guard
+matrix: jq present` and `guard matrix: python3 fallback` steps do not run, nor does
+`remove jq`.** Unchanged means both that the git tree entry (mode and blob) equals
+the base branch's and that the checked-out file's bytes equal the base blob's. The
 comparison is made in the step that writes the base file, before any PR code has
-run. Only an exact `true` skips. A different entry, no entry on the PR's side, or
-that step failing all run every pass. The base expectations always run on a pull
-request. A push has no base run, so it always runs both `guard matrix` passes.
+run. Only an exact `true` skips. A difference in either, no entry on the PR's side,
+a `cmp` that cannot read a file, or that step failing all run every pass. The base
+expectations always run on a pull request. A push has no base run, so it always
+runs both `guard matrix` passes.
 
-Tree entries rather than `cmp` on the files, because bytes miss two changes: a
-`chmod -x`, and a symlink to the base copy the step has just written. Under `cmp`
-the first would be red only on `main`, and later PRs would stay green over it.
+Both checks, because each alone misses a change that would then be red only on
+`main`, with later PRs green over it. Bytes alone miss a `chmod -x` and a symlink
+to the base copy the step has just written. Tree entries alone miss a
+`.gitattributes` that rewrites the file at checkout.
 
 In that case both pairs run the same bytes over the same hooks in the same modes.
 The base steps set `CLAUDE_CONFIG_DIR`, but the matrix overwrites it before its
@@ -66,20 +69,23 @@ and 1494 lines on older heads, 1535 and 1570 on newer). Of the last 60 merged PR
 **`trimtab: tests` runs module by module, four at a time.** The sum of `Ran N
 tests` must equal the loader's `countTestCases()`, so a module that stops early or
 never starts goes red without pinning a number that goes stale. Locally on 4 CPUs
-this took the step from 81 s to 28-34 s over 5 runs, with all 1177 tests run and
+this took the step from 77 s to 28-31 s over 5 runs, with all 1183 tests run and
 per-test verdicts identical to a serial run. The loader's count took under a second.
 
-Each module has 10 minutes, far past the slowest. `xargs -P4` holds a module's
-output until the end, so without a bound a hung module would be killed with the
-job and its log lost with the runner. With the bound it goes red, its name is
-printed and its log survives.
+Each module has 10 minutes, then 30 s more before SIGKILL. That is far past the
+slowest module, `test_shim` at 23 s locally alone, with the whole step at 44 s on
+CI. Each module's output goes to its own log until the end, so
+without a bound a hung module would be killed with the job and its log lost with
+the runner. With the bound it goes red, its name is printed and its log survives.
+The loader's count imports every module again, so it has 5 minutes of its own, and
+a module that hangs at import cannot hang the step there.
 
 ### Expected saving
 
 Estimated, scaled from local ratios and these one-run CI numbers. Step 8 of the
 plan replaces it with a measurement. The later pair cost 169 s in #136's run, on
-about 60% of PRs. The unit tests save about 25-29 s on every run, taking the local
-58-65% against the 44 s median; a runner's 4 vCPUs may scale worse.
+about 60% of PRs. The unit tests save about 26-28 s on every run, taking the local
+60-64% against the 44 s median; a runner's 4 vCPUs may scale worse.
 
 ## Options considered
 
@@ -87,8 +93,8 @@ about 60% of PRs. The unit tests save about 25-29 s on every run, taking the loc
   from. Rejected: it leaves only the passes that run after PR code. Skipping the
   later pair keeps the order-protected one, and gives up only what Consequences
   names.
-- **Compare the files with `cmp`.** Tried first. Rejected for the two changes it
-  misses, above.
+- **Compare only the files with `cmp`, or only the tree entries.** Each was tried
+  in turn before review. Rejected for the changes each misses, above.
 - **Skip by a list of paths the matrix does not read.** Rejected. The matrix reads
   `hooks/`, `settings.base.json`, `rules/`, `systemd/` and the trimtab package; a
   stale list fails open; and it saves little beyond byte-equality.
@@ -138,9 +144,10 @@ rule holds at job level.
 
 A PR that edits the matrix gets no saving from the skip, and those include every
 PR that changed a hook in the sample. The cost of the unit-test change is that a
-module's output appears only once all modules have ended, up to 10 minutes after
-one hangs. A hang in any other step still runs to the job's default limit, as it
-did before.
+module's output appears only once all modules have ended. One hung module delays
+that by up to 10 minutes 30 s. Hung modules queue under the ceiling of four, so if
+every module hung the step would take about an hour and a half before going red. A
+hang in any other step still runs to the job's default limit, as it did before.
 
 ## Trials
 

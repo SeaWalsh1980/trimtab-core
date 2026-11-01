@@ -141,12 +141,15 @@ jobs:
             > tests/base-guard-tests.sh
           chmod +x tests/base-guard-tests.sh
           # Read by the later `guard matrix` steps, before any PR code has run.
-          # The git tree entries, not the bytes, so a changed mode or a symlink
-          # counts as a change. Anything but an exact true runs them: a different
-          # entry, no entry on this side, or this step failing before it got here.
+          # Both the git tree entries, so a changed mode or a symlink counts as a
+          # change, and the checked-out bytes, so a .gitattributes that rewrites
+          # the file at checkout does too. Anything but an exact true runs them: a
+          # difference in either, no entry on this side, a cmp that could not read
+          # a file, or this step failing before it got here.
           base_entry=$(git ls-tree "origin/$GITHUB_BASE_REF" -- tests/guard-tests.sh)
           head_entry=$(git ls-tree HEAD -- tests/guard-tests.sh)
-          if [[ -n "$head_entry" && "$head_entry" == "$base_entry" ]]; then
+          if [[ -n "$head_entry" && "$head_entry" == "$base_entry" ]] \
+            && cmp -s tests/guard-tests.sh tests/base-guard-tests.sh; then
             echo "identical=true" >> "$GITHUB_OUTPUT"
           else
             echo "identical=false" >> "$GITHUB_OUTPUT"
@@ -190,7 +193,8 @@ jobs:
       # modules share no state (ADR 0054). The loader's count must match what
       # ran, so a module that stops early or is never started cannot pass. A
       # module has 10 minutes, far past the slowest, so a hung one goes red, is
-      # named, and leaves its log for the printing below. ---
+      # named, and leaves its log for the printing below. The loader imports
+      # every module again, so it has a bound of its own. ---
       - name: "trimtab: tests"
         if: ${{ !cancelled() }}
         run: |
@@ -204,7 +208,7 @@ jobs:
             || rc=$?
           cat "$logs"/*.log
           ran=$(cat "$logs"/*.log | awk '/^Ran [0-9]+ tests? in /{n+=$2} END{print n+0}')
-          want=$(python3 -c 'import unittest; print(unittest.defaultTestLoader.discover("tests/trimtab").countTestCases())')
+          want=$(timeout -k 30s 5m python3 -c 'import unittest; print(unittest.defaultTestLoader.discover("tests/trimtab").countTestCases())')
           echo "ran $ran of $want tests"
           if [[ "$ran" != "$want" ]]; then echo "tests run do not match the loader's count"; exit 1; fi
           exit "$rc"

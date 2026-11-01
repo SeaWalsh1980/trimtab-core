@@ -3,8 +3,9 @@
 A repository-consistency check, as test_draft_ci_workflow is: it reads the
 tracked workflow on purpose, because the workflow is what it checks. The
 comparison is the one thing here that can run outside GitHub, so
-ComparisonTest runs that step's own text in a throwaway repository. GitHub's
-behaviour itself is not testable here; ADR 0054 records the trial on real PRs.
+ComparisonTest runs that step's own text in a throwaway repository, and
+UnitStepBehaviourTest does the same for the unit step. GitHub's behaviour itself
+is not testable here; ADR 0054 records the trial on real PRs.
 """
 
 import os
@@ -66,8 +67,14 @@ class MatrixPassOnceTest(unittest.TestCase):
         self.assertLess(last_base, first_skippable)
 
     def test_the_comparison_is_made_before_any_step_that_runs_pr_code(self):
+        # Before it: only pinned actions and the workflow's own hashed install.
+        before = step_list()[:self.order.index(MATERIALISE)]
+
         self.assertEqual(self.steps[MATERIALISE]["id"], "base_matrix")
-        self.assertLess(self.order.index(MATERIALISE), min(self.order.index(name) for name in BASE_EXPECTATIONS))
+        self.assertEqual([step["name"] for step in before if "uses" not in step], ["python: PyYAML for the 3.11 floor"])
+
+    def test_removing_jq_and_the_fallback_pass_stay_last(self):
+        self.assertEqual(self.order[-2:], list(SKIPPED_WHEN_IDENTICAL[1:]))
 
     def test_the_rule_usage_matrix_always_runs(self):
         self.assertEqual(self.steps["guard matrix: rule-usage matrix"]["if"], "${{ !cancelled() }}")
@@ -85,8 +92,8 @@ class ComparisonTest(unittest.TestCase):
         self.root = Path(tmp.name)
         # No inherited GIT_DIR, and no operator config reaching the fixture.
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-        self.env.update(HOME=tmp.name, GIT_CONFIG_NOSYSTEM="1", GITHUB_BASE_REF="main",
-                        GITHUB_OUTPUT=str(self.root / "output"))
+        self.env.update(HOME=tmp.name, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                        GITHUB_BASE_REF="main", GITHUB_OUTPUT=str(self.root / "output"))
         self.origin = self.root / "origin"
         self.git(self.root, "init", "-q", "-b", "main", str(self.origin))
         self.write(self.origin, "#!/bin/sh\n")
@@ -154,6 +161,17 @@ class ComparisonTest(unittest.TestCase):
 
         self.assertEqual(self.identical(), (0, "false"))
 
+    def test_a_gitattributes_that_rewrites_the_checkout_compares_false(self):
+        # The tree entry is unchanged and only a fresh checkout applies the rule.
+        (self.repo / ".gitattributes").write_text(f"{MATRIX} text eol=crlf\n", encoding="utf-8")
+        self.git(self.repo, "add", ".")
+        self.commit(self.repo)
+        fresh = self.root / "fresh"
+        self.git(self.root, "clone", "-q", str(self.repo), str(fresh))
+        self.repo = fresh
+
+        self.assertEqual(self.identical(), (0, "false"))
+
     def test_a_base_branch_without_the_file_writes_no_true(self):
         self.git(self.origin, "rm", "-q", MATRIX)
         self.commit(self.origin)
@@ -162,6 +180,61 @@ class ComparisonTest(unittest.TestCase):
 
         self.assertNotEqual(status, 0)
         self.assertNotEqual(value, "true")
+
+
+PASSING_MODULE = (
+    "import unittest\n"
+    "class T(unittest.TestCase):\n"
+    "    def test_passes(self):\n"
+    "        pass\n"
+)
+FAILING_MODULE = (
+    "import unittest\n"
+    "class T(unittest.TestCase):\n"
+    "    def test_fails_as_seeded(self):\n"
+    "        self.fail('seeded')\n"
+)
+
+
+class UnitStepBehaviourTest(unittest.TestCase):
+    """The unit step's own text, over a throwaway tree of minimal modules."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tree = Path(tmp.name) / "tree"
+        (self.tree / "tests" / "trimtab").mkdir(parents=True)
+        self.env = dict(os.environ, RUNNER_TEMP=tmp.name)
+        self.module("test_ok", PASSING_MODULE)
+
+    def module(self, name, text):
+        (self.tree / "tests" / "trimtab" / f"{name}.py").write_text(text, encoding="utf-8")
+
+    def run_step(self):
+        return subprocess.run(["bash", "-c", steps()["trimtab: tests"]["run"]], cwd=self.tree, env=self.env,
+                              capture_output=True, text=True, timeout=120)
+
+    def test_passing_modules_pass_the_step_and_report_the_count(self):
+        self.module("test_ok_too", PASSING_MODULE)
+
+        result = self.run_step()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("ran 2 of 2 tests", result.stdout)
+
+    def test_a_failing_module_fails_the_step_is_named_and_its_log_prints(self):
+        self.module("test_bad", FAILING_MODULE)
+
+        result = self.run_step()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("FAILED test_bad.py", result.stdout)
+        self.assertIn("test_fails_as_seeded", result.stdout)
+
+    def test_a_module_that_exits_clean_before_any_test_fails_the_step(self):
+        self.module("test_quits", "import os\nos._exit(0)\n")
+
+        self.assertNotEqual(self.run_step().returncode, 0)
 
 
 class UnitTestsByModuleTest(unittest.TestCase):
@@ -177,6 +250,9 @@ class UnitTestsByModuleTest(unittest.TestCase):
 
     def test_a_module_cannot_run_forever(self):
         self.assertIn("timeout -k 30s 10m python3 -m unittest", self.run_text)
+
+    def test_the_loaders_count_cannot_run_forever(self):
+        self.assertIn("want=$(timeout -k 30s 5m python3 -c", self.run_text)
 
     def test_a_failed_module_fails_the_step_only_after_the_logs_print(self):
         self.assertIn("|| rc=$?", self.run_text)
