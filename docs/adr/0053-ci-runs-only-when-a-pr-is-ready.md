@@ -40,10 +40,11 @@ The constraints:
 ## Decision
 
 - `ci.yml` also runs on `ready_for_review` and `converted_to_draft`. The job
-  has `if: !github.event.pull_request.draft`, and on a draft its name is
-  `lint-test (draft, not run)`. The skip lands under that name, so no check
-  named `lint-test` exists on a draft's head and the required check stays
-  Expected. A run on a ready PR or a push is named `lint-test`.
+  has `if: !github.event.pull_request.draft`, and its name is an expression
+  that is `lint-test` only when the PR is not a draft. GitHub does not evaluate
+  the name of a skipped job, so the skip lands under the expression's raw text.
+  No check named `lint-test` exists on a draft's head, and the required check
+  stays Expected. A run on a ready PR or a push is named `lint-test`.
 - A concurrency group per PR, with `cancel-in-progress: true`, cancels the run
   in progress. A push to `main` has no PR number, so each is its own group and
   none is cancelled.
@@ -68,8 +69,9 @@ The constraints:
 
 ## Consequences
 
-- A draft still shows a run for `ci.yml`, with a skipped `lint-test (draft, not
-  run)` job and no runner used. GitHub offers no way to start nothing.
+- A draft still shows a run for `ci.yml`, with a skipped job and no runner
+  used, and the merge box lists that job under the expression's raw text.
+  GitHub offers no way to start nothing.
 - If the ready event is lost, a ready PR waits on Expected and cannot merge.
   Closing and reopening the PR starts a run.
 - A PR that returns to draft after its run passed keeps that pass on the head;
@@ -94,6 +96,19 @@ The constraints:
 
 ## Trial
 
-On trimtab-core#135, in progress. The first version, at `5029eb5`, as a draft:
-`ci` run concluded `skipped`, with `lint-test` and `claude-review` checks
-`skipped` and no runner used, which is what the operator's rule then removed.
+On trimtab-core#135, 2026-11-01, reading the check runs and `ci.yml` runs on the
+head through the API.
+
+| Head | Event | Result |
+|---|---|---|
+| `5029eb5` (reverted version: skip named `lint-test`) | draft opened | `ci` run `skipped`; checks `lint-test` and `claude-review` `skipped`, no runner. The operator's rule then removed this |
+| `09834d8` | push while draft | `ci` run `skipped`; the only skipped job carries the raw expression as its name; no check named `lint-test`, so `gh pr checks --required` does not list it |
+| `09834d8` | marked ready 10:42:16 | new `ci` run created 10:42:19; check `lint-test` `in_progress` by 10:42:23 |
+| `09834d8` | back to draft 10:42:54 | new `ci` run created 10:42:57; check `lint-test` `cancelled` and the ready run `cancelled` by 10:43:16; the new run `skipped` |
+
+Not shown: a `claude-review` in progress being cancelled, because on this PR the
+action skips itself and the job had already failed (it edits its own workflow).
+The group and trigger are the same as `ci.yml`'s. A re-run of a draft-era run and
+out-of-order events were not trialled: the skip no longer carries the required
+name, and a cancel reads `cancelled`, which does not pass. A `lint-test` pass and
+a push to `main` follow when this PR is marked ready and merged.
