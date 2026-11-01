@@ -281,6 +281,7 @@ PY
 }
 
 check_idempotent() {
+  false  # CONTROL for ADR 0054, never merged: this check aborts.
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
   boot "$h" "$live" --instance "$inst"
