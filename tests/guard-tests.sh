@@ -45,7 +45,23 @@ PEM="$PEM KEY-----"
 DSN_PROD="postgresql://ct:$(printf 'S%.0s' $(seq 20))@db.internal:5432/prod"
 DSN_DEV="postgresql://postgres:postgres@localhost:5432/test"
 
-j() { python3 -c 'import json,sys; print(json.dumps({"tool_name":sys.argv[1],"tool_input":json.loads(sys.argv[2])}))' "$@"; }
+# Builds a tool-call payload. python3 here was 1055 process starts and about a
+# quarter of a pass, so a tool name that needs no JSON quoting is spliced in with
+# printf. Any other name still goes through python3: spliced raw it makes invalid
+# JSON, which the guard blocks for the wrong reason, and the case passes testing
+# nothing. The same goes for a malformed second argument, so every payload is
+# logged here (NUL-delimited, as $(j ...) is a subshell and cannot touch $fails)
+# and checked once, before the verdict at the end of this file.
+j() {
+  local payload
+  if [[ "${1-}" =~ ^[A-Za-z0-9_.:-]+$ ]]; then
+    printf -v payload '{"tool_name": "%s", "tool_input": %s}' "$1" "${2-}"
+  else
+    payload=$(python3 -c 'import json,sys; print(json.dumps({"tool_name":sys.argv[1],"tool_input":json.loads(sys.argv[2])}))' "$@")
+  fi
+  printf '%s\0' "$payload" >> "$J_LOG"
+  printf '%s\n' "$payload"
+}
 
 # --- live-control-plane fixture -----------------------------------------
 # guard-paths derives its protected roots from CLAUDE_HOME. Point CLAUDE_HOME at
@@ -66,6 +82,7 @@ j() { python3 -c 'import json,sys; print(json.dumps({"tool_name":sys.argv[1],"to
 # while the workstation goes red.
 CPTMP=$(mktemp -d -t guard-tests.XXXXXX)
 trap 'rm -rf "$CPTMP"' EXIT
+J_LOG="$CPTMP/j-payloads"
 CP_REPO="$CPTMP/config-repo"
 CP_HOME="$CPTMP/home/.claude"
 mkdir -p "$CP_REPO"/hooks "$CP_REPO"/rules "$CP_REPO"/bin \
@@ -3681,6 +3698,35 @@ else
   rm "$LV_REPO/hooks/new-blocker.sh"
   lv "an added hook without the guard- prefix reads GUARDS OFF" "$LV_HOME" "hooks/new-blocker.sh"
   LIVENESS="$LIVENESS_SHIPPED"
+fi
+
+# Every payload j() built must be a JSON tool call (see j). No log at all, or an
+# empty one, means the check saw nothing, which is a failure too.
+if ! python3 -c '
+import json, sys
+try:
+    with open(sys.argv[1], "rb") as f:
+        payloads = f.read().split(b"\0")[:-1]
+except OSError as e:
+    sys.exit(f"cannot read the payload log: {e}")
+if not payloads:
+    sys.exit("no payloads logged")
+bad = []
+for p in payloads:
+    try:
+        call = json.loads(p)
+        if set(call) != {"tool_name", "tool_input"}:
+            bad.append(p)
+    except (ValueError, TypeError):
+        bad.append(p)
+for p in bad[:5]:
+    print(f"  not a tool call: {p[:120]!r}")
+if bad:
+    sys.exit(f"{len(bad)} of {len(payloads)} payloads are not tool calls")
+print(f"{len(payloads)} payloads are valid tool calls")
+' "$J_LOG"; then
+  printf 'FAIL  %-14s %s\n' "payloads" "a case ran on a payload j() could not build"
+  fails=$((fails+1))
 fi
 
 echo
