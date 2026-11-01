@@ -145,10 +145,29 @@ rule holds at job level.
 A PR that edits the matrix gets no saving from the skip, and those include every
 PR that changed a hook in the sample. The cost of the unit-test change is that a
 module's output appears only once all modules have ended. One hung module delays
-that by up to 10 minutes 30 s. Hung modules queue under the ceiling of four, so if
-every module hung the step would take about an hour and a half before going red. A
-hang in any other step still runs to the job's default limit, as it did before.
+that by up to 10 minutes 30 s, or about 16 minutes if it hangs at import, because
+the loader then waits out its own bound too. Hung modules queue under the ceiling
+of four, so if every module hung the step would take about an hour and a half
+before going red. A hang in any other step still runs to the job's default limit,
+as it did before.
 
 ## Trials
 
-Negative controls on real PRs are recorded here before merge.
+Negative controls on real PRs, stacked on this change and never merged, on the
+operator's authorisation to break `hooks/guard-bash.sh` on throwaway heads. Each
+removed the same one guard rule, so the verdict names one case.
+
+| PR | Fault | Base steps | Later matrix steps | Other | Job |
+|---|---|---|---|---|---|
+| #139 | Rule removed, matrix unchanged, a bootstrap check aborting, a unit module failing | Red in both modes, on that one case | Skipped, with `remove jq` | Bootstrap test red, the check named. Unit step red, the module named, `ran 1184 of 1184` | 281 s |
+| #140 | Rule removed, matrix edited to agree | Red in both modes, on that one case | Ran, green | The rest green | 458 s |
+| #141 | Matrix file deleted | Green: base's own matrix over unchanged hooks | Ran, red: the file is gone | The rest green | 203 s |
+
+Together these show a guard change still goes red when the matrix is unchanged and
+when it is edited to agree, and that the comparison fails toward running every
+pass. #139 against #140 is the skip's saving on one run: 177 s. The unit step took
+26 s on both, against a 44 s median before. None of the three started
+`claude-review`, because that workflow is limited to PRs against `main`.
+
+A push running both `guard matrix` passes can only be read from the first push
+after this merges.
