@@ -25,10 +25,13 @@ jobs:
   # ruleset): each separate job was billed a whole minute for seconds of work.
   # Each step keeps the name of the job it came from. Every check step runs
   # whatever an earlier one did (`!cancelled()`), so one failure does not hide
-  # the next, and the job fails if any did. Never add `continue-on-error`: it
-  # would leave that step ungated. Removing jq runs last; the base expectations
-  # run first and hide jq around their own fallback run (why is in their
-  # comment below). The ruleset requires `lint-test` by name, so renaming this
+  # the next, and the job fails if any did. The one exception: a pull request
+  # that leaves the matrix file unchanged does not run the later `guard matrix`
+  # passes or remove jq, because the base expectations ran the same script
+  # (ADR 0054). Never add `continue-on-error`: it would leave that step ungated.
+  # Where it runs, removing jq runs last; the base expectations run first and
+  # hide jq around their own fallback run (why is in their comment below). The
+  # ruleset requires `lint-test` by name, so renaming this
   # job silently un-requires every check in it. Rename here and in the ruleset
   # together.
   lint-test:
@@ -114,12 +117,16 @@ jobs:
       # There is deliberately no override: no skip label, no env var, no
       # commit-message token, no marker file. Any of those would be reachable
       # by the same agent this gate constrains. If a base expectation
-      # legitimately changed, this goes red and a human merges over it.
+      # legitimately changed, this goes red and a human merges over it. These
+      # steps run on every pull request. When the PR leaves the matrix file
+      # unchanged, the later `guard matrix` steps are what it skips: they would
+      # run the same script over the same hooks, after PR code has run (ADR 0054).
       #
       # CLAUDE_CONFIG_DIR proves the control-plane roots are absent rather
       # than relying on the runner image not happening to have a live install.
       # It is per step, so it never reaches a step that did not have it. ---
       - name: "base expectations: materialise the base branch's guard matrix"
+        id: base_matrix
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
           CLAUDE_CONFIG_DIR: /tmp/claude-ci-no-home
@@ -133,9 +140,23 @@ jobs:
           git show "origin/$GITHUB_BASE_REF:tests/guard-tests.sh" \
             > tests/base-guard-tests.sh
           chmod +x tests/base-guard-tests.sh
+          # Read by the later `guard matrix` steps, before any PR code has run.
+          # Both the git tree entries, so a changed mode or a symlink counts as a
+          # change, and the checked-out bytes, so a .gitattributes that rewrites
+          # the file at checkout does too. Anything but an exact true runs them: a
+          # difference in either, no entry on this side, a cmp that could not read
+          # a file, or this step failing before it got here.
+          base_entry=$(git ls-tree "origin/$GITHUB_BASE_REF" -- tests/guard-tests.sh)
+          head_entry=$(git ls-tree HEAD -- tests/guard-tests.sh)
+          if [[ -n "$head_entry" && "$head_entry" == "$base_entry" ]] \
+            && cmp -s tests/guard-tests.sh tests/base-guard-tests.sh; then
+            echo "identical=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "identical=false" >> "$GITHUB_OUTPUT"
+          fi
 
       # Moved aside, not removed, so it can be put back without the network.
-      # It is removed for good at the end of the job.
+      # It is removed for good at the end of the job, where that step runs.
       - name: "hide jq (the base python3 fallback runs next)"
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: |
@@ -167,10 +188,30 @@ jobs:
       # --- trimtab tests. This repository has no instance, so the tests that
       # need one skip themselves and there is no registry or lint step. Before
       # the fixture instance and bootstrap, which write outside the checkout;
-      # the untracked tests/base-guard-tests.sh above does not affect them. ---
+      # the untracked tests/base-guard-tests.sh above does not affect them.
+      # Module by module, four at a time, because the step is CPU-bound and the
+      # modules share no state (ADR 0054). The loader's count must match what
+      # ran, so a module that stops early or is never started cannot pass. A
+      # module has 10 minutes, far past the slowest, so a hung one goes red, is
+      # named, and leaves its log for the printing below. The loader imports
+      # every module again, so it has a bound of its own. ---
       - name: "trimtab: tests"
         if: ${{ !cancelled() }}
-        run: python3 -m unittest discover -s tests/trimtab -v
+        run: |
+          set -euo pipefail
+          logs="$RUNNER_TEMP/unit-logs"
+          mkdir -p "$logs"
+          rc=0
+          find tests/trimtab -maxdepth 1 -name 'test*.py' -printf '%f\n' \
+            | xargs -P4 -n1 sh -c \
+                'timeout -k 30s 10m python3 -m unittest discover -s tests/trimtab -p "$1" -v > "$0/$1.log" 2>&1 || { rc=$?; echo "FAILED $1 (exit $rc)"; exit "$rc"; }' "$logs" \
+            || rc=$?
+          cat "$logs"/*.log
+          ran=$(cat "$logs"/*.log | awk '/^Ran [0-9]+ tests? in /{n+=$2} END{print n+0}')
+          want=$(timeout -k 30s 5m python3 -c 'import unittest; print(unittest.defaultTestLoader.discover("tests/trimtab").countTestCases())')
+          echo "ran $ran of $want tests"
+          if [[ "$ran" != "$want" ]]; then echo "tests run do not match the loader's count"; exit 1; fi
+          exit "$rc"
 
       # --- public scrub. Nothing private-looking may reach this public
       # repository, and no workflow may run fork code with secrets. Before
@@ -184,9 +225,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 .github/scripts/forbidden_triggers.py .github/workflows
 
-      # --- guard matrix, jq present ---
+      # --- guard matrix, jq present. On a pull request that leaves the matrix
+      # file unchanged the base expectations above already ran this script in
+      # this mode (ADR 0054). A push has no base run, so it always runs. ---
       - name: "guard matrix: jq present"
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && !(github.event_name == 'pull_request' && steps.base_matrix.outputs.identical == 'true') }}
         run: ./tests/guard-tests.sh hooks
 
       # The rule-usage observer has its own matrix, so a change to it needs a
@@ -350,13 +393,14 @@ jobs:
 
       # --- last: remove jq, then the python3 fallback runs. A fresh machine
       # won't have jq; every guard must fall back to python3 and still fail
-      # closed. ---
+      # closed. On a pull request that leaves the matrix file unchanged the base
+      # expectations already ran this script with jq hidden (ADR 0054). ---
       - name: "remove jq (the python3 fallback runs below)"
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && !(github.event_name == 'pull_request' && steps.base_matrix.outputs.identical == 'true') }}
         run: |
           sudo apt-get remove -y jq >/dev/null
           if command -v jq; then echo "jq still present"; exit 1; fi
 
       - name: "guard matrix: python3 fallback"
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && !(github.event_name == 'pull_request' && steps.base_matrix.outputs.identical == 'true') }}
         run: ./tests/guard-tests.sh hooks
