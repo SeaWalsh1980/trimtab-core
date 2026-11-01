@@ -13,7 +13,18 @@ for v in $(compgen -v HOOK_ALLOW_); do unset "$v"; done
 unset TRIMTAB_INSTANCE
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work=$(mktemp -d -t bootstrap-env.XXXXXX)
-trap 'rm -rf "$work"' EXIT
+# Each running check is its own process group (run_check), so an early exit stops
+# the check and everything it started, not only its outer shell. SIGKILL, so that
+# nothing is still writing under $work when it goes. `|| true`: a job can end
+# first, and under `set -e` a failed kill would end the trap there, leaving the
+# directory behind and replacing the script's exit status.
+stop_checks() {
+  local p
+  for p in $(jobs -p); do
+    kill -KILL -- "-$p" 2>/dev/null || true
+  done
+}
+trap 'stop_checks; rm -rf "$work"' EXIT
 
 fails=0
 pass() { echo "PASS  $1"; }
@@ -1490,6 +1501,7 @@ check_refuses_python_that_reports_no_version() {
   fi
 }
 
+checks=(
 check_refuses_python_older_than_3_11
 check_refuses_python_older_than_3_11_under_check
 check_accepts_python_3_11
@@ -1574,6 +1586,51 @@ check_commands_drop_a_stale_link_and_keep_the_operators
 check_commands_clash_with_a_real_directory_is_refused
 check_commands_relink_from_another_core_checkout
 check_commands_check_reports_and_changes_nothing
+)
+
+# The checks run at once, because each builds its own throwaway home and the
+# suite is CPU-bound: 161 s one at a time, 43 s four at a time on 4 CPUs, which
+# is what a public repository's runner has. The ceiling is fixed, so a bigger
+# machine gains nothing and a smaller one only queues.
+max_jobs=4
+
+# run_check <check>: its output goes to its log, its verdict to its status file.
+# The inner subshell must stay out of any tested position: inside `if ( ... )` or
+# `( ... ) || ...` bash ignores `set -e`, and a check that aborts would carry on
+# and report success. Its status is 0 only when it ran to the end with no FAIL.
+# `set -m` around the `&` makes the job its own process group, for stop_checks.
+# It also stops bash pointing the job's stdin at /dev/null, so that is explicit.
+run_check() {
+  local c="$1"
+  set -m
+  (
+    set +e
+    ( set -e; fails=0; "$c"; [[ $fails -eq 0 ]] )
+    echo $? > "$work/$c.status"
+  ) > "$work/$c.log" 2>&1 < /dev/null &
+  set +m
+}
+
+running=0
+for c in "${checks[@]}"; do
+  if (( running >= max_jobs )); then
+    wait -n || true   # frees a slot only; the verdict is in the status file
+    running=$((running - 1))
+  fi
+  run_check "$c"
+  running=$((running + 1))
+done
+wait || true
+
+# In the listed order, whatever order they finished in. A missing status file
+# means the check's shell died before it could write one, so it counts as failed.
+for c in "${checks[@]}"; do
+  cat "$work/$c.log"
+  status=$(cat "$work/$c.status" 2>/dev/null || echo none)
+  if [[ "$status" != 0 ]]; then
+    fail "$c did not finish clean" "status=$status"
+  fi
+done
 
 if [[ $fails -ne 0 ]]; then
   echo "$fails check(s) FAILED"
