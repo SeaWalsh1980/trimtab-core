@@ -13,9 +13,18 @@ for v in $(compgen -v HOOK_ALLOW_); do unset "$v"; done
 unset TRIMTAB_INSTANCE
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work=$(mktemp -d -t bootstrap-env.XXXXXX)
-# `|| true`: with no job left, kill fails, and under `set -e` that would end the
-# trap there, leaving the directory behind and replacing the script's exit status.
-trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "$work"' EXIT
+# Each running check is its own process group (run_check), so an early exit stops
+# the check and everything it started, not only its outer shell. SIGKILL, so that
+# nothing is still writing under $work when it goes. `|| true`: a job can end
+# first, and under `set -e` a failed kill would end the trap there, leaving the
+# directory behind and replacing the script's exit status.
+stop_checks() {
+  local p
+  for p in $(jobs -p); do
+    kill -KILL -- "-$p" 2>/dev/null || true
+  done
+}
+trap 'stop_checks; rm -rf "$work"' EXIT
 
 fails=0
 pass() { echo "PASS  $1"; }
@@ -1589,13 +1598,17 @@ max_jobs=4
 # The inner subshell must stay out of any tested position: inside `if ( ... )` or
 # `( ... ) || ...` bash ignores `set -e`, and a check that aborts would carry on
 # and report success. Its status is 0 only when it ran to the end with no FAIL.
+# `set -m` around the `&` makes the job its own process group, for stop_checks.
+# It also stops bash pointing the job's stdin at /dev/null, so that is explicit.
 run_check() {
   local c="$1"
+  set -m
   (
     set +e
     ( set -e; fails=0; "$c"; [[ $fails -eq 0 ]] )
     echo $? > "$work/$c.status"
-  ) > "$work/$c.log" 2>&1 &
+  ) > "$work/$c.log" 2>&1 < /dev/null &
+  set +m
 }
 
 running=0
