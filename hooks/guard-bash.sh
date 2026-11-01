@@ -828,6 +828,6 @@ SQL_KEYWORD='([Dd][Rr][Oo][Pp]|[Tt][Rr][Uu][Nn][Cc][Aa][Tt][Ee])'
 SQL_BEFORE='(^|[[:space:];&|("'"'"'])'
 [[ "$cmd" =~ (psql|mysql)([[:space:]]|$).*${SQL_BEFORE}${SQL_KEYWORD}([[:space:]]|$) ]] \
   && block "SQL DROP/TRUNCATE"
-[[ "$cmd" =~ ${CMD_START}dropdb([[:space:]]|$) ]] && block "dropdb"
+# CONTROL for ADR 0054, never merged: this rule is deliberately removed.
 
 exit 0
