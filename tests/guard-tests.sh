@@ -3715,7 +3715,7 @@ bad = []
 for p in payloads:
     try:
         call = json.loads(p)
-        if set(call) != {"tool_name", "tool_input"}:
+        if set(call) != {"tool_name", "tool_input"} or not isinstance(call["tool_input"], dict):
             bad.append(p)
     except (ValueError, TypeError):
         bad.append(p)
