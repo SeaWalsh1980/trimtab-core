@@ -43,8 +43,25 @@
 #   a full name on the desktop app's exact-name list
 #   (CCD_ALLOW below, ADR 0027)                     -> pass
 #   [args] mcp__github__update_pull_request
-#   (PR_EDIT below, ADR 0034)                       -> pass when it sets only
-#                                                      title, body or reviewers;
+#   (PR_EDIT below, ADR 0034, ADR 0052)             -> pass when it sets only
+#                                                      title, body, reviewers or
+#                                                      the draft flag; ask
+#                                                      otherwise
+#   [args] mcp__github__create_pull_request
+#   (PR_CREATE below, ADR 0052)                     -> a draft, the denies above
+#                                                      having refused any other:
+#                                                      pass when every argument
+#                                                      is on its list; ask
+#                                                      otherwise
+#   [args] mcp__github__add_issue_comment,
+#   mcp__github__add_reply_to_pull_request_comment
+#   (PR_COMMENT, PR_REPLY below, ADR 0052)          -> pass when every argument
+#                                                      is on its list; ask
+#                                                      otherwise
+#   [args] mcp__github__issue_write
+#   (ISSUE_WRITE below, ADR 0052)                   -> pass when its method is
+#                                                      create or update and every
+#                                                      argument is on its list;
 #                                                      ask otherwise
 #   a full name on the PR-workflow exact-name list
 #   (PR_WORKFLOW_ALLOW below, ADR 0034)             -> pass
@@ -150,7 +167,8 @@ GH_REVIEW=(
 )
 # gh_args <mode>  — the verdict of the argument check for create or review,
 # read inside the parser so no argument reaches this script or a reason.
-# create: draft (draft is the JSON true) or not-draft. review: approve (event
+# create: draft (draft is the JSON true) or not-draft. issue: listed (method is
+# exactly create or update) or unlisted. review: approve (event
 # APPROVE, in any case or spacing), resolve (a method that resolves), unreadable
 # (an event or method that is not a string) or other. Either mode: no-object.
 # Anything else, an empty answer included, means the parser did not finish.
@@ -165,6 +183,7 @@ gh_args() {
       .tool_input as $a
       | if ($a | type) != "object" then "no-object"
         elif $mode == "create" then (if $a.draft == true then "draft" else "not-draft" end)
+        elif $mode == "issue" then (if $a.method == "create" or $a.method == "update" then "listed" else "unlisted" end)
         elif ($a | has("event")) and ($a.event | type) != "string" then "unreadable"
         elif ($a | has("event")) and ($a.event | ascii_upcase | explode | map(select(. != 32 and (. < 9 or . > 13))) | implode) == "APPROVE" then "approve"
         elif ($a | has("method")) and ($a.method | type) != "string" then "unreadable"
@@ -183,6 +202,8 @@ if not isinstance(a, dict):
     v = "no-object"
 elif mode == "create":
     v = "draft" if a.get("draft") is True else "not-draft"
+elif mode == "issue":
+    v = "listed" if a.get("method") in ("create", "update") and isinstance(a.get("method"), str) else "unlisted"
 elif "event" in a and not isinstance(a["event"], str):
     v = "unreadable"
 elif "event" in a and "".join(c for c in upper(a["event"]) if c not in " \t\n\v\f\r") == "APPROVE":
@@ -302,22 +323,18 @@ for allowed in "${CCD_ALLOW[@]}"; do
   [[ "$name" == "$allowed" ]] && exit 0
 done
 
-# A PR edit passes, by exact full name, only when it changes nothing but the
-# title, body or reviewers (ADR 0034). Any other argument, draft, state, base
-# or one this guard does not know, asks: marking a draft ready starts review,
-# so it stays the operator's. The check runs inside the parser, so a key is
-# never split or printed here, and nothing from the arguments reaches a reason.
-PR_EDIT=(
-  mcp__github__update_pull_request
-)
-pr_edit_args='["owner","repo","pullNumber","title","body","reviewers"]'
-for edit in "${PR_EDIT[@]}"; do
-  [[ "$name" == "$edit" ]] || continue
+# PR work that passes by exact full name, only when every argument is on its
+# list (ADR 0034, ADR 0052). Any other argument, or one this guard does not
+# know, asks. The check runs inside the parser, so a key is never split or
+# printed here, and nothing from the arguments reaches a reason.
+# pr_args_answer <allowed keys, JSON> <what they set, for the reason>
+pr_args_answer() {
+  local verdict rc
   # pass, no-object (tool_input missing or not an object) or extra (a key off
   # the list). Anything else, an empty answer included, means the parser did
   # not finish, and asks as unreadable.
   if command -v jq >/dev/null 2>&1; then
-    verdict=$(printf '%s' "$payload" | jq -r --argjson ok "$pr_edit_args" \
+    verdict=$(printf '%s' "$payload" | jq -r --argjson ok "$1" \
       'if (.tool_input | type) != "object" then "no-object" elif ((.tool_input | keys) - $ok | length) == 0 then "pass" else "extra" end' 2>/dev/null)
     rc=$?
   else
@@ -326,7 +343,7 @@ import json, sys
 ok = set(json.loads(sys.argv[1]))
 a = json.load(sys.stdin).get("tool_input")
 sys.stdout.write("no-object" if not isinstance(a, dict) else "pass" if set(a) <= ok else "extra")
-' "$pr_edit_args" 2>/dev/null)
+' "$1" 2>/dev/null)
     rc=$?
   fi
   # A verdict counts only from a parser that finished: one that printed and
@@ -336,12 +353,67 @@ sys.stdout.write("no-object" if not isinstance(a, dict) else "pass" if set(a) <=
     pass)
       exit 0 ;;
     extra)
-      ask "$name sets an argument other than the title, body or reviewers (draft, state, base or another), so it asks (ADR 0034). Approve it only if you intended this change." ;;
+      ask "$name sets an argument other than $2, so it asks (ADR 0052). Approve it only if you intended this change." ;;
     no-object)
-      ask "$name carries no argument object, so its arguments cannot be checked and it asks (ADR 0034). Approve it only if you intended this call." ;;
+      ask "$name carries no argument object, so its arguments cannot be checked and it asks (ADR 0052). Approve it only if you intended this call." ;;
     *)
-      ask "$name could not have its arguments read, so it asks (fail closed, ADR 0034). This says nothing about what the call changes. Approve it only if you intended this call." ;;
+      ask "$name could not have its arguments read, so it asks (fail closed, ADR 0052). This says nothing about what the call changes. Approve it only if you intended this call." ;;
   esac
+}
+# A PR edit: the title, body, reviewers or the draft flag, either way. Closing
+# it, a new base and the maintainer flag ask.
+PR_EDIT=(
+  mcp__github__update_pull_request
+)
+for allowed in "${PR_EDIT[@]}"; do
+  [[ "$name" == "$allowed" ]] \
+    && pr_args_answer '["owner","repo","pullNumber","title","body","reviewers","draft"]' "the title, body, reviewers or draft flag (state, base or another)"
+done
+# Opening a PR. The deny above refuses anything but a draft; this pass asks the
+# same question again, so a guard that lost that deny cannot pass a non-draft.
+PR_CREATE=(
+  mcp__github__create_pull_request
+)
+for allowed in "${PR_CREATE[@]}"; do
+  [[ "$name" == "$allowed" ]] || continue
+  [[ "$(gh_args create)" == draft ]] \
+    || deny "$name is not a draft whose arguments could be read, so it is denied (fail closed, ADR 0052)."
+  pr_args_answer '["owner","repo","title","body","head","base","draft"]' "the repository, title, body, branches or draft flag (maintainer_can_modify, reviewers or another)"
+done
+# A comment on a PR or issue, and a reply to a review comment. A reaction, or a
+# comment_id that aims one, is not on the lists and asks.
+PR_COMMENT=(
+  mcp__github__add_issue_comment
+)
+for allowed in "${PR_COMMENT[@]}"; do
+  [[ "$name" == "$allowed" ]] \
+    && pr_args_answer '["owner","repo","issue_number","body"]' "the comment's target and body (a reaction or another)"
+done
+PR_REPLY=(
+  mcp__github__add_reply_to_pull_request_comment
+)
+for allowed in "${PR_REPLY[@]}"; do
+  [[ "$name" == "$allowed" ]] \
+    && pr_args_answer '["owner","repo","pullNumber","commentId","body"]' "the reply's target and body (a reaction or another)"
+done
+# Opening, editing or closing an issue. The method comes first: this tool's
+# method is what it does, so one off the list asks whatever its other arguments.
+# Assignees, the milestone, the type, sub-issue links and the rest ask.
+ISSUE_WRITE=(
+  mcp__github__issue_write
+)
+for allowed in "${ISSUE_WRITE[@]}"; do
+  [[ "$name" == "$allowed" ]] || continue
+  case "$(gh_args issue)" in
+    listed) ;;
+    unlisted)
+      ask "$name uses a method other than create or update, so it asks (ADR 0052). Approve it only if you intended this call." ;;
+    no-object)
+      ask "$name carries no argument object, so its arguments cannot be checked and it asks (ADR 0052). Approve it only if you intended this call." ;;
+    *)
+      ask "$name could not have its arguments read, so it asks (fail closed, ADR 0052). This says nothing about what the call changes. Approve it only if you intended this call." ;;
+  esac
+  pr_args_answer '["owner","repo","method","issue_number","title","body","labels","state","state_reason"]' "the issue's target, title, body, labels or state (assignees, milestone, type or another)"
 done
 
 # Writes that drive a session's PR work pass by exact full name, server part

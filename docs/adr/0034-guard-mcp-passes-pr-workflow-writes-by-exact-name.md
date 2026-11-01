@@ -2,6 +2,8 @@
 
 ## Status
 
+Amended by [ADR 0052](0052-guard-mcp-passes-draft-creates-and-comments-by-exact-name.md): the draft flag no longer asks on a PR edit.
+
 Accepted (2026-10-17), by the operator. Amends ADR 0013
 (`docs/adr/0013-guard-mcp-asks-before-mcp-tools-that-may-write.md`), adding a
 second tool whose arguments guard-mcp reads, and ADR 0027

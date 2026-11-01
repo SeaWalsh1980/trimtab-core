@@ -1962,12 +1962,13 @@ tm pass "PR edit: the reviewers"              "$(j $PR_EDIT_NAME "{$PR_REF,\"rev
 tm pass "PR edit: title, body and reviewers"  "$(j $PR_EDIT_NAME "{$PR_REF,\"title\":\"t\",\"body\":\"b\",\"reviewers\":[]}")"
 tm pass "PR edit: no change at all"           "$(j $PR_EDIT_NAME "{$PR_REF}")"
 tm pass "PR edit: an empty argument object"   "$(j $PR_EDIT_NAME '{}')"
-tm ask  "PR edit: marking ready"              "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")"
-tm ask  "PR edit: marking draft"              "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":true}")"
+tm pass "PR edit: marking ready"              "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")"
+tm pass "PR edit: marking draft"              "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":true}")"
 tm ask  "PR edit: closing"                    "$(j $PR_EDIT_NAME "{$PR_REF,\"state\":\"closed\"}")"
 tm ask  "PR edit: a new base"                 "$(j $PR_EDIT_NAME "{$PR_REF,\"base\":\"dev\"}")"
 tm ask  "PR edit: maintainer_can_modify"      "$(j $PR_EDIT_NAME "{$PR_REF,\"maintainer_can_modify\":true}")"
-tm ask  "PR edit: a body with draft as well"  "$(j $PR_EDIT_NAME "{$PR_REF,\"body\":\"b\",\"draft\":false}")"
+tm pass "PR edit: a body with draft as well"  "$(j $PR_EDIT_NAME "{$PR_REF,\"body\":\"b\",\"draft\":false}")"
+tm ask  "PR edit: draft with a close"          "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false,\"state\":\"closed\"}")"
 tm ask  "PR edit: an argument it does not know" "$(j $PR_EDIT_NAME "{$PR_REF,\"labels\":[\"x\"]}")"
 tm ask  "PR edit: a key that spells two allowed ones" "$(j $PR_EDIT_NAME "{$PR_REF,\"title\\nbody\":\"x\"}")"
 tm ask  "PR edit: arguments that are not an object" '{"tool_name":"mcp__github__update_pull_request","tool_input":["title"]}'
@@ -1979,7 +1980,7 @@ pin_list PR_EDIT "$PR_EDIT_NAME"
 tm_says() { # tm_says <label> <payload> <text the ask reason holds> [PATH]
   tm ask "$1" "$2" "${4:-$PATH}" . "$3"
 }
-tm_says "PR edit: an extra argument is named as one" "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")" "sets an argument other than"
+tm_says "PR edit: an extra argument is named as one" "$(j $PR_EDIT_NAME "{$PR_REF,\"state\":\"closed\"}")" "sets an argument other than"
 tm_says "PR edit: a non-object is named as one"    '{"tool_name":"mcp__github__update_pull_request","tool_input":["title"]}' "carries no argument object"
 tm_says "PR edit: missing arguments are named as such" '{"tool_name":"mcp__github__update_pull_request"}' "carries no argument object"
 # A parser that does not finish the argument check is unreadable, not a draft
@@ -2004,7 +2005,7 @@ fi
 by_name=$( { guard_list CCD_ALLOW; guard_list PR_WORKFLOW_ALLOW; } | sort)
 by_tool=$(guard_list TOOL_READ_ALLOW)
 both=""
-for n in $( { guard_list CCD_OWN_PR; guard_list PR_EDIT; } ); do
+for n in $( { guard_list CCD_OWN_PR; guard_list PR_EDIT; guard_list PR_CREATE; guard_list PR_COMMENT; guard_list PR_REPLY; guard_list ISSUE_WRITE; } ); do
   t="${n#mcp__}"; t="${t#*__}"
   grep -qxF "$n" <<<"$by_name" && both+=" $n"
   grep -qxF "$t" <<<"$by_tool" && both+=" $n"
@@ -2029,7 +2030,98 @@ done
 GH_CREATE_NAME=mcp__github__create_pull_request
 GH_REVIEW_NAME=mcp__github__pull_request_review_write
 CR='"owner":"o","repo":"r","title":"t","head":"h","base":"main"'
-tm ask  "create: draft true is not denied (it asks as a write)" "$(j $GH_CREATE_NAME "{$CR,\"draft\":true}")"
+tm pass "create: a draft passes"                 "$(j $GH_CREATE_NAME "{$CR,\"draft\":true}")"
+tm pass "create: a draft with a body"            "$(j $GH_CREATE_NAME "{$CR,\"body\":\"b\",\"draft\":true}")"
+tm ask  "create: a draft with the maintainer flag" "$(j $GH_CREATE_NAME "{$CR,\"draft\":true,\"maintainer_can_modify\":true}")"
+tm ask  "create: a draft with reviewers"         "$(j $GH_CREATE_NAME "{$CR,\"draft\":true,\"reviewers\":[\"u\"]}")"
+tm ask  "create: a draft with an unknown argument" "$(j $GH_CREATE_NAME "{$CR,\"draft\":true,\"labels\":[\"x\"]}")"
+tm ask  "create: a draft on another server"      "$(j mcp__plugin_github_github__create_pull_request "{$CR,\"draft\":true}")"
+tm ask  "create: a draft on a lookalike server"  "$(j mcp__xgithub__create_pull_request "{$CR,\"draft\":true}")"
+tm deny "create: draft false with an unknown argument" "$(j $GH_CREATE_NAME "{$CR,\"draft\":false,\"labels\":[\"x\"]}")" "$PATH" . "not a draft"
+tm deny "create: true then false, the last key decides" '{"tool_name":"mcp__github__create_pull_request","tool_input":{"owner":"o","repo":"r","draft":true,"draft":false}}' "$PATH" . "not a draft"
+pin_list PR_CREATE "$GH_CREATE_NAME"
+# The pass reads draft itself: a copy of the guard that lost the deny's list
+# must still refuse a non-draft, not pass it.
+NODENY=$(mktemp -d "$CPTMP/nodeny.XXXXXX")
+sed -e '/^GH_CREATE=($/,/^)$/{/create_pull_request/d}' "$HOOKS/guard-mcp.sh" > "$NODENY/guard-mcp.sh"
+if ! sed -n '/^GH_CREATE=($/,/^)$/p' "$NODENY/guard-mcp.sh" | grep -q create_pull_request; then
+  TM_HOOK="$NODENY/guard-mcp.sh"
+  tm deny "create: with the deny's list emptied, a non-draft is still refused" "$(j $GH_CREATE_NAME "{$CR,\"draft\":false}")" "$PATH" . "not a draft"
+  tm pass "create: with the deny's list emptied, a draft still passes" "$(j $GH_CREATE_NAME "{$CR,\"draft\":true}")"
+  unset TM_HOOK
+else
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "create: could not empty the deny's list in a copy of the guard"; fails=$((fails+1))
+fi
+# The argument lists are pinned as the names are: a key added to one must be
+# reviewed here too.
+for keys in \
+  "'[\"owner\",\"repo\",\"pullNumber\",\"title\",\"body\",\"reviewers\",\"draft\"]'" \
+  "'[\"owner\",\"repo\",\"title\",\"body\",\"head\",\"base\",\"draft\"]'" \
+  "'[\"owner\",\"repo\",\"issue_number\",\"body\"]'" \
+  "'[\"owner\",\"repo\",\"pullNumber\",\"commentId\",\"body\"]'" \
+  "'[\"owner\",\"repo\",\"method\",\"issue_number\",\"title\",\"body\",\"labels\",\"state\",\"state_reason\"]'"; do
+  if [[ $(grep -cF "pr_args_answer $keys" "$HOOKS/guard-mcp.sh") -ne 1 ]]; then
+    printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "argument list changed: $keys"; fails=$((fails+1))
+  fi
+done
+if [[ $(grep -c "pr_args_answer '\[" "$HOOKS/guard-mcp.sh") -ne 5 ]]; then
+  printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "an argument list this matrix does not pin"; fails=$((fails+1))
+fi
+# A comment or a reply passes with its own arguments; a reaction asks. A body
+# that says resolve or approve is only text.
+GH_COMMENT_NAME=mcp__github__add_issue_comment
+GH_REPLY_NAME=mcp__github__add_reply_to_pull_request_comment
+CM='"owner":"o","repo":"r","issue_number":7'
+RP='"owner":"o","repo":"r","pullNumber":7,"commentId":9'
+tm pass "comment: a comment passes"              "$(j $GH_COMMENT_NAME "{$CM,\"body\":\"b\"}")"
+tm pass "comment: a body that says resolve is text" "$(j $GH_COMMENT_NAME "{$CM,\"body\":\"resolveReviewThread APPROVE\"}")"
+tm ask  "comment: a reaction"                    "$(j $GH_COMMENT_NAME "{$CM,\"reaction\":\"+1\"}")"
+tm ask  "comment: a reaction aimed by comment_id" "$(j $GH_COMMENT_NAME "{$CM,\"comment_id\":1,\"reaction\":\"+1\"}")"
+tm ask  "comment: an unknown argument"           "$(j $GH_COMMENT_NAME "{$CM,\"body\":\"b\",\"x\":1}")"
+tm ask  "comment: arguments that are not an object" '{"tool_name":"mcp__github__add_issue_comment","tool_input":["body"]}'
+tm ask  "comment: no tool_input at all"          '{"tool_name":"mcp__github__add_issue_comment"}'
+tm ask  "comment: on another server"             "$(j mcp__plugin_github_github__add_issue_comment "{$CM,\"body\":\"b\"}")"
+tm ask  "comment: a longer name"                 "$(j mcp__github__add_issue_comment_x "{$CM,\"body\":\"b\"}")"
+tm ask  "comment: a case change"                 "$(j mcp__github__Add_Issue_Comment "{$CM,\"body\":\"b\"}")"
+tm pass "reply: a reply passes"                  "$(j $GH_REPLY_NAME "{$RP,\"body\":\"b\"}")"
+tm ask  "reply: a reaction"                      "$(j $GH_REPLY_NAME "{$RP,\"reaction\":\"+1\"}")"
+tm ask  "reply: an unknown argument"             "$(j $GH_REPLY_NAME "{$RP,\"body\":\"b\",\"x\":1}")"
+tm ask  "reply: on another server"               "$(j mcp__plugin_github_github__add_reply_to_pull_request_comment "{$RP,\"body\":\"b\"}")"
+pin_list PR_COMMENT "$GH_COMMENT_NAME"
+pin_list PR_REPLY "$GH_REPLY_NAME"
+# Opening, editing and closing an issue pass, for the two listed methods with
+# the listed arguments. Everything else on the tool asks.
+GH_ISSUE_NAME=mcp__github__issue_write
+IS='"owner":"o","repo":"r"'
+tm pass "issue: opening one"                     "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"create\",\"title\":\"t\",\"body\":\"b\",\"labels\":[\"l\"]}")"
+tm pass "issue: editing one"                     "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"update\",\"issue_number\":7,\"title\":\"t\"}")"
+tm pass "issue: closing one"                     "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"update\",\"issue_number\":7,\"state\":\"closed\",\"state_reason\":\"completed\"}")"
+for k in '"assignees":["u"]' '"milestone":1' '"type":"Bug"' '"duplicate_of":1' '"issue_fields":[]' '"parent_issue_number":1' '"x":1'; do
+  tm ask "issue: an unlisted argument, $k"       "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"update\",\"issue_number\":7,$k}")"
+done
+tm_says "issue: an unlisted argument is named as one" "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"create\",\"assignees\":[\"u\"]}")" "sets an argument other than"
+for m in '"delete"' '"Create"' '" update"' '"get"' '"resolve_later"' 'null' '1' '["create"]'; do
+  tm ask "issue: an unlisted method, $m"         "$(j $GH_ISSUE_NAME "{$IS,\"method\":$m,\"title\":\"t\"}")"
+done
+tm ask  "issue: no method at all"                "$(j $GH_ISSUE_NAME "{$IS,\"title\":\"t\"}")"
+tm_says "issue: an unlisted method is named as one" "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"delete\"}")" "a method other than"
+tm_says "issue: arguments that are not an object" '{"tool_name":"mcp__github__issue_write","tool_input":["method"]}' "carries no argument object"
+tm_says "issue: no tool_input at all"            '{"tool_name":"mcp__github__issue_write"}' "carries no argument object"
+tm ask  "issue: on another server"               "$(j mcp__plugin_github_github__issue_write "{$IS,\"method\":\"create\",\"title\":\"t\"}")"
+tm ask  "issue: a longer name"                   "$(j mcp__github__issue_write_x "{$IS,\"method\":\"create\",\"title\":\"t\"}")"
+pin_list ISSUE_WRITE "$GH_ISSUE_NAME"
+if command -v jq >/dev/null 2>&1; then
+  printf '#!/bin/sh\ncase " $* " in *" --arg mode "*) exit 5 ;; esac\nexec %q "$@"\n' "$(command -v jq)" > "$JQ_SHIM/jq"
+  tm_says "issue: a method check that did not finish" "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"create\",\"title\":\"t\"}")" "could not have its arguments read" "$JQ_SHIM"
+  printf '#!/bin/sh\ncase " $* " in *" --arg mode "*) echo listed; exit 1 ;; esac\nexec %q "$@"\n' "$(command -v jq)" > "$JQ_SHIM/jq"
+  tm_says "issue: a listed method from a check that then failed" "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"create\",\"title\":\"t\"}")" "could not have its arguments read" "$JQ_SHIM"
+  printf '#!/bin/sh\ncase " $* " in *" --argjson ok "*) echo pass; exit 1 ;; esac\nexec %q "$@"\n' "$(command -v jq)" > "$JQ_SHIM/jq"
+  tm_says "issue: a pass from an argument check that then failed" "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"create\",\"title\":\"t\"}")" "could not have its arguments read" "$JQ_SHIM"
+fi
+# The tools that stay off every list keep asking, comments among them.
+tm ask  "comment tools off the lists: a pending review comment" "$(j mcp__github__add_comment_to_pending_review '{"body":"b"}')"
+tm ask  "comment tools off the lists: rewriting a comment" "$(j mcp__github__update_issue_comment '{"body":"b"}')"
+tm ask  "comment tools off the lists: a discussion comment" "$(j mcp__github__discussion_comment_write '{"body":"b"}')"
 tm deny "create: draft false"                 "$(j $GH_CREATE_NAME "{$CR,\"draft\":false}")" "$PATH" . "not a draft"
 tm deny "create: draft as the string true"    "$(j $GH_CREATE_NAME "{$CR,\"draft\":\"true\"}")" "$PATH" . "not a draft"
 tm deny "create: draft as 1"                  "$(j $GH_CREATE_NAME "{$CR,\"draft\":1}")" "$PATH" . "not a draft"
@@ -2068,15 +2160,15 @@ tm ask  "the deny list is by tool part: a case change" "$(j mcp__github__Merge_P
 # still denied.
 tm deny "an ambiguous split still denies a merge" "$(j mcp__a__b__merge_pull_request '{}')" "$PATH" . "merges a pull request"
 # The denies run before every pass: a copy of the guard whose pass lists also
-# name these tools must still deny them. Nothing on the shipped lists overlaps
-# a deny, so only a widened copy can show the order.
+# name these tools must still deny them. Only the draft create's list overlaps
+# a deny (ADR 0052), so a widened copy is what shows the order.
 ORDER=$(mktemp -d "$CPTMP/order.XXXXXX")
 sed -e 's/^CCD_ALLOW=($/&\n  mcp__github__merge_pull_request mcp__srv__resolve_review_thread/' \
     -e 's/^PR_WORKFLOW_ALLOW=($/&\n  mcp__github__create_pull_request/' \
     -e 's/^TOOL_READ_ALLOW=($/&\n  pull_request_review_write/' \
     -e 's/^PR_EDIT=($/&\n  mcp__github__submit_pending_pull_request_review/' \
     "$HOOKS/guard-mcp.sh" > "$ORDER/guard-mcp.sh"
-if [[ $(grep -c -e merge_pull_request\ mcp__srv__resolve -e '^  mcp__github__create_pull_request$' -e '^  pull_request_review_write$' -e '^  mcp__github__submit_pending' "$ORDER/guard-mcp.sh") -eq 4 ]]; then
+if [[ $(grep -c -e merge_pull_request\ mcp__srv__resolve -e '^  mcp__github__create_pull_request$' -e '^  pull_request_review_write$' -e '^  mcp__github__submit_pending' "$ORDER/guard-mcp.sh") -eq 5 ]]; then
   TM_HOOK="$ORDER/guard-mcp.sh"
   tm deny "order: a merge on the app list is still denied" "$(j mcp__github__merge_pull_request '{}')" "$PATH" . "merges a pull request"
   tm deny "order: a resolve on the app list is still denied" "$(j mcp__srv__resolve_review_thread '{}')" "$PATH" . "resolves a review thread"
@@ -2783,9 +2875,15 @@ if command -v jq >/dev/null 2>&1; then
   tm pass "jq only: a read still passes"        "$MCP_READ"  "$STUB"
   tm ask  "jq only: a write asks"               "$MCP_WRITE" "$STUB"
   tm pass "jq only: a PR title edit passes"     "$(j $PR_EDIT_NAME "{$PR_REF,\"title\":\"t\"}")" "$STUB"
-  tm ask  "jq only: marking a PR ready asks"     "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")" "$STUB"
+  tm pass "jq only: marking a PR ready passes"   "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")" "$STUB"
+  tm ask  "jq only: closing a PR asks"           "$(j $PR_EDIT_NAME "{$PR_REF,\"state\":\"closed\"}")" "$STUB"
+  tm pass "jq only: a draft create passes"       "$(j $GH_CREATE_NAME "{$CR,\"draft\":true}")" "$STUB"
+  tm pass "jq only: a comment passes"            "$(j $GH_COMMENT_NAME "{$CM,\"body\":\"b\"}")" "$STUB"
+  tm pass "jq only: closing an issue passes"     "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"update\",\"issue_number\":7,\"state\":\"closed\"}")" "$STUB"
+  tm ask  "jq only: an unlisted issue method asks" "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"delete\"}")" "$STUB"
+  tm ask  "jq only: an unlisted issue argument asks" "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"update\",\"milestone\":1}")" "$STUB"
+  tm ask  "jq only: a reaction asks"             "$(j $GH_COMMENT_NAME "{$CM,\"reaction\":\"+1\"}")" "$STUB"
   tm deny "jq only: a non-draft create is denied" "$(j $GH_CREATE_NAME "{$CR,\"draft\":false}")" "$STUB" . "not a draft"
-  tm ask  "jq only: a draft create asks"          "$(j $GH_CREATE_NAME "{$CR,\"draft\":true}")" "$STUB"
   tm deny "jq only: an approval is denied"        "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":\" approve\"}")" "$STUB" . "approves"
   tm deny "jq only: a resolving method is denied" "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"resolve_thread\"}")" "$STUB" . "resolves a review thread"
   tm ask  "jq only: an unresolving method asks"   "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"unresolve_thread\"}")" "$STUB"
@@ -2808,10 +2906,18 @@ tm pass "python3 only: a read still passes"   "$MCP_READ"  "$STUB"
 tm ask  "python3 only: a write asks"          "$MCP_WRITE" "$STUB"
 tm ask  "python3 only: garbage payload asks"  'NOT JSON AT ALL' "$STUB"
 tm pass "python3 only: a PR title edit passes" "$(j $PR_EDIT_NAME "{$PR_REF,\"title\":\"t\"}")" "$STUB"
-tm ask  "python3 only: marking a PR ready asks" "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")" "$STUB"
+tm pass "python3 only: marking a PR ready passes" "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")" "$STUB"
+tm ask  "python3 only: closing a PR asks"        "$(j $PR_EDIT_NAME "{$PR_REF,\"state\":\"closed\"}")" "$STUB"
+tm pass "python3 only: a draft create passes"    "$(j $GH_CREATE_NAME "{$CR,\"draft\":true}")" "$STUB"
+tm pass "python3 only: a reply passes"           "$(j $GH_REPLY_NAME "{$RP,\"body\":\"b\"}")" "$STUB"
+tm pass "python3 only: closing an issue passes"  "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"update\",\"issue_number\":7,\"state\":\"closed\"}")" "$STUB"
+for m in '"delete"' '"Create"' 'null' '1' '["create"]'; do
+  tm ask "python3 only: an unlisted issue method, $m" "$(j $GH_ISSUE_NAME "{$IS,\"method\":$m}")" "$STUB"
+done
+tm ask  "python3 only: an unlisted issue argument asks" "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"update\",\"milestone\":1}")" "$STUB"
+tm ask  "python3 only: a reaction asks"          "$(j $GH_REPLY_NAME "{$RP,\"reaction\":\"+1\"}")" "$STUB"
 tm deny "python3 only: a non-draft create is denied" "$(j $GH_CREATE_NAME "{$CR,\"draft\":false}")" "$STUB" . "not a draft"
 tm deny "python3 only: draft as the string true is denied" "$(j $GH_CREATE_NAME "{$CR,\"draft\":\"true\"}")" "$STUB" . "not a draft"
-tm ask  "python3 only: a draft create asks"     "$(j $GH_CREATE_NAME "{$CR,\"draft\":true}")" "$STUB"
 tm deny "python3 only: an approval is denied"   "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":\" approve\"}")" "$STUB" . "approves"
 tm deny "python3 only: a resolving method is denied" "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"resolve_thread\"}")" "$STUB" . "resolves a review thread"
 tm ask  "python3 only: an unresolving method asks" "$(j $GH_REVIEW_NAME "{$PR_REF,\"method\":\"unresolve_thread\"}")" "$STUB"
@@ -2833,7 +2939,7 @@ def load(f):
     return {"tool_name": "mcp__srv__get_item"}
 PY
 tm ask  "python3 only: a planted json.py does not make a write a read" "$MCP_WRITE" "$STUB" "$PLANT"
-tm ask  "python3 only: a planted json.py does not pass marking a PR ready" "$(j $PR_EDIT_NAME "{$PR_REF,\"draft\":false}")" "$STUB" "$PLANT"
+tm ask  "python3 only: a planted json.py does not pass closing a PR" "$(j $PR_EDIT_NAME "{$PR_REF,\"state\":\"closed\"}")" "$STUB" "$PLANT"
 tm deny "python3 only: a planted json.py does not pass a non-draft create" "$(j $GH_CREATE_NAME "{$CR,\"draft\":false}")" "$STUB" "$PLANT" "not a draft"
 
 echo "== guard-github (ADR 0037) =="

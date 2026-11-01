@@ -433,9 +433,9 @@ check_set_monitor_probe_reports_green() {
   fi
 }
 
-# guard-mcp must ask on a PR edit that marks a draft ready (ADR 0034). A guard
-# that passes update_pull_request by name loses draft-until-final through the
-# MCP route: the install must refuse it. The stub passes that tool whole and
+# guard-mcp must ask on a PR edit that closes the PR (ADR 0034, ADR 0052). A
+# guard that passes update_pull_request by name has stopped reading its
+# arguments: the install must refuse it. The stub passes that tool whole and
 # hands every other call to the real guard, as for set_monitor above.
 check_pr_edit_by_name_fails_the_install() {
   local h inst
@@ -447,24 +447,24 @@ check_pr_edit_by_name_fails_the_install() {
   chmod +x "$snap_new/hooks/guard-mcp.sh"
   boot "$h" "$snap_new/bootstrap.sh" --instance "$inst"
   if [[ $rc -ne 0 && "$out" == *"guard-mcp asks about an MCP write"* \
-     && "$out" == *"without asking about a PR edit that marks a draft ready"* ]]; then
+     && "$out" == *"without asking about a PR edit that closes the PR"* ]]; then
     pass "a guard-mcp that passes update_pull_request by name fails the install"
   else
     fail "a guard-mcp that passes update_pull_request by name fails the install" "rc=$rc"; echo "$out" | tail -6
   fi
 }
 
-# ...and a correct install reports both: the ready-marking edit asks, a title
-# edit passes.
+# ...and a correct install reports both: the closing edit asks, a title edit
+# passes.
 check_pr_edit_probe_reports_green() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
   boot "$h" "$live" --instance "$inst"
-  if [[ $rc -eq 0 && "$out" == *"guard-mcp asks about a PR edit that marks a draft ready"* \
+  if [[ $rc -eq 0 && "$out" == *"guard-mcp asks about a PR edit that closes the PR"* \
      && "$out" == *"guard-mcp passes a PR title edit"* ]]; then
-    pass "an install proves a PR edit passes only for title, body or reviewers"
+    pass "an install proves a PR edit passes only for its listed arguments"
   else
-    fail "an install proves a PR edit passes only for title, body or reviewers" "rc=$rc"; echo "$out" | grep -i "PR edit\|title edit" | tail -6
+    fail "an install proves a PR edit passes only for its listed arguments" "rc=$rc"; echo "$out" | grep -i "PR edit\|title edit" | tail -6
   fi
 }
 
