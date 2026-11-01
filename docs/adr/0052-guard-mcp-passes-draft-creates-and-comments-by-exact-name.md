@@ -194,6 +194,21 @@ a pass is enough there.
   session, and `plan:blocked`; a restart still checks that the admin account removed
   that label. Read from the README, not tried. Merge, approval and resolving are not
   on this tool's list of methods and stay denied.
+  The operator accepted this on 2026-11-01, knowing the following. No workflow in
+  ControlTower, Trimtab or trimtab-core reads a label or fires on one, and a close
+  or a label neither merges nor approves.
+  - Closing a Dependabot PR by hand may stop it raising that version again, so a
+    session could drop a security bump. From memory of Dependabot's behaviour, not
+    tried. The guard sees only a number and cannot protect these PRs.
+  - Nothing tells the operator a PR was closed.
+  - Reopening can revive a PR the operator closed on purpose. It also fires CI and
+    `claude-review`, which trigger on `reopened`, so closing and reopening is a
+    second way to start a billed review.
+  - `labels` probably replaces the whole set, so a session could strip labels. Not
+    tried. `trimtab-ingested` decides what the retro reads. `review-cap-failed` is
+    what ADR 0028's planned approver check would read in that repository, though
+    the failing `claude-review` check still blocks merge. `plan:continue` starts a
+    billed session, which must still pass the plan check.
 - Accepted: an issue write can trigger automation that reacts to issue events. In
   ControlTower only `claude.yml` does (`issues: opened`, `issue_comment: created`).
   Its job runs only for an author association of `OWNER` with a mention of the
