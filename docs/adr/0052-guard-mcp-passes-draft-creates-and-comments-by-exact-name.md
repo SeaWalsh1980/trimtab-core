@@ -95,9 +95,9 @@ that passes the tool by name.
 - **Close further speculative resolve routes in this change** (other tool names,
   a generic GraphQL tool, `minimizeComment`). Not taken: the server's README lists
   none of them, and they ask today. ADR 0038's residuals stand.
-- **A limit on target owners, from an operator-exported variable.** Held back
-  until the reach check below is recorded. Not needed if the server already
-  binds these calls to the session's repositories.
+- **A limit on target owners, from an operator-exported variable.** Rejected on
+  the reach check below: the session's MCP route already refuses a repository that
+  is not attached, so the limit would add configuration for nothing.
 
 ## Trial
 
@@ -118,10 +118,21 @@ and pins the four argument lists. The base branch's matrix goes red on 11 cases,
 the ready toggle and draft create pins that used to ask (with their jq-only,
 python3-only and planted-module versions), and the order check's line count.
 
+**Reach, measured on 2026-11-01.** In a guarded cloud session with two attached
+repositories, acting as a user with no connection to the target, the operator
+approved one `add_issue_comment` to a public scratch repository that was not
+attached. It was refused with "Access denied: repository ... is not configured
+for this session", and nothing was written. One tool, one target and one session:
+a create was not tried, and the refusal text is the only evidence of where it is
+enforced.
+
+`mcp__claude-code-remote__add_repo` widens that set. It asks under this guard, as
+any unlisted write does, so it ends as a denial in an unattended run, and routines
+refuse the whole server. The asking is what keeps the boundary in an unattended
+run, so a pass on it would need its own decision.
+
 **Pending, to be recorded here before this is accepted:**
 
-- **Reach.** Whether a comment through the MCP server can land on a repository
-  outside the session's sources.
 - **The permission layer.** A pass from guard-mcp is no decision (ADR 0034).
   Whether a cloud session still prompts after a pass, which would need an allow
   rule in the instance.
@@ -135,10 +146,10 @@ python3-only and planted-module versions), and the order check's line count.
   ready to the operator, so a run will not use the ready pass until both change.
 - A guarded session opens a draft, comments, replies and toggles ready with no
   stop from guard-mcp, attended or not.
-- Accepted, unless the reach check says otherwise: injected text can post chosen
-  content, as a comment or a draft's body, wherever the session's credentials
-  and the server allow. A comment needs no branch, so any public issue accepts
-  one if the server is not bound to the session's repositories.
+- Accepted: injected text can post chosen content, as a comment or a draft's
+  body, on the repositories attached to the session, with no stop. The reach check
+  shows the comment route stops there. If the platform drops that limit, these
+  passes would reach any public issue, and this guard would not notice.
 - Accepted: the ready toggle passes on any PR the credentials reach, not only one
   the session opened, as title and body edits do since ADR 0034. A session could
   mark another PR ready, or back to draft.
