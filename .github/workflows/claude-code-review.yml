@@ -11,7 +11,9 @@ name: Claude Code Review
 # and needs a person's.
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review]
+    # `converted_to_draft` starts a run only so that the concurrency group below
+    # cancels a review in progress; the job's condition then skips it (ADR 0053).
+    types: [opened, reopened, ready_for_review, converted_to_draft]
     branches: [main]
 
 # Comment-only. The reviewer can read the tree and write to the PR conversation;
