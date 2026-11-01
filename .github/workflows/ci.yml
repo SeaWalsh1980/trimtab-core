@@ -32,11 +32,13 @@ jobs:
   # job silently un-requires every check in it. Rename here and in the ruleset
   # together.
   lint-test:
-    name: lint-test
-    # A job-level condition, because a trigger cannot filter on draft. A skipped
-    # required check counts as passing; a draft cannot merge, and marking it
-    # ready starts the run that replaces the skip (ADR 0053). A push has no PR,
-    # so the condition holds.
+    # A trigger cannot filter on draft, so a draft's run skips this job. A skipped
+    # check named `lint-test` would pass the ruleset, so on a draft the job takes
+    # another name: `lint-test` itself is never skipped. It stays Expected and
+    # blocks until a ready run reports it, even if that run never starts or a
+    # draft-era run is re-run (ADR 0053). A push has no PR, so it runs as
+    # `lint-test`.
+    name: ${{ github.event.pull_request.draft && 'lint-test (draft, not run)' || 'lint-test' }}
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:

@@ -4,9 +4,10 @@
 
 Accepted on merge. A security control (SEC-7): the operator authorised the
 changes to `.github/workflows/ci.yml` and
-`.github/workflows/claude-code-review.yml` in chat. Reverses, for this
-repository, the instance's standing text that CI still runs on drafts; that
-text and the instance's records are not edited here.
+`.github/workflows/claude-code-review.yml` in chat, and set the rule that
+`lint-test` is never skipped. Reverses, for this repository, the instance's
+standing text that CI still runs on drafts; that text and the instance's
+records are not edited here.
 
 ## Context
 
@@ -19,10 +20,15 @@ commit already tested.
 The constraints:
 
 - A trigger can filter on types, branches and paths, never on draft. Only a
-  job-level condition can skip a draft, and that leaves a run with a `skipped`
-  job on the head.
-- A `skipped` job satisfies a required check. A draft cannot merge, so the
-  skip matters only once the PR is ready.
+  job-level condition can skip a draft.
+- A skipped job satisfies a required check of its name, and a job's condition
+  reads the event's payload, not the PR's live state. Trimtab ADR 0015 rejected
+  a skip on this check for that reason: a body edit on a red PR would turn it
+  green. A review of the first version of this change found the same routes
+  here: re-running a draft-era run could put a skip over a red `lint-test` on a
+  ready PR, and a lost or late event could leave a ready PR on a skip.
+- The operator's rule: `lint-test` is only ever Expected, in progress, failed
+  or passed. It is never skipped.
 - Cancelling takes a new run in the same concurrency group, so
   `converted_to_draft` has to be a trigger even though that run does no work.
 - The ruleset requires `lint-test`, `claude-review`, `plan-scope`,
@@ -33,12 +39,16 @@ The constraints:
 
 ## Decision
 
-- `ci.yml` also runs on `ready_for_review` and `converted_to_draft`.
-  `lint-test` has `if: !github.event.pull_request.draft`. A concurrency group
-  per PR, with `cancel-in-progress: true`, cancels the run in progress. A push
-  to `main` has no PR number, so each is its own group and none is cancelled.
+- `ci.yml` also runs on `ready_for_review` and `converted_to_draft`. The job
+  has `if: !github.event.pull_request.draft`, and on a draft its name is
+  `lint-test (draft, not run)`. The skip lands under that name, so no check
+  named `lint-test` exists on a draft's head and the required check stays
+  Expected. A run on a ready PR or a push is named `lint-test`.
+- A concurrency group per PR, with `cancel-in-progress: true`, cancels the run
+  in progress. A push to `main` has no PR number, so each is its own group and
+  none is cancelled.
 - `claude-code-review.yml` also runs on `converted_to_draft`. Its job already
-  skipped drafts and its group already cancelled.
+  skipped drafts and its group already cancelled. Its skip is unchanged.
 - `plan-scope.yml` and `merge-authority-rerun.yml` do not change. `plan-scope`
   and `merge-authority` still run on a draft.
 
@@ -47,25 +57,30 @@ The constraints:
 | Option | Why it lost |
 |---|---|
 | Keep running CI on drafts | The operator asked to stop |
-| Leave `opened` and `synchronize` off `ci.yml`, keep only `ready_for_review` | No draft run at all, but a push to a ready PR would test nothing and its head would wait on `lint-test` forever |
+| Skip under the name `lint-test` | The first version of this change. A skip passes the ruleset, so a lost ready event, a late event or a re-run of a draft-era run could leave a ready PR passing with nothing run. Breaks the operator's rule |
+| Skip under the name `lint-test`, and test on any re-run (`github.run_attempt > 1`) | Closes the re-run route only; a lost or late event still leaves a skip |
+| Leave `opened` and `synchronize` off `ci.yml`, keep only `ready_for_review` | No draft run at all, but a push to a ready PR would test nothing |
 | Run `lint-test` on a draft and fail it, so a draft's check is never a pass | Takes a runner per push, which is what the change removes, and marks every draft red |
+| A reusable workflow, so a skip reports under the caller's name | Same result as a second name, with one more file and a ruleset change for the new check name |
 | Gate `plan-scope` on draft too | A skipped run voids the head, so a plan PR whose last push came while it was a draft could never pass on the approver route without another commit |
 | Gate only `merge-authority` on draft | The check that decides whose approval a PR needs would read as passing until the ready run registers. It cannot be cancelled on return to draft either, as a group would also cancel `plan-scope` |
 | Cancel with a job calling the Actions API instead of a concurrency group | More code and an `actions: write` token, for what a group does with neither |
 
 ## Consequences
 
-- A draft still shows a run for `ci.yml`, with its job skipped and no runner
-  used. GitHub offers no way to start nothing.
+- A draft still shows a run for `ci.yml`, with a skipped `lint-test (draft, not
+  run)` job and no runner used. GitHub offers no way to start nothing.
+- If the ready event is lost, a ready PR waits on Expected and cannot merge.
+  Closing and reopening the PR starts a run.
+- A PR that returns to draft after its run passed keeps that pass on the head;
+  a run cancelled by the return reads cancelled, which does not pass.
+- `claude-review` still reads `skipped` on a draft, the gap `lint-test` no
+  longer has. It is the operator's to change.
 - A draft still runs `merge-authority` on each push, and `plan-scope` on a
   `plan/` head.
-- **The gate has a gap.** From marking ready until the new run registers,
-  `lint-test` reads `skipped`, which passes. If GitHub never delivers the
-  event, it keeps reading that way on a ready PR. `claude-review` has always
-  had the same gap. Code-owner approval still applies, and a merger must read
-  the check, not only the merge box.
 - A broken head surfaces only at ready, the moment the billed `claude-review`
-  starts. Local checks before ready are the only earlier signal.
+  starts, and a plan run's fix rounds are then spent on it. Local checks before
+  ready are the only earlier signal.
 - Going ready, to draft and ready again re-tests the same commit. Converting
   to draft and back is how a review is re-triggered, so that path now also
   costs a `lint-test` run.
@@ -73,6 +88,12 @@ The constraints:
   result is lost, and it can no longer merge.
 - Other repositories keep their own workflows; each needs its own change and,
   where it runs `plan-scope`, the same reasoning.
-- `tests/trimtab/test_draft_ci_workflow.py` pins the triggers, the groups and
-  the conditions. `test_plan_scope_workflow.py` still pins that `plan-scope.yml`
-  has no group.
+- `tests/trimtab/test_draft_ci_workflow.py` pins the triggers, the groups, the
+  condition and the name. `test_plan_scope_workflow.py` still pins that
+  `plan-scope.yml` has no group.
+
+## Trial
+
+On trimtab-core#135, in progress. The first version, at `5029eb5`, as a draft:
+`ci` run concluded `skipped`, with `lint-test` and `claude-review` checks
+`skipped` and no runner used, which is what the operator's rule then removed.

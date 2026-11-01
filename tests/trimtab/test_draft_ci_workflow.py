@@ -41,6 +41,12 @@ class CiWorkflowTest(unittest.TestCase):
     def test_the_required_job_skips_only_a_draft(self):
         self.assertEqual(self.workflow["jobs"]["lint-test"]["if"], "${{ !github.event.pull_request.draft }}")
 
+    def test_the_skipped_job_never_reports_as_the_required_check(self):
+        # The ruleset requires `lint-test` by name and a skip under that name
+        # passes it; under another name the required check stays Expected.
+        self.assertEqual(self.workflow["jobs"]["lint-test"]["name"],
+                         "${{ github.event.pull_request.draft && 'lint-test (draft, not run)' || 'lint-test' }}")
+
 
 class ClaudeReviewWorkflowTest(unittest.TestCase):
     def setUp(self):
