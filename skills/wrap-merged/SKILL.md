@@ -431,11 +431,12 @@ One item, or one part of an item, per session, ending in one PR:
    PR ready**, through what the guards permit (`gh pr ready`, or
    `update_pull_request` with `draft` false where `gh pr` is blocked).
    Ready describes one head: return the PR to draft before pushing
-   anything more, and mark it ready again only after reviewing the new
-   head. If a guard refuses, stop as in step 5. Then fix CI review findings
-   the same way. At most
-   three review rounds in session, then at most two CI fix rounds; an
-   infrastructure failure is re-run once and does not count. The item PR
+   anything more (`gh pr ready --undo`, or `update_pull_request` with
+   `draft` true where `gh pr` is blocked), and mark it ready again only
+   after reviewing the new head. If a guard refuses, stop as in step 5.
+   Then fix CI review findings the same way. At most three review rounds in
+   session, then at most two CI fix rounds; an infrastructure failure is
+   re-run once and does not count. The item PR
    needs an approving review from the approver or the admin on its final
    head commit, and is merged by the admin, or by the approver when the
    conditions in section 3 hold. The agent account never merges.
@@ -451,5 +452,5 @@ One item, or one part of an item, per session, ending in one PR:
    normally, and its merge starts no session — say so rather than promising
    one.
 
-The session ends once ready is requested and any CI rounds it can act on
+The session ends once the PR is marked ready and any CI rounds it can act on
 are done, or it has stopped. The PR's merge starts the session after.
