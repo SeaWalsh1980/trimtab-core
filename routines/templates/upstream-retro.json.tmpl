@@ -9,7 +9,7 @@
       "events": [ { "data": { "message": { "role": "user", "content": $prompt_json } } } ],
       "session_context": {
         "allowed_tools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep"],
-        "disallowed_tools": ["mcp__claude-code-remote", "mcp__claude-code-remote__subscribe_pr_activity", "mcp__github__create_pull_request", "mcp__github__update_pull_request", "mcp__github__add_issue_comment", "mcp__github__add_reply_to_pull_request_comment"],
+        "disallowed_tools": ["mcp__claude-code-remote", "mcp__claude-code-remote__subscribe_pr_activity", "mcp__github__create_pull_request", "mcp__github__update_pull_request", "mcp__github__add_issue_comment", "mcp__github__add_reply_to_pull_request_comment", "mcp__github__issue_write"],
         "sources": [ { "git_repository": { "url": "https://github.com/$instance_repo" } } ]
       }
     }

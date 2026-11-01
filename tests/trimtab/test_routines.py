@@ -71,6 +71,7 @@ class Render(unittest.TestCase):
         passed = {
             "mcp__github__create_pull_request", "mcp__github__update_pull_request",
             "mcp__github__add_issue_comment", "mcp__github__add_reply_to_pull_request_comment",
+            "mcp__github__issue_write",
         }
         for name in ("conformance", "retro", "upstream-retro"):
             given = {"environment_id": ENV_ID, "project_repo": "owner/project"}

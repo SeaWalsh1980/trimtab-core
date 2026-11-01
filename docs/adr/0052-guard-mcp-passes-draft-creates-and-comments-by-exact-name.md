@@ -1,4 +1,4 @@
-# 0052. guard-mcp passes draft creates, comments, replies and the ready toggle by exact name
+# 0052. guard-mcp passes draft creates, comments, replies, the ready toggle and issue writes by exact name
 
 ## Status
 
@@ -33,7 +33,7 @@ the guard no longer holds draft-until-final on this route.
 
 ## Decision
 
-guard-mcp passes four writes, each by exact full name and only when every
+guard-mcp passes five writes, each by exact full name and only when every
 argument is on that tool's list:
 
 | Tool | Arguments that pass |
@@ -42,6 +42,16 @@ argument is on that tool's list:
 | `mcp__github__update_pull_request` | `owner`, `repo`, `pullNumber`, `title`, `body`, `reviewers`, `draft` |
 | `mcp__github__add_issue_comment` | `owner`, `repo`, `issue_number`, `body` |
 | `mcp__github__add_reply_to_pull_request_comment` | `owner`, `repo`, `pullNumber`, `commentId`, `body` |
+| `mcp__github__issue_write`, `method` exactly `create` or `update` | `owner`, `repo`, `method`, `issue_number`, `title`, `body`, `labels`, `state`, `state_reason` |
+
+The issue pass is for the Daily CI/CD Health Check routine, added at the
+operator's request on 2026-11-01. The routine runs under the guards and keeps its
+state in a weekly run-log issue: each week it closes the old issue and opens a new
+one. With nobody present, the ask on those two writes ends as a denial, so the
+routine would fail at its first rotation. On `issue_write`, another method, a
+method that is not exactly one of those two strings, and `assignees`, `milestone`,
+`type`, `duplicate_of`, `issue_fields`, the `parent_*` arguments or any other
+argument all ask.
 
 Anything else on those tools asks: closing a PR, a new base, the maintainer
 flag, reviewers on a create, a reaction, an argument a later release adds,
@@ -51,8 +61,9 @@ create is denied before these checks, as before.
 The answer is the same in an interactive session and an autonomous run. guard-mcp
 does not read the mode.
 
-The routine templates list the four tools in `disallowed_tools`, so routines keep
-today's refusal. Their prompts forbid marking a PR ready and writing outside the
+The routine templates list the five tools in `disallowed_tools`, so routines
+rendered from them keep today's refusal. The Daily routine is not rendered from
+them, so this does not reach it: its `disallowed_tools` is empty. Their prompts forbid marking a PR ready and writing outside the
 project, and on the MCP route the ask was what held that. Routines work through
 REST (ADR 0021), so they lose nothing. A live routine keeps its old list until it
 is updated from its render.
@@ -95,6 +106,11 @@ that passes the tool by name.
 - **Close further speculative resolve routes in this change** (other tool names,
   a generic GraphQL tool, `minimizeComment`). Not taken: the server's README lists
   none of them, and they ask today. ADR 0038's residuals stand.
+- **The routine posts to one fixed log issue, with no rotation.** Rejected by the
+  operator. It needs no wider guard, since the comment pass already covers it, but
+  one issue grows without limit and the routine's weekly rollup goes.
+- **Pass `issue_write` by name, or by method alone.** Rejected: `assignees` and
+  `milestone` would pass, and a method a later release adds would pass unread.
 - **A limit on target owners, from an operator-exported variable.** Rejected on
   the reach check below: the session's MCP route already refuses a repository that
   is not attached, so the limit would add configuration for nothing.
@@ -113,8 +129,17 @@ cases; the pr-monitor cases also fail on a copy, for the reason in ADR 0034.
   non-draft create passed silently. It is now refused, and the matrix holds that.
 - A `<tool>`-part match on the create: other server, lookalike server.
 
+The issue rule, on 2026-11-01, on copies the same way. Each turned its named cases
+red:
+
+- The tool off its list (the rule removed): 12 cases, every pass and named reason.
+- The method check removed: 18 cases, every unlisted method.
+- The argument list ignored: 13 cases, every unlisted argument and the list pin.
+- `assignees` added to the list: 3 cases.
+- A `<tool>`-part match: 1 case, the other server.
+
 On the shipped lists the matrix passes, with its jq-only and python3-only groups,
-and pins the four argument lists. The base branch's matrix goes red on 11 cases, by design:
+and pins the five argument lists. The base branch's matrix goes red on 11 cases, by design:
 the ready toggle and draft create pins that used to ask (with their jq-only,
 python3-only and planted-module versions), and the order check's line count.
 
@@ -130,6 +155,11 @@ enforced.
 any unlisted write does, so it ends as a denial in an unattended run, and routines
 refuse the whole server. The asking is what keeps the boundary in an unattended
 run, so a pass on it would need its own decision.
+
+**The permission layer, so far.** The Daily routine's run of 2026-11-01 lists only
+built-in tools in `allowed_tools`. Its MCP reads raised no prompt, and each of its
+comments raised guard-mcp's prompt and no other. That is evidence, not proof, that
+a pass is enough there.
 
 **Pending, to be recorded here before this is accepted:**
 
@@ -150,6 +180,28 @@ run, so a pass on it would need its own decision.
   body, on the repositories attached to the session, with no stop. The reach check
   shows the comment route stops there. If the platform drops that limit, these
   passes would reach any public issue, and this guard would not notice.
+- Accepted: an AI session under the connected GitHub account can open, edit or
+  close any issue it can reach, with no prompt. Reach is the session's attached
+  repositories, on the check above, which covered a comment and not this tool. The
+  routine's rule against touching issues it did not create is instruction text, and
+  this guard does not hold it.
+- Accepted: **`issue_write` reaches pull requests too.** The server's README
+  describes it as "Create or update issue/pull request", and GitHub treats a PR as
+  an issue here. A PR's number can be passed as `issue_number`, and the guard cannot
+  tell the two apart from a number. So closing or reopening a PR, retitling it, and
+  setting its labels pass on this route, while closing it through
+  `update_pull_request` still asks. Labels include `plan:continue`, which starts a
+  session, and `plan:blocked`; ADR 0018's check on who removed that label still
+  applies. Read from the README, not tried. Merge, approval and resolving are not
+  on this tool's list of methods and stay denied.
+- Accepted: an issue write can trigger automation that reacts to issue events. In
+  ControlTower only `claude.yml` does (`issues: opened`, `issue_comment: created`).
+  Its job runs only for an author association of `OWNER` with a mention of the
+  agent, so a session acting as a write-role user starts the workflow and the job
+  skips, as the routine's own comments did on 2026-11-01. **If the connected GitHub
+  account were the owner's, that gate would open**, and a session's issue or comment
+  could start the agent with the repository's token. No other ControlTower workflow
+  has an issue trigger. Other repositories were not checked.
 - Accepted: the ready toggle passes on any PR the credentials reach, not only one
   the session opened, as title and body edits do since ADR 0034. A session could
   mark another PR ready, or back to draft.

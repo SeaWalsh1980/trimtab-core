@@ -58,6 +58,11 @@
 #   (PR_COMMENT, PR_REPLY below, ADR 0052)          -> pass when every argument
 #                                                      is on its list; ask
 #                                                      otherwise
+#   [args] mcp__github__issue_write
+#   (ISSUE_WRITE below, ADR 0052)                   -> pass when its method is
+#                                                      create or update and every
+#                                                      argument is on its list;
+#                                                      ask otherwise
 #   a full name on the PR-workflow exact-name list
 #   (PR_WORKFLOW_ALLOW below, ADR 0034)             -> pass
 #   a <tool> part on the verb-last read list, on any
@@ -162,7 +167,8 @@ GH_REVIEW=(
 )
 # gh_args <mode>  — the verdict of the argument check for create or review,
 # read inside the parser so no argument reaches this script or a reason.
-# create: draft (draft is the JSON true) or not-draft. review: approve (event
+# create: draft (draft is the JSON true) or not-draft. issue: listed (method is
+# exactly create or update) or unlisted. review: approve (event
 # APPROVE, in any case or spacing), resolve (a method that resolves), unreadable
 # (an event or method that is not a string) or other. Either mode: no-object.
 # Anything else, an empty answer included, means the parser did not finish.
@@ -177,6 +183,7 @@ gh_args() {
       .tool_input as $a
       | if ($a | type) != "object" then "no-object"
         elif $mode == "create" then (if $a.draft == true then "draft" else "not-draft" end)
+        elif $mode == "issue" then (if $a.method == "create" or $a.method == "update" then "listed" else "unlisted" end)
         elif ($a | has("event")) and ($a.event | type) != "string" then "unreadable"
         elif ($a | has("event")) and ($a.event | ascii_upcase | explode | map(select(. != 32 and (. < 9 or . > 13))) | implode) == "APPROVE" then "approve"
         elif ($a | has("method")) and ($a.method | type) != "string" then "unreadable"
@@ -195,6 +202,8 @@ if not isinstance(a, dict):
     v = "no-object"
 elif mode == "create":
     v = "draft" if a.get("draft") is True else "not-draft"
+elif mode == "issue":
+    v = "listed" if a.get("method") in ("create", "update") and isinstance(a.get("method"), str) else "unlisted"
 elif "event" in a and not isinstance(a["event"], str):
     v = "unreadable"
 elif "event" in a and "".join(c for c in upper(a["event"]) if c not in " \t\n\v\f\r") == "APPROVE":
@@ -386,6 +395,25 @@ PR_REPLY=(
 for allowed in "${PR_REPLY[@]}"; do
   [[ "$name" == "$allowed" ]] \
     && pr_args_answer '["owner","repo","pullNumber","commentId","body"]' "the reply's target and body (a reaction or another)"
+done
+# Opening, editing or closing an issue. The method comes first: this tool's
+# method is what it does, so one off the list asks whatever its other arguments.
+# Assignees, the milestone, the type, sub-issue links and the rest ask.
+ISSUE_WRITE=(
+  mcp__github__issue_write
+)
+for allowed in "${ISSUE_WRITE[@]}"; do
+  [[ "$name" == "$allowed" ]] || continue
+  case "$(gh_args issue)" in
+    listed) ;;
+    unlisted)
+      ask "$name uses a method other than create or update, so it asks (ADR 0052). Approve it only if you intended this call." ;;
+    no-object)
+      ask "$name carries no argument object, so its arguments cannot be checked and it asks (ADR 0052). Approve it only if you intended this call." ;;
+    *)
+      ask "$name could not have its arguments read, so it asks (fail closed, ADR 0052). This says nothing about what the call changes. Approve it only if you intended this call." ;;
+  esac
+  pr_args_answer '["owner","repo","method","issue_number","title","body","labels","state","state_reason"]' "the issue's target, title, body, labels or state (assignees, milestone, type or another)"
 done
 
 # Writes that drive a session's PR work pass by exact full name, server part

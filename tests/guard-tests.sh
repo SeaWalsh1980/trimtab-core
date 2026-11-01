@@ -2005,7 +2005,7 @@ fi
 by_name=$( { guard_list CCD_ALLOW; guard_list PR_WORKFLOW_ALLOW; } | sort)
 by_tool=$(guard_list TOOL_READ_ALLOW)
 both=""
-for n in $( { guard_list CCD_OWN_PR; guard_list PR_EDIT; guard_list PR_CREATE; guard_list PR_COMMENT; guard_list PR_REPLY; } ); do
+for n in $( { guard_list CCD_OWN_PR; guard_list PR_EDIT; guard_list PR_CREATE; guard_list PR_COMMENT; guard_list PR_REPLY; guard_list ISSUE_WRITE; } ); do
   t="${n#mcp__}"; t="${t#*__}"
   grep -qxF "$n" <<<"$by_name" && both+=" $n"
   grep -qxF "$t" <<<"$by_tool" && both+=" $n"
@@ -2058,12 +2058,13 @@ for keys in \
   "'[\"owner\",\"repo\",\"pullNumber\",\"title\",\"body\",\"reviewers\",\"draft\"]'" \
   "'[\"owner\",\"repo\",\"title\",\"body\",\"head\",\"base\",\"draft\"]'" \
   "'[\"owner\",\"repo\",\"issue_number\",\"body\"]'" \
-  "'[\"owner\",\"repo\",\"pullNumber\",\"commentId\",\"body\"]'"; do
+  "'[\"owner\",\"repo\",\"pullNumber\",\"commentId\",\"body\"]'" \
+  "'[\"owner\",\"repo\",\"method\",\"issue_number\",\"title\",\"body\",\"labels\",\"state\",\"state_reason\"]'"; do
   if [[ $(grep -cF "pr_args_answer $keys" "$HOOKS/guard-mcp.sh") -ne 1 ]]; then
     printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "argument list changed: $keys"; fails=$((fails+1))
   fi
 done
-if [[ $(grep -c "pr_args_answer '\[" "$HOOKS/guard-mcp.sh") -ne 4 ]]; then
+if [[ $(grep -c "pr_args_answer '\[" "$HOOKS/guard-mcp.sh") -ne 5 ]]; then
   printf 'FAIL  %-14s %-4s  %s\n' guard-mcp.sh list "an argument list this matrix does not pin"; fails=$((fails+1))
 fi
 # A comment or a reply passes with its own arguments; a reaction asks. A body
@@ -2088,6 +2089,35 @@ tm ask  "reply: an unknown argument"             "$(j $GH_REPLY_NAME "{$RP,\"bod
 tm ask  "reply: on another server"               "$(j mcp__plugin_github_github__add_reply_to_pull_request_comment "{$RP,\"body\":\"b\"}")"
 pin_list PR_COMMENT "$GH_COMMENT_NAME"
 pin_list PR_REPLY "$GH_REPLY_NAME"
+# Opening, editing and closing an issue pass, for the two listed methods with
+# the listed arguments. Everything else on the tool asks.
+GH_ISSUE_NAME=mcp__github__issue_write
+IS='"owner":"o","repo":"r"'
+tm pass "issue: opening one"                     "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"create\",\"title\":\"t\",\"body\":\"b\",\"labels\":[\"l\"]}")"
+tm pass "issue: editing one"                     "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"update\",\"issue_number\":7,\"title\":\"t\"}")"
+tm pass "issue: closing one"                     "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"update\",\"issue_number\":7,\"state\":\"closed\",\"state_reason\":\"completed\"}")"
+for k in '"assignees":["u"]' '"milestone":1' '"type":"Bug"' '"duplicate_of":1' '"issue_fields":[]' '"parent_issue_number":1' '"x":1'; do
+  tm ask "issue: an unlisted argument, $k"       "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"update\",\"issue_number\":7,$k}")"
+done
+tm_says "issue: an unlisted argument is named as one" "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"create\",\"assignees\":[\"u\"]}")" "sets an argument other than"
+for m in '"delete"' '"Create"' '" update"' '"get"' '"resolve_later"' 'null' '1' '["create"]'; do
+  tm ask "issue: an unlisted method, $m"         "$(j $GH_ISSUE_NAME "{$IS,\"method\":$m,\"title\":\"t\"}")"
+done
+tm ask  "issue: no method at all"                "$(j $GH_ISSUE_NAME "{$IS,\"title\":\"t\"}")"
+tm_says "issue: an unlisted method is named as one" "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"delete\"}")" "a method other than"
+tm_says "issue: arguments that are not an object" '{"tool_name":"mcp__github__issue_write","tool_input":["method"]}' "carries no argument object"
+tm_says "issue: no tool_input at all"            '{"tool_name":"mcp__github__issue_write"}' "carries no argument object"
+tm ask  "issue: on another server"               "$(j mcp__plugin_github_github__issue_write "{$IS,\"method\":\"create\",\"title\":\"t\"}")"
+tm ask  "issue: a longer name"                   "$(j mcp__github__issue_write_x "{$IS,\"method\":\"create\",\"title\":\"t\"}")"
+pin_list ISSUE_WRITE "$GH_ISSUE_NAME"
+if command -v jq >/dev/null 2>&1; then
+  printf '#!/bin/sh\ncase " $* " in *" --arg mode "*) exit 5 ;; esac\nexec %q "$@"\n' "$(command -v jq)" > "$JQ_SHIM/jq"
+  tm_says "issue: a method check that did not finish" "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"create\",\"title\":\"t\"}")" "could not have its arguments read" "$JQ_SHIM"
+  printf '#!/bin/sh\ncase " $* " in *" --arg mode "*) echo listed; exit 1 ;; esac\nexec %q "$@"\n' "$(command -v jq)" > "$JQ_SHIM/jq"
+  tm_says "issue: a listed method from a check that then failed" "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"create\",\"title\":\"t\"}")" "could not have its arguments read" "$JQ_SHIM"
+  printf '#!/bin/sh\ncase " $* " in *" --argjson ok "*) echo pass; exit 1 ;; esac\nexec %q "$@"\n' "$(command -v jq)" > "$JQ_SHIM/jq"
+  tm_says "issue: a pass from an argument check that then failed" "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"create\",\"title\":\"t\"}")" "could not have its arguments read" "$JQ_SHIM"
+fi
 # The tools that stay off every list keep asking, comments among them.
 tm ask  "comment tools off the lists: a pending review comment" "$(j mcp__github__add_comment_to_pending_review '{"body":"b"}')"
 tm ask  "comment tools off the lists: rewriting a comment" "$(j mcp__github__update_issue_comment '{"body":"b"}')"
@@ -2849,6 +2879,9 @@ if command -v jq >/dev/null 2>&1; then
   tm ask  "jq only: closing a PR asks"           "$(j $PR_EDIT_NAME "{$PR_REF,\"state\":\"closed\"}")" "$STUB"
   tm pass "jq only: a draft create passes"       "$(j $GH_CREATE_NAME "{$CR,\"draft\":true}")" "$STUB"
   tm pass "jq only: a comment passes"            "$(j $GH_COMMENT_NAME "{$CM,\"body\":\"b\"}")" "$STUB"
+  tm pass "jq only: closing an issue passes"     "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"update\",\"issue_number\":7,\"state\":\"closed\"}")" "$STUB"
+  tm ask  "jq only: an unlisted issue method asks" "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"delete\"}")" "$STUB"
+  tm ask  "jq only: an unlisted issue argument asks" "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"update\",\"milestone\":1}")" "$STUB"
   tm ask  "jq only: a reaction asks"             "$(j $GH_COMMENT_NAME "{$CM,\"reaction\":\"+1\"}")" "$STUB"
   tm deny "jq only: a non-draft create is denied" "$(j $GH_CREATE_NAME "{$CR,\"draft\":false}")" "$STUB" . "not a draft"
   tm deny "jq only: an approval is denied"        "$(j $GH_REVIEW_NAME "{$PR_REF,\"event\":\" approve\"}")" "$STUB" . "approves"
@@ -2877,6 +2910,11 @@ tm pass "python3 only: marking a PR ready passes" "$(j $PR_EDIT_NAME "{$PR_REF,\
 tm ask  "python3 only: closing a PR asks"        "$(j $PR_EDIT_NAME "{$PR_REF,\"state\":\"closed\"}")" "$STUB"
 tm pass "python3 only: a draft create passes"    "$(j $GH_CREATE_NAME "{$CR,\"draft\":true}")" "$STUB"
 tm pass "python3 only: a reply passes"           "$(j $GH_REPLY_NAME "{$RP,\"body\":\"b\"}")" "$STUB"
+tm pass "python3 only: closing an issue passes"  "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"update\",\"issue_number\":7,\"state\":\"closed\"}")" "$STUB"
+for m in '"delete"' '"Create"' 'null' '1' '["create"]'; do
+  tm ask "python3 only: an unlisted issue method, $m" "$(j $GH_ISSUE_NAME "{$IS,\"method\":$m}")" "$STUB"
+done
+tm ask  "python3 only: an unlisted issue argument asks" "$(j $GH_ISSUE_NAME "{$IS,\"method\":\"update\",\"milestone\":1}")" "$STUB"
 tm ask  "python3 only: a reaction asks"          "$(j $GH_REPLY_NAME "{$RP,\"reaction\":\"+1\"}")" "$STUB"
 tm deny "python3 only: a non-draft create is denied" "$(j $GH_CREATE_NAME "{$CR,\"draft\":false}")" "$STUB" . "not a draft"
 tm deny "python3 only: draft as the string true is denied" "$(j $GH_CREATE_NAME "{$CR,\"draft\":\"true\"}")" "$STUB" . "not a draft"
