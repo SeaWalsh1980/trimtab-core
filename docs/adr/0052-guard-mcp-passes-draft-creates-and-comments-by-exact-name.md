@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed (2026-10-31), by the operator; accepted once the trial below is
-recorded. Amends ADR 0034
+Accepted (2026-11-01), by the operator, on the cloud trial recorded below;
+proposed 2026-10-31. Amends ADR 0034
 (`docs/adr/0034-guard-mcp-passes-pr-workflow-writes-by-exact-name.md`), whose
 ask on the draft flag goes, and ADR 0038
 (`docs/adr/0038-guard-mcp-denies-the-pull-request-writes-the-operator-owns.md`),
@@ -161,13 +161,34 @@ built-in tools in `allowed_tools`. Its MCP reads raised no prompt, and each of i
 comments raised guard-mcp's prompt and no other. That is evidence, not proof, that
 a pass is enough there.
 
-**Pending, to be recorded here before this is accepted:**
+**The cloud trial, on 2026-11-01.** One guarded, attended cloud session on a
+freshly run setup script, acting as the write-role user, with two attached
+repositories, made each call once against an empty draft in a consumer repository.
+The session's log shows one permission prompt in the whole run, on the last row.
 
-- **The permission layer.** A pass from guard-mcp is no decision (ADR 0034).
-  Whether a cloud session still prompts after a pass, which would need an allow
-  rule in the instance.
-- **A guarded cloud session** opening a draft with no stop, and being refused a
-  non-draft create, a merge, an approval and a resolve.
+| Call | Result |
+|---|---|
+| `create_pull_request`, draft | passed, no prompt |
+| `update_pull_request`, title | passed, no prompt |
+| `update_pull_request`, `draft: true` on a draft | passed, no prompt |
+| `add_issue_comment` on the draft | passed, no prompt |
+| `add_reply_to_pull_request_comment`, invented comment id | no prompt; GitHub refused the id |
+| `issue_write` create, then update to closed | passed, no prompt |
+| `create_pull_request`, `draft: false` | denied by guard-mcp |
+| `merge_pull_request` | denied by guard-mcp |
+| `pull_request_review_write`, `APPROVE` | denied by guard-mcp |
+| `pull_request_review_write`, `resolve_thread` | denied by guard-mcp |
+| draft create, reply and `issue_write` create on an unattached repository | no prompt; refused by the session's MCP layer, "not configured for this session" |
+| `update_pull_request`, `state: closed` | guard-mcp's prompt, approved by the operator |
+
+So a pass is enough in this session: no allow rule is needed, and none was added.
+The reach limit now covers four tools. The unattached repository returned 404 to
+this account when checked afterwards, so GitHub may also have refused those calls;
+the refusals named the session's configuration.
+
+Not tried: `draft: false` on a draft, which starts a billed review; a reply to a
+real comment; and any of this in an unattended session, where the same answers
+are expected because no pass raised a prompt.
 
 ## Consequences
 
@@ -182,7 +203,7 @@ a pass is enough there.
   passes would reach any public issue, and this guard would not notice.
 - Accepted: an AI session under the connected GitHub account can open, edit or
   close any issue it can reach, with no prompt. Reach is the session's attached
-  repositories, on the check above, which covered a comment and not this tool. The
+  repositories, on the checks above. The
   routine's rule against touching issues it did not create is instruction text, and
   this guard does not hold it.
 - Accepted: **`issue_write` reaches pull requests too.** The server's README
