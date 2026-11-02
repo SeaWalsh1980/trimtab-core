@@ -3271,6 +3271,47 @@ tg 2 "gh alias set x '!gh run \"\$@\"'"                     'a shell alias that 
 tg 0 "gh alias set rv 'run view'"
 tg 0 "gh alias set prv 'pr view'"
 tg 0 "gh alias set g 'api repos/o/r/pulls'"              'an alias with its own path, which is a read'
+# An alias takes options when it runs, so one to a command judged by its options can't be read.
+tg 2 "gh alias set a 'repo sync'"
+tg 2 "gh alias set v 'pr review'"
+tg 2 "gh alias set v 'pr review 1 --comment'"
+# An expansion that starts with an option, which the option parser would otherwise swallow.
+tg 2 'gh alias set r "--repo o/r run"'
+tg 2 'gh alias set r -- "--repo o/r run"'
+# A built option before the refused subcommand, on a built command word.
+tg 2 '${G}h run $F delete 1'
+tg 2 '${G}h workflow $F run cd.yml'
+tg 0 'gh pr view 1 && $NPM run $SCRIPT build'            'another tool: no refused subcommand follows'
+# GitHub resolves `..` in a path (seen on a read), so an expansion after an id can hold a route.
+tg 2 'gh api -X DELETE repos/o/r/labels/$X'              'a delete that ends in an expansion'
+tg 2 'gh api -X POST repos/o/r/issues/$X -f ref=main'    'a create that ends in an expansion'
+tg 2 'gh api -X DELETE repos/o/r/labels/$X/logs'         'an expansion, then logs'
+tg 2 'gh api -X $M repos/o/r/labels/$X'                  'an unreadable method and an expansion'
+tg 2 'gh api -X DELETE repos/o/r/labels/../actions/runs/1' 'a literal .. is normalised first'
+tg 2 'gh api -X DELETE repos/o/r/labels/%2e%2e/actions/runs/1' 'an encoded .. too'
+tg 0 'gh api -X PATCH repos/o/r/pulls/$N -f body=x'      'an update through an id stays open'
+tg 0 'gh api -X PATCH repos/o/r/issues/comments/$ID -f body=x'
+tg 0 'gh api -X POST repos/o/r/issues/$N/comments -f body=x' 'a named route after the id stays open'
+# Only a repository option marks a built word as gh; another tool's -R does not.
+tg 0 'gh pr view 1 && $TOOL -Rfoo run $X'                'another tool with a -R option'
+tg 2 '$GH -Ro/r run $X'                                  'a repository option in its short form'
+# A hook that outlives its timeout fails open, so a long command must not cost the
+# prefilter time: this shape took over 20 s through the regex.
+gg_long() { # gg_long <expected-exit> <label> <word to repeat> <times> [what follows]
+  python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":"echo " + sys.argv[1] * int(sys.argv[2]) + sys.argv[3]},"cwd":"/tmp"}))' "$3" "$4" "${5:-}" > "$GG/long.json"
+  local start=$SECONDS rc=0
+  bash "$HOOKS/guard-github.sh" < "$GG/long.json" >/dev/null 2>&1 || rc=$?
+  if [[ $rc -eq $1 && $((SECONDS - start)) -lt 8 ]]; then
+    echo "PASS  guard-github.sh exit=$rc  $2"
+  else
+    echo "FAIL  guard-github.sh exit=$rc (want $1, under 8 s; took $((SECONDS - start)) s)  $2"
+    fails=$((fails + 1))
+  fi
+}
+gg_long 2 'a long crafted command ending in a refused write' 'run -a ' 20000 ' ; gh pr create --title t'
+gg_long 2 'the same shape on another group'                  'pr -a ' 20000 ' ; gh pr create --title t'
+gg_long 2 'a very long one'                                  'run -a ' 100000 ' ; gh pr create --title t'
+gg_long 0 'a long harmless command still passes'             'run -a ' 20000
 tg 0 'gh run view 123'
 tg 0 'gh run list'
 tg 0 'gh run watch 123'

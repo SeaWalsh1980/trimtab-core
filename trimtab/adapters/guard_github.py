@@ -363,7 +363,15 @@ API_BOOL = {"-i", "--include", "--paginate", "--silent", "--verbose", "--slurp"}
 GH_GLOBAL_VALUED = {"-R", "--repo"}
 RUN_DELETE = "deleting a workflow run or its logs is the owner's: it erases what a merge check reads"
 DISPATCH = "dispatching a workflow is the owner's: it can start a production deploy or rollback"
-GROUP_REFUSALS = {"run": "delete", "workflow": "run"}
+# The group, the subcommand this guard refuses in it, and why.
+GROUP_REFUSALS = {"run": ("delete", RUN_DELETE), "workflow": ("run", DISPATCH)}
+
+
+def _after_options(words: list[Word], i: int) -> int:
+    """The index of the first word at or after `i` that isn't a literal option (and its value, for a repository)."""
+    while i < len(words) and words[i].text.startswith("-") and not words[i].dynamic:
+        i += 2 if words[i].text in GH_GLOBAL_VALUED else 1
+    return i
 
 
 def check_pr_create(args: list[Word], ctx: Ctx) -> None:
@@ -394,9 +402,7 @@ def check_repo_sync(args: list[Word], ctx: Ctx) -> None:
 
 def check_gh(args: list[Word], ctx: Ctx) -> None:
     """Judge the arguments after a `gh` command word."""
-    i = 0
-    while i < len(args) and args[i].text.startswith("-") and not args[i].dynamic:
-        i += 2 if args[i].text in GH_GLOBAL_VALUED else 1
+    i = _after_options(args, 0)
     if i >= len(args):
         return
     group = args[i]
@@ -405,9 +411,7 @@ def check_gh(args: list[Word], ctx: Ctx) -> None:
         return
     rest = args[i + 1:]
     # Persistent options may sit between the group and its command (`gh pr -R o/r create`).
-    j = 0
-    while j < len(rest) and rest[j].text.startswith("-") and not rest[j].dynamic:
-        j += 2 if rest[j].text in GH_GLOBAL_VALUED else 1
+    j = _after_options(rest, 0)
     sub = rest[j] if j < len(rest) else None
     tail = rest[j + 1:]
     if group.text == "api":
@@ -425,10 +429,8 @@ def check_gh(args: list[Word], ctx: Ctx) -> None:
         check_pr_review(tail, ctx)
     elif group.text == "repo" and sub.text == "sync":
         check_repo_sync(tail, ctx)
-    elif group.text == "run" and sub.text == "delete":
-        raise Refused(RUN_DELETE)
-    elif group.text == "workflow" and sub.text == "run":
-        raise Refused(DISPATCH)
+    elif group.text in GROUP_REFUSALS and sub.text == GROUP_REFUSALS[group.text][0]:
+        raise Refused(GROUP_REFUSALS[group.text][1])
     elif group.text == "alias" and sub.text == "set":
         check_alias_set(tail, ctx)
     elif group.text == "alias" and sub.text == "import":
@@ -437,6 +439,9 @@ def check_gh(args: list[Word], ctx: Ctx) -> None:
 
 def check_alias_set(args: list[Word], ctx: Ctx) -> None:
     """An alias runs later under its own name, so its expansion is judged when it is defined."""
+    # A literal word with a space is an expansion that starts with an option, not an option.
+    if any(not w.dynamic and w.text.startswith("-") and " " in w.text for w in args):
+        ctx.unknown("an alias's expansion starts with an option")
     _, positional = parse_options(args, set(), {"--clobber", "-s", "--shell"}, strict=False)
     if len(positional) < 2:
         return
@@ -447,12 +452,13 @@ def check_alias_set(args: list[Word], ctx: Ctx) -> None:
     text = expansion.text
     shell = text.startswith("!") or any(w.text in ("-s", "--shell") for w in args)
     if not shell and _alias_stops_short(text.split()):
-        ctx.unknown("an alias that stops at a command group or at api takes the rest when it runs")
+        ctx.unknown("an alias takes more words when it runs, and this one leaves what it does to them")
     judge(text.removeprefix("!") if shell else "gh " + text, ctx)
 
 
 def _alias_stops_short(words: list[str]) -> bool:
-    """The expansion names a group or `api` and not what it runs, so this guard never sees the rest."""
+    """What the words a later call appends would decide: the expansion names a group or `api` and not what it
+    runs, or a command this guard judges by its options. `pr create --draft` stays open (ADR 0055)."""
     named = []
     i = 0
     while i < len(words):
@@ -462,6 +468,8 @@ def _alias_stops_short(words: list[str]) -> bool:
         if not words[i].startswith("-"):
             named.append(words[i])
         i += 1
+    if named[:2] in (["pr", "review"], ["repo", "sync"]):
+        return True
     return len(named) == 1 and named[0] in ("api", "pr", "repo", "run", "workflow")
 
 
@@ -505,13 +513,18 @@ def _readable_path(path: str) -> bool:
     return True
 
 
-def _may_hide_route(path: str) -> bool:
-    """An expansion in the repository's slots can hold slashes, so `repos/$P/123` can be a run's route.
+def _may_hide_route(path: str, method: str | None) -> bool:
+    """An expansion can hold slashes, so `repos/$P/123` can be a run's route.
 
     A named route after the repository (`repos/$REPO/issues/1/comments`) shows what it is. Only nothing,
-    an id, or `logs` after the slots leaves the route to the expansion.
+    an id, or `logs` after the slots leaves the route to the expansion. GitHub also resolves `..`, so one
+    at the end of a delete or a create (`labels/$X`, `labels/$X/logs`) can hold a route too; PATCH and PUT
+    stay open there, since a run's and a dispatch's routes take neither (ADR 0055).
     """
     parts = path.split("/")
+    ending = parts[:-1] if parts[-1] == "logs" else parts
+    if HOLE in ending[-1] and method not in ("PATCH", "PUT"):
+        return True
     held = [k for k in (1, 2) if k < len(parts) and HOLE in parts[k]]
     if parts[0] != "repos" or not held:
         return False
@@ -687,7 +700,7 @@ def check_api(args: list[Word], ctx: Ctx) -> None:
     if not _readable_path(req.path):
         ctx.unknown("a write to an API path built by the shell")
         return
-    if _may_hide_route(req.path):
+    if _may_hide_route(req.path, req.method):
         ctx.unknown("a write to an API path whose route a shell expansion may hold")
         return
     path = req.path
@@ -866,21 +879,19 @@ def check_http(tool: str, args: list[Word], ctx: Ctx) -> None:
 # ---- one command -------------------------------------------------------------------------
 
 def _repo_option(word: Word) -> bool:
-    return word.text in GH_GLOBAL_VALUED or word.text.startswith(("--repo=", "-R"))
+    """A repository option; a short form needs its owner/name, since another tool may have its own `-R`."""
+    return word.text in GH_GLOBAL_VALUED or word.text.startswith("--repo=") or (
+        word.text.startswith("-R") and "/" in word.text)
 
 
 def _may_be_gh(rest: list[Word]) -> bool:
     """What follows a command word the shell builds says it may be gh.
 
     `run` is a common second word for other tools (`$NPM run $SCRIPT`), so for `run` and `workflow`
-    a repository option or the refused subcommand has to show it. `${G}h run $SUB` is read as another
-    tool and passes (ADR 0055).
+    a repository option before it or the refused subcommand after it has to show it. `${G}h run $SUB` is
+    read as another tool and passes (ADR 0055).
     """
-    k = 0
-    has_repo = False
-    while k < len(rest) and not rest[k].dynamic and rest[k].text.startswith("-"):
-        has_repo = has_repo or _repo_option(rest[k])
-        k += 2 if rest[k].text in GH_GLOBAL_VALUED else 1
+    k = _after_options(rest, 0)
     if k >= len(rest) or rest[k].dynamic:
         return False
     group = rest[k].text
@@ -888,12 +899,13 @@ def _may_be_gh(rest: list[Word]) -> bool:
         return True
     if group not in GROUP_REFUSALS:
         return False
-    if has_repo:
+    if any(_repo_option(w) for w in rest[:k] if not w.dynamic):
         return True
-    j = k + 1
-    while j < len(rest) and not rest[j].dynamic and rest[j].text.startswith("-"):
-        j += 2 if rest[j].text in GH_GLOBAL_VALUED else 1
-    return j < len(rest) and not rest[j].dynamic and rest[j].text == GROUP_REFUSALS[group]
+    # An expansion here may be an option, so the refused subcommand can stand after one.
+    j = _after_options(rest, k + 1)
+    while j < len(rest) and rest[j].dynamic:
+        j = _after_options(rest, j + 1)
+    return j < len(rest) and rest[j].text == GROUP_REFUSALS[group][0]
 
 
 def check_segment(words: list[Word], ctx: Ctx) -> None:

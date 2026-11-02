@@ -56,11 +56,23 @@ as well. These apply to every rule in the guard:
   `${G}h -R o/r run delete 1`, `${G}h pr -R o/r create`. The prefilter reads past
   options between a group and its command.
 - **An alias that stops at a group or at `api` refuses** (`gh alias set r run`),
-  because the guard never sees the rest of what it runs.
+  because the guard never sees the rest of what it runs. So does one to `pr review` or
+  `repo sync`, which a later call could give `--approve` or `--force`, and an expansion
+  that starts with an option.
+- **GitHub resolves `..` in a path,** plain and percent-encoded. A read of
+  `repos/<owner>/<repo>/labels/../actions/runs` returned the runs. So a delete or a
+  create that ends in an expansion refuses (`labels/$X`, `issues/$X`, `labels/$X/logs`).
+  A write by this route wasn't tried. A PATCH or PUT stays open, as does a named route
+  after the id (`issues/$N/comments`).
+- **A long payload skips the prefilter.** Its regex took over 20 s on a crafted
+  140 KB command, 3.5 s before these options were read, and a hook that outlives its
+  10-second timeout fails open. Above 32 KB the payload goes to the adapter, which stops
+  itself at 7 s and blocks. The review of this change found that; the matrix pins it.
 
 **A built command word, and `run`.** `run` is a far commoner second word than `pr`,
 so a built word before `run` or `workflow` counts as gh only when a repository
-option or the refused subcommand shows it. `$NPM run $SCRIPT` passes.
+option before it, or the refused subcommand after it, shows it. `$NPM run $SCRIPT`
+passes.
 
 ## Options considered
 
@@ -86,14 +98,19 @@ option or the refused subcommand shows it. `$NPM run $SCRIPT` passes.
   - an alias whose expansion the guard can't split on spaces. A shell alias with no
     `"$@"` passes too, and it takes no arguments as far as we know, so `!gh run` runs
     only that; `!gh run "$@"` refuses;
+  - `gh alias set mk 'pr create --draft'`, which the guard allows by an earlier
+    decision, and which a later `gh mk --draft=false` would undo;
+  - a PATCH or PUT that ends in an expansion holding `../git/refs/heads/main`, on the
+    older default-branch rules, since refusing those would refuse `pulls/$N` updates;
   - an option `gh run` doesn't take, on a built word: `${G}h run -R o/r --json x
     delete 1`. As far as we know gh rejects it, and that wasn't tried.
 - **Left open, by choice:** deleting an artifact or a cache. Neither is what a merge
   check reads today, and the owner asked for runs and logs. A check that comes to rely
   on an artifact needs this reopened.
-- **Accepted false refusals:** `$NPM run delete` and `$TEMPORAL workflow run x` read
-  the same as a built gh word. So does a write to `repos/$REPO/123`, or to `repos/$R`
-  itself, through a variable.
+- **Accepted false refusals:** `$NPM run delete`, `$NPM run $F delete` and
+  `$TEMPORAL workflow run x` read the same as a built gh word. So does a write to
+  `repos/$REPO/123`, or to `repos/$R` itself, through a variable, and a delete that
+  ends in a variable, such as `issues/comments/$ID`: write the id literally.
 - **The operator loses the same commands in a guarded session,** and lifts the
   guard with `HOOK_ALLOW_GITHUB=1`, or runs them outside it.
 - **A runbook step that dispatches a scan or a CI run** is now the operator's.
