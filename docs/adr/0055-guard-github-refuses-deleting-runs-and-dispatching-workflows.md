@@ -21,10 +21,10 @@ not tried, because the agent doesn't permanently delete data.
 **It can dispatch a workflow.** That project's agent account dispatched its
 production deploy workflow successfully, on 2026-08-23 and 2026-09-09. Its
 `production` environment has a branch policy and no required reviewer, since a
-reviewer would stop the automatic deploy. A dispatch can name an older commit, so
-it can act as a rollback. The project's owner decided on 2026-11-02 that automation
-only rolls forward, fixing problems with new PRs, and that rollback stays the
-owner's.
+reviewer would stop the automatic deploy. Its deploy workflow takes a commit as an
+input, so a dispatch can act as a rollback. The project's owner decided on
+2026-11-02 that automation only rolls forward, fixing problems with new PRs, and
+that rollback stays the owner's.
 
 ## Decision
 
@@ -36,13 +36,31 @@ guard-github also refuses, in the spellings it already reads:
   `…/actions/workflows/<id>/dispatches` or `repos/<owner>/<repo>/dispatches`.
 
 The API routes refuse any method but GET and HEAD, so a method the shell builds
-refuses too. A shell expansion as the `gh run` or `gh workflow` subcommand refuses,
-and the hook's prefilter sends a command word the shell builds to the adapter when
-`run delete` or `workflow run` follows it. Review runs are covered like any other
-run.
+refuses too. A shell expansion as the `gh run` or `gh workflow` subcommand refuses.
+Review runs are covered like any other run.
 
 Reads stay open, including a run's logs. So do `gh run rerun`, `gh run cancel` and
 their API routes.
+
+Reviewing that change found spellings that passed, some of them on ADR 0037's rules
+as well. These apply to every rule in the guard:
+
+- **An expansion in the repository's slots can hold slashes.** A write to
+  `repos/$P/123`, `repos/$P/logs` or `repos/$A/$B` refuses, because the route may be
+  in the variable. A named route after the repository stays open:
+  `repos/$OWNER/$REPO/issues/1/comments`, `repos/$REPO/labels`.
+- **The numeric route is read as the named one.** `repositories/<id>/…` is judged as
+  `repos/<id>/<id>/…`. GitHub serves the Actions routes this way on a read. A write
+  by this route wasn't tried.
+- **A command word the shell builds is read past a repository option:**
+  `${G}h -R o/r run delete 1`, `${G}h pr -R o/r create`. The prefilter allows one
+  option between a group and its command.
+- **An alias that stops at a group or at `api` refuses** (`gh alias set r run`),
+  because the guard never sees the rest of what it runs.
+
+**A built command word, and `run`.** `run` is a far commoner second word than `pr`,
+so a built word before `run` or `workflow` counts as gh only when a repository
+option or the refused subcommand shows it. `$NPM run $SCRIPT` passes.
 
 ## Options considered
 
@@ -50,15 +68,26 @@ their API routes.
 |---|---|---|
 | Refuse in guard-github | Chosen | It's where the operator's other GitHub writes are refused, and a project's own workflow condition can back it on the server |
 | Refuse re-runs too | Rejected | Sessions re-run CI legitimately: a project's `lint-test` needs a re-run after a PR body fix, since an edit starts no run. A project guards its deploy workflow's re-runs with a condition on the triggering actor, which the hook can't express |
-| Refuse dispatch only for named deploy workflows | Rejected | The base can't know a project's workflow names, and a job ID or a dispatch by number hides the name |
+| Refuse dispatch only for named deploy workflows | Rejected | The base can't know a project's workflow names, and a dispatch by workflow id hides the name |
+| Read every built word before `run` as gh | Rejected | It refused `$NPM run $SCRIPT` and `uv run $TEST`, and a session told not to look for another route stops there, so an unattended run would block on a build command |
 | Refuse cancelling runs and disabling workflows | Not done | Neither was asked for. A cancelled required run blocks a merge, which fails safe, but `gh workflow disable` stays open and can stop a scheduled scan; a later change can add it |
 | Rely on a server control | Not available | The write role can do both, and no setting found separates them from the rest of `repo` on a classic token |
 
 ## Consequences
 
 - **It's client-side.** It doesn't bind a session without the guards or a workflow
-  job. A project that needs a limit on the server sets one in the workflow, as a
-  condition on `github.triggering_actor`.
+  job. A project can limit dispatch and re-run on the server with a workflow
+  condition on `github.triggering_actor`. **Deleting a run has no server backstop:**
+  no workflow condition can stop it, and no setting was found.
+- **Residuals, which pass.** Each needs a deliberately built command:
+  - a built word and a built subcommand, `${G}h run $S 1`, because that reads the same
+    as `$NPM run $SCRIPT`. `${G}h pr $S` also still passes, at the prefilter, as it did
+    before this change;
+  - more than one option between a group and its command, on a built word;
+  - an alias whose expansion the guard can't split on spaces.
+- **Accepted false refusals:** `$NPM run delete` and `$TEMPORAL workflow run x` read
+  the same as a built gh word. So does a write to `repos/$REPO/123`, or to `repos/$R`
+  itself, through a variable.
 - **The operator loses the same commands in a guarded session,** and lifts the
   guard with `HOOK_ALLOW_GITHUB=1`, or runs them outside it.
 - **A runbook step that dispatches a scan or a CI run** is now the operator's.

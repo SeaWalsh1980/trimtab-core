@@ -8,7 +8,8 @@ that block destructive commands, reads of credential files, secrets written
 into files, edits to the controls that review change (CI workflows,
 CODEOWNERS, Claude Code settings and hooks), and the GitHub writes the
 operator owns (a PR opened as anything but a draft, an approving review,
-resolving a review thread, an API write to the default branch; ADR 0037),
+resolving a review thread, an API write to the default branch; ADR 0037; and
+deleting a workflow run or its logs, or dispatching a workflow; ADR 0055),
 and that ask the operator to
 approve, call by call, an MCP tool call not named as a read (ADR 0013; the
 name is the only evidence, so a write named like a read is not asked). A
