@@ -22,10 +22,11 @@ also be open (ADR 0057): the agent opened the PR and alone pushed its branch,
 in an unbroken chain from the branch's creation to the head; every required
 check but this one has a latest run that passed from the App the ruleset binds
 it to; no commit status sits in a required check's name; the ruleset's
-containment is on; and the admin's last review is not a dismissal. All of it is
-read from what only the server writes, never a commit's author. None of it
-touches the admin's own approval: nothing is read for it, so a failed read can
-only stop the approver.
+containment is on; and the admin's last review is not a dismissal. All of it
+comes from the server, never a commit's author. A workflow on the agent's branch
+can still forge a check run under the Actions App's id, so the required-checks
+guard is no proof against that yet (ADR 0057). None of it touches the admin's own
+approval: nothing is read for it, so a failed read can only stop the approver.
 
 An approval counts only as the account's last review that is not `COMMENTED`
 or `PENDING`, in state `APPROVED`, on the head commit. A last review in state
@@ -64,6 +65,7 @@ SHOWN_PATHS = 5
 SHA = re.compile(r"[0-9a-f]{40}")
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 STATUS_LIMIT = 1000
+RULE_LIMIT = 1000
 COUNTED = ("APPROVED", "CHANGES_REQUESTED", "DISMISSED")
 NO_COMMIT = "0" * 40
 CONTAINMENT = ("require_code_owner_review", "require_last_push_approval", "dismiss_stale_reviews_on_push",
@@ -90,7 +92,7 @@ class CheckRun:
     status: str
     conclusion: str
     started_at: str
-    app_id: int = 0
+    app_id: int | None = None  # None when the run has no App: it then matches no required check
 
 
 @dataclass(frozen=True)
@@ -122,7 +124,7 @@ class Containment:
 
 @dataclass(frozen=True)
 class RouteFacts:
-    """What only the server writes, read when the approver's approval is the one the PR rests on."""
+    """What the server reports, read when the approver's approval is the one the PR rests on."""
 
     author: str
     activities: tuple[Activity, ...]
@@ -398,12 +400,15 @@ def read_check_runs(api: GhApi, repository: str, head: str, name: str | None = C
     for r in rows:
         try:
             run = CheckRun(r["id"], r["name"], (r.get("app") or {}).get("slug") or "", r["status"],
-                           r.get("conclusion") or "", r.get("started_at") or "", (r.get("app") or {}).get("id") or 0)
+                           r.get("conclusion") or "", r.get("started_at") or "", (r.get("app") or {}).get("id"))
         except (KeyError, TypeError, AttributeError) as err:
             raise MergeAuthorityError(f"{what} returned unexpected JSON") from err
-        if not (isinstance(run.id, int) and isinstance(run.app_id, int) and all(isinstance(v, str) for v in
+        if not (isinstance(run.id, int) and all(isinstance(v, str) for v in
                                                  (run.name, run.app_slug, run.status, run.conclusion,
                                                   run.started_at))):
+            raise MergeAuthorityError(f"{what} returned unexpected JSON")
+        # Only the approver route reads the App's id, so a bad one must not stop the admin's approval.
+        if name is None and not (run.app_id is None or _app_id(run.app_id)):
             raise MergeAuthorityError(f"{what} returned unexpected JSON")
         found.append(run)
     return found
@@ -446,9 +451,10 @@ def read_activities(api: GhApi, repository: str, ref: str) -> tuple[Activity, ..
 
 def read_containment(api: GhApi, repository: str, branch: str) -> Containment:
     what = "gh api rules branches"
-    rows = _json(api, f"repos/{repository}/rules/branches/{branch}", what)
-    if not isinstance(rows, list):
-        raise MergeAuthorityError(f"{what} returned unexpected JSON")
+    try:
+        rows = api.all_pages(f"repos/{repository}/rules/branches/{branch}", {}, RULE_LIMIT, what)
+    except SourceError as err:
+        raise MergeAuthorityError(str(err)) from err
     settings: set[str] = set()
     approvals = 0
     strict = False
@@ -467,7 +473,7 @@ def read_containment(api: GhApi, repository: str, branch: str) -> Containment:
                                     and any(c.context == CHECK_NAME for c in held))
     except (KeyError, TypeError, AttributeError) as err:
         raise MergeAuthorityError(f"{what} returned unexpected JSON") from err
-    if not all(isinstance(c.context, str) and (c.app_id is None or isinstance(c.app_id, int)) for c in checks):
+    if not all(isinstance(c.context, str) and (c.app_id is None or _app_id(c.app_id)) for c in checks):
         raise MergeAuthorityError(f"{what} returned unexpected JSON")
     return Containment(frozenset(settings), approvals, strict, tuple(checks))
 
@@ -499,6 +505,11 @@ def _json(api: GhApi, path: str, what: str, query: dict | None = None):
         return api.json("GET", path, what, query=query)
     except SourceError as err:
         raise MergeAuthorityError(str(err)) from err
+
+
+def _app_id(value) -> bool:
+    """A real App id: a positive int, and not a bool, which Python counts as an int."""
+    return type(value) is int and value > 0
 
 
 def _login(user, what: str) -> str:

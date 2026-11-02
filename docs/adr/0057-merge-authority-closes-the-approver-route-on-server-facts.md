@@ -16,7 +16,8 @@ author a commit under any name and push to its branch. A workflow on its branch 
 also forge check runs under the Actions App's id.
 
 The admin's approval must not change. A guard that can fail the admin's own route
-could stop the only person who can fix the guard.
+could stop the only person who can fix the guard. The one exception is a
+configuration error, under Options.
 
 ## Decision
 
@@ -44,8 +45,8 @@ calls.
 
 `--agent` is optional on the command line and an absent one closes the route. A
 repository that sets the approver before it passes `--agent` loses the approver's
-approvals, and keeps the admin's, until it does. Its job also needs `statuses: read`
-and `actions: read`, or the route exits 2.
+approvals, and keeps the admin's, until it does. Its job also needs `statuses: read`,
+or the route exits 2.
 
 ## Options considered
 
@@ -63,6 +64,10 @@ and `actions: read`, or the route exits 2.
   so a full page exits 2.
 - **Treat activity that stops short of the creation as fine.** Rejected: older rows
   can age out, and an older push could be anyone's. A gap closes the route.
+- **Close only the approver route when the agent shares a login with the admin or
+  approver.** Rejected: the job can't tell which login is wrong, so it can't judge the
+  admin's route either, and approver equal to admin is already an error. It exits 2 on
+  every PR until the admin corrects the variable, which needs no PR.
 - **Tell a stale dismissal from a person's.** Rejected: the review record doesn't say
   who dismissed it or why, and a push dismisses the admin's approval the same way a
   dismissal after a change request does. Both close the route, so the admin judges.
@@ -80,10 +85,10 @@ and `actions: read`, or the route exits 2.
   admin once approved stays with the admin.
 - Each guard's test was seen red on its assertion before the guard existed, except
   two controls and the pin on the commit's author, which pass either way by design.
-  A mutation trial broke 29 lines one at a time, one for each guard's condition, the
-  ordering by id, and the rule that nothing is read for the admin. A test failed for
-  each. The first run left one green, a missing facts object read as open, which now
-  has a test.
+  A mutation trial broke 40 lines one at a time: each guard's condition, the
+  ordering by id, combining rules, paging the rules, and the rule that nothing is
+  read for the admin. A test failed for each. The first run left one green, a missing
+  facts object read as open, which now has a test.
 - The reads ran against a real merged PR with the agent's own token: about 3 seconds
   for all five, every shape as the tests fake it, and the expected refusals (the
   owner's deletion of the merged branch, and a skipped `plan-scope` on a non-plan
