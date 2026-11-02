@@ -45,6 +45,9 @@ The admin, approver and agent logins and the expected workflows come from the
 caller, never from the PR: the job passes them from configuration the PR cannot change. Changed paths come
 from git (`base...head`, renames off, as plan-scope reads them); reviews and
 check runs from GitHub's REST API through `gh api`.
+
+`plan_admin_problems` is for sessions, not the job: it reads the repository's
+`TRIMTAB_ADMIN` itself, to compare with the instance's admin (ADR 0056).
 """
 
 from __future__ import annotations

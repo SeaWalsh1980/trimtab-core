@@ -335,7 +335,15 @@ class AgreesWithTheSkill(unittest.TestCase):
         section = skill[start:skill.index("3. **Both are unchanged since that merge:**", start)]
 
         self.assertIn("trimtab check-plan-admin --repository", section)
+        self.assertIn("command of its own, with no pipe", " ".join(section.split()))
         self.assertNotIn("trimtab instance --json", section)
+
+    def test_the_skills_in_flight_test_names_where_the_agents_login_comes_from(self):
+        skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
+        start = skill.index("- **In flight:**")
+        section = skill[start:skill.index("- **Next:**", start)]
+
+        self.assertIn("`accounts.agent` from `trimtab instance --json`", section)
 
 
 class Configuration(unittest.TestCase):
@@ -2134,7 +2142,6 @@ class PlanAdmin(unittest.TestCase):
             with self.subTest(what=what):
                 with self.assertRaises(MergeAuthorityError):
                     mergeauthority.plan_admin_problems(ADMIN, REPOSITORY, FakeGh({VARIABLE_PATH: answer}))
-
 
     def test_a_malformed_repository_is_an_error_before_any_read(self):
         for repository in ("owner", "owner/repo/actions", "owner/repo?x=1", "owner/..", "own..er/repo", ""):

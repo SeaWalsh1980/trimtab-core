@@ -3,7 +3,8 @@
 ## Status
 
 Accepted on merge. Narrows nothing in ADR 0044, which still decides where the
-merge-authority job reads its logins.
+merge-authority job reads its logins. Amended 2026-11-02: "The plan check reads this in
+code", below.
 
 ## Context
 
@@ -78,7 +79,7 @@ required when the object is present, and `agent`, optional.
   field, so a label the approver added can't be recognised from the file until it
   does.
 
-## The plan check reads this in code
+## Amendment (2026-11-02): The plan check reads this in code
 
 Added after the decision above, on the owner's yes to two questions: should code fail
 the plan check when no admin is named, and should `accounts.admin` be compared with
@@ -91,7 +92,7 @@ compared with, and `wrap-merged`'s check 2 calls it.
 |---|---|---|
 | `accounts.admin` matches the repository's `TRIMTAB_ADMIN`, without case | 0 | The login |
 | The instance names no admin, or the two differ | 1 | Nothing |
-| The instance file or the variable can't be read, or the variable holds no login | 2 | Nothing |
+| The instance file or the variable can't be read, the variable holds no login, or `--repository` isn't owner/name | 2 | Nothing |
 
 So a repository with no variable fails the plan check. Space around the variable is
 ignored, as `accounts()` ignores it for the merge gate.
@@ -112,11 +113,12 @@ ignored, as `accounts()` ignores it for the merge gate.
 
 - **A session that can't read the variable can't pass the plan check.** The option
   rejected above said such sessions exist. That now stops a run rather than letting it
-  go on the instance's word alone. `ClaudeControlTower`'s token read it on ControlTower,
-  and the operator's on all three repositories. A cloud session's read is untried.
+  go on the instance's word alone. The agent's token read it on a consumer, the base and
+  the instance. A cloud session's read is untried.
 - **It's still called by an instruction.** `wrap-merged` tells a session to run it, and
-  no hook makes it. The comparison is of the moment the session runs it, and the login
-  it prints only means something if the session compares `merged_by` with it.
+  no hook makes it. The session chooses the `--repository` and instance it names, so
+  nothing ties them to the plan's. The comparison is of the moment the session runs it,
+  and the login it prints only means something if the session compares `merged_by` with it.
 - **The merge gate doesn't change.** It judges by the variable and never reads the
   instance, so an instance that disagrees stops plans, not merges.
 
@@ -127,6 +129,5 @@ reported no problem. Six controls pass either way. A mutation trial broke 28 lin
 at a time. Its first run left 2 green, a `..` inside a name and `--repository` made
 optional; each now has a test case, and all 28 are caught.
 
-Read-only against real repositories: ControlTower, trimtab-core and Trimtab each exit 0
-with the instance at `bf93f16f`, in under half a second, and a repository that doesn't
-exist exits 2.
+Read-only against real repositories, with the agent's token: a consumer, the base and the
+instance each exit 0 in under half a second, and a repository that doesn't exist exits 2.
