@@ -1225,6 +1225,603 @@ class ApproverRoute(GitRepository):
         self.assertEqual(self.judged(), mergeauthority.Result(ADMIN, ()))
 
 
+def pull_row(head, head_ref=PLAN_REF, head_repo=REPOSITORY, base_ref=DEFAULT, state="open", draft=False, merged=False,
+             labels=(), author=AGENT):
+    return {"user": {"login": author}, "state": state, "draft": draft, "merged": merged,
+            "labels": [{"name": name} for name in labels],
+            "head": {"sha": head, "ref": head_ref, "repo": {"full_name": head_repo} if head_repo else None},
+            "base": {"ref": base_ref, "repo": {"default_branch": DEFAULT}}}
+
+
+INLINE_PATH = f"repos/{REPOSITORY}/pulls/{NUMBER}/comments"
+CONVERSATION_PATH = f"repos/{REPOSITORY}/issues/{NUMBER}/comments"
+GATES = list(REQUIRED)
+TRACKER = "the-reviewer[bot]"
+PERSON = "a-person"
+OWN_ID = list(REQUIRED).index("merge-authority") + 1
+
+
+def inline_row(id, login, reply_to=None):
+    return {"id": id, "user": {"login": login}, **({"in_reply_to_id": reply_to} if reply_to else {})}
+
+
+def conversation_row(login, at):
+    return {"id": 1, "user": {"login": login}, "created_at": at}
+
+
+def review_body_row(id, login, at, body="a review's words"):
+    return {**review_row(id, login, "COMMENTED", HEAD), "body": body, "submitted_at": at}
+
+
+EARLY, MIDDLE, LATE = "2026-10-25T10:00:00Z", "2026-10-25T10:30:00Z", "2026-10-25T11:00:00Z"
+
+
+class ApproverAction(GitRepository):
+    """check-approver-route's guards through check_action(): every test starts where the App may write, and breaks
+    one fact."""
+
+    def setUp(self):
+        super().setUp()
+        self.write("src/app.py", "x = 2\n")
+        self.head = self.commit("item")
+        self.answers = {**route_answers(self.head), PULL_PATH: json.dumps(pull_row(self.head)),
+                        REVIEWS_PATH: json.dumps([review_row(1, APPROVER, commit=self.head)]),
+                        INLINE_PATH: "[]", CONVERSATION_PATH: "[]"}
+
+    def set(self, path, *rows):
+        self.answers[path] = json.dumps(list(rows))
+
+    def set_pull(self, **fields):
+        self.answers[PULL_PATH] = json.dumps(pull_row(self.head, **fields))
+
+    def runs_path(self):
+        return f"repos/{REPOSITORY}/commits/{self.head}/check-runs"
+
+    def set_run(self, name, conclusion):
+        rows = [check_row(i, c, a, conclusion if c == name else "success")
+                for i, (c, a) in enumerate(REQUIRED.items(), 1)]
+        self.answers[self.runs_path()] = json.dumps({"check_runs": rows})
+
+    def acted(self, action=mergeauthority.MERGE, gh=None, who=WHO, gates=GATES, reviewer=TRACKER, head=None,
+              workflows=WORKFLOW_PAIRS):
+        return mergeauthority.check_action(str(self.repo), REPOSITORY, NUMBER, self.base, head or self.head, action,
+                                           who, gates, reviewer=reviewer, run=gh or FakeGh(self.answers),
+                                           workflows=workflows)
+
+    def assert_refused(self, says, action=mergeauthority.MERGE, alone=True, **kwargs):
+        result = self.acted(action, **kwargs)
+
+        self.assertEqual(result.verdict, mergeauthority.REFUSE, result)
+        self.assertTrue(any(says in p for p in result.problems), result.problems)
+        if alone:
+            self.assertEqual(len(result.problems), 1, result.problems)
+
+    def assert_acts(self, action=mergeauthority.MERGE, **kwargs):
+        self.assertEqual(self.acted(action, **kwargs), mergeauthority.ActionResult(mergeauthority.ACT, ()))
+
+    def test_every_guard_satisfied_lets_each_action_go(self):
+        for action in mergeauthority.ACTIONS:
+            with self.subTest(action=action):
+                self.assert_acts(action)
+
+    def test_approving_needs_no_earlier_approval(self):
+        self.set(REVIEWS_PATH)
+
+        self.assert_acts(mergeauthority.APPROVE)
+
+    def test_the_route_is_held_even_when_the_admin_also_approved(self):
+        self.set(REVIEWS_PATH, review_row(1, APPROVER, commit=self.head), review_row(2, ADMIN, commit=self.head))
+        self.set(ACTIVITY_PATH, activity_row(1, "force_push", EARLIER, self.head))
+
+        self.assert_refused("creation")
+
+    def test_a_route_guard_refuses_each_action(self):
+        self.set(ACTIVITY_PATH, activity_row(2, "push", EARLIER, self.head, actor=ADMIN),
+                 activity_row(1, "branch_creation", NO_COMMIT, EARLIER))
+
+        for action in mergeauthority.ACTIONS:
+            with self.subTest(action=action):
+                self.assert_refused(f"{ADMIN} pushed", action)
+
+    def test_a_pr_someone_else_opened_refuses(self):
+        self.set_pull(author=PERSON)
+
+        self.assert_refused(f"opened by {PERSON}")
+
+    def test_no_agent_login_refuses(self):
+        self.assert_refused("no agent login", who=Accounts(ADMIN, APPROVER))
+
+    def test_a_checker_in_the_tree_refuses(self):
+        git(self.repo, "switch", "-q", DEFAULT)
+        self.write(mergeauthority.CHECKER_MARK, "#!/bin/sh\n")
+        self.base = self.commit("checker")
+        git(self.repo, "switch", "-q", PLAN_REF)
+        git(self.repo, "merge", "-q", "--no-edit", DEFAULT)
+        self.head = git(self.repo, "rev-parse", "HEAD")
+        self.answers.update(route_answers(self.head))
+        self.set(REVIEWS_PATH, review_row(1, APPROVER, commit=self.head))
+        self.set_pull()
+
+        self.assert_refused("runs its checker from its own tree")
+
+    def test_a_voided_plan_scope_refuses_though_its_latest_run_passed(self):
+        rows = [check_row(i, c, a) for i, (c, a) in enumerate(REQUIRED.items(), 1)]
+        voided = check_row(0, "plan-scope", ACTIONS_ID, "failure")
+        self.answers[self.runs_path()] = json.dumps({"check_runs": [voided, *rows]})
+
+        self.assert_refused("voids the head")
+
+    # The head being acted on
+    def test_a_head_that_moved_refuses_each_action(self):
+        self.set_pull()
+
+        for action in mergeauthority.ACTIONS:
+            with self.subTest(action=action):
+                self.assert_refused("not the PR's head", action, head=EARLIER)
+
+    # M1: the gates on this head
+    def test_each_failed_gate_refuses_the_merge(self):
+        for name in REQUIRED:
+            with self.subTest(gate=name):
+                self.set_run(name, "failure")
+
+                self.assert_refused(f"{name}", alone=False)
+
+    def test_a_required_check_red_refuses_approval_too(self):
+        self.set_run("lint-test", "failure")
+
+        self.assert_refused("lint-test", mergeauthority.APPROVE)
+
+    def test_a_gate_off_the_ruleset_refuses_each_action(self):
+        scanner = "GitGuardian Security Checks"
+        self.set(RULES_PATH, *rule_rows({c: a for c, a in REQUIRED.items() if c != scanner}))
+
+        for action in mergeauthority.ACTIONS:
+            with self.subTest(action=action):
+                self.assert_refused(f"does not require {scanner}", action)
+
+    def test_no_gate_named_is_an_error(self):
+        with self.assertRaises(MergeAuthorityError):
+            self.acted(gates=[])
+
+    # merge-authority's own slot, which its own run cannot vouch for
+    def test_merge_authority_red_is_expected_before_the_approval(self):
+        self.set(REVIEWS_PATH)
+        self.set_run("merge-authority", "failure")
+
+        self.assert_acts(mergeauthority.APPROVE)
+
+    def test_merge_authority_red_refuses_resolving_and_merging(self):
+        self.set_run("merge-authority", "failure")
+
+        for action in (mergeauthority.RESOLVE, mergeauthority.MERGE):
+            with self.subTest(action=action):
+                self.assert_refused("merge-authority", action)
+
+    def test_no_merge_authority_run_refuses_resolving_and_merging(self):
+        rows = [check_row(i, c, a) for i, (c, a) in enumerate(REQUIRED.items(), 1) if c != "merge-authority"]
+        self.answers[self.runs_path()] = json.dumps({"check_runs": rows})
+
+        for action in (mergeauthority.RESOLVE, mergeauthority.MERGE):
+            with self.subTest(action=action):
+                self.assert_refused("merge-authority has no run", action)
+
+    def test_a_forged_merge_authority_run_refuses_merging(self):
+        self.answers[job_path(OWN_ID)] = json.dumps(job_row(OWN_ID, "merge-authority", self.head, runner_id=None,
+                                                            runner_name=None, steps=0))
+
+        self.assert_refused("merge-authority's latest run is not a passing job")
+
+    def test_merge_authority_with_no_expected_workflow_refuses_merging_only(self):
+        pairs = [pair for pair in WORKFLOW_PAIRS if not pair.startswith("merge-authority=")]
+
+        self.assert_refused("merge-authority has no expected workflow", workflows=pairs)
+        self.assert_acts(mergeauthority.APPROVE, workflows=pairs)
+
+    # M2: the approver's approval on the head being merged
+    def test_an_approval_on_an_earlier_head_does_not_merge(self):
+        self.set(REVIEWS_PATH, review_row(1, APPROVER, commit=EARLIER))
+
+        self.assert_refused(f"no approval from {APPROVER}")
+
+    def test_an_approval_on_an_earlier_head_does_not_resolve(self):
+        self.set(REVIEWS_PATH, review_row(1, APPROVER, commit=EARLIER))
+
+        self.assert_refused(f"no approval from {APPROVER}", mergeauthority.RESOLVE)
+
+    def test_the_admins_approval_does_not_stand_in_for_the_approvers(self):
+        self.set(REVIEWS_PATH, review_row(1, ADMIN, commit=self.head))
+
+        self.assert_refused(f"no approval from {APPROVER}")
+
+    def test_a_dismissed_approval_does_not_merge(self):
+        self.set(REVIEWS_PATH, review_row(1, APPROVER, commit=self.head),
+                 review_row(2, APPROVER, "DISMISSED", self.head))
+
+        self.assert_refused(f"no approval from {APPROVER}")
+
+    def test_a_request_for_changes_refuses_each_action(self):
+        self.set(REVIEWS_PATH, review_row(1, APPROVER, commit=self.head),
+                 review_row(2, ADMIN, "CHANGES_REQUESTED", self.head))
+
+        for action in mergeauthority.ACTIONS:
+            with self.subTest(action=action):
+                self.assert_refused(f"{ADMIN} requested changes", action)
+
+    # M3: not an item PR the approver may touch
+    def test_a_non_plan_head_is_not_merged(self):
+        self.set_pull(head_ref=FEATURE_REF)
+
+        self.assert_refused("not a plan branch")
+
+    def test_a_malformed_plan_head_is_not_merged(self):
+        self.set_pull(head_ref="plan/0019-y")
+
+        self.assert_refused("not plan/<plan>/item-NN-partK")
+
+    def test_a_fork_is_not_merged(self):
+        self.set_pull(head_repo=FORK)
+
+        self.assert_refused(FORK)
+
+    def test_a_deleted_head_repository_is_not_merged(self):
+        self.set_pull(head_repo=None)
+
+        self.assert_refused("not this repository")
+
+    def test_a_pr_to_another_branch_is_not_merged(self):
+        self.set_pull(base_ref="release")
+
+        self.assert_refused("not the default branch")
+
+    def test_a_github_path_change_is_not_merged(self):
+        self.write(".github/workflows/ci.yml", "on: push\n")
+        self.head = self.commit("workflow")
+        self.answers.update(route_answers(self.head))
+        self.set_pull()
+
+        self.assert_refused(".github/workflows/ci.yml")
+
+    def test_a_github_path_change_is_not_approved(self):
+        self.write(".github/workflows/ci.yml", "on: push\n")
+        self.head = self.commit("workflow")
+        self.answers.update(route_answers(self.head))
+        self.set_pull()
+
+        self.assert_refused(".github/workflows/ci.yml", mergeauthority.APPROVE)
+
+    # M4: a comment with no posted response
+    def test_an_unanswered_comment_refuses_the_merge(self):
+        self.set(INLINE_PATH, inline_row(1, TRACKER))
+
+        self.assert_refused("review comment")
+
+    def test_an_answered_comment_merges(self):
+        self.set(INLINE_PATH, inline_row(1, TRACKER), inline_row(2, AGENT, reply_to=1))
+
+        self.assert_acts()
+
+    def test_a_reply_after_the_agents_refuses_the_merge(self):
+        self.set(INLINE_PATH, inline_row(1, PERSON), inline_row(2, AGENT, reply_to=1),
+                 inline_row(3, PERSON, reply_to=1))
+
+        self.assert_refused("review comment")
+
+    def test_thread_order_is_by_id_not_by_position(self):
+        self.set(INLINE_PATH, inline_row(3, PERSON, reply_to=1), inline_row(1, PERSON),
+                 inline_row(2, AGENT, reply_to=1))
+
+        self.assert_refused("review comment")
+
+    def test_a_reply_to_another_thread_answers_nothing(self):
+        self.set(INLINE_PATH, inline_row(1, TRACKER), inline_row(2, TRACKER), inline_row(3, AGENT, reply_to=2))
+
+        self.assert_refused("review comment")
+
+    def test_the_agents_own_comment_needs_no_answer(self):
+        self.set(INLINE_PATH, inline_row(1, AGENT))
+
+        self.assert_acts()
+
+    def test_the_agents_reply_is_recognised_without_case(self):
+        self.set(INLINE_PATH, inline_row(1, TRACKER), inline_row(2, AGENT.upper(), reply_to=1))
+
+        self.assert_acts()
+
+    def test_an_unanswered_conversation_comment_refuses_the_merge(self):
+        self.set(CONVERSATION_PATH, conversation_row(PERSON, EARLY))
+
+        self.assert_refused(f"{PERSON}'s comment")
+
+    def test_a_later_agent_comment_answers_the_conversation(self):
+        self.set(CONVERSATION_PATH, conversation_row(PERSON, EARLY), conversation_row(AGENT, LATE))
+
+        self.assert_acts()
+
+    def test_an_earlier_agent_comment_answers_nothing(self):
+        self.set(CONVERSATION_PATH, conversation_row(AGENT, EARLY), conversation_row(PERSON, LATE))
+
+        self.assert_refused(f"{PERSON}'s comment")
+
+    def test_the_agents_latest_comment_is_the_answer(self):
+        self.set(CONVERSATION_PATH, conversation_row(AGENT, EARLY), conversation_row(PERSON, MIDDLE),
+                 conversation_row(AGENT, LATE))
+
+        self.assert_acts()
+
+    def test_the_agents_comment_is_recognised_without_case(self):
+        self.set(CONVERSATION_PATH, conversation_row(PERSON, EARLY), conversation_row(AGENT.upper(), LATE))
+
+        self.assert_acts()
+
+    def test_a_comment_in_the_same_second_is_not_an_answer(self):
+        self.set(CONVERSATION_PATH, conversation_row(PERSON, EARLY), conversation_row(AGENT, EARLY))
+
+        self.assert_refused(f"{PERSON}'s comment")
+
+    def test_an_inline_reply_does_not_answer_the_conversation(self):
+        self.set(CONVERSATION_PATH, conversation_row(PERSON, EARLY))
+        self.set(INLINE_PATH, {**inline_row(1, AGENT), "created_at": LATE})
+
+        self.assert_refused(f"{PERSON}'s comment")
+
+    def test_the_trackers_comment_needs_no_answer(self):
+        self.set(CONVERSATION_PATH, conversation_row(TRACKER, EARLY))
+
+        self.assert_acts()
+
+    def test_with_no_reviewer_named_the_trackers_comment_needs_an_answer(self):
+        self.set(CONVERSATION_PATH, conversation_row(TRACKER, EARLY))
+
+        self.assert_refused(f"{TRACKER}'s comment", reviewer=None)
+
+    def test_the_tracker_is_exempt_only_in_the_conversation(self):
+        self.set(INLINE_PATH, inline_row(1, TRACKER))
+
+        self.assert_refused("review comment", reviewer=TRACKER)
+
+    def test_an_unanswered_review_body_refuses_the_merge(self):
+        self.set(REVIEWS_PATH, review_row(1, APPROVER, commit=self.head), review_body_row(2, PERSON, EARLY))
+
+        self.assert_refused(f"{PERSON}'s comment")
+
+    def test_an_answered_review_body_merges(self):
+        self.set(REVIEWS_PATH, review_row(1, APPROVER, commit=self.head), review_body_row(2, PERSON, EARLY))
+        self.set(CONVERSATION_PATH, conversation_row(AGENT, LATE))
+
+        self.assert_acts()
+
+    def test_an_empty_review_body_needs_no_answer(self):
+        self.set(REVIEWS_PATH, review_row(1, APPROVER, commit=self.head), review_body_row(2, PERSON, EARLY, body=""))
+
+        self.assert_acts()
+
+    def test_an_unanswered_comment_is_left_for_the_threads_guard_before_the_merge(self):
+        self.set(INLINE_PATH, inline_row(1, TRACKER))
+
+        for action in (mergeauthority.APPROVE, mergeauthority.RESOLVE):
+            with self.subTest(action=action):
+                self.assert_acts(action)
+
+    def test_comments_are_not_read_before_the_merge(self):
+        gh = FakeGh(self.answers)
+
+        self.acted(mergeauthority.RESOLVE, gh=gh)
+
+        self.assertFalse({INLINE_PATH, CONVERSATION_PATH} & {path_of(a) for a in gh.argvs()})
+
+    def test_comments_are_read_from_every_page(self):
+        first = [inline_row(i, AGENT) for i in range(1, 101)]
+        self.answers[INLINE_PATH] = [json.dumps(first), json.dumps([inline_row(101, PERSON)])]
+
+        self.assert_refused("review comment")
+
+    def test_too_many_comments_is_an_error(self):
+        full = json.dumps([inline_row(i, AGENT) for i in range(1, 101)])
+        self.answers[INLINE_PATH] = [full] * 11 + ["[]"]
+
+        with self.assertRaises(MergeAuthorityError):
+            self.acted()
+
+    def test_a_malformed_comment_is_an_error(self):
+        for path, row in ((INLINE_PATH, {"id": "1", "user": {"login": PERSON}}),
+                          (INLINE_PATH, {"id": 1, "user": {"login": PERSON}, "in_reply_to_id": "1"}),
+                          (INLINE_PATH, {"user": {"login": PERSON}}),
+                          (CONVERSATION_PATH, {"id": 1, "user": {"login": PERSON}}),
+                          (CONVERSATION_PATH, {"id": 1, "user": {"login": PERSON}, "created_at": 5})):
+            with self.subTest(row=row):
+                saved = self.answers[path]
+                self.set(path, row)
+
+                with self.assertRaises(MergeAuthorityError):
+                    self.acted()
+                self.answers[path] = saved
+
+    def test_a_malformed_review_body_is_an_error(self):
+        self.set(REVIEWS_PATH, review_row(1, APPROVER, commit=self.head),
+                 {**review_body_row(2, PERSON, EARLY), "body": 5})
+
+        with self.assertRaises(MergeAuthorityError):
+            self.acted()
+
+    def test_a_review_body_with_no_time_is_an_error(self):
+        self.set(REVIEWS_PATH, review_row(1, APPROVER, commit=self.head), review_body_row(2, PERSON, None))
+
+        with self.assertRaises(MergeAuthorityError):
+            self.acted()
+
+    def test_a_failed_comment_read_is_an_error(self):
+        self.answers[CONVERSATION_PATH] = "not json"
+
+        with self.assertRaises(MergeAuthorityError):
+            self.acted()
+
+    # M5: labels and state
+    def test_a_blocked_pr_is_not_merged(self):
+        for label in mergeauthority.BLOCKING_LABELS:
+            for action in mergeauthority.ACTIONS:
+                with self.subTest(label=label, action=action):
+                    self.set_pull(labels=[label])
+
+                    self.assert_refused(label, action)
+
+    def test_another_label_is_not_a_block(self):
+        self.set_pull(labels=["plan:continue"])
+
+        self.assert_acts()
+
+    def test_a_draft_is_not_merged(self):
+        for action in mergeauthority.ACTIONS:
+            with self.subTest(action=action):
+                self.set_pull(draft=True)
+
+                self.assert_refused("draft", action)
+
+    def test_a_closed_pr_is_not_merged(self):
+        for action in mergeauthority.ACTIONS:
+            with self.subTest(action=action):
+                self.set_pull(state="closed")
+
+                self.assert_refused("closed", action)
+
+    # M6: nothing left to do
+    def test_a_merged_pr_is_a_no_op(self):
+        self.set_pull(state="closed", merged=True)
+
+        for action in mergeauthority.ACTIONS:
+            with self.subTest(action=action):
+                self.assertEqual(self.acted(action), mergeauthority.ActionResult(mergeauthority.NOOP, ()))
+
+    def test_a_merged_pr_reads_nothing_more(self):
+        self.set_pull(state="closed", merged=True)
+        gh = FakeGh(self.answers)
+
+        self.acted(gh=gh)
+
+        self.assertEqual([path_of(a) for a in gh.argvs()], [PULL_PATH])
+
+    def test_a_merged_pr_is_a_no_op_whatever_head_was_asked_for(self):
+        self.set_pull(state="closed", merged=True)
+
+        self.assertEqual(self.acted(head=EARLIER).verdict, mergeauthority.NOOP)
+
+    # Reads and inputs
+    def test_a_refusal_from_the_pr_itself_reads_nothing_more(self):
+        self.set_pull(head_ref=FEATURE_REF)
+        gh = FakeGh(self.answers)
+
+        self.acted(gh=gh)
+
+        self.assertEqual([path_of(a) for a in gh.argvs()], [PULL_PATH])
+
+    def test_a_fork_reads_nothing_more(self):
+        self.set_pull(head_repo=FORK)
+        gh = FakeGh(self.answers)
+
+        self.acted(gh=gh)
+
+        self.assertEqual([path_of(a) for a in gh.argvs()], [PULL_PATH])
+
+    def test_approving_reads_no_merge_authority_job(self):
+        gh = FakeGh(self.answers)
+
+        self.acted(mergeauthority.APPROVE, gh=gh)
+
+        self.assertNotIn(job_path(OWN_ID), [path_of(a) for a in gh.argvs()])
+
+    def test_the_pr_is_read_once(self):
+        gh = FakeGh(self.answers)
+
+        self.acted(gh=gh)
+
+        self.assertEqual([path_of(a) for a in gh.argvs()].count(PULL_PATH), 1)
+
+    def test_the_reviews_are_read_once(self):
+        gh = FakeGh(self.answers)
+
+        self.acted(gh=gh)
+
+        self.assertEqual([path_of(a) for a in gh.argvs()].count(REVIEWS_PATH), 1)
+
+    def test_a_failed_pr_read_is_an_error(self):
+        with self.assertRaises(MergeAuthorityError):
+            self.acted(gh=FakeGh(returncode=1, stderr="HTTP 500"))
+
+    def test_a_malformed_pr_is_an_error(self):
+        whole = pull_row(self.head)
+        for broken in ({k: v for k, v in whole.items() if k != "head"}, {k: v for k, v in whole.items() if k != "user"},
+                       {**whole, "merged": "no"}, {**whole, "draft": 1},
+                       {**whole, "labels": [{"name": 5}]}, {**whole, "labels": None}, {**whole, "state": None},
+                       {**whole, "head": {"sha": self.head, "ref": 5, "repo": None}},
+                       {**whole, "base": {"ref": DEFAULT, "repo": None}}, []):
+            with self.subTest(broken=broken):
+                self.answers[PULL_PATH] = json.dumps(broken)
+
+                with self.assertRaises(MergeAuthorityError):
+                    self.acted()
+
+    def test_an_unknown_action_is_an_error(self):
+        with self.assertRaises(MergeAuthorityError):
+            self.acted("rebase")
+
+    def test_no_approver_login_is_an_error(self):
+        with self.assertRaises(MergeAuthorityError):
+            self.acted(who=Accounts(ADMIN, "", AGENT))
+
+    def test_bad_inputs_are_refused_before_any_call(self):
+        gh = FakeGh(self.answers)
+
+        with self.assertRaises(MergeAuthorityError):
+            self.acted(gh=gh, head="HEAD")
+
+        self.assertEqual(gh.calls, [])
+
+    def fake_gh(self):
+        bin_dir = Path(self.tmp.name) / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        gh = bin_dir / "gh"
+        gh.write_text("#!/usr/bin/env python3\nimport json, os, sys\n"
+                      "print(json.loads(os.environ['FAKE_ANSWERS'])[sys.argv[4].split('?')[0]])\n",
+                      encoding="utf-8")
+        gh.chmod(0o755)
+        return {"PATH": f"{bin_dir}{os.pathsep}{self.env['PATH']}", "FAKE_ANSWERS": json.dumps(self.answers)}
+
+    def cli(self, *extra):
+        return subprocess.run([str(TRIMTAB), "check-approver-route", "--repo", str(self.repo), "--action", "merge",
+                               "--repository", REPOSITORY, "--pr", str(NUMBER), "--base", self.base,
+                               "--head", self.head,
+                               "--admin", ADMIN, "--approver", APPROVER, "--agent", AGENT, "--reviewer", TRACKER,
+                               *(arg for name in GATES for arg in ("--gate", name)), *JOB_ARGS, *extra],
+                              capture_output=True, text=True, env={**self.env, **self.fake_gh()})
+
+    def test_the_cli_prints_act_and_exits_0(self):
+        done = self.cli()
+
+        self.assertEqual((done.returncode, done.stdout), (0, "verdict=act\n"), done.stderr)
+
+    def test_the_cli_prints_noop_and_exits_0_on_a_merged_pr(self):
+        self.set_pull(state="closed", merged=True)
+
+        done = self.cli()
+
+        self.assertEqual((done.returncode, done.stdout), (0, "verdict=noop\n"), done.stderr)
+
+    def test_the_cli_prints_refuse_and_exits_1_naming_why(self):
+        self.set_pull(draft=True)
+
+        done = self.cli()
+
+        self.assertEqual((done.returncode, done.stdout, "draft" in done.stderr), (1, "verdict=refuse\n", True),
+                         done.stderr)
+
+    def test_the_cli_exits_2_printing_no_verdict_on_a_failed_read(self):
+        del self.answers[CONVERSATION_PATH]
+
+        done = self.cli()
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""), done.stderr)
+
+
 JOB_ARGS = [arg for pair in WORKFLOW_PAIRS for arg in ("--job-workflow", pair)]
 
 

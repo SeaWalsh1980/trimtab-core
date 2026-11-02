@@ -901,6 +901,20 @@ def cmd_check_merge_authority(args) -> int:
     return 0
 
 
+def cmd_check_approver_route(args) -> int:
+    try:
+        who = mergeauthority.accounts(args.admin, args.approver, args.agent)
+        result = mergeauthority.check_action(args.repo, args.repository, args.pr, args.base, args.head, args.action,
+                                             who, args.gate, reviewer=args.reviewer, workflows=args.job_workflow)
+    except mergeauthority.MergeAuthorityError as err:
+        print(f"error: {err}; nothing is vouched for", file=sys.stderr)
+        return 2
+    _print_problems(result.problems)
+    # On stdout alone, for $GITHUB_OUTPUT: exit 0 covers both act and noop, and only act may write.
+    print(f"verdict={result.verdict}")
+    return 1 if result.verdict == mergeauthority.REFUSE else 0
+
+
 def cmd_routine_render(args) -> int:
     pairs = {}
     for item in args.set or []:
@@ -1206,6 +1220,30 @@ def build_parser() -> argparse.ArgumentParser:
                          "repeat per check. A check with none closes the approver route")
     ma.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout (default: .)")
     ma.set_defaults(func=cmd_check_merge_authority)
+
+    ar = sub.add_parser("check-approver-route",
+                        help="what the approver App runs before each write: prints verdict=act, noop or refuse for one "
+                             "action on one head, from the server's facts (ADR 0057). Only verdict=act may write")
+    ar.add_argument("--action", required=True, choices=mergeauthority.ACTIONS, help="the write about to be made")
+    ar.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository")
+    ar.add_argument("--pr", required=True, type=int, metavar="N", help="the PR's number")
+    ar.add_argument("--head", required=True, metavar="SHA",
+                    help="the commit the write will be pinned to; it must be the PR's head on the server")
+    ar.add_argument("--base", required=True, metavar="SHA", help="the default branch's tip, in the checkout")
+    ar.add_argument("--admin", required=True, metavar="LOGIN",
+                    help="the admin login, from configuration the PR cannot change")
+    ar.add_argument("--approver", required=True, metavar="LOGIN", help="the approver login, from the same configuration")
+    ar.add_argument("--agent", required=True, metavar="LOGIN", help="the agent login, from the same configuration")
+    ar.add_argument("--gate", action="append", required=True, metavar="CHECK",
+                    help="a check the ruleset must require, from the same configuration; repeat per check")
+    ar.add_argument("--reviewer", metavar="LOGIN",
+                    help="the login posting the review's tracking comment, from the same configuration; its "
+                         "conversation comments need no reply. Without it they do")
+    ar.add_argument("--job-workflow", action="append", metavar="CHECK=PATH",
+                    help="the workflow that must run this Actions-bound required check, from the same configuration; "
+                         "repeat per check. A check with none refuses")
+    ar.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout (default: .)")
+    ar.set_defaults(func=cmd_check_approver_route)
 
     rt = sub.add_parser("routine", help="routine specs")
     rts = rt.add_subparsers(dest="routine_command", required=True)
