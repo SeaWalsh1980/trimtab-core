@@ -35,7 +35,7 @@ A last review in state `CHANGES_REQUESTED` from either account fails the PR.
 This is the wrap-merged skill's code gate, so the gate at merge and the
 skill's check after it agree.
 
-The admin and approver logins come from the caller, never from the PR: the
+The admin, approver and agent logins come from the caller, never from the PR: the
 job passes them from configuration the PR cannot change. Changed paths come
 from git (`base...head`, renames off, as plan-scope reads them); reviews and
 check runs from GitHub's REST API through `gh api`.
@@ -244,7 +244,7 @@ def containment_problems(held: Containment) -> list[str]:
 
 def required_run_problems(checks: tuple[RequiredCheck, ...], runs: tuple[CheckRun, ...]) -> list[str]:
     """Which required check has no latest run that passed from its bound App. This check is skipped: it is the
-    run judging, so it cannot vouch for its own slot (the App's own step reads it before acting). The latest by
+    run judging, so it cannot vouch for its own slot; the approver's own step must read it before acting. The latest by
     id, not by start: a carried-over job keeps its old start, and a draft's red before a ready run's green is
     normal on one head."""
     problems = []
