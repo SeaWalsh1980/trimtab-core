@@ -36,6 +36,7 @@ the approver route must be open. Otherwise the check fails and says why.
 | Statuses | A commit status carries a required check's name | `commits/H/statuses` |
 | Containment | A ruleset setting the approver leans on is off, a required check has no bound App, `plan-scope` and `merge-authority` aren't required from GitHub Actions, or no file path rule locks `.github/**/*` | `rules/branches/<default>` |
 | Dismissal | The admin's last review is a dismissal | reviews |
+| Checker in the tree | The repository runs its checker from its own tree: closed, with nothing read | `bin/trimtab` in the base commit |
 | Configuration | No agent login is given (closed); the agent shares a login with the admin or approver (an error) | `--agent` |
 
 A read that fails, is malformed or passes its bound exits 2, nothing vouched for.
@@ -76,6 +77,12 @@ its run's event and path were unchanged, so the guard needs no exception for it.
   the default branch, so a second PR could close after its run. Neither was tried.
 - **Run a trial before choosing.** Not done first, by the owner's choice: the lock check
   below stands whatever a trial finds, and the live negatives can still stage it.
+- **Have the workflows refuse a non-default base.** Rejected: a change to a security
+  control for a route already blocked where the checker is pinned, and it would remove
+  the failed or skipped `plan-scope` run that does the blocking.
+- **Lock the checker paths where the checker is in the tree.** Rejected: a repository
+  like that would need its tests and code locked too, since a `pull_request` run also
+  tests the merge with its base. No such repository has an approver in view.
 - **Hardcode the expected workflow paths in core.** Rejected: they are each repository's
   own. The event is fixed because a required check moving to another event should be a
   decision made here.
@@ -110,8 +117,21 @@ its run's event and path were unchanged, so the guard needs no exception for it.
   place a workflow at the expected path on another branch, and open a second PR from the
   same head into it, could produce a run that passes every field. This comes from
   documented behaviour and hasn't been tried. Only a repository whose rules lock
-  `.github/**/*` is open to the approver, so the route closes if that lock goes. Bypass of
-  that lock isn't readable here, and anyone arming an approver must name this residual.
+  `.github/**/*` is open to the approver, so the route closes while that lock is gone. Bypass
+  of that lock isn't readable here. The read is of the moment too: a branch holding a
+  workflow edit from before the lock, or from a lapse, isn't covered.
+- **The lock doesn't reach what a locked workflow runs.** A second PR into a branch with
+  weakened tests gets a real `lint-test` green from the real workflow, with every field
+  right. What stops it is `plan-scope`: on the second PR it fails from a `plan/` head, since
+  only the default branch can scope it, and is skipped from any other. Either run voids the
+  head under ADR 0043's every-run rule, and a test pins that. This read of the code hasn't
+  been tried live. It holds only where the checker is pinned, which is why a checker in the
+  tree closes the route.
+- **That rule needs failed runs to survive.** Deleting the second PR's `plan-scope` run
+  would lift the block while its green `lint-test` stays. A forged-run trial saw a merge
+  go through after a real run was deleted, so this is likely to work, and only the
+  `guard-github` hook stands against it (ADR 0055), so a route outside the hook isn't stopped.
+- Anyone arming an approver must name these three residuals.
 - That a forger can't set a job's runner fields rests on one forged POST that tried
   them and was ignored; it didn't try `steps` or `labels`. A green `plan-scope` on a real
   plan head has never been read, so that check's job record is untested on real data.
@@ -130,7 +150,7 @@ its run's event and path were unchanged, so the guard needs no exception for it.
   admin once approved stays with the admin.
 - Each guard's test was seen red on its assertion before the guard existed, except
   two controls and the pin on the commit's author, which pass either way by design.
-  A mutation trial broke 71 lines one at a time: each guard's condition, the
+  A mutation trial broke 73 lines one at a time: each guard's condition, the
   ordering by id, combining rules, paging the rules, each field of the job record,
   and the rule that nothing is read for the admin. A test failed for each. The first
   run left one green, a missing facts object read as open, which now has a test.

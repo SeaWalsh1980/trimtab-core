@@ -295,6 +295,20 @@ class NoFacts(unittest.TestCase):
 
         self.assertIn("facts were not read", result.problems[0])
 
+    def test_a_checker_in_the_tree_closes_the_route_without_reading_it(self):
+        ordered = [replace(review(APPROVER), id=1)]
+
+        result = mergeauthority.decide(pr(), WHO, SOURCE, True, ordered, PASSED, unread)
+
+        self.assertIn("runs its checker from its own tree", result.problems[0])
+
+    def test_a_checker_in_the_tree_leaves_the_admins_approval_counting(self):
+        ordered = [replace(review(ADMIN), id=1)]
+
+        result = mergeauthority.decide(pr(), WHO, SOURCE, True, ordered, PASSED, unread)
+
+        self.assertEqual(result.approved_by, ADMIN)
+
     def test_a_passing_run_with_no_job_record_closes_the_route(self):
         ordered = [replace(review(APPROVER), id=1)]
 
@@ -800,6 +814,14 @@ class ApproverRoute(GitRepository):
 
         self.assertTrue(any("lint-test" in p and "expected workflow" in p for p in result.problems), result.problems)
 
+    def test_a_second_prs_plan_scope_run_voids_the_head_though_a_later_run_passes(self):
+        for outcome in ("failure", "skipped"):
+            with self.subTest(outcome=outcome):
+                self.set_runs(*self.green_runs_except("plan-scope"), check_row(50, "plan-scope", ACTIONS_ID, outcome),
+                              check_row(51, "plan-scope", ACTIONS_ID))
+
+                self.assert_closed("voids the head")
+
     def test_a_carried_over_job_passes_with_its_new_id_and_old_times(self):
         self.set_runs(*self.green_runs_except("lint-test"), check_row(50, "lint-test", ACTIONS_ID))
 
@@ -1056,7 +1078,8 @@ class ApproverRoute(GitRepository):
         self.assertEqual(self.judged().approved_by, APPROVER)
 
     def test_a_later_rule_does_not_undo_a_lock(self):
-        rows = rule_rows() + [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": ["CODEOWNERS"]}}]
+        later = {"type": "file_path_restriction", "parameters": {"restricted_file_paths": ["CODEOWNERS"]}}
+        rows = [*rule_rows(), later]
         self.answers[RULES_PATH] = json.dumps(rows)
 
         self.assertEqual(self.judged().approved_by, APPROVER)

@@ -303,8 +303,9 @@ def required_run_problems(checks: tuple[RequiredCheck, ...], runs: tuple[CheckRu
 def job_problems(head: str, checks: tuple[RequiredCheck, ...], runs: tuple[CheckRun, ...], jobs: tuple[JobRecord, ...],
                  workflows: Mapping[str, str]) -> list[str]:
     """Which Actions-bound required check's passing run is not a real job. A forged run has the App's id and no
-    runner or steps; a job from a forging workflow has a runner but another workflow and event, and the forged
-    run can borrow a real run's identity, so neither test is enough alone (ADR 0057). A run that has not passed
+    runner or steps; a job from a forging workflow has a runner but, unless it sits at the expected path, another
+    workflow and event; and a forged run can borrow a real run's identity. So neither test is enough alone, and
+    together they still rest on the workflow lock and plan-scope's every-run rule (ADR 0057). A run that has not passed
     is `required_run_problems`' to report."""
     found = {job.check_run_id: job for job in jobs}
     problems = []
@@ -339,10 +340,15 @@ def _real_job(job: JobRecord | None, name: str, head: str, workflow: str) -> boo
             and job.head_sha == head and job.run_head_sha == head and job.path == workflow and job.event == JOB_EVENT)
 
 
-def route_problems(who: Accounts, pr: Pr, last: dict[str, Review], read: RouteRead) -> list[str]:
+def route_problems(who: Accounts, pr: Pr, last: dict[str, Review], checker_in_tree: bool,
+                   read: RouteRead) -> list[str]:
     """Why the approver's approval cannot carry this PR; empty when the approver route is open."""
     if not who.agent:
         return ["no agent login is configured, so the approver route is closed"]
+    if checker_in_tree:
+        # A second PR into a branch the agent wrote would run that branch's checker, so plan-scope's refusal of
+        # that PR, which the route rests on, proves nothing here.
+        return ["approver route closed: the repository runs its checker from its own tree"]
     facts = read()
     if facts is None:
         return ["the approver route's facts were not read"]
@@ -392,7 +398,7 @@ def decide(pr: Pr, who: Accounts, paths: list[str], checker_in_tree: bool, revie
         detail = f"; {' and '.join(stale)} approved an earlier commit" if stale else ""
         problems.append(f"no approval from {names} on the head commit {pr.head[:12]}{reason}{detail}")
     elif approved[0] == who.approver:
-        problems += route_problems(who, pr, last, route)
+        problems += route_problems(who, pr, last, checker_in_tree, route)
     if problems:
         return Result("", tuple(problems))
     return Result(approved[0], ())
