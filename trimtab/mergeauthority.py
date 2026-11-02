@@ -17,6 +17,16 @@ admin-only paths below, can:
   repository that runs its checker from its own tree (one with `bin/trimtab`
   in the base commit), that code: `bin/`, `trimtab/`, `hooks/run_module.py`.
 
+When the approver's approval is the one a PR rests on, the approver route must
+also be open (ADR 0057): the agent opened the PR and alone pushed its branch,
+in an unbroken chain from the branch's creation to the head; every required
+check but this one has a latest run that passed from the App the ruleset binds
+it to; no commit status sits in a required check's name; the ruleset's
+containment is on; and the admin's last review is not a dismissal. All of it is
+read from what only the server writes, never a commit's author. None of it
+touches the admin's own approval: nothing is read for it, so a failed read can
+only stop the approver.
+
 An approval counts only as the account's last review that is not `COMMENTED`
 or `PENDING`, in state `APPROVED`, on the head commit. A last review in state
 `DISMISSED` means the account has no review; an earlier one never stands in.
@@ -39,7 +49,9 @@ from trimtab import planscope
 from trimtab.capture.sources import PER_PAGE, GhApi, Run, SourceError
 
 CHECK_NAME = "plan-scope"
+OWN_CHECK = "merge-authority"
 ACTIONS_APP = "github-actions"
+ACTIONS_APP_ID = 15368
 PIN_FILES = (".claude/trimtab.json", "instance.json")
 CHECKER_MARK = "bin/trimtab"
 CHECKER_DIRS = ("bin/", "trimtab/")
@@ -47,10 +59,15 @@ CHECKER_FILES = ("hooks/run_module.py",)
 # Bounded (ENG-6.2): past these the answer is an error, never a partial list judged as whole.
 REVIEW_LIMIT = 1000
 CHECK_RUN_LIMIT = 1000
+ACTIVITY_LIMIT = 100  # one page; a plan item with this many ref events is the admin's to judge
 SHOWN_PATHS = 5
 SHA = re.compile(r"[0-9a-f]{40}")
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+STATUS_LIMIT = 1000
 COUNTED = ("APPROVED", "CHANGES_REQUESTED", "DISMISSED")
+NO_COMMIT = "0" * 40
+CONTAINMENT = ("require_code_owner_review", "require_last_push_approval", "dismiss_stale_reviews_on_push",
+               "require_extra_approval_for_unattributed_changes", "required_review_thread_resolution")
 
 
 class MergeAuthorityError(Exception):
@@ -73,6 +90,45 @@ class CheckRun:
     status: str
     conclusion: str
     started_at: str
+    app_id: int = 0
+
+
+@dataclass(frozen=True)
+class Activity:
+    """One row of the head branch's activity: who moved it, how, and between which commits."""
+
+    id: int
+    kind: str
+    actor: str
+    before: str
+    after: str
+
+
+@dataclass(frozen=True)
+class RequiredCheck:
+    context: str
+    app_id: int | None  # None when the ruleset binds the check to no App
+
+
+@dataclass(frozen=True)
+class Containment:
+    """What the default branch's rulesets hold, unioned across every rule in effect."""
+
+    settings: frozenset[str]
+    approvals: int
+    strict: bool
+    checks: tuple[RequiredCheck, ...]
+
+
+@dataclass(frozen=True)
+class RouteFacts:
+    """What only the server writes, read when the approver's approval is the one the PR rests on."""
+
+    author: str
+    activities: tuple[Activity, ...]
+    containment: Containment
+    runs: tuple[CheckRun, ...]
+    statuses: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -91,6 +147,7 @@ class Pr:
 class Accounts:
     admin: str
     approver: str  # "" when none is configured: then no approver review counts
+    agent: str = ""  # "" when none is configured: then the approver route is closed
 
 
 @dataclass(frozen=True)
@@ -99,14 +156,17 @@ class Result:
     problems: tuple[str, ...]
 
 
-def accounts(admin: str, approver: str | None) -> Accounts:
+def accounts(admin: str, approver: str | None, agent: str | None = None) -> Accounts:
     """The configured logins, compared as GitHub compares them: without case."""
     admin, approver = admin.strip(), (approver or "").strip()
     if not admin:
         raise MergeAuthorityError("no admin login is configured")
+    agent = (agent or "").strip()
     if approver.casefold() == admin.casefold():
         raise MergeAuthorityError("the approver and admin logins are the same; the configuration is wrong")
-    return Accounts(admin, approver)
+    if agent and agent.casefold() in (admin.casefold(), approver.casefold()):
+        raise MergeAuthorityError("the agent login is also the admin or approver login; the configuration is wrong")
+    return Accounts(admin, approver, agent)
 
 
 def admin_only(path: str, checker_in_tree: bool) -> bool:
@@ -146,8 +206,96 @@ def plan_scope_problem(runs: list[CheckRun]) -> str:
     return ""
 
 
+def push_problems(head: str, agent: str, activities: tuple[Activity, ...]) -> list[str]:
+    """Why the head branch's history is not the agent's alone, unbroken, from its creation to the head."""
+    if not activities:
+        return ["the head branch has no recorded activity"]
+    rows = sorted(activities, key=lambda a: a.id)
+    problems = [f"{name} pushed to the head branch; only {agent} may" for name in
+                sorted({a.actor or "an unknown account" for a in rows if a.actor.casefold() != agent.casefold()})]
+    first = rows[0]
+    if first.kind != "branch_creation" or first.before != NO_COMMIT:
+        # Older rows may have aged out, and an older push could be anyone's.
+        problems.append("the head branch's activity does not reach back to its creation")
+    problems += [f"a {kind} on the head branch" for kind in
+                 sorted({a.kind for a in rows[1:] if a.kind != "push"})]
+    if any(earlier.after != later.before for earlier, later in zip(rows, rows[1:])):
+        problems.append("a gap in the head branch's chain of pushes")
+    if rows[-1].after != head:
+        problems.append("the head branch's newest activity is not the head commit")
+    return problems
+
+
+def containment_problems(held: Containment) -> list[str]:
+    """Which of the containment the approver leans on is off, on the rulesets the server says are in effect."""
+    problems = [f"the ruleset has {name} off" for name in CONTAINMENT if name not in held.settings]
+    if held.approvals < 1:
+        problems.append("the ruleset's required_approving_review_count is below 1")
+    if not held.strict:
+        problems.append(f"the ruleset does not hold {CHECK_NAME} to a strict policy")
+    bound = {c.context for c in held.checks if c.app_id == ACTIONS_APP_ID}
+    problems += [f"the ruleset does not require {name} bound to GitHub Actions" for name in (CHECK_NAME, OWN_CHECK)
+                 if name not in bound]
+    problems += [f"the ruleset binds {c.context} to no App" for c in held.checks if c.app_id is None]
+    return problems
+
+
+def required_run_problems(checks: tuple[RequiredCheck, ...], runs: tuple[CheckRun, ...]) -> list[str]:
+    """Which required check has no latest run that passed from its bound App. This check is skipped: it is the
+    run judging, so it cannot vouch for its own slot (the App's own step reads it before acting). The latest by
+    id, not by start: a carried-over job keeps its old start, and a draft's red before a ready run's green is
+    normal on one head."""
+    problems = []
+    for check in checks:
+        if check.context == OWN_CHECK or check.app_id is None:
+            continue
+        ours = [r for r in runs if r.name == check.context and r.app_id == check.app_id]
+        if not ours:
+            problems.append(f"required check {check.context} has no run from its bound App on the head commit")
+            continue
+        latest = max(ours, key=lambda r: r.id)
+        if latest.status != "completed" or latest.conclusion != "success":
+            problems.append(f"required check {check.context}'s latest run has not passed")
+    return problems
+
+
+def route_problems(who: Accounts, pr: Pr, last: dict[str, Review], facts: RouteFacts | None) -> list[str]:
+    """Why the approver's approval cannot carry this PR; empty when the approver route is open."""
+    if not who.agent:
+        return ["no agent login is configured, so the approver route is closed"]
+    if facts is None:
+        return ["the approver route's facts were not read"]
+    problems = []
+    if facts.author.casefold() != who.agent.casefold():
+        problems.append(f"the PR was opened by {facts.author or 'an unknown account'}, not {who.agent}")
+    problems += push_problems(pr.head, who.agent, facts.activities)
+    problems += required_run_problems(facts.containment.checks, facts.runs)
+    required = {c.context for c in facts.containment.checks}
+    # The required name is what gets printed: a status's own context is anyone's text.
+    problems += [f"a commit status is named for required check {name}"
+                 for name in sorted(required & set(facts.statuses))]
+    problems += containment_problems(facts.containment)
+    admin = last.get(who.admin.casefold())
+    if admin and admin.state == "DISMISSED":
+        problems.append(f"{who.admin}'s last review was dismissed")
+    return [f"approver route closed: {p}" for p in problems]
+
+
+def rests_on_approver(pr: Pr, who: Accounts, paths: list[str], checker_in_tree: bool,
+                      reviews: list[Review]) -> bool:
+    """Whether the approver's approval is the one the PR would pass on, so the route has to be open."""
+    branch = planscope.plan_of(pr.head_ref)
+    if not who.approver or branch.ref is planscope.Ref.NOT_PLAN:
+        return False
+    if admin_reason(pr, branch, [p for p in paths if admin_only(p, checker_in_tree)]):
+        return False
+    last = last_reviews(reviews, (who.admin, who.approver))
+    return (_approves(last.get(who.approver.casefold()), pr.head)
+            and not _approves(last.get(who.admin.casefold()), pr.head))
+
+
 def decide(pr: Pr, who: Accounts, paths: list[str], checker_in_tree: bool, reviews: list[Review],
-           runs: list[CheckRun]) -> Result:
+           runs: list[CheckRun], route: RouteFacts | None = None) -> Result:
     problems = []
     last = last_reviews(reviews, (who.admin, who.approver))
     for login in (who.admin, who.approver):
@@ -172,6 +320,8 @@ def decide(pr: Pr, who: Accounts, paths: list[str], checker_in_tree: bool, revie
         stale = [login for login in eligible if _stale(last.get(login.casefold()), pr.head)]
         detail = f"; {' and '.join(stale)} approved an earlier commit" if stale else ""
         problems.append(f"no approval from {names} on the head commit {pr.head[:12]}{reason}{detail}")
+    elif rests_on_approver(pr, who, paths, checker_in_tree, reviews):
+        problems += route_problems(who, pr, last, route)
     if problems:
         return Result("", tuple(problems))
     return Result(approved[0], ())
@@ -222,16 +372,17 @@ def read_reviews(api: GhApi, repository: str, number: int) -> list[Review]:
     return found
 
 
-def read_check_runs(api: GhApi, repository: str, head: str) -> list[CheckRun]:
-    """Every plan-scope check run on the head commit, every page: `filter=all`, since the default keeps only
-    the latest run per check suite, which could hide a later failure in another suite."""
+def read_check_runs(api: GhApi, repository: str, head: str, name: str | None = CHECK_NAME) -> list[CheckRun]:
+    """Every check run on the head commit named `name` (None: under any name), every page: `filter=all`, since
+    the default keeps only the latest run per check suite, which could hide a later failure in another suite."""
     what = "gh api commits check-runs"
+    named = {"check_name": name} if name else {}
     rows: list = []
     page = 1
     while True:
         try:
             data = api.json("GET", f"repos/{repository}/commits/{head}/check-runs", what,
-                            query={"check_name": CHECK_NAME, "filter": "all", "per_page": PER_PAGE, "page": page})
+                            query={**named, "filter": "all", "per_page": PER_PAGE, "page": page})
         except SourceError as err:
             raise MergeAuthorityError(str(err)) from err
         batch = data.get("check_runs") if isinstance(data, dict) else None
@@ -247,15 +398,117 @@ def read_check_runs(api: GhApi, repository: str, head: str) -> list[CheckRun]:
     for r in rows:
         try:
             run = CheckRun(r["id"], r["name"], (r.get("app") or {}).get("slug") or "", r["status"],
-                           r.get("conclusion") or "", r.get("started_at") or "")
+                           r.get("conclusion") or "", r.get("started_at") or "", (r.get("app") or {}).get("id") or 0)
         except (KeyError, TypeError, AttributeError) as err:
             raise MergeAuthorityError(f"{what} returned unexpected JSON") from err
-        if not (isinstance(run.id, int) and all(isinstance(v, str) for v in
+        if not (isinstance(run.id, int) and isinstance(run.app_id, int) and all(isinstance(v, str) for v in
                                                  (run.name, run.app_slug, run.status, run.conclusion,
                                                   run.started_at))):
             raise MergeAuthorityError(f"{what} returned unexpected JSON")
         found.append(run)
     return found
+
+
+def read_author(api: GhApi, repository: str, number: int) -> str:
+    """The login that opened the PR; "" for a deleted account."""
+    what = "gh api pulls"
+    data = _json(api, f"repos/{repository}/pulls/{number}", what)
+    if not isinstance(data, dict) or "user" not in data:
+        raise MergeAuthorityError(f"{what} returned unexpected JSON")
+    return _login(data["user"], what)
+
+
+def read_activities(api: GhApi, repository: str, ref: str) -> tuple[Activity, ...]:
+    """The head branch's activity. One full page is an error rather than a cut-off history: the endpoint pages by
+    cursor, and a plan item with that many ref events is the admin's to judge."""
+    what = "gh api activity"
+    rows = _json(api, f"repos/{repository}/activity", what,
+                 query={"ref": f"refs/heads/{ref}", "per_page": ACTIVITY_LIMIT})
+    if not isinstance(rows, list):
+        raise MergeAuthorityError(f"{what} returned unexpected JSON")
+    if len(rows) >= ACTIVITY_LIMIT:
+        raise MergeAuthorityError(f"{what} holds {ACTIVITY_LIMIT} or more rows; refusing a partial list")
+    found = []
+    for r in rows:
+        try:
+            activity = Activity(r["id"], r["activity_type"], _login(r["actor"], what), r["before"], r["after"])
+            row_ref = r["ref"]
+        except (KeyError, TypeError) as err:
+            raise MergeAuthorityError(f"{what} returned unexpected JSON") from err
+        if not (isinstance(activity.id, int) and all(isinstance(v, str) for v in
+                                                      (activity.kind, activity.before, activity.after))):
+            raise MergeAuthorityError(f"{what} returned unexpected JSON")
+        if row_ref != f"refs/heads/{ref}":
+            raise MergeAuthorityError(f"{what} returned a row for another ref")
+        found.append(activity)
+    return tuple(found)
+
+
+def read_containment(api: GhApi, repository: str, branch: str) -> Containment:
+    what = "gh api rules branches"
+    rows = _json(api, f"repos/{repository}/rules/branches/{branch}", what)
+    if not isinstance(rows, list):
+        raise MergeAuthorityError(f"{what} returned unexpected JSON")
+    settings: set[str] = set()
+    approvals = 0
+    strict = False
+    checks: list[RequiredCheck] = []
+    try:
+        for rule in rows:
+            params = rule.get("parameters") or {}
+            if rule["type"] == "pull_request":
+                settings |= {name for name in CONTAINMENT if params.get(name) is True}
+                approvals = max(approvals, params.get("required_approving_review_count") or 0)
+            elif rule["type"] == "required_status_checks":
+                held = [RequiredCheck(c["context"], c.get("integration_id")) for c in params["required_status_checks"]]
+                checks += held
+                # Strict is per rule, so only the rule holding plan-scope makes a plan PR take the new base.
+                strict = strict or (params.get("strict_required_status_checks_policy") is True
+                                    and any(c.context == CHECK_NAME for c in held))
+    except (KeyError, TypeError, AttributeError) as err:
+        raise MergeAuthorityError(f"{what} returned unexpected JSON") from err
+    if not all(isinstance(c.context, str) and (c.app_id is None or isinstance(c.app_id, int)) for c in checks):
+        raise MergeAuthorityError(f"{what} returned unexpected JSON")
+    return Containment(frozenset(settings), approvals, strict, tuple(checks))
+
+
+def read_status_contexts(api: GhApi, repository: str, head: str) -> tuple[str, ...]:
+    what = "gh api commits statuses"
+    try:
+        rows = api.all_pages(f"repos/{repository}/commits/{head}/statuses", {}, STATUS_LIMIT, what)
+        contexts = tuple(r["context"] for r in rows)
+    except SourceError as err:
+        raise MergeAuthorityError(str(err)) from err
+    except (KeyError, TypeError) as err:
+        raise MergeAuthorityError(f"{what} returned unexpected JSON") from err
+    if not all(isinstance(c, str) for c in contexts):
+        raise MergeAuthorityError(f"{what} returned unexpected JSON")
+    return contexts
+
+
+def read_route_facts(api: GhApi, pr: Pr, number: int) -> RouteFacts:
+    return RouteFacts(author=read_author(api, pr.repository, number),
+                      activities=read_activities(api, pr.repository, pr.head_ref),
+                      containment=read_containment(api, pr.repository, pr.default_branch),
+                      runs=tuple(read_check_runs(api, pr.repository, pr.head, name=None)),
+                      statuses=read_status_contexts(api, pr.repository, pr.head))
+
+
+def _json(api: GhApi, path: str, what: str, query: dict | None = None):
+    try:
+        return api.json("GET", path, what, query=query)
+    except SourceError as err:
+        raise MergeAuthorityError(str(err)) from err
+
+
+def _login(user, what: str) -> str:
+    """A user object's login; "" for the null GitHub leaves in place of a deleted account."""
+    if user is None:
+        return ""
+    login = user.get("login") if isinstance(user, dict) else None
+    if not isinstance(login, str):
+        raise MergeAuthorityError(f"{what} returned unexpected JSON")
+    return login
 
 
 def check(repo: str, pr: Pr, number: int, base: str, who: Accounts, run: Run | None = None) -> Result:
@@ -282,4 +535,7 @@ def check(repo: str, pr: Pr, number: int, base: str, who: Accounts, run: Run | N
     api = GhApi(run)
     reviews = read_reviews(api, pr.repository, number)
     runs = read_check_runs(api, pr.repository, pr.head) if is_plan else []
-    return decide(pr, who, paths, checker_in_tree, reviews, runs)
+    # Read only when the PR rests on the approver, so a failed read cannot stop the admin's approval counting.
+    route = (read_route_facts(api, pr, number)
+             if who.agent and rests_on_approver(pr, who, paths, checker_in_tree, reviews) else None)
+    return decide(pr, who, paths, checker_in_tree, reviews, runs, route)

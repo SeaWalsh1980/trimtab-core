@@ -13,7 +13,8 @@ from gh_fake import FakeGh, path_of, query_of
 from test_scrub import isolated_git_env
 from trimtab import mergeauthority, planscope
 from trimtab.capture.sources import GhApi
-from trimtab.mergeauthority import Accounts, CheckRun, MergeAuthorityError, Pr, Review
+from trimtab.mergeauthority import (Accounts, Activity, CheckRun, Containment, MergeAuthorityError, Pr, RequiredCheck,
+                                    Review, RouteFacts)
 
 ROOT = Path(__file__).resolve().parents[2]
 TRIMTAB = ROOT / "bin" / "trimtab"
@@ -22,7 +23,7 @@ FORK = "someone/repo"
 ADMIN = "the-admin"
 APPROVER = "the-approver"
 AGENT = "the-agent"
-WHO = Accounts(ADMIN, APPROVER)
+WHO = Accounts(ADMIN, APPROVER, AGENT)
 HEAD = "a" * 40
 EARLIER = "b" * 40
 BASE = "c" * 40
@@ -33,6 +34,15 @@ NUMBER = 7
 SOURCE = ["src/app.py"]
 AUTHORISED_PLAN = f"{planscope.AUTHORISED}/0020-z.md"
 OTHER_APP = "some-other-app"
+NO_COMMIT = "0" * 40
+ACTIONS_ID = 15368
+SCANNER_ID = 46505
+REVIEW_ID = 5531184
+OTHER_ID = 99
+REQUIRED = {"lint-test": ACTIONS_ID, "plan-scope": ACTIONS_ID, "merge-authority": ACTIONS_ID,
+            "claude-review": REVIEW_ID, "GitGuardian Security Checks": SCANNER_ID}
+SETTINGS = ("require_code_owner_review", "require_last_push_approval", "dismiss_stale_reviews_on_push",
+            "require_extra_approval_for_unattributed_changes", "required_review_thread_resolution")
 
 
 def pr(head_ref=PLAN_REF, head_repo=REPOSITORY, base_ref=DEFAULT):
@@ -50,11 +60,20 @@ def run(conclusion="success", status="completed", started="2026-10-25T10:00:00Z"
 
 
 PASSED = [run()]
+# The approver route with every guard satisfied, so the tests of the rest of the decision are not about it.
+OPEN_ROUTE = RouteFacts(
+    author=AGENT,
+    activities=(Activity(1, "branch_creation", AGENT, NO_COMMIT, HEAD),),
+    containment=Containment(frozenset(SETTINGS), 1, True,
+                            tuple(RequiredCheck(c, a) for c, a in REQUIRED.items())),
+    runs=tuple(CheckRun(i, c, "", "completed", "success", "", a) for i, (c, a) in enumerate(REQUIRED.items(), 1)),
+    statuses=())
 
 
 def decided(*reviews, head_ref=PLAN_REF, runs=PASSED, paths=SOURCE, checker_in_tree=False, who=WHO, **kwargs):
     ordered = [r if r.id else replace(r, id=i) for i, r in enumerate(reviews, start=1)]
-    return mergeauthority.decide(pr(head_ref, **kwargs), who, list(paths), checker_in_tree, ordered, list(runs))
+    return mergeauthority.decide(pr(head_ref, **kwargs), who, list(paths), checker_in_tree, ordered, list(runs),
+                                 OPEN_ROUTE)
 
 
 class NonPlanPrs(unittest.TestCase):
@@ -178,7 +197,7 @@ class AdminOnly(unittest.TestCase):
         self.assertIn("not the default branch", decided(review(APPROVER), base_ref="release").problems[0])
 
     def test_with_no_approver_configured_only_the_admin_counts(self):
-        result = decided(review(APPROVER), who=Accounts(ADMIN, ""))
+        result = decided(review(APPROVER), who=Accounts(ADMIN, "", AGENT))
 
         self.assertIn(f"from {ADMIN} on", result.problems[0])
 
@@ -226,6 +245,15 @@ class Reviews(unittest.TestCase):
         self.assertEqual(len(decided(review(APPROVER, state="PENDING")).problems), 1)
 
 
+class NoFacts(unittest.TestCase):
+    def test_facts_never_read_close_the_route_rather_than_open_it(self):
+        ordered = [replace(review(APPROVER), id=1)]
+
+        result = mergeauthority.decide(pr(), WHO, SOURCE, False, ordered, PASSED, None)
+
+        self.assertIn("facts were not read", result.problems[0])
+
+
 class AgreesWithTheSkill(unittest.TestCase):
     """The wrap-merged skill's approver file test reads the same lists after the merge; they must not drift."""
 
@@ -250,6 +278,14 @@ class Configuration(unittest.TestCase):
     def test_no_approver_means_none(self):
         self.assertEqual(mergeauthority.accounts(ADMIN, None), Accounts(ADMIN, ""))
 
+    def test_the_approver_and_agent_being_one_login_is_an_error(self):
+        with self.assertRaises(MergeAuthorityError):
+            mergeauthority.accounts(ADMIN, APPROVER, APPROVER.upper())
+
+    def test_the_admin_and_agent_being_one_login_is_an_error(self):
+        with self.assertRaises(MergeAuthorityError):
+            mergeauthority.accounts(ADMIN, APPROVER, ADMIN.upper())
+
 
 def review_row(id, login, state="APPROVED", commit=HEAD):
     return {"id": id, "user": {"login": login}, "state": state, "commit_id": commit}
@@ -262,6 +298,39 @@ def run_row(id, conclusion="success", status="completed", app="github-actions"):
 
 REVIEWS_PATH = f"repos/{REPOSITORY}/pulls/{NUMBER}/reviews"
 RUNS_PATH = f"repos/{REPOSITORY}/commits/{HEAD}/check-runs"
+PULL_PATH = f"repos/{REPOSITORY}/pulls/{NUMBER}"
+ACTIVITY_PATH = f"repos/{REPOSITORY}/activity"
+RULES_PATH = f"repos/{REPOSITORY}/rules/branches/{DEFAULT}"
+
+
+def activity_row(id, kind, before, after, actor=AGENT, ref=PLAN_REF):
+    return {"id": id, "activity_type": kind, "before": before, "after": after,
+            "actor": {"login": actor} if actor else None, "ref": f"refs/heads/{ref}"}
+
+
+def check_row(id, name, app_id, conclusion="success", status="completed"):
+    slug = "github-actions" if app_id == ACTIONS_ID else OTHER_APP
+    return {"id": id, "name": name, "app": {"id": app_id, "slug": slug}, "status": status,
+            "conclusion": conclusion, "started_at": "2026-10-25T10:00:00Z"}
+
+
+def rule_rows(checks=None, settings=SETTINGS, approvals=1, strict=True):
+    pull_request = {name: True for name in settings} | {"required_approving_review_count": approvals}
+    required = [{"context": c, **({"integration_id": a} if a else {})} for c, a in (checks or REQUIRED).items()]
+    return [{"type": "pull_request", "parameters": pull_request},
+            {"type": "required_status_checks",
+             "parameters": {"required_status_checks": required, "strict_required_status_checks_policy": strict}}]
+
+
+def route_answers(head):
+    """The server's answers on a head only the agent pushed, with every required check green and no status."""
+    return {f"repos/{REPOSITORY}/pulls/{NUMBER}": json.dumps({"user": {"login": AGENT}}),
+            ACTIVITY_PATH: json.dumps([activity_row(2, "push", EARLIER, head),
+                                       activity_row(1, "branch_creation", NO_COMMIT, EARLIER)]),
+            RULES_PATH: json.dumps(rule_rows()),
+            f"repos/{REPOSITORY}/commits/{head}/check-runs": json.dumps(
+                {"check_runs": [check_row(i, c, a) for i, (c, a) in enumerate(REQUIRED.items(), 1)]}),
+            f"repos/{REPOSITORY}/commits/{head}/statuses": "[]"}
 
 
 class Rest(unittest.TestCase):
@@ -319,8 +388,8 @@ def git(repo, *args):
                           text=True).stdout.strip()
 
 
-class Repository(unittest.TestCase):
-    """Real git for the changed paths; a fake gh for reviews and check runs."""
+class GitRepository(unittest.TestCase):
+    """Real git for the changed paths, on a plan branch cut from the default branch."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -348,9 +417,294 @@ class Repository(unittest.TestCase):
         git(self.repo, "commit", "-q", "-m", message)
         return git(self.repo, "rev-parse", "HEAD")
 
+
+class ApproverRoute(GitRepository):
+    """Each guard through check(), from the server's JSON: every test starts on a passing PR and breaks one fact."""
+
+    def setUp(self):
+        super().setUp()
+        self.write("src/app.py", "x = 2\n")
+        self.head = self.commit("item")
+        self.answers = {**route_answers(self.head),
+                        REVIEWS_PATH: json.dumps([review_row(1, APPROVER, commit=self.head)])}
+
+    def status_path(self):
+        return f"repos/{REPOSITORY}/commits/{self.head}/statuses"
+
+    def runs_path(self):
+        return f"repos/{REPOSITORY}/commits/{self.head}/check-runs"
+
+    def set_activity(self, *rows):
+        self.answers[ACTIVITY_PATH] = json.dumps(list(rows))
+
+    def set_runs(self, *rows):
+        self.answers[self.runs_path()] = json.dumps({"check_runs": list(rows)})
+
+    def green_runs_except(self, *names):
+        return [check_row(i, c, a) for i, (c, a) in enumerate(REQUIRED.items(), 1) if c not in names]
+
+    def judged(self, who=WHO, gh=None):
+        the_pr = Pr(repository=REPOSITORY, head_repo=REPOSITORY, head_ref=PLAN_REF, head=self.head, base_ref=DEFAULT,
+                    default_branch=DEFAULT)
+        return mergeauthority.check(str(self.repo), the_pr, NUMBER, self.base, who, run=gh or FakeGh(self.answers))
+
+    def assert_closed(self, says):
+        result = self.judged()
+
+        self.assertEqual(result.approved_by, "")
+        self.assertTrue(any(says in p for p in result.problems), result.problems)
+
+    def test_every_guard_satisfied_passes_the_approver(self):
+        self.assertEqual(self.judged(), mergeauthority.Result(APPROVER, ()))
+
+    # R1a-c: who pushed
+    def test_a_head_the_approver_pushed_needs_the_admin(self):
+        self.set_activity(activity_row(2, "push", EARLIER, self.head, actor=APPROVER),
+                          activity_row(1, "branch_creation", NO_COMMIT, EARLIER))
+
+        self.assert_closed(f"{APPROVER} pushed")
+
+    def test_a_head_the_admin_pushed_needs_the_admins_approval(self):
+        self.set_activity(activity_row(2, "push", EARLIER, self.head, actor=ADMIN),
+                          activity_row(1, "branch_creation", NO_COMMIT, EARLIER))
+
+        self.assert_closed(f"{ADMIN} pushed")
+
+    def test_a_push_by_any_other_identity_closes_the_approver_route(self):
+        self.set_activity(activity_row(2, "push", EARLIER, self.head),
+                          activity_row(1, "branch_creation", NO_COMMIT, EARLIER, actor=OTHER_APP))
+
+        self.assert_closed(f"{OTHER_APP} pushed")
+
+    def test_a_push_with_no_actor_closes_the_approver_route(self):
+        self.set_activity(activity_row(2, "push", EARLIER, self.head, actor=None),
+                          activity_row(1, "branch_creation", NO_COMMIT, EARLIER))
+
+        self.assert_closed("an unknown account pushed")
+
+    # R1d, R1e: how the ref moved
+    def test_a_force_push_on_the_ref_closes_the_approver_route(self):
+        self.set_activity(activity_row(2, "force_push", EARLIER, self.head),
+                          activity_row(1, "branch_creation", NO_COMMIT, EARLIER))
+
+        self.assert_closed("force_push")
+
+    def test_a_deleted_and_recreated_branch_closes_the_route(self):
+        self.set_activity(activity_row(3, "branch_creation", NO_COMMIT, self.head),
+                          activity_row(2, "branch_deletion", EARLIER, NO_COMMIT),
+                          activity_row(1, "branch_creation", NO_COMMIT, EARLIER))
+
+        self.assert_closed("branch_deletion")
+
+    def test_activity_that_does_not_reach_the_head_closes_the_route(self):
+        self.set_activity(activity_row(1, "branch_creation", NO_COMMIT, EARLIER))
+
+        self.assert_closed("not the head")
+
+    def test_a_gap_in_the_push_chain_closes_the_route(self):
+        self.set_activity(activity_row(2, "push", BASE, self.head),
+                          activity_row(1, "branch_creation", NO_COMMIT, EARLIER))
+
+        self.assert_closed("gap")
+
+    def test_activity_that_stops_short_of_the_branchs_creation_closes_the_route(self):
+        self.set_activity(activity_row(1, "push", EARLIER, self.head))
+
+        self.assert_closed("creation")
+
+    def test_no_activity_closes_the_route(self):
+        self.set_activity()
+
+        self.assert_closed("no recorded activity")
+
+    def test_rows_are_ordered_by_id_not_by_position(self):
+        self.set_activity(activity_row(1, "branch_creation", NO_COMMIT, EARLIER),
+                          activity_row(2, "push", EARLIER, self.head))
+
+        self.assertEqual(self.judged().approved_by, APPROVER)
+
+    def test_activity_for_another_ref_is_an_error(self):
+        self.set_activity(activity_row(1, "branch_creation", NO_COMMIT, self.head, ref="plan/other"))
+
+        with self.assertRaises(MergeAuthorityError):
+            self.judged()
+
+    def test_a_commit_authored_as_the_admin_earns_no_admin_route(self):
+        git(self.repo, "-c", f"user.name={ADMIN}", "-c", "user.email=admin@example.invalid", "commit", "-q",
+            "--allow-empty", "--author", f"{ADMIN} <admin@example.invalid>", "-m", "as the admin")
+        self.head = git(self.repo, "rev-parse", "HEAD")
+        self.answers.update({**route_answers(self.head),
+                             REVIEWS_PATH: json.dumps([review_row(1, AGENT, commit=self.head)])})
+
+        self.assertIn(f"no approval from {ADMIN} or {APPROVER}", self.judged().problems[0])
+
+    # R2
+    def test_a_pr_the_agent_did_not_author_needs_the_admin(self):
+        self.answers[PULL_PATH] = json.dumps({"user": {"login": OTHER_APP}})
+
+        self.assert_closed(f"opened by {OTHER_APP}")
+
+    # R3
+    def test_a_required_check_with_no_run_closes_the_route(self):
+        self.set_runs(*self.green_runs_except("lint-test"))
+
+        self.assert_closed("lint-test")
+
+    def test_a_required_check_run_from_the_wrong_app_does_not_count(self):
+        self.set_runs(*self.green_runs_except("lint-test"), check_row(50, "lint-test", OTHER_ID))
+
+        self.assert_closed("lint-test")
+
+    def test_a_red_latest_required_run_closes_the_route(self):
+        self.set_runs(*self.green_runs_except("lint-test"), check_row(50, "lint-test", ACTIONS_ID),
+                      check_row(51, "lint-test", ACTIONS_ID, "failure"))
+
+        self.assert_closed("lint-test")
+
+    def test_a_running_required_check_closes_the_route(self):
+        self.set_runs(*self.green_runs_except("lint-test"), check_row(50, "lint-test", ACTIONS_ID, None, "in_progress"))
+
+        self.assert_closed("lint-test")
+
+    def test_a_skipped_required_check_closes_the_route(self):
+        self.set_runs(*self.green_runs_except("claude-review"), check_row(50, "claude-review", REVIEW_ID, "skipped"))
+
+        self.assert_closed("claude-review")
+
+    def test_a_red_draft_run_before_a_green_ready_run_passes(self):
+        self.set_runs(*self.green_runs_except("lint-test"), check_row(50, "lint-test", ACTIONS_ID, "failure"),
+                      check_row(51, "lint-test", ACTIONS_ID))
+
+        self.assertEqual(self.judged().approved_by, APPROVER)
+
+    def test_the_checks_own_slot_is_not_required_of_itself(self):
+        self.set_runs(*self.green_runs_except("merge-authority"))
+
+        self.assertEqual(self.judged().approved_by, APPROVER)
+
+    # R4
+    def test_a_commit_status_named_for_a_required_check_closes_the_route(self):
+        self.answers[self.status_path()] = json.dumps([{"context": "lint-test", "state": "success"}])
+
+        self.assert_closed("commit status")
+
+    def test_a_status_in_the_merge_authority_slot_closes_the_route(self):
+        self.answers[self.status_path()] = json.dumps([{"context": "merge-authority", "state": "success"}])
+
+        self.assert_closed("commit status")
+
+    def test_a_status_under_another_name_is_ignored(self):
+        self.answers[self.status_path()] = json.dumps([{"context": "something-else", "state": "failure"}])
+
+        self.assertEqual(self.judged().approved_by, APPROVER)
+
+    # R5
+    def test_each_ruleset_containment_off_closes_the_route(self):
+        for setting in SETTINGS:
+            with self.subTest(setting=setting):
+                self.answers[RULES_PATH] = json.dumps(rule_rows(settings=[s for s in SETTINGS if s != setting]))
+
+                self.assert_closed(setting)
+
+    def test_no_required_approval_closes_the_route(self):
+        self.answers[RULES_PATH] = json.dumps(rule_rows(approvals=0))
+
+        self.assert_closed("required_approving_review_count")
+
+    def test_a_loose_strict_policy_closes_the_route(self):
+        self.answers[RULES_PATH] = json.dumps(rule_rows(strict=False))
+
+        self.assert_closed("strict")
+
+    def test_an_unbound_required_check_closes_the_route(self):
+        self.answers[RULES_PATH] = json.dumps(rule_rows(checks={**REQUIRED, "lint-test": None}))
+
+        self.assert_closed("lint-test")
+
+    def test_a_ruleset_not_requiring_merge_authority_closes_the_route(self):
+        self.answers[RULES_PATH] = json.dumps(
+            rule_rows(checks={c: a for c, a in REQUIRED.items() if c != "merge-authority"}))
+
+        self.assert_closed("merge-authority")
+
+    def test_plan_scope_bound_to_another_app_closes_the_route(self):
+        self.answers[RULES_PATH] = json.dumps(rule_rows(checks={**REQUIRED, "plan-scope": OTHER_ID}))
+
+        self.assert_closed("plan-scope")
+
+    def test_no_rules_at_all_closes_the_route(self):
+        self.answers[RULES_PATH] = "[]"
+
+        self.assert_closed("require_code_owner_review")
+
+    # R6
+    def test_a_dismissed_admin_review_closes_the_approver_route(self):
+        self.answers[REVIEWS_PATH] = json.dumps([review_row(1, ADMIN, "CHANGES_REQUESTED", self.head),
+                                                 review_row(2, ADMIN, "DISMISSED", self.head),
+                                                 review_row(3, APPROVER, commit=self.head)])
+
+        self.assert_closed("dismissed")
+
+    # R7
+    def test_no_agent_login_closes_the_approver_route(self):
+        result = self.judged(who=Accounts(ADMIN, APPROVER))
+
+        self.assertIn("no agent login", result.problems[0])
+
+    def test_no_agent_login_leaves_the_admins_approval_counting(self):
+        self.answers[REVIEWS_PATH] = json.dumps([review_row(1, ADMIN, commit=self.head)])
+
+        self.assertEqual(self.judged(who=Accounts(ADMIN, APPROVER)).approved_by, ADMIN)
+
+    # R8
+    def test_a_failed_activity_read_is_an_error(self):
+        with self.assertRaises(MergeAuthorityError):
+            self.judged(gh=FakeGh(self.answers | {ACTIVITY_PATH: "not json"}))
+
+    def test_too_many_activities_is_an_error(self):
+        self.set_activity(*[activity_row(i, "push", EARLIER, self.head) for i in range(mergeauthority.ACTIVITY_LIMIT)])
+
+        with self.assertRaises(MergeAuthorityError):
+            self.judged()
+
+    def test_each_malformed_read_is_an_error(self):
+        for path in (PULL_PATH, ACTIVITY_PATH, RULES_PATH, self.runs_path(), self.status_path()):
+            with self.subTest(path=path):
+                with self.assertRaises(MergeAuthorityError):
+                    self.judged(gh=FakeGh(self.answers | {path: json.dumps({"unexpected": 1})}))
+
+    def test_a_rejected_activity_read_is_an_error(self):
+        answering = FakeGh(self.answers)
+
+        def forbidden(argv, stdin):
+            if path_of(argv) == ACTIVITY_PATH:
+                return subprocess.CompletedProcess(argv, 1, "", "HTTP 403")
+            return answering(argv, stdin)
+
+        with self.assertRaises(MergeAuthorityError):
+            self.judged(gh=forbidden)
+
+    def test_a_failed_activity_read_leaves_the_admins_approval_counting(self):
+        self.answers[REVIEWS_PATH] = json.dumps([review_row(1, ADMIN, commit=self.head),
+                                                 review_row(2, APPROVER, commit=self.head)])
+
+        result = self.judged(gh=FakeGh(self.answers | {ACTIVITY_PATH: "not json"}))
+
+        self.assertEqual(result.approved_by, ADMIN)
+
+    def test_a_closed_route_never_fails_the_admins_own_approval(self):
+        self.set_activity(activity_row(1, "force_push", EARLIER, self.head, actor=ADMIN))
+        self.answers[REVIEWS_PATH] = json.dumps([review_row(1, ADMIN, commit=self.head)])
+
+        self.assertEqual(self.judged(), mergeauthority.Result(ADMIN, ()))
+
+
+class Repository(GitRepository):
+    """check() and the CLI end to end; a fake gh for the server."""
+
     def check(self, head, reviewer=APPROVER):
-        gh = FakeGh({f"repos/{REPOSITORY}/pulls/{NUMBER}/reviews": json.dumps([review_row(1, reviewer, commit=head)]),
-                     f"repos/{REPOSITORY}/commits/{head}/check-runs": json.dumps({"check_runs": [run_row(1)]})})
+        gh = FakeGh({**route_answers(head),
+                     f"repos/{REPOSITORY}/pulls/{NUMBER}/reviews": json.dumps([review_row(1, reviewer, commit=head)])})
         the_pr = Pr(repository=REPOSITORY, head_repo=REPOSITORY, head_ref=PLAN_REF, head=head, base_ref=DEFAULT,
                     default_branch=DEFAULT)
         return mergeauthority.check(str(self.repo), the_pr, NUMBER, self.base, WHO, run=gh), gh
@@ -421,17 +775,17 @@ class Repository(unittest.TestCase):
         return self.commit("item")
 
     def fake_gh(self, head, reviewer):
-        """A `gh` on PATH for the CLI, which runs the real command: canned reviews and check runs (TST-2)."""
+        """A `gh` on PATH for the CLI, which runs the real command: the server's canned answers (TST-2)."""
         bin_dir = Path(self.tmp.name) / "bin"
         bin_dir.mkdir(exist_ok=True)
         gh = bin_dir / "gh"
-        gh.write_text("#!/usr/bin/env python3\nimport os, sys\n"
-                      "print(os.environ['FAKE_REVIEWS' if '/reviews' in sys.argv[4] else 'FAKE_RUNS'])\n",
+        gh.write_text("#!/usr/bin/env python3\nimport json, os, sys\n"
+                      "print(json.loads(os.environ['FAKE_ANSWERS'])[sys.argv[4].split('?')[0]])\n",
                       encoding="utf-8")
         gh.chmod(0o755)
         return {"PATH": f"{bin_dir}{os.pathsep}{self.env['PATH']}",
-                "FAKE_REVIEWS": json.dumps([review_row(1, reviewer, commit=head)]),
-                "FAKE_RUNS": json.dumps({"check_runs": [run_row(1)]})}
+                "FAKE_ANSWERS": json.dumps({**route_answers(head), REVIEWS_PATH: json.dumps(
+                    [review_row(1, reviewer, commit=head)])})}
 
     def cli(self, *extra, reviewer=None):
         head = self.commit_change()
@@ -453,12 +807,17 @@ class Repository(unittest.TestCase):
         self.assertEqual(done.returncode, 2, done.stderr)
 
     def test_the_cli_exits_0_and_names_the_approver_on_a_pass(self):
-        done = self.cli("--admin", ADMIN, "--approver", APPROVER, reviewer=APPROVER)
+        done = self.cli("--admin", ADMIN, "--approver", APPROVER, "--agent", AGENT, reviewer=APPROVER)
 
         self.assertEqual((done.returncode, f"approved by {APPROVER}" in done.stdout), (0, True), done.stderr)
 
+    def test_the_cli_exits_2_when_agent_and_admin_are_one_login(self):
+        done = self.cli("--admin", ADMIN, "--approver", APPROVER, "--agent", ADMIN)
+
+        self.assertEqual(done.returncode, 2, done.stderr)
+
     def test_the_cli_exits_1_with_a_fail_line_when_unapproved(self):
-        done = self.cli("--admin", ADMIN, "--approver", APPROVER, reviewer=AGENT)
+        done = self.cli("--admin", ADMIN, "--approver", APPROVER, "--agent", AGENT, reviewer=AGENT)
 
         self.assertEqual((done.returncode, done.stderr.startswith("FAIL  ")), (1, True), done.stderr)
 

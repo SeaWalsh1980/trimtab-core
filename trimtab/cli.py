@@ -888,7 +888,7 @@ def cmd_check_merge_authority(args) -> int:
     pr = mergeauthority.Pr(repository=args.repository, head_repo=args.head_repo, head_ref=args.head_ref,
                            head=args.head, base_ref=args.base_ref, default_branch=args.default_branch)
     try:
-        who = mergeauthority.accounts(args.admin, args.approver)
+        who = mergeauthority.accounts(args.admin, args.approver, args.agent)
         result = mergeauthority.check(args.repo, pr, args.pr, args.base, who)
     except mergeauthority.MergeAuthorityError as err:
         print(f"error: {err}; nothing is vouched for", file=sys.stderr)
@@ -1199,6 +1199,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the admin login, from configuration the PR cannot change")
     ma.add_argument("--approver", metavar="LOGIN",
                     help="the approver login, from the same configuration; without it no approver review counts")
+    ma.add_argument("--agent", metavar="LOGIN",
+                    help="the agent login, from the same configuration; without it the approver route is closed")
     ma.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout (default: .)")
     ma.set_defaults(func=cmd_check_merge_authority)
 
