@@ -225,3 +225,7 @@ The guard reads the command text, so it does not see:
   for the operator.
 
 Each is a reason the server stays the boundary.
+
+## Amendments
+
+- [ADR 0055](0055-guard-github-refuses-deleting-runs-and-dispatching-workflows.md) adds deleting a workflow run or its logs, and dispatching a workflow, to what this guard refuses.

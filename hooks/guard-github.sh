@@ -3,10 +3,12 @@
 # that registration is a security-control change (ADR 0011).
 #
 # Refuses the GitHub writes the operator owns: a PR opened as anything but a
-# draft, an approving review, resolving a review thread, and API writes to the
-# default branch (and `gh repo sync --force`). The rules, the spellings read
-# and the residuals are in trimtab/adapters/guard_github.py and
-# docs/adr/0037-guard-github-refuses-the-github-writes-the-operator-owns.md.
+# draft, an approving review, resolving a review thread, API writes to the
+# default branch (and `gh repo sync --force`), deleting a workflow run or its
+# logs, and dispatching a workflow. The rules, the spellings read
+# and the residuals are in trimtab/adapters/guard_github.py,
+# docs/adr/0037-guard-github-refuses-the-github-writes-the-operator-owns.md and
+# docs/adr/0055-guard-github-refuses-deleting-runs-and-dispatching-workflows.md.
 # Exit 2 = blocked, with a message that names the rule and never quotes the
 # command.
 #
@@ -48,8 +50,14 @@ flat=${flat//[\"\'\\]/}
 # Besides the names, gh's own subcommands: a command word the shell builds
 # (${G}h, /usr/bin/g?) hides `gh` but not what follows it.
 about_github='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-]|$)|graphql|github\.com'
-about_github+='|(^|[^A-Za-z0-9_])(pr[[:space:]]+(create|new|review)|api[[:space:]]|repo[[:space:]]+sync|alias[[:space:]]+(set|import))'
-if [[ "$payload" != *'\u'* && "$payload" != *"\$'"* ]]; then
+# Options, or expansions that may be options, may sit between a group and its
+# command (`run -R o/r delete`, `run $F delete`).
+opt='((-|\$)[^[:space:]]+[[:space:]]+([^[:space:]-][^[:space:]]*[[:space:]]+)?)*'
+about_github+="|(^|[^A-Za-z0-9_])(pr[[:space:]]+${opt}(create|new|review)|api[[:space:]]|repo[[:space:]]+${opt}sync|alias[[:space:]]+(set|import)|run[[:space:]]+${opt}delete|workflow[[:space:]]+${opt}run)"
+# The regex's time grows steeply with a long crafted command (over 20 s at 140 KB,
+# ADR 0055), and a hook that outlives its timeout fails open. So a long payload
+# goes to the adapter, which stops itself and blocks.
+if (( ${#payload} <= 32768 )) && [[ "$payload" != *'\u'* && "$payload" != *"\$'"* ]]; then
   shopt -s nocasematch
   [[ "$flat" =~ $about_github ]] || exit 0
   shopt -u nocasematch
