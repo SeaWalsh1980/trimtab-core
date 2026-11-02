@@ -13,8 +13,8 @@ from gh_fake import FakeGh, path_of, query_of
 from test_scrub import isolated_git_env
 from trimtab import mergeauthority, planscope
 from trimtab.capture.sources import PER_PAGE, GhApi
-from trimtab.mergeauthority import (Accounts, Activity, CheckRun, Containment, MergeAuthorityError, Pr, RequiredCheck,
-                                    Review, RouteFacts)
+from trimtab.mergeauthority import (Accounts, Activity, CheckRun, Containment, JobRecord, MergeAuthorityError, Pr,
+                                    RequiredCheck, Review, RouteFacts)
 
 ROOT = Path(__file__).resolve().parents[2]
 TRIMTAB = ROOT / "bin" / "trimtab"
@@ -60,6 +60,11 @@ def run(conclusion="success", status="completed", started="2026-10-25T10:00:00Z"
 
 
 PASSED = [run()]
+CI_WORKFLOW = ".github/workflows/ci.yml"
+SCOPE_WORKFLOW = ".github/workflows/plan-scope.yml"
+WORKFLOWS = {"lint-test": CI_WORKFLOW, "plan-scope": SCOPE_WORKFLOW, "merge-authority": SCOPE_WORKFLOW}
+RUN_ID = 700
+RUNNER = 1000000560
 # The approver route with every guard satisfied, so the tests of the rest of the decision are not about it.
 OPEN_ROUTE = RouteFacts(
     author=AGENT,
@@ -67,13 +72,16 @@ OPEN_ROUTE = RouteFacts(
     containment=Containment(frozenset(SETTINGS), 1, True,
                             tuple(RequiredCheck(c, a) for c, a in REQUIRED.items())),
     runs=tuple(CheckRun(i, c, "", "completed", "success", "", a) for i, (c, a) in enumerate(REQUIRED.items(), 1)),
-    statuses=())
+    statuses=(),
+    jobs=tuple(JobRecord(i, c, "completed", "success", RUNNER, "a runner", 3, HEAD, HEAD, WORKFLOWS[c], "pull_request")
+               for i, (c, a) in enumerate(REQUIRED.items(), 1) if a == ACTIONS_ID and c != "merge-authority"),
+    workflows=WORKFLOWS)
 
 
 def decided(*reviews, head_ref=PLAN_REF, runs=PASSED, paths=SOURCE, checker_in_tree=False, who=WHO, **kwargs):
     ordered = [r if r.id else replace(r, id=i) for i, r in enumerate(reviews, start=1)]
     return mergeauthority.decide(pr(head_ref, **kwargs), who, list(paths), checker_in_tree, ordered, list(runs),
-                                 OPEN_ROUTE)
+                                 lambda: OPEN_ROUTE)
 
 
 class NonPlanPrs(unittest.TestCase):
@@ -249,9 +257,16 @@ class NoFacts(unittest.TestCase):
     def test_facts_never_read_close_the_route_rather_than_open_it(self):
         ordered = [replace(review(APPROVER), id=1)]
 
-        result = mergeauthority.decide(pr(), WHO, SOURCE, False, ordered, PASSED, None)
+        result = mergeauthority.decide(pr(), WHO, SOURCE, False, ordered, PASSED, lambda: None)
 
         self.assertIn("facts were not read", result.problems[0])
+
+    def test_a_passing_run_with_no_job_record_closes_the_route(self):
+        ordered = [replace(review(APPROVER), id=1)]
+
+        result = mergeauthority.decide(pr(), WHO, SOURCE, False, ordered, PASSED, lambda: replace(OPEN_ROUTE, jobs=()))
+
+        self.assertIn("not a passing job", result.problems[0])
 
 
 class AgreesWithTheSkill(unittest.TestCase):
@@ -274,6 +289,22 @@ class Configuration(unittest.TestCase):
     def test_the_same_login_for_both_is_an_error(self):
         with self.assertRaises(MergeAuthorityError):
             mergeauthority.accounts(ADMIN, ADMIN.upper())
+
+    def test_job_workflows_are_read_from_pairs(self):
+        self.assertEqual(mergeauthority.job_workflows([f"lint-test={CI_WORKFLOW}"]), {"lint-test": CI_WORKFLOW})
+
+    def test_no_job_workflows_means_none(self):
+        self.assertEqual(mergeauthority.job_workflows(None), {})
+
+    def test_a_bad_job_workflow_is_an_error(self):
+        for pair in ("lint-test", f"={CI_WORKFLOW}", "lint-test=ci.yml", "lint-test=.github/workflows/../ci.yml"):
+            with self.subTest(pair=pair):
+                with self.assertRaises(MergeAuthorityError):
+                    mergeauthority.job_workflows([pair])
+
+    def test_a_check_named_twice_is_an_error(self):
+        with self.assertRaises(MergeAuthorityError):
+            mergeauthority.job_workflows([f"lint-test={CI_WORKFLOW}", f"lint-test={SCOPE_WORKFLOW}"])
 
     def test_no_approver_means_none(self):
         self.assertEqual(mergeauthority.accounts(ADMIN, None), Accounts(ADMIN, ""))
@@ -322,14 +353,44 @@ def rule_rows(checks=None, settings=SETTINGS, approvals=1, strict=True):
              "parameters": {"required_status_checks": required, "strict_required_status_checks_policy": strict}}]
 
 
+def job_path(id):
+    return f"repos/{REPOSITORY}/actions/jobs/{id}"
+
+
+def job_row(id, name, head, conclusion="success", status="completed", runner_id=RUNNER, runner_name="a runner",
+            steps=3, run_id=RUN_ID):
+    return {"id": id, "name": name, "run_id": run_id, "status": status, "conclusion": conclusion, "head_sha": head,
+            "runner_id": runner_id, "runner_name": runner_name, "labels": ["ubuntu-latest"],
+            "steps": [{"name": f"step {i}"} for i in range(steps)]}
+
+
+def run_path(run_id=RUN_ID):
+    return f"repos/{REPOSITORY}/actions/runs/{run_id}"
+
+
+def workflow_run_row(head, path=CI_WORKFLOW, event="pull_request", run_id=RUN_ID):
+    return {"id": run_id, "path": path, "event": event, "head_sha": head}
+
+
+def job_answers(runs, head):
+    """A real job and workflow run behind each Actions-bound check run, one workflow run per expected workflow."""
+    answers = {}
+    for r in runs:
+        if (r["app"] or {}).get("id") == ACTIONS_ID and r["name"] in WORKFLOWS:
+            run_id = RUN_ID + list(WORKFLOWS.values()).index(WORKFLOWS[r["name"]])
+            answers[job_path(r["id"])] = json.dumps(job_row(r["id"], r["name"], head, run_id=run_id))
+            answers[run_path(run_id)] = json.dumps(workflow_run_row(head, WORKFLOWS[r["name"]], run_id=run_id))
+    return answers
+
+
 def route_answers(head):
     """The server's answers on a head only the agent pushed, with every required check green and no status."""
-    return {f"repos/{REPOSITORY}/pulls/{NUMBER}": json.dumps({"user": {"login": AGENT}}),
+    runs = [check_row(i, c, a) for i, (c, a) in enumerate(REQUIRED.items(), 1)]
+    return {**job_answers(runs, head), f"repos/{REPOSITORY}/pulls/{NUMBER}": json.dumps({"user": {"login": AGENT}}),
             ACTIVITY_PATH: json.dumps([activity_row(2, "push", EARLIER, head),
                                        activity_row(1, "branch_creation", NO_COMMIT, EARLIER)]),
             RULES_PATH: json.dumps(rule_rows()),
-            f"repos/{REPOSITORY}/commits/{head}/check-runs": json.dumps(
-                {"check_runs": [check_row(i, c, a) for i, (c, a) in enumerate(REQUIRED.items(), 1)]}),
+            f"repos/{REPOSITORY}/commits/{head}/check-runs": json.dumps({"check_runs": runs}),
             f"repos/{REPOSITORY}/commits/{head}/statuses": "[]"}
 
 
@@ -439,6 +500,7 @@ class ApproverRoute(GitRepository):
 
     def set_runs(self, *rows):
         self.answers[self.runs_path()] = json.dumps({"check_runs": list(rows)})
+        self.answers.update(job_answers(rows, self.head))
 
     def green_runs_except(self, *names):
         return [check_row(i, c, a) for i, (c, a) in enumerate(REQUIRED.items(), 1) if c not in names]
@@ -446,7 +508,8 @@ class ApproverRoute(GitRepository):
     def judged(self, who=WHO, gh=None):
         the_pr = Pr(repository=REPOSITORY, head_repo=REPOSITORY, head_ref=PLAN_REF, head=self.head, base_ref=DEFAULT,
                     default_branch=DEFAULT)
-        return mergeauthority.check(str(self.repo), the_pr, NUMBER, self.base, who, run=gh or FakeGh(self.answers))
+        return mergeauthority.check(str(self.repo), the_pr, NUMBER, self.base, who, run=gh or FakeGh(self.answers),
+                                    workflows=WORKFLOWS)
 
     def assert_closed(self, says, alone=True):
         """The route closes and says why; `alone` also pins that no other guard is what closed it."""
@@ -629,6 +692,161 @@ class ApproverRoute(GitRepository):
         self.set_runs(*self.green_runs_except("merge-authority"))
 
         self.assertEqual(self.judged().approved_by, APPROVER)
+
+    # The job record (ADR 0057): each case is a run the bound App's id alone would pass
+    def latest_lint_job(self, **changes):
+        self.answers[job_path(1)] = json.dumps(job_row(1, "lint-test", self.head, run_id=RUN_ID, **changes))
+
+    def test_every_actions_bound_check_passes_on_its_real_job(self):
+        self.assertEqual(self.judged().approved_by, APPROVER)
+
+    def test_a_forged_run_with_no_runner_closes_the_route(self):
+        self.latest_lint_job(runner_id=None, runner_name=None, steps=0)
+
+        self.assert_closed("lint-test")
+
+    def test_a_job_with_no_runner_id_closes_the_route(self):
+        self.latest_lint_job(runner_id=None)
+
+        self.assert_closed("lint-test")
+
+    def test_a_job_with_no_runner_name_closes_the_route(self):
+        self.latest_lint_job(runner_name=None)
+
+        self.assert_closed("lint-test")
+
+    def test_a_job_with_no_steps_closes_the_route(self):
+        self.latest_lint_job(steps=0)
+
+        self.assert_closed("lint-test")
+
+    def test_a_job_from_a_forging_workflow_closes_the_route(self):
+        self.answers[run_path()] = json.dumps(workflow_run_row(self.head, path=".github/workflows/e5.yml"))
+
+        self.assert_closed("lint-test")
+
+    def test_a_job_from_another_event_closes_the_route(self):
+        self.answers[run_path()] = json.dumps(workflow_run_row(self.head, event="push"))
+
+        self.assert_closed("lint-test")
+
+    def test_a_job_that_did_not_pass_closes_the_route(self):
+        self.latest_lint_job(conclusion="failure")
+
+        self.assert_closed("lint-test")
+
+    def test_a_job_not_finished_closes_the_route(self):
+        self.latest_lint_job(status="in_progress")
+
+        self.assert_closed("lint-test")
+
+    def test_a_job_under_another_name_closes_the_route(self):
+        self.answers[job_path(1)] = json.dumps(job_row(1, "not-lint-test", self.head))
+
+        self.assert_closed("lint-test")
+
+    def test_a_job_on_another_commit_closes_the_route(self):
+        self.answers[job_path(1)] = json.dumps(job_row(1, "lint-test", EARLIER))
+
+        self.assert_closed("lint-test")
+
+    def test_a_workflow_run_on_another_commit_closes_the_route(self):
+        self.answers[run_path()] = json.dumps(workflow_run_row(EARLIER))
+
+        self.assert_closed("lint-test")
+
+    def test_a_check_with_no_expected_workflow_closes_the_route(self):
+        partial = {k: v for k, v in WORKFLOWS.items() if k != "lint-test"}
+        the_pr = Pr(repository=REPOSITORY, head_repo=REPOSITORY, head_ref=PLAN_REF, head=self.head, base_ref=DEFAULT,
+                    default_branch=DEFAULT)
+
+        result = mergeauthority.check(str(self.repo), the_pr, NUMBER, self.base, WHO, run=FakeGh(self.answers),
+                                      workflows=partial)
+
+        self.assertTrue(any("lint-test" in p and "expected workflow" in p for p in result.problems), result.problems)
+
+    def test_a_carried_over_job_passes_with_its_new_id_and_old_times(self):
+        self.set_runs(*self.green_runs_except("lint-test"), check_row(50, "lint-test", ACTIONS_ID))
+
+        self.assertEqual(self.judged().approved_by, APPROVER)
+
+    def test_only_the_latest_run_is_read_for_its_job(self):
+        self.set_runs(*self.green_runs_except("lint-test"), check_row(50, "lint-test", ACTIONS_ID),
+                      check_row(51, "lint-test", ACTIONS_ID))
+        self.answers[job_path(51)] = json.dumps(job_row(51, "lint-test", self.head, runner_id=None, steps=0))
+
+        self.assert_closed("lint-test")
+
+    def test_a_run_that_has_not_passed_has_its_job_left_unread(self):
+        self.set_runs(*self.green_runs_except("lint-test"), check_row(50, "lint-test", ACTIONS_ID, "failure"))
+        gh = FakeGh(self.answers)
+
+        self.judged(gh=gh)
+
+        self.assertNotIn(job_path(50), [path_of(a) for a in gh.argvs()])
+
+    def test_a_check_bound_to_another_app_needs_no_job(self):
+        gh = FakeGh(self.answers)
+
+        self.judged(gh=gh)
+
+        self.assertEqual(sorted(path_of(a) for a in gh.argvs() if "/actions/jobs/" in path_of(a)),
+                         sorted(job_path(i) for i, (c, a) in enumerate(REQUIRED.items(), 1)
+                                if a == ACTIONS_ID and c != "merge-authority"))
+
+    def test_a_workflow_run_shared_by_two_checks_is_read_once(self):
+        self.answers.update({job_path(i): json.dumps(job_row(i, c, self.head)) for i, (c, a)
+                             in enumerate(REQUIRED.items(), 1) if a == ACTIONS_ID})
+        self.answers[run_path()] = json.dumps(workflow_run_row(self.head, CI_WORKFLOW))
+        gh = FakeGh(self.answers)
+
+        self.judged(gh=gh)
+
+        self.assertEqual(sum(1 for a in gh.argvs() if path_of(a) == run_path()), 1)
+
+    def test_too_many_jobs_to_read_is_an_error(self):
+        many = {f"check-{i}": ACTIONS_ID for i in range(mergeauthority.JOB_LIMIT)}
+        self.answers[RULES_PATH] = json.dumps(rule_rows(checks={**REQUIRED, **many}))
+        self.set_runs(*self.green_runs_except(),
+                      *[check_row(100 + i, name, ACTIONS_ID) for i, name in enumerate(many)])
+
+        with self.assertRaises(MergeAuthorityError):
+            self.judged()
+
+    def test_each_malformed_job_read_is_an_error(self):
+        cases = {
+            "job not an object": (job_path(1), []),
+            "job with no steps key": (job_path(1), {k: v for k, v in job_row(1, "lint-test", self.head).items()
+                                                    if k != "steps"}),
+            "steps not a list": (job_path(1), {**job_row(1, "lint-test", self.head), "steps": 3}),
+            "text run id": (job_path(1), {**job_row(1, "lint-test", self.head), "run_id": "700"}),
+            "text runner id": (job_path(1), {**job_row(1, "lint-test", self.head), "runner_id": "1"}),
+            "run not an object": (run_path(), []),
+            "run with no path": (run_path(), {"id": RUN_ID, "event": "pull_request", "head_sha": self.head}),
+            "run with a number for an event": (run_path(), {**workflow_run_row(self.head), "event": 1}),
+        }
+        for name, (path, body) in cases.items():
+            with self.subTest(name):
+                with self.assertRaises(MergeAuthorityError):
+                    self.judged(gh=FakeGh(self.answers | {path: json.dumps(body)}))
+
+    def test_a_job_read_that_is_refused_is_an_error(self):
+        answering = FakeGh(self.answers)
+
+        def forbidden(argv, stdin):
+            if "/actions/" in path_of(argv):
+                return subprocess.CompletedProcess(argv, 1, "", "HTTP 403")
+            return answering(argv, stdin)
+
+        with self.assertRaises(MergeAuthorityError):
+            self.judged(gh=forbidden)
+
+    def test_a_failed_job_read_leaves_the_admins_approval_counting(self):
+        self.answers[REVIEWS_PATH] = json.dumps([review_row(1, ADMIN, commit=self.head)])
+
+        result = self.judged(gh=FakeGh(self.answers | {job_path(1): "not json"}))
+
+        self.assertEqual(result.approved_by, ADMIN)
 
     # R4
     def test_a_commit_status_named_for_a_required_check_closes_the_route(self):
@@ -868,6 +1086,9 @@ class ApproverRoute(GitRepository):
         self.assertEqual(self.judged(), mergeauthority.Result(ADMIN, ()))
 
 
+JOB_ARGS = [arg for pair in WORKFLOWS.items() for arg in ("--job-workflow", "=".join(pair))]
+
+
 class Repository(GitRepository):
     """check() and the CLI end to end; a fake gh for the server."""
 
@@ -876,7 +1097,7 @@ class Repository(GitRepository):
                      f"repos/{REPOSITORY}/pulls/{NUMBER}/reviews": json.dumps([review_row(1, reviewer, commit=head)])})
         the_pr = Pr(repository=REPOSITORY, head_repo=REPOSITORY, head_ref=PLAN_REF, head=head, base_ref=DEFAULT,
                     default_branch=DEFAULT)
-        return mergeauthority.check(str(self.repo), the_pr, NUMBER, self.base, WHO, run=gh), gh
+        return mergeauthority.check(str(self.repo), the_pr, NUMBER, self.base, WHO, run=gh, workflows=WORKFLOWS), gh
 
     def test_an_approved_in_scope_plan_pr_passes(self):
         self.write("src/app.py", "x = 2\n")
@@ -976,7 +1197,7 @@ class Repository(GitRepository):
         self.assertEqual(done.returncode, 2, done.stderr)
 
     def test_the_cli_exits_0_and_names_the_approver_on_a_pass(self):
-        done = self.cli("--admin", ADMIN, "--approver", APPROVER, "--agent", AGENT, reviewer=APPROVER)
+        done = self.cli("--admin", ADMIN, "--approver", APPROVER, "--agent", AGENT, *JOB_ARGS, reviewer=APPROVER)
 
         self.assertEqual((done.returncode, f"approved by {APPROVER}" in done.stdout), (0, True), done.stderr)
 
@@ -984,6 +1205,16 @@ class Repository(GitRepository):
         done = self.cli("--admin", ADMIN, "--approver", APPROVER, "--agent", ADMIN)
 
         self.assertEqual(done.returncode, 2, done.stderr)
+
+    def test_the_cli_exits_2_on_a_bad_job_workflow(self):
+        done = self.cli("--admin", ADMIN, "--job-workflow", "lint-test=ci.yml")
+
+        self.assertEqual(done.returncode, 2, done.stderr)
+
+    def test_the_cli_exits_1_naming_a_check_with_no_expected_workflow(self):
+        done = self.cli("--admin", ADMIN, "--approver", APPROVER, "--agent", AGENT, reviewer=APPROVER)
+
+        self.assertEqual((done.returncode, "expected workflow" in done.stderr), (1, True), done.stderr)
 
     def test_the_cli_exits_1_naming_the_missing_agent_login(self):
         done = self.cli("--admin", ADMIN, "--approver", APPROVER, reviewer=APPROVER)
