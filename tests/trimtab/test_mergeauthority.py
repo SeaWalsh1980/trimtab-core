@@ -63,6 +63,8 @@ PASSED = [run()]
 CI_WORKFLOW = ".github/workflows/ci.yml"
 SCOPE_WORKFLOW = ".github/workflows/plan-scope.yml"
 WORKFLOWS = {"lint-test": CI_WORKFLOW, "plan-scope": SCOPE_WORKFLOW, "merge-authority": SCOPE_WORKFLOW}
+WORKFLOW_PAIRS = ["=".join(pair) for pair in WORKFLOWS.items()]
+LOCKED = ".github/**/*"
 RUN_ID = 700
 RUNNER = 1000000560
 # The approver route with every guard satisfied, so the tests of the rest of the decision are not about it.
@@ -70,7 +72,7 @@ OPEN_ROUTE = RouteFacts(
     author=AGENT,
     activities=(Activity(1, "branch_creation", AGENT, NO_COMMIT, HEAD),),
     containment=Containment(frozenset(SETTINGS), 1, True,
-                            tuple(RequiredCheck(c, a) for c, a in REQUIRED.items())),
+                            tuple(RequiredCheck(c, a) for c, a in REQUIRED.items()), frozenset({LOCKED})),
     runs=tuple(CheckRun(i, c, "", "completed", "success", "", a) for i, (c, a) in enumerate(REQUIRED.items(), 1)),
     statuses=(),
     jobs=tuple(JobRecord(i, c, "completed", "success", RUNNER, "a runner", 3, HEAD, HEAD, WORKFLOWS[c], "pull_request")
@@ -253,6 +255,38 @@ class Reviews(unittest.TestCase):
         self.assertEqual(len(decided(review(APPROVER, state="PENDING")).problems), 1)
 
 
+def unread():
+    raise AssertionError("the approver route was read")
+
+
+class RouteLeftUnread(unittest.TestCase):
+    """Reading the route can fail, so where the approver isn't what passes the PR, it must never be read."""
+
+    def judged(self, *reviews, head_ref=PLAN_REF, paths=SOURCE):
+        ordered = [replace(r, id=i) for i, r in enumerate(reviews, start=1)]
+        return mergeauthority.decide(pr(head_ref), WHO, list(paths), False, ordered, PASSED, unread)
+
+    def test_when_the_admin_approved(self):
+        self.assertEqual(self.judged(review(ADMIN)).approved_by, ADMIN)
+
+    def test_when_both_approved(self):
+        self.assertEqual(self.judged(review(APPROVER), review(ADMIN)).approved_by, ADMIN)
+
+    def test_on_a_non_plan_branch(self):
+        result = self.judged(review(APPROVER), review(ADMIN), head_ref=FEATURE_REF)
+
+        self.assertEqual(result.approved_by, ADMIN)
+
+    def test_when_the_approver_alone_approved_a_non_plan_branch(self):
+        self.assertIn("not a plan branch", self.judged(review(APPROVER), head_ref=FEATURE_REF).problems[0])
+
+    def test_when_admin_only_paths_leave_the_approver_ineligible(self):
+        self.assertIn("admin-only paths", self.judged(review(APPROVER), paths=[AUTHORISED_PLAN]).problems[0])
+
+    def test_when_nobody_approved(self):
+        self.assertEqual(self.judged().approved_by, "")
+
+
 class NoFacts(unittest.TestCase):
     def test_facts_never_read_close_the_route_rather_than_open_it(self):
         ordered = [replace(review(APPROVER), id=1)]
@@ -345,12 +379,13 @@ def check_row(id, name, app_id, conclusion="success", status="completed"):
             "conclusion": conclusion, "started_at": "2026-10-25T10:00:00Z"}
 
 
-def rule_rows(checks=None, settings=SETTINGS, approvals=1, strict=True):
+def rule_rows(checks=None, settings=SETTINGS, approvals=1, strict=True, locked=(LOCKED, "CODEOWNERS")):
     pull_request = {name: True for name in settings} | {"required_approving_review_count": approvals}
     required = [{"context": c, **({"integration_id": a} if a else {})} for c, a in (checks or REQUIRED).items()]
     return [{"type": "pull_request", "parameters": pull_request},
             {"type": "required_status_checks",
-             "parameters": {"required_status_checks": required, "strict_required_status_checks_policy": strict}}]
+             "parameters": {"required_status_checks": required, "strict_required_status_checks_policy": strict}},
+            {"type": "file_path_restriction", "parameters": {"restricted_file_paths": list(locked)}}]
 
 
 def job_path(id):
@@ -509,7 +544,7 @@ class ApproverRoute(GitRepository):
         the_pr = Pr(repository=REPOSITORY, head_repo=REPOSITORY, head_ref=PLAN_REF, head=self.head, base_ref=DEFAULT,
                     default_branch=DEFAULT)
         return mergeauthority.check(str(self.repo), the_pr, NUMBER, self.base, who, run=gh or FakeGh(self.answers),
-                                    workflows=WORKFLOWS)
+                                    workflows=WORKFLOW_PAIRS)
 
     def assert_closed(self, says, alone=True):
         """The route closes and says why; `alone` also pins that no other guard is what closed it."""
@@ -756,7 +791,7 @@ class ApproverRoute(GitRepository):
         self.assert_closed("lint-test")
 
     def test_a_check_with_no_expected_workflow_closes_the_route(self):
-        partial = {k: v for k, v in WORKFLOWS.items() if k != "lint-test"}
+        partial = [pair for pair in WORKFLOW_PAIRS if not pair.startswith("lint-test=")]
         the_pr = Pr(repository=REPOSITORY, head_repo=REPOSITORY, head_ref=PLAN_REF, head=self.head, base_ref=DEFAULT,
                     default_branch=DEFAULT)
 
@@ -829,6 +864,55 @@ class ApproverRoute(GitRepository):
             with self.subTest(name):
                 with self.assertRaises(MergeAuthorityError):
                     self.judged(gh=FakeGh(self.answers | {path: json.dumps(body)}))
+
+    def test_each_malformed_job_field_is_an_error(self):
+        whole = job_row(1, "lint-test", self.head)
+        run = workflow_run_row(self.head)
+        cases = {
+            "null steps": (job_path(1), {**whole, "steps": None}),
+            "text steps": (job_path(1), {**whole, "steps": "steps"}),
+            "an object for steps": (job_path(1), {**whole, "steps": {"a": 1}}),
+            "null name": (job_path(1), {**whole, "name": None}),
+            "null status": (job_path(1), {**whole, "status": None}),
+            "null commit": (job_path(1), {**whole, "head_sha": None}),
+            "a number for a conclusion": (job_path(1), {**whole, "conclusion": 1}),
+            "a number for a runner name": (job_path(1), {**whole, "runner_name": 1}),
+            "a bool for a runner id": (job_path(1), {**whole, "runner_id": True}),
+            "a runner id of 0": (job_path(1), {**whole, "runner_id": 0}),
+            "a negative runner id": (job_path(1), {**whole, "runner_id": -1}),
+            "a bool for a run id": (job_path(1), {**whole, "run_id": True}),
+            "null run path": (run_path(), {**run, "path": None}),
+            "null run commit": (run_path(), {**run, "head_sha": None}),
+            "run with no commit": (run_path(), {k: v for k, v in run.items() if k != "head_sha"}),
+        }
+        for name, (path, body) in cases.items():
+            with self.subTest(name):
+                with self.assertRaises(MergeAuthorityError):
+                    self.judged(gh=FakeGh(self.answers | {path: json.dumps(body)}))
+
+    def test_a_finished_job_with_no_conclusion_closes_the_route(self):
+        self.latest_lint_job(conclusion=None)
+
+        self.assert_closed("lint-test")
+
+    def test_a_check_run_with_no_job_behind_it_is_an_error(self):
+        answering = FakeGh(self.answers)
+
+        def not_found(argv, stdin):
+            if path_of(argv) == job_path(1):
+                return subprocess.CompletedProcess(argv, 1, "", "HTTP 404: Not Found")
+            return answering(argv, stdin)
+
+        with self.assertRaises(MergeAuthorityError):
+            self.judged(gh=not_found)
+
+    def test_a_bad_job_workflow_closes_only_the_approver(self):
+        the_pr = Pr(repository=REPOSITORY, head_repo=REPOSITORY, head_ref=PLAN_REF, head=self.head, base_ref=DEFAULT,
+                    default_branch=DEFAULT)
+
+        with self.assertRaises(MergeAuthorityError):
+            mergeauthority.check(str(self.repo), the_pr, NUMBER, self.base, WHO, run=FakeGh(self.answers),
+                                 workflows=["lint-test=ci.yml"])
 
     def test_a_job_read_that_is_refused_is_an_error(self):
         answering = FakeGh(self.answers)
@@ -936,14 +1020,14 @@ class ApproverRoute(GitRepository):
 
     def test_a_required_check_on_a_later_page_of_rules_is_judged(self):
         extra = "another-check"
-        filler = [{"type": "deletion"}] * (PER_PAGE - 2)
+        filler = [{"type": "deletion"}] * (PER_PAGE - 3)
         self.answers[RULES_PATH] = [json.dumps(rule_rows() + filler),
                                     json.dumps(rule_rows(checks={extra: OTHER_ID}))]
 
         self.assert_closed(extra)
 
     def test_too_many_rules_is_an_error(self):
-        full_pages = [json.dumps(rule_rows() + [{"type": "deletion"}] * (PER_PAGE - 2))] * 100
+        full_pages = [json.dumps(rule_rows() + [{"type": "deletion"}] * (PER_PAGE - 3))] * 100
         self.answers[RULES_PATH] = full_pages
 
         with self.assertRaises(MergeAuthorityError):
@@ -954,6 +1038,38 @@ class ApproverRoute(GitRepository):
             with self.subTest(bound=bound):
                 rows = rule_rows()
                 rows[1]["parameters"]["required_status_checks"][0]["integration_id"] = bound
+                self.answers[RULES_PATH] = json.dumps(rows)
+
+                with self.assertRaises(MergeAuthorityError):
+                    self.judged()
+
+    def test_no_lock_on_the_workflows_closes_the_route(self):
+        self.answers[RULES_PATH] = json.dumps(rule_rows(locked=("CODEOWNERS",)))
+
+        self.assert_closed("does not lock")
+
+    def test_a_lock_in_a_second_rule_counts(self):
+        rows = rule_rows(locked=("CODEOWNERS",)) + [{"type": "file_path_restriction",
+                                                    "parameters": {"restricted_file_paths": [LOCKED]}}]
+        self.answers[RULES_PATH] = json.dumps(rows)
+
+        self.assertEqual(self.judged().approved_by, APPROVER)
+
+    def test_a_later_rule_does_not_undo_a_lock(self):
+        rows = rule_rows() + [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": ["CODEOWNERS"]}}]
+        self.answers[RULES_PATH] = json.dumps(rows)
+
+        self.assertEqual(self.judged().approved_by, APPROVER)
+
+    def test_a_lock_on_a_narrower_path_does_not_count(self):
+        self.answers[RULES_PATH] = json.dumps(rule_rows(locked=(".github/workflows/ci.yml",)))
+
+        self.assert_closed("does not lock")
+
+    def test_a_malformed_lock_is_an_error(self):
+        for bad in ("a-path", None, [1]):
+            with self.subTest(bad=bad):
+                rows = [*rule_rows(), {"type": "file_path_restriction", "parameters": {"restricted_file_paths": bad}}]
                 self.answers[RULES_PATH] = json.dumps(rows)
 
                 with self.assertRaises(MergeAuthorityError):
@@ -1086,7 +1202,7 @@ class ApproverRoute(GitRepository):
         self.assertEqual(self.judged(), mergeauthority.Result(ADMIN, ()))
 
 
-JOB_ARGS = [arg for pair in WORKFLOWS.items() for arg in ("--job-workflow", "=".join(pair))]
+JOB_ARGS = [arg for pair in WORKFLOW_PAIRS for arg in ("--job-workflow", pair)]
 
 
 class Repository(GitRepository):
@@ -1097,7 +1213,8 @@ class Repository(GitRepository):
                      f"repos/{REPOSITORY}/pulls/{NUMBER}/reviews": json.dumps([review_row(1, reviewer, commit=head)])})
         the_pr = Pr(repository=REPOSITORY, head_repo=REPOSITORY, head_ref=PLAN_REF, head=head, base_ref=DEFAULT,
                     default_branch=DEFAULT)
-        return mergeauthority.check(str(self.repo), the_pr, NUMBER, self.base, WHO, run=gh, workflows=WORKFLOWS), gh
+        return (mergeauthority.check(str(self.repo), the_pr, NUMBER, self.base, WHO, run=gh, workflows=WORKFLOW_PAIRS),
+                gh)
 
     def test_an_approved_in_scope_plan_pr_passes(self):
         self.write("src/app.py", "x = 2\n")
@@ -1206,10 +1323,17 @@ class Repository(GitRepository):
 
         self.assertEqual(done.returncode, 2, done.stderr)
 
-    def test_the_cli_exits_2_on_a_bad_job_workflow(self):
-        done = self.cli("--admin", ADMIN, "--job-workflow", "lint-test=ci.yml")
+    def test_the_cli_exits_2_on_a_bad_job_workflow_when_the_approver_carries_the_pr(self):
+        done = self.cli("--admin", ADMIN, "--approver", APPROVER, "--agent", AGENT,
+                        "--job-workflow", "lint-test=ci.yml", reviewer=APPROVER)
 
         self.assertEqual(done.returncode, 2, done.stderr)
+
+    def test_a_bad_job_workflow_leaves_the_admins_approval_counting(self):
+        done = self.cli("--admin", ADMIN, "--approver", APPROVER, "--agent", AGENT,
+                        "--job-workflow", "lint-test=ci.yml", reviewer=ADMIN)
+
+        self.assertEqual((done.returncode, f"approved by {ADMIN}" in done.stdout), (0, True), done.stderr)
 
     def test_the_cli_exits_1_naming_a_check_with_no_expected_workflow(self):
         done = self.cli("--admin", ADMIN, "--approver", APPROVER, "--agent", AGENT, reviewer=APPROVER)

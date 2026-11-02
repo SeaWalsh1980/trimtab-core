@@ -35,8 +35,8 @@ A last review in state `CHANGES_REQUESTED` from either account fails the PR.
 This is the wrap-merged skill's code gate, so the gate at merge and the
 skill's check after it agree.
 
-The admin, approver and agent logins come from the caller, never from the PR: the
-job passes them from configuration the PR cannot change. Changed paths come
+The admin, approver and agent logins and the expected workflows come from the
+caller, never from the PR: the job passes them from configuration the PR cannot change. Changed paths come
 from git (`base...head`, renames off, as plan-scope reads them); reviews and
 check runs from GitHub's REST API through `gh api`.
 """
@@ -55,6 +55,7 @@ OWN_CHECK = "merge-authority"
 ACTIONS_APP = "github-actions"
 ACTIONS_APP_ID = 15368
 JOB_EVENT = "pull_request"
+WORKFLOW_LOCK = ".github/**/*"
 PIN_FILES = (".claude/trimtab.json", "instance.json")
 CHECKER_MARK = "bin/trimtab"
 CHECKER_DIRS = ("bin/", "trimtab/")
@@ -127,6 +128,7 @@ class Containment:
     approvals: int
     strict: bool
     checks: tuple[RequiredCheck, ...]
+    locked_paths: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -276,6 +278,8 @@ def containment_problems(held: Containment) -> list[str]:
     problems += [f"the ruleset does not require {name} bound to GitHub Actions" for name in (CHECK_NAME, OWN_CHECK)
                  if name not in bound]
     problems += [f"the ruleset binds {c.context} to no App" for c in held.checks if c.app_id is None]
+    if WORKFLOW_LOCK not in held.locked_paths:
+        problems.append(f"the ruleset does not lock {WORKFLOW_LOCK}, so a workflow could be placed on any branch")
     return problems
 
 
@@ -524,6 +528,7 @@ def read_containment(api: GhApi, repository: str, branch: str) -> Containment:
     approvals = 0
     strict = False
     checks: list[RequiredCheck] = []
+    locked: set[str] = set()
     try:
         for rule in rows:
             params = rule.get("parameters") or {}
@@ -536,11 +541,16 @@ def read_containment(api: GhApi, repository: str, branch: str) -> Containment:
                 # Strict is per rule, so only the rule holding plan-scope makes a plan PR take the new base.
                 strict = strict or (params.get("strict_required_status_checks_policy") is True
                                     and any(c.context == CHECK_NAME for c in held))
+            elif rule["type"] == "file_path_restriction":
+                paths = params["restricted_file_paths"]
+                if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
+                    raise MergeAuthorityError(f"{what} returned unexpected JSON")
+                locked |= set(paths)
     except (KeyError, TypeError, AttributeError) as err:
         raise MergeAuthorityError(f"{what} returned unexpected JSON") from err
     if not all(isinstance(c.context, str) and (c.app_id is None or _app_id(c.app_id)) for c in checks):
         raise MergeAuthorityError(f"{what} returned unexpected JSON")
-    return Containment(frozenset(settings), approvals, strict, tuple(checks))
+    return Containment(frozenset(settings), approvals, strict, tuple(checks), frozenset(locked))
 
 
 def read_status_contexts(api: GhApi, repository: str, head: str) -> tuple[str, ...]:
@@ -604,8 +614,8 @@ def _workflow_run_fields(run) -> tuple[str, str, str]:
     return fields
 
 
-def read_route_facts(api: GhApi, pr: Pr, number: int, workflows: Mapping[str, str] | None = None) -> RouteFacts:
-    expected = workflows or {}
+def read_route_facts(api: GhApi, pr: Pr, number: int, workflows: list[str] | None = None) -> RouteFacts:
+    expected = job_workflows(workflows)
     containment = read_containment(api, pr.repository, pr.default_branch)
     runs = tuple(read_check_runs(api, pr.repository, pr.head, name=None))
     return RouteFacts(author=read_author(api, pr.repository, number),
@@ -640,9 +650,10 @@ def _login(user, what: str) -> str:
 
 
 def check(repo: str, pr: Pr, number: int, base: str, who: Accounts, run: Run | None = None,
-          workflows: Mapping[str, str] | None = None) -> Result:
-    """Judge a PR. Every input but `who` comes from the platform's event; base and head must be commits in
-    repo (the job fetches the head, as plan-scope's does)."""
+          workflows: list[str] | None = None) -> Result:
+    """Judge a PR. Every input but `who` and `workflows` comes from the platform's event; base and head must be
+    commits in repo (the job fetches the head, as plan-scope's does). `workflows` is read only for the approver
+    route, so a bad value there can't stop the admin's approval."""
     for name, sha in (("base", base), ("head", pr.head)):
         if not SHA.fullmatch(sha):
             raise MergeAuthorityError(f"--{name} must be a 40-hex commit")

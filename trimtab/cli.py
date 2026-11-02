@@ -889,8 +889,7 @@ def cmd_check_merge_authority(args) -> int:
                            head=args.head, base_ref=args.base_ref, default_branch=args.default_branch)
     try:
         who = mergeauthority.accounts(args.admin, args.approver, args.agent)
-        result = mergeauthority.check(args.repo, pr, args.pr, args.base, who,
-                                      workflows=mergeauthority.job_workflows(args.job_workflow))
+        result = mergeauthority.check(args.repo, pr, args.pr, args.base, who, workflows=args.job_workflow)
     except mergeauthority.MergeAuthorityError as err:
         print(f"error: {err}; nothing is vouched for", file=sys.stderr)
         return 2
