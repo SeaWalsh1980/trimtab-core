@@ -497,8 +497,9 @@ def said_problems(agent: str, reviewer: str | None, conversation: tuple[SaidComm
     tracking comment is exempt: the consumer's review must put every finding in a thread (ADR 0057)."""
     who = agent.casefold()
     answered = max((c.at for c in conversation if c.login.casefold() == who), default="")
-    exempt = {who, (reviewer or "").casefold()}
-    unanswered = {c.login for c in (*conversation, *bodies) if c.login.casefold() not in exempt and c.at >= answered}
+    tracker = (reviewer or "").casefold()  # "" names nobody: a deleted account reads as "" too, and is not exempt
+    asked = [*(c for c in conversation if not tracker or c.login.casefold() != tracker), *bodies]
+    unanswered = {c.login for c in asked if c.login.casefold() != who and c.at >= answered}
     return [f"{login or 'a deleted account'}'s comment has no later comment from {agent}"
             for login in sorted(unanswered)]
 

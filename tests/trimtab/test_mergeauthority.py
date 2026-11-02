@@ -1448,6 +1448,13 @@ class ApproverAction(GitRepository):
             with self.subTest(action=action):
                 self.assert_refused(f"{ADMIN} requested changes", action)
 
+    def test_the_approvers_own_request_for_changes_refuses_each_action(self):
+        self.set(REVIEWS_PATH, review_row(1, APPROVER, "CHANGES_REQUESTED", self.head))
+
+        for action in mergeauthority.ACTIONS:
+            with self.subTest(action=action):
+                self.assert_refused(f"{APPROVER} requested changes", action, alone=False)
+
     # M3: not an item PR the approver may touch
     def test_a_non_plan_head_is_not_merged(self):
         self.set_pull(head_ref=FEATURE_REF)
@@ -1575,6 +1582,36 @@ class ApproverAction(GitRepository):
 
         self.assert_refused(f"{TRACKER}'s comment", reviewer=None)
 
+    def test_the_tracker_is_recognised_without_case(self):
+        self.set(CONVERSATION_PATH, conversation_row(TRACKER.upper(), EARLY))
+
+        self.assert_acts()
+
+    def test_the_trackers_review_body_needs_an_answer(self):
+        self.set(REVIEWS_PATH, review_row(1, APPROVER, commit=self.head), review_body_row(2, TRACKER, EARLY))
+
+        self.assert_refused(f"{TRACKER}'s comment")
+
+    def test_a_deleted_accounts_comment_needs_an_answer_whatever_the_reviewer(self):
+        for reviewer in (TRACKER, None, ""):
+            with self.subTest(reviewer=reviewer):
+                self.set(CONVERSATION_PATH, {"id": 1, "user": None, "created_at": EARLY})
+
+                self.assert_refused("a deleted account's comment", reviewer=reviewer)
+
+    def test_a_deleted_accounts_review_body_needs_an_answer_whatever_the_reviewer(self):
+        ghost = {**review_body_row(2, PERSON, EARLY), "user": None}
+        self.set(REVIEWS_PATH, review_row(1, APPROVER, commit=self.head), ghost)
+
+        for reviewer in (TRACKER, None, ""):
+            with self.subTest(reviewer=reviewer):
+                self.assert_refused("a deleted account's comment", reviewer=reviewer)
+
+    def test_a_later_agent_comment_answers_a_deleted_account(self):
+        self.set(CONVERSATION_PATH, {"id": 1, "user": None, "created_at": EARLY}, conversation_row(AGENT, LATE))
+
+        self.assert_acts(reviewer=None)
+
     def test_the_tracker_is_exempt_only_in_the_conversation(self):
         self.set(INLINE_PATH, inline_row(1, TRACKER))
 
@@ -1636,6 +1673,34 @@ class ApproverAction(GitRepository):
                 with self.assertRaises(MergeAuthorityError):
                     self.acted()
                 self.answers[path] = saved
+
+    def test_a_time_in_another_shape_is_an_error(self):
+        for shape in ("2026-10-25T10:00:00+01:00", "2026-10-25T10:00:00.123Z", "2026-10-25", ""):
+            with self.subTest(shape=shape):
+                self.set(CONVERSATION_PATH, conversation_row(PERSON, shape))
+
+                with self.assertRaises(MergeAuthorityError):
+                    self.acted()
+
+    def test_a_review_body_time_in_another_shape_is_an_error(self):
+        self.set(REVIEWS_PATH, review_row(1, APPROVER, commit=self.head),
+                 review_body_row(2, PERSON, "2026-10-25T10:00:00+01:00"))
+
+        with self.assertRaises(MergeAuthorityError):
+            self.acted()
+
+    def test_comments_up_to_the_limit_are_read(self):
+        full = json.dumps([inline_row(i, AGENT) for i in range(1, 101)])
+        self.answers[INLINE_PATH] = [full] * 10 + ["[]"]
+
+        self.assert_acts()
+
+    def test_too_many_conversation_comments_is_an_error(self):
+        full = json.dumps([conversation_row(AGENT, EARLY) for _ in range(100)])
+        self.answers[CONVERSATION_PATH] = [full] * 11 + ["[]"]
+
+        with self.assertRaises(MergeAuthorityError):
+            self.acted()
 
     def test_a_malformed_review_body_is_an_error(self):
         self.set(REVIEWS_PATH, review_row(1, APPROVER, commit=self.head),
@@ -1786,11 +1851,12 @@ class ApproverAction(GitRepository):
         gh.chmod(0o755)
         return {"PATH": f"{bin_dir}{os.pathsep}{self.env['PATH']}", "FAKE_ANSWERS": json.dumps(self.answers)}
 
-    def cli(self, *extra):
+    def cli(self, *extra, reviewer=TRACKER):
+        named = ["--reviewer", reviewer] if reviewer else []
         return subprocess.run([str(TRIMTAB), "check-approver-route", "--repo", str(self.repo), "--action", "merge",
                                "--repository", REPOSITORY, "--pr", str(NUMBER), "--base", self.base,
                                "--head", self.head,
-                               "--admin", ADMIN, "--approver", APPROVER, "--agent", AGENT, "--reviewer", TRACKER,
+                               "--admin", ADMIN, "--approver", APPROVER, "--agent", AGENT, *named,
                                *(arg for name in GATES for arg in ("--gate", name)), *JOB_ARGS, *extra],
                               capture_output=True, text=True, env={**self.env, **self.fake_gh()})
 
@@ -1813,6 +1879,26 @@ class ApproverAction(GitRepository):
 
         self.assertEqual((done.returncode, done.stdout, "draft" in done.stderr), (1, "verdict=refuse\n", True),
                          done.stderr)
+
+    def test_the_cli_exits_2_printing_no_verdict_when_two_logins_are_one(self):
+        for extra in (("--admin", APPROVER), ("--agent", ADMIN), ("--admin", "")):
+            with self.subTest(extra=extra):
+                done = self.cli(*extra)
+
+                self.assertEqual((done.returncode, done.stdout), (2, ""), done.stderr)
+
+    def test_the_cli_refuses_a_trackers_comment_without_a_reviewer(self):
+        self.set(CONVERSATION_PATH, conversation_row(TRACKER, EARLY))
+
+        done = self.cli(reviewer=None)
+
+        self.assertEqual((done.returncode, done.stdout), (1, "verdict=refuse\n"), done.stderr)
+
+    def test_the_cli_needs_the_action_named(self):
+        done = subprocess.run([str(TRIMTAB), "check-approver-route", "--repo", str(self.repo)], capture_output=True,
+                              text=True, env=self.env)
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""), done.stderr)
 
     def test_the_cli_exits_2_printing_no_verdict_on_a_failed_read(self):
         del self.answers[CONVERSATION_PATH]
