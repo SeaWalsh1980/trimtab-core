@@ -915,6 +915,20 @@ def cmd_check_approver_route(args) -> int:
     return 1 if result.verdict == mergeauthority.REFUSE else 0
 
 
+def cmd_check_plan_admin(args) -> int:
+    try:
+        named = instance.load(_instance(args)).admin
+        problems = mergeauthority.plan_admin_problems(named, args.repository)
+    except (instance.InstanceFileError, mergeauthority.MergeAuthorityError) as err:
+        print(f"error: {err}; nothing is vouched for", file=sys.stderr)
+        return 2
+    if problems:
+        _print_problems(problems)
+        return 1
+    print(named)  # on stdout alone: the login a plan's merge is compared with
+    return 0
+
+
 def cmd_routine_render(args) -> int:
     pairs = {}
     for item in args.set or []:
@@ -1244,6 +1258,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "repeat per check. A check with none refuses")
     ar.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout (default: .)")
     ar.set_defaults(func=cmd_check_approver_route)
+
+    pa = sub.add_parser("check-plan-admin", parents=[common],
+                        help="print the admin login a plan's merge is compared with: the instance must name one, and "
+                             "it must match the repository's TRIMTAB_ADMIN variable (ADR 0056). For sessions only")
+    pa.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository the plan is in")
+    pa.set_defaults(func=cmd_check_plan_admin)
 
     rt = sub.add_parser("routine", help="routine specs")
     rts = rt.add_subparsers(dest="routine_command", required=True)

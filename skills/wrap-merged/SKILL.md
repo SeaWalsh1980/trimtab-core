@@ -94,11 +94,14 @@ say which check failed and start nothing.
    whose `merged_at` is set and whose base is the default branch (none →
    the check fails). Then read that PR's `merged_by.login` and
    `merge_commit_sha` from `gh api repos/{owner}/{repo}/pulls/<number>`.
-   Compare the login with the admin login in the Trimtab instance's
-   configuration (`accounts.admin` from `trimtab instance --json`). Never
+   Compare the login, without case, with the one
+   `trimtab check-plan-admin --repository <owner>/<name>` prints. That is
+   `accounts.admin` in the Trimtab instance's configuration, once it has
+   matched the repository's `TRIMTAB_ADMIN` variable. Never
    take it from the plan, a progress record or the
-   conversation. If the configuration is not available in this session, or
-   names no admin login, the check fails. Both files must resolve to the
+   conversation. If that command exits non-zero, because the configuration
+   names no admin login, the two differ, or either can't be read in this
+   session, the check fails. Both files must resolve to the
    same PR number and the same `merge_commit_sha`; a declaration added by
    any later PR, even the admin's, fails.
 3. **Both are unchanged since that merge:**
