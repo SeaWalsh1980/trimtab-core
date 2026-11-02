@@ -35,6 +35,12 @@ A last review in state `CHANGES_REQUESTED` from either account fails the PR.
 This is the wrap-merged skill's code gate, so the gate at merge and the
 skill's check after it agree.
 
+`check_action` is what the approver App runs before each write, since a check
+cannot vouch for its own slot (ADR 0057): the same route, always held, with
+this check's own run and job read at resolve and merge; the approver's approval
+on the head at resolve and merge; and no unanswered comment at merge. Only
+`ACT` may write. It decides nothing for the admin.
+
 The admin, approver and agent logins and the expected workflows come from the
 caller, never from the PR: the job passes them from configuration the PR cannot change. Changed paths come
 from git (`base...head`, renames off, as plan-scope reads them); reviews and
@@ -69,8 +75,14 @@ SHA = re.compile(r"[0-9a-f]{40}")
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 WORKFLOW = re.compile(r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml")
 STATUS_LIMIT = 1000
+COMMENT_LIMIT = 1000
+TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")  # what GitHub writes, so text order is time order
 JOB_LIMIT = 50  # job reads per PR: one per Actions-bound required check, so far past any real ruleset
 RULE_LIMIT = 1000
+ACT, NOOP, REFUSE = "act", "noop", "refuse"
+APPROVE, RESOLVE, MERGE = "approve", "resolve", "merge"
+ACTIONS = (APPROVE, RESOLVE, MERGE)
+BLOCKING_LABELS = ("plan:blocked", "review-cap-failed")
 COUNTED = ("APPROVED", "CHANGES_REQUESTED", "DISMISSED")
 NO_COMMIT = "0" * 40
 CONTAINMENT = ("require_code_owner_review", "require_last_push_approval", "dismiss_stale_reviews_on_push",
@@ -159,6 +171,7 @@ class RouteFacts:
     statuses: tuple[str, ...]
     jobs: tuple[JobRecord, ...] = ()
     workflows: Mapping[str, str] = field(default_factory=dict)  # each Actions-bound check's expected workflow
+    gates: tuple[str, ...] = ()  # checks the ruleset must require; only the App's own step names them
 
 
 @dataclass(frozen=True)
@@ -183,6 +196,39 @@ class Accounts:
 @dataclass(frozen=True)
 class Result:
     approved_by: str  # the login whose approval passed the PR; "" when it failed
+    problems: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Pull:
+    """A PR as the server reports it at this moment."""
+
+    pr: Pr
+    author: str
+    state: str
+    draft: bool
+    merged: bool
+    labels: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class InlineComment:
+    id: int
+    login: str
+    reply_to: int | None  # None on the comment that opens its thread
+
+
+@dataclass(frozen=True)
+class SaidComment:
+    """A conversation comment or a review's body: words with no thread, so only their time can place a reply."""
+
+    login: str
+    at: str
+
+
+@dataclass(frozen=True)
+class ActionResult:
+    verdict: str  # ACT, NOOP or REFUSE: the App writes only on ACT
     problems: tuple[str, ...]
 
 
@@ -283,14 +329,15 @@ def containment_problems(held: Containment) -> list[str]:
     return problems
 
 
-def required_run_problems(checks: tuple[RequiredCheck, ...], runs: tuple[CheckRun, ...]) -> list[str]:
-    """Which required check has no latest run that passed from its bound App. This check is skipped: it is the
-    run judging, so it cannot vouch for its own slot; the approver's own step must read it before acting. The latest by
-    id, not by start: a carried-over job keeps its old start, and a draft's red before a ready run's green is
-    normal on one head."""
+def required_run_problems(checks: tuple[RequiredCheck, ...], runs: tuple[CheckRun, ...],
+                          own: bool = False) -> list[str]:
+    """Which required check has no latest run that passed from its bound App. This check is skipped unless `own`: it
+    is the run judging, so it cannot vouch for its own slot; the approver's own step reads it before resolving or
+    merging. The latest by id, not by start: a carried-over job keeps its old start, and a draft's red before a ready
+    run's green is normal on one head."""
     problems = []
     for check in checks:
-        if check.context == OWN_CHECK or check.app_id is None:
+        if (check.context == OWN_CHECK and not own) or check.app_id is None:
             continue
         latest = _latest(check, runs)
         if latest is None:
@@ -301,7 +348,7 @@ def required_run_problems(checks: tuple[RequiredCheck, ...], runs: tuple[CheckRu
 
 
 def job_problems(head: str, checks: tuple[RequiredCheck, ...], runs: tuple[CheckRun, ...], jobs: tuple[JobRecord, ...],
-                 workflows: Mapping[str, str]) -> list[str]:
+                 workflows: Mapping[str, str], own: bool = False) -> list[str]:
     """Which Actions-bound required check's passing run is not a real job. A forged run has the App's id and no
     runner or steps; a job from a forging workflow has a runner but, unless it sits at the expected path, another
     workflow and event; and a forged run can borrow a real run's identity. So neither test is enough alone, and
@@ -309,7 +356,7 @@ def job_problems(head: str, checks: tuple[RequiredCheck, ...], runs: tuple[Check
     is `required_run_problems`' to report."""
     found = {job.check_run_id: job for job in jobs}
     problems = []
-    for check, run in _jobs_to_read(checks, runs):
+    for check, run in _jobs_to_read(checks, runs, own):
         expected = workflows.get(check.context)
         if not expected:
             problems.append(f"required check {check.context} has no expected workflow configured")
@@ -327,10 +374,11 @@ def _passed(run: CheckRun) -> bool:
     return run.status == "completed" and run.conclusion == "success"
 
 
-def _jobs_to_read(checks: tuple[RequiredCheck, ...],
-                  runs: tuple[CheckRun, ...]) -> list[tuple[RequiredCheck, CheckRun]]:
-    """Each Actions-bound required check but this one, with its latest run, where that run passed."""
-    latest = ((c, _latest(c, runs)) for c in checks if c.app_id == ACTIONS_APP_ID and c.context != OWN_CHECK)
+def _jobs_to_read(checks: tuple[RequiredCheck, ...], runs: tuple[CheckRun, ...],
+                  own: bool = False) -> list[tuple[RequiredCheck, CheckRun]]:
+    """Each Actions-bound required check, this one only if `own`, with its latest run, where that run passed."""
+    latest = ((c, _latest(c, runs)) for c in checks
+              if c.app_id == ACTIONS_APP_ID and (own or c.context != OWN_CHECK))
     return [(c, r) for c, r in latest if r is not None and _passed(r)]
 
 
@@ -340,8 +388,8 @@ def _real_job(job: JobRecord | None, name: str, head: str, workflow: str) -> boo
             and job.head_sha == head and job.run_head_sha == head and job.path == workflow and job.event == JOB_EVENT)
 
 
-def route_problems(who: Accounts, pr: Pr, last: dict[str, Review], checker_in_tree: bool,
-                   read: RouteRead) -> list[str]:
+def route_problems(who: Accounts, pr: Pr, last: dict[str, Review], checker_in_tree: bool, read: RouteRead,
+                   own: bool = False) -> list[str]:
     """Why the approver's approval cannot carry this PR; empty when the approver route is open."""
     if not who.agent:
         return ["no agent login is configured, so the approver route is closed"]
@@ -356,9 +404,10 @@ def route_problems(who: Accounts, pr: Pr, last: dict[str, Review], checker_in_tr
     if facts.author.casefold() != who.agent.casefold():
         problems.append(f"the PR was opened by {facts.author or 'an unknown account'}, not {who.agent}")
     problems += push_problems(pr.head, who.agent, facts.activities)
-    problems += required_run_problems(facts.containment.checks, facts.runs)
-    problems += job_problems(pr.head, facts.containment.checks, facts.runs, facts.jobs, facts.workflows)
+    problems += required_run_problems(facts.containment.checks, facts.runs, own)
+    problems += job_problems(pr.head, facts.containment.checks, facts.runs, facts.jobs, facts.workflows, own)
     required = {c.context for c in facts.containment.checks}
+    problems += [f"the ruleset does not require {name}" for name in facts.gates if name not in required]
     # The required name is what gets printed: a status's own context is anyone's text.
     problems += [f"a commit status is named for required check {name}"
                  for name in sorted(required & set(facts.statuses))]
@@ -373,12 +422,8 @@ def decide(pr: Pr, who: Accounts, paths: list[str], checker_in_tree: bool, revie
            runs: list[CheckRun], route: RouteRead = lambda: None) -> Result:
     """Judge the PR. `route` is called only when the approver's approval is the one the PR would pass on, so a
     failed read can only stop the approver."""
-    problems = []
     last = last_reviews(reviews, (who.admin, who.approver))
-    for login in (who.admin, who.approver):
-        r = last.get(login.casefold()) if login else None
-        if r and r.state == "CHANGES_REQUESTED":
-            problems.append(f"{login} requested changes; that voids every approval until they approve again")
+    problems = _changes_requested(who, last)
 
     branch = planscope.plan_of(pr.head_ref)
     if branch.ref is planscope.Ref.NOT_PLAN:
@@ -402,6 +447,83 @@ def decide(pr: Pr, who: Accounts, paths: list[str], checker_in_tree: bool, revie
     if problems:
         return Result("", tuple(problems))
     return Result(approved[0], ())
+
+
+def _changes_requested(who: Accounts, last: dict[str, Review]) -> list[str]:
+    problems = []
+    for login in (who.admin, who.approver):
+        r = last.get(login.casefold()) if login else None
+        if r and r.state == "CHANGES_REQUESTED":
+            problems.append(f"{login} requested changes; that voids every approval until they approve again")
+    return problems
+
+
+def pull_problems(pull: Pull, head: str) -> list[str]:
+    """Why the approver may not touch this PR, from the PR alone. A label may only refuse (SEC-2.3)."""
+    problems = []
+    if pull.state != "open":
+        problems.append("the PR is closed")
+    if pull.draft:
+        problems.append("the PR is a draft")
+    problems += [f"the PR carries the {name} label" for name in BLOCKING_LABELS if name in pull.labels]
+    if pull.pr.head != head:
+        problems.append(f"{head[:12]} is not the PR's head, {pull.pr.head[:12]}")
+    branch = planscope.plan_of(pull.pr.head_ref)
+    if branch.ref is planscope.Ref.NOT_PLAN:
+        problems.append("the head is not a plan branch")
+    else:
+        why = admin_reason(pull.pr, branch, [])
+        if why:
+            problems.append(why)
+    return problems
+
+
+def thread_problems(agent: str, comments: tuple[InlineComment, ...]) -> list[str]:
+    """Which review thread's newest comment isn't the agent's. Whether that reply settles it is the App's own
+    step's to judge; here it only has to exist. Ids order a thread, whose comments all come from one sequence."""
+    newest: dict[int, InlineComment] = {}
+    for c in comments:
+        root = c.reply_to or c.id
+        if root not in newest or c.id > newest[root].id:
+            newest[root] = c
+    return [f"review comment {root} has no reply from {agent} after it"
+            for root, c in sorted(newest.items()) if c.login.casefold() != agent.casefold()]
+
+
+def said_problems(agent: str, reviewer: str | None, conversation: tuple[SaidComment, ...],
+                  bodies: tuple[SaidComment, ...]) -> list[str]:
+    """Whose conversation comment or review body has no later conversation comment from the agent. Such words have
+    no thread, so a later comment is all a reply can be, and one in the same second isn't later. The reviewer's
+    tracking comment is exempt: the consumer's review must put every finding in a thread (ADR 0057)."""
+    who = agent.casefold()
+    answered = max((c.at for c in conversation if c.login.casefold() == who), default="")
+    tracker = (reviewer or "").casefold()  # "" names nobody: a deleted account reads as "" too, and is not exempt
+    asked = [*(c for c in conversation if not tracker or c.login.casefold() != tracker), *bodies]
+    unanswered = {c.login for c in asked if c.login.casefold() != who and c.at >= answered}
+    return [f"{login or 'a deleted account'}'s comment has no later comment from {agent}"
+            for login in sorted(unanswered)]
+
+
+def action_problems(action: str, pr: Pr, who: Accounts, paths: list[str], checker_in_tree: bool, reviews: list[Review],
+                    runs: list[CheckRun], route: RouteRead,
+                    comments: Callable[[], list[str]]) -> list[str]:
+    """Why the approver may not make this write on a PR `pull_problems` let through. The route is always held, even
+    where the admin approved too: the approver is the one acting, so nothing here can count for the admin."""
+    held = [p for p in paths if admin_only(p, checker_in_tree)]
+    why = admin_reason(pr, planscope.plan_of(pr.head_ref), held)
+    if why:
+        return [why]
+    last = last_reviews(reviews, (who.admin, who.approver))
+    problems = _changes_requested(who, last)
+    scope = plan_scope_problem(runs)
+    if scope:
+        problems.append(scope)
+    problems += route_problems(who, pr, last, checker_in_tree, route, own=action != APPROVE)
+    if action != APPROVE and not _approves(last.get(who.approver.casefold()), pr.head):
+        problems.append(f"no approval from {who.approver} on the head commit {pr.head[:12]}")
+    if action == MERGE:
+        problems += comments()
+    return problems
 
 
 def admin_reason(pr: Pr, branch: planscope.Branch, held: list[str]) -> str:
@@ -429,12 +551,19 @@ def _stale(r: Review | None, head: str) -> bool:
 
 # ---- GitHub and git ------------------------------------------------------
 
-def read_reviews(api: GhApi, repository: str, number: int) -> list[Review]:
-    what = "gh api pulls reviews"
+def _review_rows(api: GhApi, repository: str, number: int) -> list:
     try:
-        rows = api.all_pages(f"repos/{repository}/pulls/{number}/reviews", {}, REVIEW_LIMIT, what)
+        return api.all_pages(f"repos/{repository}/pulls/{number}/reviews", {}, REVIEW_LIMIT, "gh api pulls reviews")
     except SourceError as err:
         raise MergeAuthorityError(str(err)) from err
+
+
+def read_reviews(api: GhApi, repository: str, number: int) -> list[Review]:
+    return _reviews(_review_rows(api, repository, number))
+
+
+def _reviews(rows: list) -> list[Review]:
+    what = "gh api pulls reviews"
     found = []
     for r in rows:
         try:
@@ -496,6 +625,76 @@ def read_author(api: GhApi, repository: str, number: int) -> str:
     if not isinstance(data, dict) or "user" not in data:
         raise MergeAuthorityError(f"{what} returned unexpected JSON")
     return _login(data["user"], what)
+
+
+def read_pull(api: GhApi, repository: str, number: int) -> Pull:
+    what = "gh api pulls"
+    data = _json(api, f"repos/{repository}/pulls/{number}", what)
+    try:
+        head, base = data["head"], data["base"]
+        # A deleted fork leaves null here, which reads as no repository and so as not this one.
+        pr = Pr(repository, (head["repo"] or {}).get("full_name") or "", head["ref"], head["sha"], base["ref"],
+                base["repo"]["default_branch"])
+        pull = Pull(pr, _login(data["user"], what), data["state"], data["draft"], data["merged"],
+                    tuple(label["name"] for label in data["labels"]))
+    except (KeyError, TypeError, AttributeError) as err:
+        raise MergeAuthorityError(f"{what} returned unexpected JSON") from err
+    if not (all(isinstance(v, str) for v in (pr.head_repo, pr.head_ref, pr.head, pr.base_ref, pr.default_branch,
+                                             pull.state, *pull.labels))
+            and type(pull.draft) is bool and type(pull.merged) is bool):
+        raise MergeAuthorityError(f"{what} returned unexpected JSON")
+    return pull
+
+
+def _comment_rows(api: GhApi, path: str, what: str) -> list:
+    try:
+        return api.all_pages(path, {}, COMMENT_LIMIT, what)
+    except SourceError as err:
+        raise MergeAuthorityError(str(err)) from err
+
+
+def read_inline_comments(api: GhApi, repository: str, number: int) -> tuple[InlineComment, ...]:
+    what = "gh api pulls comments"
+    found = []
+    for r in _comment_rows(api, f"repos/{repository}/pulls/{number}/comments", what):
+        try:
+            comment = InlineComment(r["id"], _login(r["user"], what), r.get("in_reply_to_id"))
+        except (KeyError, TypeError, AttributeError) as err:
+            raise MergeAuthorityError(f"{what} returned unexpected JSON") from err
+        if not (_app_id(comment.id) and (comment.reply_to is None or _app_id(comment.reply_to))):
+            raise MergeAuthorityError(f"{what} returned unexpected JSON")
+        found.append(comment)
+    return tuple(found)
+
+
+def read_conversation(api: GhApi, repository: str, number: int) -> tuple[SaidComment, ...]:
+    what = "gh api issues comments"
+    found = []
+    for r in _comment_rows(api, f"repos/{repository}/issues/{number}/comments", what):
+        try:
+            found.append(SaidComment(_login(r["user"], what), _time(r["created_at"], what)))
+        except (KeyError, TypeError) as err:
+            raise MergeAuthorityError(f"{what} returned unexpected JSON") from err
+    return tuple(found)
+
+
+def review_bodies(rows: list) -> tuple[SaidComment, ...]:
+    """Each review that has words in it. `rows` have passed `_reviews`, which is all the admin's route reads."""
+    what = "gh api pulls reviews"
+    found = []
+    for r in rows:
+        body = r.get("body")
+        if body is not None and not isinstance(body, str):
+            raise MergeAuthorityError(f"{what} returned unexpected JSON")
+        if body:
+            found.append(SaidComment(_login(r["user"], what), _time(r.get("submitted_at"), what)))
+    return tuple(found)
+
+
+def _time(value, what: str) -> str:
+    if not (isinstance(value, str) and TIME.fullmatch(value)):
+        raise MergeAuthorityError(f"{what} returned unexpected JSON")
+    return value
 
 
 def read_activities(api: GhApi, repository: str, ref: str) -> tuple[Activity, ...]:
@@ -574,10 +773,10 @@ def read_status_contexts(api: GhApi, repository: str, head: str) -> tuple[str, .
 
 
 def read_jobs(api: GhApi, repository: str, checks: tuple[RequiredCheck, ...], runs: tuple[CheckRun, ...],
-              workflows: Mapping[str, str]) -> tuple[JobRecord, ...]:
+              workflows: Mapping[str, str], own: bool = False) -> tuple[JobRecord, ...]:
     """The job and workflow run behind each Actions-bound required check's passing latest run. Two checks in one
     workflow share a run, which is read once."""
-    wanted = _jobs_to_read(checks, runs)
+    wanted = _jobs_to_read(checks, runs, own)
     if len(wanted) > JOB_LIMIT:
         raise MergeAuthorityError(f"more than {JOB_LIMIT} required checks' jobs to read; refusing a partial list")
     workflow_runs: dict[int, tuple[str, str, str]] = {}
@@ -620,17 +819,20 @@ def _workflow_run_fields(run) -> tuple[str, str, str]:
     return fields
 
 
-def read_route_facts(api: GhApi, pr: Pr, number: int, workflows: list[str] | None = None) -> RouteFacts:
+def read_route_facts(api: GhApi, pr: Pr, number: int, workflows: list[str] | None = None, own: bool = False,
+                     gates: tuple[str, ...] = (), author: str | None = None) -> RouteFacts:
+    """`author` is passed where the PR has already been read, so it isn't read again."""
     expected = job_workflows(workflows)
     containment = read_containment(api, pr.repository, pr.default_branch)
     runs = tuple(read_check_runs(api, pr.repository, pr.head, name=None))
-    return RouteFacts(author=read_author(api, pr.repository, number),
+    return RouteFacts(author=read_author(api, pr.repository, number) if author is None else author,
                       activities=read_activities(api, pr.repository, pr.head_ref),
                       containment=containment,
                       runs=runs,
                       statuses=read_status_contexts(api, pr.repository, pr.head),
-                      jobs=read_jobs(api, pr.repository, containment.checks, runs, expected),
-                      workflows=expected)
+                      jobs=read_jobs(api, pr.repository, containment.checks, runs, expected, own),
+                      workflows=expected,
+                      gates=gates)
 
 
 def _json(api: GhApi, path: str, what: str, query: dict | None = None):
@@ -682,3 +884,50 @@ def check(repo: str, pr: Pr, number: int, base: str, who: Accounts, run: Run | N
     reviews = read_reviews(api, pr.repository, number)
     runs = read_check_runs(api, pr.repository, pr.head) if is_plan else []
     return decide(pr, who, paths, checker_in_tree, reviews, runs, lambda: read_route_facts(api, pr, number, workflows))
+
+
+def check_action(repo: str, repository: str, number: int, base: str, head: str, action: str, who: Accounts,
+                 gates: list[str], reviewer: str | None = None, run: Run | None = None,
+                 workflows: list[str] | None = None) -> ActionResult:
+    """Judge one write the approver is about to make on one head. The PR comes from the server, not an event, so
+    this answers for the moment it runs; `head` is what the write will be pinned to, and must be in repo as in
+    `check`. A merged PR is NOOP before anything else is read, whatever `head` says."""
+    if action not in ACTIONS:
+        raise MergeAuthorityError(f"--action must be one of {', '.join(ACTIONS)}")
+    if not who.approver:
+        raise MergeAuthorityError("no approver login is configured")
+    if not gates:
+        raise MergeAuthorityError("no --gate is named")
+    for name, sha in (("base", base), ("head", head)):
+        if not SHA.fullmatch(sha):
+            raise MergeAuthorityError(f"--{name} must be a 40-hex commit")
+    if not REPOSITORY.fullmatch(repository) or ".." in repository:
+        raise MergeAuthorityError("--repository must be OWNER/NAME")
+    if number < 1:
+        raise MergeAuthorityError("--pr must be a positive number")
+    api = GhApi(run)
+    pull = read_pull(api, repository, number)
+    if pull.merged:
+        return ActionResult(NOOP, ())
+    early = pull_problems(pull, head)
+    if early:
+        return ActionResult(REFUSE, tuple(early))
+    try:
+        paths = sorted({c.path for c in planscope.changes(repo, base, head)})
+        checker_in_tree = bool(planscope.present(repo, base, [CHECKER_MARK]))
+    except planscope.PlanScopeError as err:
+        raise MergeAuthorityError(str(err)) from err
+    rows = _review_rows(api, repository, number)
+    reviews = _reviews(rows)
+    runs = read_check_runs(api, repository, head)
+
+    def route() -> RouteFacts:
+        return read_route_facts(api, pull.pr, number, workflows, own=action != APPROVE, gates=tuple(gates),
+                                author=pull.author)
+
+    def comments() -> list[str]:
+        return (thread_problems(who.agent, read_inline_comments(api, repository, number))
+                + said_problems(who.agent, reviewer, read_conversation(api, repository, number), review_bodies(rows)))
+
+    problems = action_problems(action, pull.pr, who, paths, checker_in_tree, reviews, runs, route, comments)
+    return ActionResult(REFUSE, tuple(problems)) if problems else ActionResult(ACT, ())

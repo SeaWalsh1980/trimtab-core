@@ -3,8 +3,8 @@
 ## Status
 
 Accepted on merge. Adds to ADR 0043, whose routes and admin-only paths stand. This
-record covers the approval guards and the job-record guard. The merge guards and the
-`check-approver-route` command follow in their own PRs and will amend it.
+record covers the approval guards, the job-record guard, and, under "The App's own
+step", the merge guards and the `check-approver-route` command.
 
 ## Context
 
@@ -136,7 +136,7 @@ its run's event and path were unchanged, so the guard needs no exception for it.
   them and was ignored; it didn't try `steps` or `labels`. A green `plan-scope` on a real
   plan head has never been read, so that check's job record is untested on real data.
 - This check's own slot isn't read for its job, since the run being judged can't vouch
-  for itself. The approver's own step must read it before resolving or merging.
+  for itself. The approver's own step reads it before resolving or merging, below.
 - `check-merge-authority` still exits 2 on every PR for a login clash, the one
   configuration error that can stop the admin's approval.
 - The guards are conservative on purpose, and may surprise someone later. A status with
@@ -160,3 +160,105 @@ its run's event and path were unchanged, so the guard needs no exception for it.
   skipped `plan-scope` on a non-plan head). `GITHUB_TOKEN`'s access to `activity`,
   `statuses` and the job records is not yet shown. A 403 exits 2, which closes the route
   and leaves the admin's approval alone.
+
+## The App's own step
+
+`trimtab check-approver-route --action approve|resolve|merge` is what the App runs before
+each write. A check can't vouch for its own slot, and `merge-authority` passing says
+nothing about the moment after it ran.
+
+It reads the PR from the server, not an event, and prints one line for the caller's
+output: `verdict=act`, `verdict=noop` or `verdict=refuse`, with the reasons on stderr.
+Only `act` may write. It exits 0 for `act` and `noop`, 1 for `refuse`, and 2 with no
+verdict when a read fails, so an exit code alone can't tell the App to go ahead.
+
+| Guard | Refuses when | Actions |
+|---|---|---|
+| Head | `--head`, the commit the write is pinned to, isn't the server's head | All |
+| Item PR | Not a well-formed `plan/` head, a fork, not the default branch, or an admin-only path changed, `.github/` among them | All |
+| State | The PR is closed or a draft, or labelled `plan:blocked` or `review-cap-failed` | All |
+| Route | Any guard in the table above, and `plan-scope`'s every-run rule, whoever else approved | All |
+| Gates | A `--gate` name isn't required by the ruleset | All |
+| Changes requested | The admin's or the approver's last review requests changes | All |
+| Own slot | `merge-authority`'s latest run from its bound App didn't pass, or isn't a real job | Resolve, merge |
+| Approval | The approver's last review isn't an approval of this head | Resolve, merge |
+| Comments | A thread's newest comment isn't the agent's, or a conversation comment or review body has no later conversation comment from the agent | Merge |
+| Merged | Not a refusal: `noop`, with nothing else read, whatever `--head` says | All |
+
+**A review thread** is ordered by comment id. **Conversation comments and review bodies**
+have no thread, so a later comment from the agent is all a reply can be, compared by the
+server's timestamp, and one in the same second doesn't count. These guards only ask that
+a reply exists. Whether a reply settles a finding, and the owner's rule on findings
+(ADR 0040 in the consumer), read tags and severities, and belong to the App's preflight.
+
+**A finding only in a tracking comment.** The reviewer's tracking comment is free text,
+and on a real PR held two observations with no severity. So `--reviewer` exempts that login's
+conversation comments, not its review bodies, and an empty login is never exempt, since a
+deleted account reads as one. The consumer's review must post every finding in a thread and
+have its verdict go red when its findings and its inline comments differ. A finding
+then either has a thread these guards can read, or closes the route through a red required
+check. That change is the consumer's, and a control change, so it comes with its approver
+workflow. A prose observation outside the review's structured findings is still unseen.
+
+### Options considered
+
+- **Require an agent reply to every tracking comment.** Rejected: a blind reply passes it,
+  and it proves nothing about the finding.
+- **Parse the tracking comment.** Rejected: free text isn't a fact a guard can rest on.
+- **Read the review job's structured output.** Rejected: job outputs aren't readable from
+  the REST API. The verdict's check run could carry counts, but only as a later change
+  to the consumer's workflow.
+- **Read changed paths from `pulls/N/files`.** Rejected: `merge-authority` reads them from
+  git, and two readers could disagree. So the job needs the base checked out and the head
+  fetched, never checked out.
+- **Take the PR's facts from the event, as `check-merge-authority` does.** Rejected: the
+  App acts later than any event, so it needs the server's answer at that moment.
+- **Exempt the reviewer's review bodies too.** Rejected: its login on the consumer is
+  `github-actions[bot]`, so any workflow's review body would pass unanswered. None of the
+  five real PRs read had a review body at all, so this costs nothing today.
+- **Exit 0 only for `act`, and non-zero for `noop`.** Rejected: an already merged PR is a
+  normal repeat of a handler, not a failure (REL-1).
+- **Let the admin's approval carry the App's merge.** Rejected: the App is the one acting, so
+  the route is held and the approver's own approval needed, whoever else approved.
+- **Hold the comments guard at approval too.** Rejected: threads are still open then by
+  design, and the App's order is approve, re-run, resolve, merge. Refusing an approval over
+  a thread's state is the preflight's, which reads tags.
+
+### Consequences
+
+- The merge API call carrying `sha` isn't shown here, since core makes no write. Core only
+  refuses a head that moved; the consumer's workflow contract test pins the `sha`.
+- `resolveReviewThread` has no pin, so a push just after the read can't be stopped at that
+  write. The merge's `sha` decides the outcome.
+- A person's or a bot's comment needs a reply even if it asks nothing. That can hold a PR
+  on a harmless comment, and the agent's next comment clears it.
+- A blind reply passes the comments guard. The preflight's tag and severity guards are
+  what give a reply any weight, and until they exist nothing is armed.
+- A comment edited after the agent's reply reads as answered, and a deleted comment reads as
+  never said, because the guard reads ids and creation times. What the agent's token can
+  do to another account's comment hasn't been tried. The preflight's design inherits this.
+- If the approver's own last review requests changes, the App can't approve again, though
+  the message says "until they approve again". Only the admin can clear it, by dismissing
+  that review or approving the PR themselves. This fails closed.
+- `check_action` answers `act` to `approve` on a head the approver has already approved. Core
+  makes no write, so posting nothing on a repeat is the preflight's.
+- `--reviewer` isn't checked against the admin's or approver's login. Set to the admin's, it
+  would exempt the admin's conversation comments. The value comes from configuration the
+  agent can't change.
+- The exempt login, `github-actions[bot]` on the consumer, also covers any other Actions
+  conversation comment. That only removes a refusal, so it can't help a forged fact, but it
+  can hide a real one from another workflow.
+- A required check named by `--gate` but dropped from the ruleset refuses every action until
+  the ruleset or the configuration is put right. Nothing the admin does is affected.
+- Each new test was seen red on its assertion against a stub that always said `act`,
+  apart from 14 controls, which pass either way. A mutation trial broke 134 lines one at a
+  time, the 73 above and 61 new, and a test failed for each. Its first run left 7 green,
+  and each now has a test: the fork's early refusal, a job read at approval, thread order,
+  the latest agent comment, the agent's login without case, a PR with no `user`, and the
+  comment bound. It still missed two fail-open bugs, since no mutation adds an exemption:
+  local review found them, the reviewer's review bodies and a deleted account's comment
+  with no reviewer named. Each test was seen red on its assertion before its fix.
+- The new readers ran read-only against five real PRs in about 2 seconds each. They left
+  nothing unread, and reported the comments those PRs really left unanswered, one of them the
+  owner's bypass comment. The full command hasn't run against an open plan PR, since none
+  exists. `GITHUB_TOKEN`'s access to comments is not yet shown.
