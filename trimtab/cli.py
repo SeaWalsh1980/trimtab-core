@@ -837,6 +837,7 @@ def cmd_instance(args) -> int:
         print(json.dumps({
             "schema_version": instance.SCHEMA_VERSION, "root": str(base), "repo": found.repo,
             "base": {"repo": found.base_repo, "sha": found.base_sha},
+            "accounts": {"admin": found.admin, "agent": found.agent},
             "env": {"TRIMTAB_SECRET_PACKS": instance.packs_env(found),
                     "TRIMTAB_SECRET_PATTERNS": str(patterns) if patterns else None},
         }))

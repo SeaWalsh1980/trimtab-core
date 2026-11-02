@@ -95,7 +95,8 @@ say which check failed and start nothing.
    the check fails). Then read that PR's `merged_by.login` and
    `merge_commit_sha` from `gh api repos/{owner}/{repo}/pulls/<number>`.
    Compare the login with the admin login in the Trimtab instance's
-   configuration. Never take it from the plan, a progress record or the
+   configuration (`accounts.admin` from `trimtab instance --json`). Never
+   take it from the plan, a progress record or the
    conversation. If the configuration is not available in this session, or
    names no admin login, the check fails. Both files must resolve to the
    same PR number and the same `merge_commit_sha`; a declaration added by
@@ -126,7 +127,8 @@ Everything comes from the default branch and open PRs, never from memory:
   recognisable from the moment its draft opens, before any record exists.
   The branch name alone proves nothing: the PR's head must be in this same
   repository (not a fork) and its author must be the agent or admin
-  account from instance configuration. A `plan/…` PR that fails either
+  account from instance configuration (`accounts.agent`, `accounts.admin`).
+  A file naming no agent leaves only the admin. A `plan/…` PR that fails either
   test is a stop — report it; never resume or build on it. Otherwise it is
   resumed before anything else, but only through the gate in section 4,
   applied to the item its branch names. An open PR labelled `plan:blocked`

@@ -19,9 +19,11 @@ REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
 PACK = re.compile(r"^[a-z0-9-]+$")
-TOP = {"schema_version", "repo", "base", "guards"}
+LOGIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,38}$")  # a user's: an App's `[bot]` can't match
+TOP = {"schema_version", "repo", "base", "guards", "accounts"}
 BASE = {"repo", "sha"}
 GUARDS = {"secrets_packs", "secrets_patterns"}
+ACCOUNTS = {"admin", "agent"}
 NO_ID_FIELDS = {"cloud", "routines"}
 
 
@@ -36,6 +38,8 @@ class InstanceFile:
     base_sha: str
     secrets_packs: tuple[str, ...] | None  # None: every shipped pack; (): "none"
     secrets_patterns: str | None  # relative to the instance root
+    admin: str | None = None  # None: the file names none, and whatever needs one fails (ADR 0056)
+    agent: str | None = None  # the same
 
 
 def _keys(obj: dict, allowed: set[str], where: str) -> None:
@@ -73,6 +77,24 @@ def _patterns(value: object) -> str:
     return value
 
 
+def _login(value: object, key: str) -> str:
+    if not isinstance(value, str) or not LOGIN.fullmatch(value):
+        raise InstanceFileError(f"{key} must be a GitHub user's login, never an App's")
+    return value
+
+
+def _accounts(accounts: object) -> tuple[str, str | None]:
+    if not isinstance(accounts, dict):
+        raise InstanceFileError("accounts must be an object")
+    _keys(accounts, ACCOUNTS, "accounts.")
+    admin = _login(accounts.get("admin"), "accounts.admin")
+    agent = _login(accounts["agent"], "accounts.agent") if "agent" in accounts else None
+    # GitHub compares logins without case, so this does.
+    if agent is not None and agent.casefold() == admin.casefold():
+        raise InstanceFileError("accounts.agent and accounts.admin must be different logins")
+    return admin, agent
+
+
 def parse(data: object) -> InstanceFile:
     if not isinstance(data, dict):
         raise InstanceFileError(f"{FILE} must hold a JSON object")
@@ -93,12 +115,15 @@ def parse(data: object) -> InstanceFile:
     if not isinstance(guards, dict):
         raise InstanceFileError("guards must be an object")
     _keys(guards, GUARDS, "guards.")
+    admin, agent = _accounts(data["accounts"]) if "accounts" in data else (None, None)
     return InstanceFile(
         repo=_repo(data.get("repo"), "repo"),
         base_repo=_repo(base.get("repo"), "base.repo"),
         base_sha=sha,
         secrets_packs=_packs(guards["secrets_packs"]) if "secrets_packs" in guards else None,
         secrets_patterns=_patterns(guards["secrets_patterns"]) if "secrets_patterns" in guards else None,
+        admin=admin,
+        agent=agent,
     )
 
 
