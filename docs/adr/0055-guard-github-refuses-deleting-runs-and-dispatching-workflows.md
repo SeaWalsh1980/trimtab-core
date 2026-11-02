@@ -67,7 +67,13 @@ as well. These apply to every rule in the guard:
 - **A long payload skips the prefilter.** Its regex took over 20 s on a crafted
   140 KB command, 3.5 s before these options were read, and a hook that outlives its
   10-second timeout fails open. Above 32 KB the payload goes to the adapter, which stops
-  itself at 7 s and blocks. The review of this change found that; the matrix pins it.
+  itself and blocks. The review of this change found that; the matrix pins it.
+- **That stop is 6 s, and `timeout` kills at 7 s.** They were 7 s and 8 s until the
+  matrix's `under 8 s` failed at random on the merge of this change and on #144. The
+  700 KB case reaches the stop and took 7.26 s on all six CI runs read. `$SECONDS`
+  counts whole seconds, so it read 8 when a run began late in a second: about one run
+  in four. The guard blocked every time. Loosening only the test was rejected: the base
+  expectations run the base branch's copy on a PR, so that PR could still fail.
 
 **A built command word, and `run`.** `run` is a far commoner second word than `pr`,
 so a built word before `run` or `workflow` counts as gh only when a repository

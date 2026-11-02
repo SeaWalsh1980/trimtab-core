@@ -75,10 +75,10 @@ here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # root can stand in for a module (ADR 0035). -B: write no bytecode beside the
 # package.
 # A hook that outlives its 10 s timeout fails open, so the adapter stops itself
-# at 7 s (and blocks), and `timeout` kills it at 8 s if that did not happen;
+# at 6 s (and blocks), and `timeout` kills it at 7 s if that did not happen;
 # either way the exit is non-zero and blocks below.
 deadline=()
-command -v timeout >/dev/null 2>&1 && deadline=(timeout -k 1 8)
+command -v timeout >/dev/null 2>&1 && deadline=(timeout -k 1 7)
 ${deadline[@]+"${deadline[@]}"} python3 -I -S -B "$here/run_module.py" "$here/.." trimtab.adapters.guard_github <<<"$payload"
 rc=$?
 [[ $rc -eq 0 ]] && exit 0
