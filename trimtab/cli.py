@@ -929,6 +929,19 @@ def cmd_check_plan_admin(args) -> int:
     return 0
 
 
+def cmd_check_plan_scope_job(args) -> int:
+    try:
+        problems = mergeauthority.plan_scope_job_problems(args.repository, args.head)
+    except mergeauthority.MergeAuthorityError as err:
+        print(f"error: {err}; nothing is vouched for", file=sys.stderr)
+        return 2
+    if problems:
+        _print_problems(problems)
+        return 1
+    print(f"plan-scope: every job on {args.head[:12]} is a real, passing one")
+    return 0
+
+
 def cmd_routine_render(args) -> int:
     pairs = {}
     for item in args.set or []:
@@ -1264,6 +1277,13 @@ def build_parser() -> argparse.ArgumentParser:
                              "it must match the repository's TRIMTAB_ADMIN variable (ADR 0056). For sessions only")
     pa.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository the plan is in")
     pa.set_defaults(func=cmd_check_plan_admin)
+
+    pj = sub.add_parser("check-plan-scope-job",
+                        help="whether a head's plan-scope jobs are all real and passing, on a ruleset binding the check "
+                             "to GitHub Actions, read from job records (ADR 0058). For sessions only")
+    pj.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository the PR is in")
+    pj.add_argument("--head", required=True, metavar="SHA", help="the PR's final head commit")
+    pj.set_defaults(func=cmd_check_plan_scope_job)
 
     rt = sub.add_parser("routine", help="routine specs")
     rts = rt.add_subparsers(dest="routine_command", required=True)

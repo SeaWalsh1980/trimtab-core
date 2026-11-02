@@ -2226,5 +2226,303 @@ class PlanAdminCli(unittest.TestCase):
         self.assertEqual((done.returncode, done.stdout, "--repository" in done.stderr), (2, "", True), done.stderr)
 
 
+
+PLAN_SCOPE_WORKFLOW = ".github/workflows/plan-scope.yml"
+REPOSITORY_PATH = f"repos/{REPOSITORY}"
+ACTIONS_RUNS_PATH = f"repos/{REPOSITORY}/actions/runs"
+SECOND_RUN = RUN_ID + 1
+
+
+def jobs_path(run_id=RUN_ID):
+    return f"repos/{REPOSITORY}/actions/runs/{run_id}/jobs"
+
+
+def plan_scope_job(id=1, **changes):
+    return job_row(id, mergeauthority.CHECK_NAME, changes.pop("head", HEAD), **changes)
+
+
+def plan_scope_answers(jobs=None, runs=None):
+    """A head whose one workflow run holds one real, passing plan-scope job, on a ruleset binding it to Actions."""
+    return {REPOSITORY_PATH: json.dumps({"default_branch": DEFAULT}),
+            RULES_PATH: json.dumps(rule_rows()),
+            ACTIONS_RUNS_PATH: json.dumps({"workflow_runs": runs or [workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW)]}),
+            jobs_path(): json.dumps({"jobs": [plan_scope_job()] if jobs is None else jobs})}
+
+
+class PlanScopeJob(unittest.TestCase):
+    """plan_scope_job_problems(): what a session whose token can't read check runs reads instead."""
+
+    def problems(self, answers):
+        return mergeauthority.plan_scope_job_problems(REPOSITORY, HEAD, FakeGh(answers))
+
+    def assert_one_problem(self, answers, word):
+        problems = self.problems(answers)
+
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn(word, problems[0])
+
+    def test_a_real_passing_job_on_a_bound_ruleset_has_no_problem(self):
+        self.assertEqual(self.problems(plan_scope_answers()), ())
+
+    def test_a_carried_over_job_beside_its_passing_first_attempt_has_no_problem(self):
+        self.assertEqual(self.problems(plan_scope_answers([plan_scope_job(1), plan_scope_job(2)])), ())
+
+    def test_the_jobs_of_every_attempt_are_read(self):
+        gh = FakeGh(plan_scope_answers())
+
+        mergeauthority.plan_scope_job_problems(REPOSITORY, HEAD, gh)
+
+        queries = [query_of(argv) for argv in gh.argvs() if path_of(argv) == jobs_path()]
+        self.assertEqual([q.get("filter") for q in queries], ["all"])
+
+    def test_the_runs_are_read_for_the_head(self):
+        gh = FakeGh(plan_scope_answers())
+
+        mergeauthority.plan_scope_job_problems(REPOSITORY, HEAD, gh)
+
+        queries = [query_of(argv) for argv in gh.argvs() if path_of(argv) == ACTIONS_RUNS_PATH]
+        self.assertEqual([q.get("head_sha") for q in queries], [HEAD])
+
+    def test_no_check_run_is_read_since_the_session_token_gets_a_403(self):
+        gh = FakeGh(plan_scope_answers())
+
+        mergeauthority.plan_scope_job_problems(REPOSITORY, HEAD, gh)
+
+        self.assertEqual([path_of(argv) for argv in gh.argvs() if "check-runs" in path_of(argv)], [])
+
+    def test_no_plan_scope_job_is_a_problem(self):
+        self.assert_one_problem(plan_scope_answers([job_row(1, "another-job", HEAD)]), "no plan-scope job")
+
+    def test_a_job_still_running_is_a_problem(self):
+        self.assert_one_problem(plan_scope_answers([plan_scope_job(status="in_progress", conclusion=None)]),
+                                "has not completed")
+
+    def test_a_job_that_did_not_pass_is_a_problem(self):
+        for conclusion in ("failure", "cancelled", "skipped", None):
+            with self.subTest(conclusion=conclusion):
+                self.assert_one_problem(plan_scope_answers([plan_scope_job(conclusion=conclusion)]), "voids the head")
+
+    def test_an_earlier_failure_outweighs_a_later_pass(self):
+        jobs = [plan_scope_job(1, conclusion="failure"), plan_scope_job(2)]
+
+        self.assert_one_problem(plan_scope_answers(jobs), "voids the head")
+
+    def test_a_passing_job_with_no_runner_is_a_problem(self):
+        self.assert_one_problem(plan_scope_answers([plan_scope_job(runner_id=None)]), "voids the head")
+
+    def test_a_passing_job_with_no_runner_name_is_a_problem(self):
+        self.assert_one_problem(plan_scope_answers([plan_scope_job(runner_name="")]), "voids the head")
+
+    def test_a_passing_job_with_no_steps_is_a_problem(self):
+        self.assert_one_problem(plan_scope_answers([plan_scope_job(steps=0)]), "voids the head")
+
+    def test_a_job_on_another_commit_is_a_problem(self):
+        self.assert_one_problem(plan_scope_answers([plan_scope_job(head=EARLIER)]), "voids the head")
+
+    def test_a_workflow_run_on_another_commit_is_a_problem(self):
+        answers = plan_scope_answers(runs=[workflow_run_row(EARLIER, PLAN_SCOPE_WORKFLOW)])
+
+        self.assert_one_problem(answers, "voids the head")
+
+    def test_a_job_from_a_forging_workflow_is_a_problem(self):
+        answers = plan_scope_answers(runs=[workflow_run_row(HEAD, ".github/workflows/forged.yml")])
+
+        self.assert_one_problem(answers, "voids the head")
+
+    def test_a_forged_job_beside_the_real_one_is_a_problem(self):
+        answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW),
+                                           workflow_run_row(HEAD, ".github/workflows/forged.yml", run_id=SECOND_RUN)])
+        answers[jobs_path(SECOND_RUN)] = json.dumps({"jobs": [plan_scope_job(2, run_id=SECOND_RUN)]})
+
+        self.assert_one_problem(answers, "voids the head")
+
+    def test_a_job_from_another_event_is_a_problem(self):
+        answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW, event="workflow_dispatch")])
+
+        self.assert_one_problem(answers, "voids the head")
+
+    def test_other_workflows_jobs_are_not_judged(self):
+        answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW),
+                                           workflow_run_row(HEAD, CI_WORKFLOW, run_id=SECOND_RUN)])
+        answers[jobs_path(SECOND_RUN)] = json.dumps(
+            {"jobs": [job_row(2, "lint-test", HEAD, conclusion="failure", run_id=SECOND_RUN)]})
+
+        self.assertEqual(self.problems(answers), ())
+
+    def test_a_job_on_a_later_page_is_judged(self):
+        answers = plan_scope_answers()
+        full_page = [job_row(i, "another-job", HEAD) for i in range(1, PER_PAGE + 1)]
+        answers[jobs_path()] = [json.dumps({"jobs": full_page}),
+                                json.dumps({"jobs": [plan_scope_job(PER_PAGE + 1, conclusion="failure")]})]
+
+        self.assert_one_problem(answers, "voids the head")
+
+    def test_a_ruleset_not_requiring_plan_scope_is_a_problem(self):
+        answers = plan_scope_answers()
+        answers[RULES_PATH] = json.dumps(rule_rows(checks={"lint-test": ACTIONS_ID}))
+
+        self.assert_one_problem(answers, "ruleset")
+
+    def test_plan_scope_with_no_bound_app_is_a_problem(self):
+        answers = plan_scope_answers()
+        answers[RULES_PATH] = json.dumps(rule_rows(checks={"plan-scope": None}))
+
+        self.assert_one_problem(answers, "ruleset")
+
+    def test_plan_scope_bound_to_another_app_is_a_problem(self):
+        answers = plan_scope_answers()
+        answers[RULES_PATH] = json.dumps(rule_rows(checks={"plan-scope": OTHER_ID}))
+
+        self.assert_one_problem(answers, "ruleset")
+
+    def test_a_second_rule_leaving_plan_scope_unbound_is_a_problem(self):
+        answers = plan_scope_answers()
+        answers[RULES_PATH] = json.dumps(rule_rows() + rule_rows(checks={"plan-scope": None}))
+
+        self.assert_one_problem(answers, "ruleset")
+
+    def test_a_failed_read_is_an_error(self):
+        for path in (REPOSITORY_PATH, RULES_PATH, ACTIONS_RUNS_PATH, jobs_path()):
+            with self.subTest(path=path):
+                answers = plan_scope_answers()
+                answers[path] = "not json"
+
+                with self.assertRaises(MergeAuthorityError):
+                    self.problems(answers)
+
+    def test_a_refused_read_is_an_error(self):
+        with self.assertRaises(MergeAuthorityError):
+            mergeauthority.plan_scope_job_problems(REPOSITORY, HEAD, FakeGh(returncode=1, stderr="HTTP 403"))
+
+    def test_an_unexpected_shape_is_an_error(self):
+        cases = {REPOSITORY_PATH: ("{}", '{"default_branch": 5}', '{"default_branch": ""}', "[]"),
+                 ACTIONS_RUNS_PATH: ("[]", "{}", '{"workflow_runs": 5}', '{"workflow_runs": [5]}',
+                                     '{"workflow_runs": [{}]}', '{"workflow_runs": [{"path": "x"}]}'),
+                 jobs_path(): ("[]", "{}", '{"jobs": 5}', '{"jobs": [5]}',
+                               json.dumps({"jobs": [{"name": mergeauthority.CHECK_NAME}]}))}
+        for path, answers in cases.items():
+            for answer in answers:
+                with self.subTest(path=path, answer=answer):
+                    with self.assertRaises(MergeAuthorityError):
+                        self.problems({**plan_scope_answers(), path: answer})
+
+    def test_a_run_with_no_usable_id_is_an_error(self):
+        for run_id in (None, "1", True, 0):
+            with self.subTest(run_id=run_id):
+                answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW, run_id=run_id)])
+                # Answers any jobs path, so only the check on the id can refuse.
+                gh = FakeGh(answers, default=json.dumps({"jobs": [plan_scope_job()]}))
+
+                with self.assertRaises(MergeAuthorityError):
+                    mergeauthority.plan_scope_job_problems(REPOSITORY, HEAD, gh)
+
+    def test_a_job_with_no_usable_id_is_an_error(self):
+        for job_id in (None, "1", True, 0):
+            with self.subTest(job_id=job_id):
+                with self.assertRaises(MergeAuthorityError):
+                    self.problems(plan_scope_answers([plan_scope_job(job_id)]))
+
+    def test_more_runs_than_the_bound_is_an_error(self):
+        runs = [workflow_run_row(HEAD, CI_WORKFLOW, run_id=i)
+                for i in range(1, mergeauthority.ACTIONS_RUN_LIMIT + 2)]
+        pages = [json.dumps({"workflow_runs": runs[i:i + PER_PAGE]}) for i in range(0, len(runs), PER_PAGE)]
+
+        with self.assertRaises(MergeAuthorityError):
+            self.problems({**plan_scope_answers(), ACTIONS_RUNS_PATH: pages})
+
+    def test_more_jobs_than_the_bound_is_an_error(self):
+        jobs = [job_row(i, "another-job", HEAD) for i in range(1, mergeauthority.ACTIONS_JOB_LIMIT + 2)]
+        pages = [json.dumps({"jobs": jobs[i:i + PER_PAGE]}) for i in range(0, len(jobs), PER_PAGE)]
+
+        with self.assertRaises(MergeAuthorityError):
+            self.problems({**plan_scope_answers(), jobs_path(): pages})
+
+    def test_a_bad_head_is_an_error_reading_nothing(self):
+        gh = FakeGh(plan_scope_answers())
+
+        with self.assertRaises(MergeAuthorityError):
+            mergeauthority.plan_scope_job_problems(REPOSITORY, "main", gh)
+
+        self.assertEqual(gh.calls, [])
+
+    def test_a_bad_repository_is_an_error_reading_nothing(self):
+        for repository in ("not-a-repo", "owner/..", "../repo"):
+            with self.subTest(repository=repository):
+                gh = FakeGh(plan_scope_answers())
+
+                with self.assertRaises(MergeAuthorityError):
+                    mergeauthority.plan_scope_job_problems(repository, HEAD, gh)
+
+                self.assertEqual(gh.calls, [])
+
+    def test_the_skills_merger_test_takes_plan_scope_from_the_command(self):
+        skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
+        start = skill.index("Then the merger.")
+        section = skill[start:skill.index("the PR changes neither `.github/`", start)]
+
+        self.assertIn("trimtab check-plan-scope-job --repository", section)
+        self.assertIn("command of its own, with no pipe", " ".join(section.split()))
+        self.assertNotIn("check-runs", section)
+
+
+class PlanScopeJobCli(unittest.TestCase):
+    """`trimtab check-plan-scope-job`, with only gh faked."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.answers = plan_scope_answers()
+
+    def cli(self, *args):
+        bin_dir = Path(self.tmp.name) / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        gh = bin_dir / "gh"
+        gh.write_text("#!/usr/bin/env python3\nimport json, os, sys\n"
+                      "answers = json.loads(os.environ['FAKE_ANSWERS'])\n"
+                      "path = sys.argv[4].split('?')[0]\n"
+                      "if path not in answers:\n    sys.exit('gh: Not Found (HTTP 404)')\n"
+                      "print(answers[path])\n", encoding="utf-8")
+        gh.chmod(0o755)
+        env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+               "FAKE_ANSWERS": json.dumps(self.answers)}
+        return subprocess.run([str(TRIMTAB), "check-plan-scope-job", *(args or ("--repository", REPOSITORY,
+                                                                               "--head", HEAD))],
+                              capture_output=True, text=True, env=env)
+
+    def test_a_real_job_exits_0(self):
+        done = self.cli()
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_a_problem_exits_1_naming_it(self):
+        self.answers = plan_scope_answers([plan_scope_job(conclusion="failure")])
+
+        done = self.cli()
+
+        self.assertEqual((done.returncode, "FAIL  " in done.stderr), (1, True), done.stderr)
+
+    def test_a_refused_read_exits_2(self):
+        del self.answers[ACTIONS_RUNS_PATH]
+
+        done = self.cli()
+
+        self.assertEqual((done.returncode, "nothing is vouched for" in done.stderr), (2, True), done.stderr)
+
+    def test_a_bad_head_exits_2(self):
+        done = self.cli("--repository", REPOSITORY, "--head", "main")
+
+        self.assertEqual((done.returncode, "nothing is vouched for" in done.stderr), (2, True), done.stderr)
+
+    def test_the_cli_needs_the_head_named(self):
+        done = self.cli("--repository", REPOSITORY)
+
+        self.assertEqual((done.returncode, "--head" in done.stderr), (2, True), done.stderr)
+
+    def test_the_cli_needs_the_repository_named(self):
+        done = self.cli("--head", HEAD)
+
+        self.assertEqual((done.returncode, "--repository" in done.stderr), (2, True), done.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
