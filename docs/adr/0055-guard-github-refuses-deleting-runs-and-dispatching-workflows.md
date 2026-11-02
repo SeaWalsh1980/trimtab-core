@@ -53,8 +53,8 @@ as well. These apply to every rule in the guard:
   `repos/<id>/<id>/…`. GitHub serves the Actions routes this way on a read. A write
   by this route wasn't tried.
 - **A command word the shell builds is read past a repository option:**
-  `${G}h -R o/r run delete 1`, `${G}h pr -R o/r create`. The prefilter allows one
-  option between a group and its command.
+  `${G}h -R o/r run delete 1`, `${G}h pr -R o/r create`. The prefilter reads past
+  options between a group and its command.
 - **An alias that stops at a group or at `api` refuses** (`gh alias set r run`),
   because the guard never sees the rest of what it runs.
 
@@ -83,8 +83,14 @@ option or the refused subcommand shows it. `$NPM run $SCRIPT` passes.
   - a built word and a built subcommand, `${G}h run $S 1`, because that reads the same
     as `$NPM run $SCRIPT`. `${G}h pr $S` also still passes, at the prefilter, as it did
     before this change;
-  - more than one option between a group and its command, on a built word;
-  - an alias whose expansion the guard can't split on spaces.
+  - an alias whose expansion the guard can't split on spaces. A shell alias with no
+    `"$@"` passes too, and it takes no arguments as far as we know, so `!gh run` runs
+    only that; `!gh run "$@"` refuses;
+  - an option `gh run` doesn't take, on a built word: `${G}h run -R o/r --json x
+    delete 1`. As far as we know gh rejects it, and that wasn't tried.
+- **Left open, by choice:** deleting an artifact or a cache. Neither is what a merge
+  check reads today, and the owner asked for runs and logs. A check that comes to rely
+  on an artifact needs this reopened.
 - **Accepted false refusals:** `$NPM run delete` and `$TEMPORAL workflow run x` read
   the same as a built gh word. So does a write to `repos/$REPO/123`, or to `repos/$R`
   itself, through a variable.

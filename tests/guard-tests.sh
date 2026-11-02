@@ -3248,6 +3248,8 @@ tg 2 '/usr/bin/g? run -R o/r delete 123'
 tg 2 '/usr/bin/g? workflow -R o/r run cd.yml'
 tg 2 '$GH --repo o/r run $SUB 123'                       'a repository option marks the word as gh'
 tg 2 'G=g; env ${G}h run delete 1'                       'a wrapper before the built word'
+tg 2 '${G}h run -R o/r -R o/r delete 123'                'more than one option before the command'
+tg 2 '${G}h workflow -R o/r -R o/r run cd.yml'
 tg 2 '${G}h -R o/r pr create --title t'                  'the older rules read past the option too'
 tg 2 '${G}h pr -R o/r create --title t'
 # Other tools: `run` is a common second word. Each is sent to the adapter by a
@@ -3265,6 +3267,7 @@ tg 2 'gh alias set w workflow'
 tg 2 "gh alias set d 'api -X DELETE'"
 tg 2 "gh alias set r 'run -R o/r'"
 tg 2 'gh alias set p pr'                                 'the older rules, the same way'
+tg 2 "gh alias set x '!gh run \"\$@\"'"                     'a shell alias that passes its arguments on'
 tg 0 "gh alias set rv 'run view'"
 tg 0 "gh alias set prv 'pr view'"
 tg 0 "gh alias set g 'api repos/o/r/pulls'"              'an alias with its own path, which is a read'
