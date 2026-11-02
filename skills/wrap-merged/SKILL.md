@@ -94,11 +94,16 @@ say which check failed and start nothing.
    whose `merged_at` is set and whose base is the default branch (none →
    the check fails). Then read that PR's `merged_by.login` and
    `merge_commit_sha` from `gh api repos/{owner}/{repo}/pulls/<number>`.
-   Compare the login with the admin login in the Trimtab instance's
-   configuration (`accounts.admin` from `trimtab instance --json`). Never
+   Compare the login, without case, with the one
+   `trimtab check-plan-admin --repository <owner>/<name>` prints, run as a
+   command of its own, with no pipe, and naming the repository these `gh api`
+   calls read. That is
+   `accounts.admin` in the Trimtab instance's configuration, once it has
+   matched the repository's `TRIMTAB_ADMIN` variable. Never
    take it from the plan, a progress record or the
-   conversation. If the configuration is not available in this session, or
-   names no admin login, the check fails. Both files must resolve to the
+   conversation. If that command exits non-zero, because the configuration
+   names no admin login, the two differ, or either can't be read in this
+   session, the check fails. Both files must resolve to the
    same PR number and the same `merge_commit_sha`; a declaration added by
    any later PR, even the admin's, fails.
 3. **Both are unchanged since that merge:**
@@ -127,7 +132,8 @@ Everything comes from the default branch and open PRs, never from memory:
   recognisable from the moment its draft opens, before any record exists.
   The branch name alone proves nothing: the PR's head must be in this same
   repository (not a fork) and its author must be the agent or admin
-  account from instance configuration (`accounts.agent`, `accounts.admin`).
+  account from instance configuration (`accounts.agent` from `trimtab instance --json`,
+  and the admin login section 2's check 2 printed).
   A file naming no agent leaves only the admin. A `plan/…` PR that fails either
   test is a stop — report it; never resume or build on it. Otherwise it is
   resumed before anything else, but only through the gate in section 4,

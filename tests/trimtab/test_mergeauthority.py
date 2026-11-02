@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from gh_fake import FakeGh, path_of, query_of
+from instance_fixture import env_for, make_instance
 from test_scrub import isolated_git_env
 from trimtab import mergeauthority, planscope
 from trimtab.capture.sources import PER_PAGE, GhApi
@@ -327,6 +328,22 @@ class AgreesWithTheSkill(unittest.TestCase):
         paths = (*mergeauthority.PIN_FILES, *mergeauthority.CHECKER_DIRS, *mergeauthority.CHECKER_FILES, ".github/")
 
         self.assertEqual([p for p in paths if f"`{p}`" not in section], [])
+
+    def test_the_skills_plan_check_takes_the_admin_from_check_plan_admin(self):
+        skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
+        start = skill.index("2. **Both were added by one PR the admin account merged.**")
+        section = skill[start:skill.index("3. **Both are unchanged since that merge:**", start)]
+
+        self.assertIn("trimtab check-plan-admin --repository", section)
+        self.assertIn("command of its own, with no pipe", " ".join(section.split()))
+        self.assertNotIn("trimtab instance --json", section)
+
+    def test_the_skills_in_flight_test_names_where_the_agents_login_comes_from(self):
+        skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
+        start = skill.index("- **In flight:**")
+        section = skill[start:skill.index("- **Next:**", start)]
+
+        self.assertIn("`accounts.agent` from `trimtab instance --json`", section)
 
 
 class Configuration(unittest.TestCase):
@@ -2058,6 +2075,155 @@ class Repository(GitRepository):
 
     def test_the_cli_refuses_to_run_without_an_admin_argument(self):
         self.assertEqual(self.cli().returncode, 2)
+
+
+VARIABLE_PATH = f"repos/{REPOSITORY}/actions/variables/TRIMTAB_ADMIN"
+
+
+def variable_row(value=ADMIN):
+    return json.dumps({"name": "TRIMTAB_ADMIN", "value": value, "created_at": "2026-10-25T10:00:00Z"})
+
+
+class PlanAdmin(unittest.TestCase):
+    """plan_admin_problems(): the instance's admin must exist and agree with the merge gate's."""
+
+    def test_an_instance_naming_no_admin_is_a_problem(self):
+        problems = mergeauthority.plan_admin_problems(None, REPOSITORY, FakeGh({VARIABLE_PATH: variable_row()}))
+
+        self.assertEqual(len(problems), 1)
+        self.assertIn("names no admin", problems[0])
+
+    def test_an_instance_naming_no_admin_reads_nothing(self):
+        gh = FakeGh({VARIABLE_PATH: variable_row()})
+
+        mergeauthority.plan_admin_problems(None, REPOSITORY, gh)
+
+        self.assertEqual(gh.calls, [])
+
+    def test_a_different_admin_is_a_problem_naming_both(self):
+        problems = mergeauthority.plan_admin_problems(ADMIN, REPOSITORY, FakeGh({VARIABLE_PATH: variable_row(AGENT)}))
+
+        self.assertEqual(len(problems), 1)
+        self.assertIn(ADMIN, problems[0])
+        self.assertIn(AGENT, problems[0])
+
+    def test_the_same_admin_passes(self):
+        gh = FakeGh({VARIABLE_PATH: variable_row()})
+
+        self.assertEqual(mergeauthority.plan_admin_problems(ADMIN, REPOSITORY, gh), ())
+        self.assertEqual([path_of(argv) for argv in gh.argvs()], [VARIABLE_PATH])
+
+    def test_logins_are_compared_without_case(self):
+        gh = FakeGh({VARIABLE_PATH: variable_row(ADMIN.upper())})
+
+        self.assertEqual(mergeauthority.plan_admin_problems(ADMIN, REPOSITORY, gh), ())
+
+    def test_space_around_the_variable_is_ignored_as_the_merge_gate_ignores_it(self):
+        gh = FakeGh({VARIABLE_PATH: variable_row(f" {ADMIN}\n")})
+
+        self.assertEqual(mergeauthority.plan_admin_problems(ADMIN, REPOSITORY, gh), ())
+
+    def test_a_repository_with_no_variable_is_an_error(self):
+        gh = FakeGh(returncode=1, stderr="gh: Not Found (HTTP 404)")
+
+        with self.assertRaises(MergeAuthorityError):
+            mergeauthority.plan_admin_problems(ADMIN, REPOSITORY, gh)
+
+    def test_a_token_refused_the_variable_is_an_error(self):
+        gh = FakeGh(returncode=1, stderr="gh: Resource not accessible by integration (HTTP 403)")
+
+        with self.assertRaises(MergeAuthorityError):
+            mergeauthority.plan_admin_problems(ADMIN, REPOSITORY, gh)
+
+    def test_a_variable_with_no_usable_value_is_an_error(self):
+        answers = {"blank": variable_row(""), "spaces": variable_row("  "), "number": variable_row(7),
+                   "no value": json.dumps({"name": "TRIMTAB_ADMIN"}), "a list": "[]", "not JSON": "<html>"}
+        for what, answer in answers.items():
+            with self.subTest(what=what):
+                with self.assertRaises(MergeAuthorityError):
+                    mergeauthority.plan_admin_problems(ADMIN, REPOSITORY, FakeGh({VARIABLE_PATH: answer}))
+
+    def test_a_malformed_repository_is_an_error_before_any_read(self):
+        for repository in ("owner", "owner/repo/actions", "owner/repo?x=1", "owner/..", "own..er/repo", ""):
+            with self.subTest(repository=repository):
+                gh = FakeGh({VARIABLE_PATH: variable_row()})
+
+                with self.assertRaises(MergeAuthorityError):
+                    mergeauthority.plan_admin_problems(ADMIN, repository, gh)
+                self.assertEqual(gh.calls, [])
+
+
+class PlanAdminCli(unittest.TestCase):
+    """`trimtab check-plan-admin` against a fixture instance, with only gh faked."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.inst = make_instance(Path(self.tmp.name))
+        self.answer = variable_row()
+
+    def name_admin(self, login=ADMIN):
+        path = self.inst / "instance.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        path.write_text(json.dumps({**data, "accounts": {"admin": login}}), encoding="utf-8")
+
+    def cli(self):
+        bin_dir = Path(self.tmp.name) / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        gh = bin_dir / "gh"
+        gh.write_text("#!/usr/bin/env python3\nimport os, sys\n"
+                      f"if sys.argv[4] != {VARIABLE_PATH!r}:\n    sys.exit('gh: Not Found (HTTP 404)')\n"
+                      "answer = os.environ['FAKE_ANSWER']\n"
+                      "if not answer:\n    sys.exit('gh: Not Found (HTTP 404)')\n"
+                      "print(answer)\n", encoding="utf-8")
+        gh.chmod(0o755)
+        env = {**env_for(self.inst), "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "FAKE_ANSWER": self.answer}
+        return subprocess.run([str(TRIMTAB), "check-plan-admin", "--repository", REPOSITORY], capture_output=True,
+                              text=True, env=env)
+
+    def test_a_match_prints_the_login_alone_and_exits_0(self):
+        self.name_admin()
+
+        done = self.cli()
+
+        self.assertEqual((done.returncode, done.stdout), (0, f"{ADMIN}\n"), done.stderr)
+
+    def test_an_instance_naming_no_admin_exits_1_printing_no_login(self):
+        done = self.cli()
+
+        self.assertEqual((done.returncode, done.stdout, "names no admin" in done.stderr), (1, "", True), done.stderr)
+
+    def test_a_different_admin_exits_1_printing_no_login(self):
+        self.name_admin(AGENT)
+
+        done = self.cli()
+
+        self.assertEqual((done.returncode, done.stdout, "FAIL  " in done.stderr), (1, "", True), done.stderr)
+
+    def test_a_repository_with_no_variable_exits_2_printing_no_login(self):
+        self.name_admin()
+        self.answer = ""
+
+        done = self.cli()
+
+        self.assertEqual((done.returncode, done.stdout, "nothing is vouched for" in done.stderr), (2, "", True),
+                         done.stderr)
+
+    def test_a_broken_instance_file_exits_2_printing_no_login(self):
+        (self.inst / "instance.json").write_text("{", encoding="utf-8")
+
+        done = self.cli()
+
+        self.assertEqual((done.returncode, done.stdout, "nothing is vouched for" in done.stderr), (2, "", True),
+                         done.stderr)
+
+    def test_the_cli_needs_the_repository_named(self):
+        self.name_admin()
+
+        done = subprocess.run([str(TRIMTAB), "check-plan-admin"], capture_output=True, text=True,
+                              env=env_for(self.inst))
+
+        self.assertEqual((done.returncode, done.stdout, "--repository" in done.stderr), (2, "", True), done.stderr)
 
 
 if __name__ == "__main__":

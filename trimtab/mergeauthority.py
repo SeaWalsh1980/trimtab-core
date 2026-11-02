@@ -45,6 +45,9 @@ The admin, approver and agent logins and the expected workflows come from the
 caller, never from the PR: the job passes them from configuration the PR cannot change. Changed paths come
 from git (`base...head`, renames off, as plan-scope reads them); reviews and
 check runs from GitHub's REST API through `gh api`.
+
+`plan_admin_problems` is for sessions, not the job: it reads the repository's
+`TRIMTAB_ADMIN` itself, to compare with the instance's admin (ADR 0056).
 """
 
 from __future__ import annotations
@@ -58,6 +61,7 @@ from trimtab.capture.sources import PER_PAGE, GhApi, Run, SourceError
 
 CHECK_NAME = "plan-scope"
 OWN_CHECK = "merge-authority"
+ADMIN_VARIABLE = "TRIMTAB_ADMIN"
 ACTIONS_APP = "github-actions"
 ACTIONS_APP_ID = 15368
 JOB_EVENT = "pull_request"
@@ -840,6 +844,25 @@ def _json(api: GhApi, path: str, what: str, query: dict | None = None):
         return api.json("GET", path, what, query=query)
     except SourceError as err:
         raise MergeAuthorityError(str(err)) from err
+
+
+def plan_admin_problems(named: str | None, repository: str, run: Run | None = None) -> tuple[str, ...]:
+    """Why the instance's admin can't judge a plan's merge in this repository: `named` is `accounts.admin`, or None
+    when the instance names none, and the merge gate judges by the repository's variable (ADR 0056). A variable that
+    can't be read, or holds no login, raises, so a repository without one fails the plan check."""
+    if not REPOSITORY.fullmatch(repository) or ".." in repository:
+        raise MergeAuthorityError(f"{repository!r} is not owner/name")
+    if named is None:
+        return ("the instance names no admin, so no plan can be authorised (accounts.admin)",)
+    row = _json(GhApi(run), f"repos/{repository}/actions/variables/{ADMIN_VARIABLE}", f"the {ADMIN_VARIABLE} variable")
+    value = row.get("value") if isinstance(row, dict) else None
+    if not isinstance(value, str) or not value.strip():
+        raise MergeAuthorityError(f"the {ADMIN_VARIABLE} variable holds no login")
+    configured = value.strip()  # as accounts() reads it for the merge gate
+    if configured.casefold() != named.casefold():
+        return (f"accounts.admin is {named} but {repository}'s {ADMIN_VARIABLE} is {configured}, so the plan check "
+                "and the merge gate would judge different accounts",)
+    return ()
 
 
 def _app_id(value) -> bool:

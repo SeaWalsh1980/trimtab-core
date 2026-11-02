@@ -3,7 +3,8 @@
 ## Status
 
 Accepted on merge. Narrows nothing in ADR 0044, which still decides where the
-merge-authority job reads its logins.
+merge-authority job reads its logins. Amended 2026-11-02: "The plan check reads this in
+code", below.
 
 ## Context
 
@@ -61,7 +62,8 @@ required when the object is present, and `agent`, optional.
 - **Two sources for one fact.** `TRIMTAB_ADMIN` on the consumer and `accounts.admin`
   in the instance can disagree. If they do, the merge gate and the
   plan check judge different accounts, and a stale `accounts.admin` keeps a former
-  admin's merge authorising plans. Nothing compares them yet. Changing the admin
+  admin's merge authorising plans. Nothing compares them yet (see "The plan check
+  reads this in code" below). Changing the admin
   now takes a variable change and an instance pin bump.
 - **Order matters.** An older reader refuses a file with `accounts`. An older shim
   changes nothing, and an older base's `trimtab instance --json`, `--check` and
@@ -70,8 +72,62 @@ required when the object is present, and `agent`, optional.
   change that moves its `base.sha` here and replaces its copy of the shim, and each
   machine re-runs bootstrap before the consumer's lock moves.
 - **Still text only.** That a file naming no admin fails the plan check is
-  `wrap-merged`'s instruction: nothing in code reads `null` yet. `check-merge-authority`
-  still takes its logins from its caller.
+  `wrap-merged`'s instruction: nothing in code reads `null` yet (see "The plan check
+  reads this in code" below). `check-merge-authority` still takes its logins from its
+  caller.
 - `wrap-merged`'s `plan:continue` check also names the approver, which still has no
   field, so a label the approver added can't be recognised from the file until it
   does.
+
+## Amendment (2026-11-02): The plan check reads this in code
+
+Added after the decision above, on the owner's yes to two questions: should code fail
+the plan check when no admin is named, and should `accounts.admin` be compared with
+`TRIMTAB_ADMIN`.
+
+`trimtab check-plan-admin --repository OWNER/NAME` prints the login a plan's merge is
+compared with, and `wrap-merged`'s check 2 calls it.
+
+| Case | Exit | Stdout |
+|---|---|---|
+| `accounts.admin` matches the repository's `TRIMTAB_ADMIN`, without case | 0 | The login |
+| The instance names no admin, or the two differ | 1 | Nothing |
+| The instance file or the variable can't be read, the variable holds no login, or `--repository` isn't owner/name | 2 | Nothing |
+
+So a repository with no variable fails the plan check. Space around the variable is
+ignored, as `accounts()` ignores it for the merge gate.
+
+### Options rejected
+
+- **Only `wrap-merged`'s text.** That was the state above, and it's an instruction a
+  session can misread.
+- **Comparing in the merge-authority job.** That job has no instance file (ADR 0044).
+- **Comparing in `trimtab instance --check`.** The instance's CI has no one repository to
+  ask, since an instance serves several consumers.
+- **Warning and passing when the variable can't be read.** The check would then pass in
+  exactly the case it can't judge.
+- **The variable alone.** AGW-1 names instance configuration, and an agent can't change
+  either source, so two that must agree are a stronger test than one.
+
+### Consequences
+
+- **A session that can't read the variable can't pass the plan check.** The option
+  rejected above said such sessions exist. That now stops a run rather than letting it
+  go on the instance's word alone. The agent's token read it on a consumer, the base and
+  the instance. A cloud session's read is untried.
+- **It's still called by an instruction.** `wrap-merged` tells a session to run it, and
+  no hook makes it. The session chooses the `--repository` and instance it names, so
+  nothing ties them to the plan's. The comparison is of the moment the session runs it,
+  and the login it prints only means something if the session compares `merged_by` with it.
+- **The merge gate doesn't change.** It judges by the variable and never reads the
+  instance, so an instance that disagrees stops plans, not merges.
+
+### Trial
+
+Each test that isn't a control was seen failing on its assertion against a stub that
+reported no problem. Six controls pass either way. A mutation trial broke 28 lines one
+at a time. Its first run left 2 green, a `..` inside a name and `--repository` made
+optional; each now has a test case, and all 28 are caught.
+
+Read-only against real repositories, with the agent's token: a consumer, the base and the
+instance each exit 0 in under half a second, and a repository that doesn't exist exits 2.
