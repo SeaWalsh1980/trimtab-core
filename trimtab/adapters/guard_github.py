@@ -523,7 +523,7 @@ def _may_hide_route(path: str, method: str | None) -> bool:
     """
     parts = path.split("/")
     ending = parts[:-1] if parts[-1] == "logs" else parts
-    if HOLE in ending[-1] and method not in ("PATCH", "PUT"):
+    if ending and HOLE in ending[-1] and method not in ("PATCH", "PUT"):
         return True
     held = [k for k in (1, 2) if k < len(parts) and HOLE in parts[k]]
     if parts[0] != "repos" or not held:
