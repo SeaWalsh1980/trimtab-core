@@ -3,8 +3,9 @@
 # that registration is a security-control change (ADR 0011).
 #
 # Refuses the GitHub writes the operator owns: a PR opened as anything but a
-# draft, an approving review, resolving a review thread, and API writes to the
-# default branch (and `gh repo sync --force`). The rules, the spellings read
+# draft, an approving review, resolving a review thread, API writes to the
+# default branch (and `gh repo sync --force`), deleting a workflow run or its
+# logs, and dispatching a workflow. The rules, the spellings read
 # and the residuals are in trimtab/adapters/guard_github.py and
 # docs/adr/0037-guard-github-refuses-the-github-writes-the-operator-owns.md.
 # Exit 2 = blocked, with a message that names the rule and never quotes the
@@ -48,7 +49,7 @@ flat=${flat//[\"\'\\]/}
 # Besides the names, gh's own subcommands: a command word the shell builds
 # (${G}h, /usr/bin/g?) hides `gh` but not what follows it.
 about_github='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-]|$)|graphql|github\.com'
-about_github+='|(^|[^A-Za-z0-9_])(pr[[:space:]]+(create|new|review)|api[[:space:]]|repo[[:space:]]+sync|alias[[:space:]]+(set|import))'
+about_github+='|(^|[^A-Za-z0-9_])(pr[[:space:]]+(create|new|review)|api[[:space:]]|repo[[:space:]]+sync|alias[[:space:]]+(set|import)|run[[:space:]]+delete|workflow[[:space:]]+run)'
 if [[ "$payload" != *'\u'* && "$payload" != *"\$'"* ]]; then
   shopt -s nocasematch
   [[ "$flat" =~ $about_github ]] || exit 0

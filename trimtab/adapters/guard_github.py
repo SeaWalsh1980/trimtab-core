@@ -15,6 +15,8 @@ Refused, in every spelling read below:
 - a write to the default branch (named `main` or `master`) through the API: a ref update or
   delete, a merge, a contents write, a fork sync, and the GraphQL ref and commit mutations;
   and `gh repo sync --force`;
+- deleting a workflow run or its logs, and dispatching a workflow, by `gh run delete`, `gh workflow run`
+  or the API (ADR 0055);
 - a write to a github.com host through `curl` or `wget`, which this guard cannot read.
 
 How it reads the command. Two passes, and either may refuse:
@@ -359,6 +361,8 @@ API_VALUED = {"-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--
               "-t", "--template", "--hostname", "-p", "--preview", "--cache"}
 API_BOOL = {"-i", "--include", "--paginate", "--silent", "--verbose", "--slurp"}
 GH_GLOBAL_VALUED = {"-R", "--repo"}
+RUN_DELETE = "deleting a workflow run or its logs is the owner's: it erases what a merge check reads"
+DISPATCH = "dispatching a workflow is the owner's: it can start a production deploy or rollback"
 
 
 def check_pr_create(args: list[Word], ctx: Ctx) -> None:
@@ -411,7 +415,7 @@ def check_gh(args: list[Word], ctx: Ctx) -> None:
     if sub is None:
         return
     if sub.dynamic:
-        if group.text in ("pr", "repo", "alias"):
+        if group.text in ("pr", "repo", "alias", "run", "workflow"):
             ctx.unknown("the gh command is a shell expansion")
         return
     if group.text == "pr" and sub.text in ("create", "new"):  # cobra registers `new` as create's alias
@@ -420,6 +424,10 @@ def check_gh(args: list[Word], ctx: Ctx) -> None:
         check_pr_review(tail, ctx)
     elif group.text == "repo" and sub.text == "sync":
         check_repo_sync(tail, ctx)
+    elif group.text == "run" and sub.text == "delete":
+        raise Refused(RUN_DELETE)
+    elif group.text == "workflow" and sub.text == "run":
+        raise Refused(DISPATCH)
     elif group.text == "alias" and sub.text == "set":
         check_alias_set(tail, ctx)
     elif group.text == "alias" and sub.text == "import":
@@ -628,6 +636,8 @@ R_REFS = re.compile(r"repos/.+/git/refs")
 R_MERGES = re.compile(r"repos/.+/merges")
 R_CONTENTS = re.compile(r"repos/.+/contents(?:/.*)?")
 R_UPSTREAM = re.compile(r"repos/.+/merge-upstream")
+R_RUN = re.compile(r"repos/.+/actions/runs/[^/]+(?:/logs)?")
+R_DISPATCH = re.compile(r"repos/.+/(?:actions/workflows/[^/]+/)?dispatches")
 
 
 def check_api(args: list[Word], ctx: Ctx) -> None:
@@ -674,6 +684,10 @@ def check_api(args: list[Word], ctx: Ctx) -> None:
         branch = _get(body_of(req, ctx), "branch", ctx, "the sync's branch is unreadable")
         if _branch_is_default(branch, ctx, "the sync's branch is unreadable"):
             raise Refused("a fork sync of the default branch through the API")
+    elif R_RUN.fullmatch(path):
+        raise Refused(RUN_DELETE)
+    elif R_DISPATCH.fullmatch(path):
+        raise Refused(DISPATCH)
 
 
 _RESOLVE = re.compile(r"(?<![A-Za-z0-9_])resolveReviewThread(?![A-Za-z0-9_])", re.I)
@@ -822,7 +836,7 @@ def check_segment(words: list[Word], ctx: Ctx) -> None:
         rest = words[k + 1:]
         is_gh = (not w.dynamic and base == "gh") or (
             # An expansion that may be gh, anywhere a wrapper (sudo, env, nice) could put it.
-            w.dynamic and bool(rest) and rest[0].text in ("pr", "api", "repo", "alias") and not rest[0].dynamic)
+            w.dynamic and bool(rest) and rest[0].text in ("pr", "api", "repo", "alias", "run", "workflow") and not rest[0].dynamic)
         if is_gh:
             if appends:
                 ctx.unknown("xargs or parallel appends arguments to gh that this guard cannot read")
