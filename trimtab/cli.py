@@ -889,7 +889,7 @@ def cmd_check_merge_authority(args) -> int:
                            head=args.head, base_ref=args.base_ref, default_branch=args.default_branch)
     try:
         who = mergeauthority.accounts(args.admin, args.approver, args.agent)
-        result = mergeauthority.check(args.repo, pr, args.pr, args.base, who)
+        result = mergeauthority.check(args.repo, pr, args.pr, args.base, who, workflows=args.job_workflow)
     except mergeauthority.MergeAuthorityError as err:
         print(f"error: {err}; nothing is vouched for", file=sys.stderr)
         return 2
@@ -1201,6 +1201,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the approver login, from the same configuration; without it no approver review counts")
     ma.add_argument("--agent", metavar="LOGIN",
                     help="the agent login, from the same configuration; without it the approver route is closed")
+    ma.add_argument("--job-workflow", action="append", metavar="CHECK=PATH",
+                    help="the workflow that must run this Actions-bound required check, from the same configuration; "
+                         "repeat per check. A check with none closes the approver route")
     ma.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout (default: .)")
     ma.set_defaults(func=cmd_check_merge_authority)
 

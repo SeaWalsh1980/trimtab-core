@@ -21,12 +21,12 @@ When the approver's approval is the one a PR rests on, the approver route must
 also be open (ADR 0057): the agent opened the PR and alone pushed its branch,
 in an unbroken chain from the branch's creation to the head; every required
 check but this one has a latest run that passed from the App the ruleset binds
-it to; no commit status sits in a required check's name; the ruleset's
-containment is on; and the admin's last review is not a dismissal. All of it
-comes from the server, never a commit's author. A workflow on the agent's branch
-can still forge a check run under the Actions App's id, so the required-checks
-guard is no proof against that yet (ADR 0057). None of it touches the admin's own
-approval: nothing is read for it, so a failed read can only stop the approver.
+it to, and where that App is GitHub Actions, the run is a real passing job from
+the workflow and event expected for it, since a forged run carries the same id;
+no commit status sits in a required check's name; the ruleset's containment is
+on; and the admin's last review is not a dismissal. All of it comes from the
+server, never a commit's author. None of it touches the admin's own approval:
+nothing is read for it, so a failed read can only stop the approver.
 
 An approval counts only as the account's last review that is not `COMMENTED`
 or `PENDING`, in state `APPROVED`, on the head commit. A last review in state
@@ -35,8 +35,8 @@ A last review in state `CHANGES_REQUESTED` from either account fails the PR.
 This is the wrap-merged skill's code gate, so the gate at merge and the
 skill's check after it agree.
 
-The admin, approver and agent logins come from the caller, never from the PR: the
-job passes them from configuration the PR cannot change. Changed paths come
+The admin, approver and agent logins and the expected workflows come from the
+caller, never from the PR: the job passes them from configuration the PR cannot change. Changed paths come
 from git (`base...head`, renames off, as plan-scope reads them); reviews and
 check runs from GitHub's REST API through `gh api`.
 """
@@ -44,7 +44,8 @@ check runs from GitHub's REST API through `gh api`.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 
 from trimtab import planscope
 from trimtab.capture.sources import PER_PAGE, GhApi, Run, SourceError
@@ -53,6 +54,8 @@ CHECK_NAME = "plan-scope"
 OWN_CHECK = "merge-authority"
 ACTIONS_APP = "github-actions"
 ACTIONS_APP_ID = 15368
+JOB_EVENT = "pull_request"
+WORKFLOW_LOCK = ".github/**/*"
 PIN_FILES = (".claude/trimtab.json", "instance.json")
 CHECKER_MARK = "bin/trimtab"
 CHECKER_DIRS = ("bin/", "trimtab/")
@@ -64,7 +67,9 @@ ACTIVITY_LIMIT = 100  # one page; a plan item with this many ref events is the a
 SHOWN_PATHS = 5
 SHA = re.compile(r"[0-9a-f]{40}")
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+WORKFLOW = re.compile(r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml")
 STATUS_LIMIT = 1000
+JOB_LIMIT = 50  # job reads per PR: one per Actions-bound required check, so far past any real ruleset
 RULE_LIMIT = 1000
 COUNTED = ("APPROVED", "CHANGES_REQUESTED", "DISMISSED")
 NO_COMMIT = "0" * 40
@@ -74,6 +79,9 @@ CONTAINMENT = ("require_code_owner_review", "require_last_push_approval", "dismi
 
 class MergeAuthorityError(Exception):
     """The inputs, git or GitHub cannot answer, so no PR is vouched for."""
+
+
+RouteRead = Callable[[], "RouteFacts | None"]
 
 
 @dataclass(frozen=True)
@@ -120,6 +128,24 @@ class Containment:
     approvals: int
     strict: bool
     checks: tuple[RequiredCheck, ...]
+    locked_paths: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class JobRecord:
+    """The job behind a required check's latest run, and the workflow run it belongs to."""
+
+    check_run_id: int
+    name: str
+    status: str
+    conclusion: str
+    runner_id: int | None
+    runner_name: str
+    steps: int
+    head_sha: str
+    run_head_sha: str
+    path: str
+    event: str
 
 
 @dataclass(frozen=True)
@@ -131,6 +157,8 @@ class RouteFacts:
     containment: Containment
     runs: tuple[CheckRun, ...]
     statuses: tuple[str, ...]
+    jobs: tuple[JobRecord, ...] = ()
+    workflows: Mapping[str, str] = field(default_factory=dict)  # each Actions-bound check's expected workflow
 
 
 @dataclass(frozen=True)
@@ -169,6 +197,17 @@ def accounts(admin: str, approver: str | None, agent: str | None = None) -> Acco
     if agent and agent.casefold() in (admin.casefold(), approver.casefold()):
         raise MergeAuthorityError("the agent login is also the admin or approver login; the configuration is wrong")
     return Accounts(admin, approver, agent)
+
+
+def job_workflows(pairs: list[str] | None) -> dict[str, str]:
+    """The `CHECK=WORKFLOW_PATH` pairs naming which workflow must run each Actions-bound required check."""
+    found: dict[str, str] = {}
+    for pair in pairs or []:
+        name, _, path = pair.partition("=")
+        if not name or not WORKFLOW.fullmatch(path) or name in found:
+            raise MergeAuthorityError("--job-workflow must be CHECK=.github/workflows/FILE, once per check")
+        found[name] = path
+    return found
 
 
 def admin_only(path: str, checker_in_tree: bool) -> bool:
@@ -239,6 +278,8 @@ def containment_problems(held: Containment) -> list[str]:
     problems += [f"the ruleset does not require {name} bound to GitHub Actions" for name in (CHECK_NAME, OWN_CHECK)
                  if name not in bound]
     problems += [f"the ruleset binds {c.context} to no App" for c in held.checks if c.app_id is None]
+    if WORKFLOW_LOCK not in held.locked_paths:
+        problems.append(f"the ruleset does not lock {WORKFLOW_LOCK}, so a workflow could be placed on any branch")
     return problems
 
 
@@ -251,20 +292,64 @@ def required_run_problems(checks: tuple[RequiredCheck, ...], runs: tuple[CheckRu
     for check in checks:
         if check.context == OWN_CHECK or check.app_id is None:
             continue
-        ours = [r for r in runs if r.name == check.context and r.app_id == check.app_id]
-        if not ours:
+        latest = _latest(check, runs)
+        if latest is None:
             problems.append(f"required check {check.context} has no run from its bound App on the head commit")
-            continue
-        latest = max(ours, key=lambda r: r.id)
-        if latest.status != "completed" or latest.conclusion != "success":
+        elif not _passed(latest):
             problems.append(f"required check {check.context}'s latest run has not passed")
     return problems
 
 
-def route_problems(who: Accounts, pr: Pr, last: dict[str, Review], facts: RouteFacts | None) -> list[str]:
+def job_problems(head: str, checks: tuple[RequiredCheck, ...], runs: tuple[CheckRun, ...], jobs: tuple[JobRecord, ...],
+                 workflows: Mapping[str, str]) -> list[str]:
+    """Which Actions-bound required check's passing run is not a real job. A forged run has the App's id and no
+    runner or steps; a job from a forging workflow has a runner but, unless it sits at the expected path, another
+    workflow and event; and a forged run can borrow a real run's identity. So neither test is enough alone, and
+    together they still rest on the workflow lock and plan-scope's every-run rule (ADR 0057). A run that has not passed
+    is `required_run_problems`' to report."""
+    found = {job.check_run_id: job for job in jobs}
+    problems = []
+    for check, run in _jobs_to_read(checks, runs):
+        expected = workflows.get(check.context)
+        if not expected:
+            problems.append(f"required check {check.context} has no expected workflow configured")
+        elif not _real_job(found.get(run.id), check.context, head, expected):
+            problems.append(f"required check {check.context}'s latest run is not a passing job from {expected}")
+    return problems
+
+
+def _latest(check: RequiredCheck, runs: tuple[CheckRun, ...]) -> CheckRun | None:
+    ours = [r for r in runs if r.name == check.context and r.app_id == check.app_id]
+    return max(ours, key=lambda r: r.id) if ours else None
+
+
+def _passed(run: CheckRun) -> bool:
+    return run.status == "completed" and run.conclusion == "success"
+
+
+def _jobs_to_read(checks: tuple[RequiredCheck, ...],
+                  runs: tuple[CheckRun, ...]) -> list[tuple[RequiredCheck, CheckRun]]:
+    """Each Actions-bound required check but this one, with its latest run, where that run passed."""
+    latest = ((c, _latest(c, runs)) for c in checks if c.app_id == ACTIONS_APP_ID and c.context != OWN_CHECK)
+    return [(c, r) for c, r in latest if r is not None and _passed(r)]
+
+
+def _real_job(job: JobRecord | None, name: str, head: str, workflow: str) -> bool:
+    return (job is not None and job.name == name and job.status == "completed" and job.conclusion == "success"
+            and job.runner_id is not None and bool(job.runner_name) and job.steps > 0
+            and job.head_sha == head and job.run_head_sha == head and job.path == workflow and job.event == JOB_EVENT)
+
+
+def route_problems(who: Accounts, pr: Pr, last: dict[str, Review], checker_in_tree: bool,
+                   read: RouteRead) -> list[str]:
     """Why the approver's approval cannot carry this PR; empty when the approver route is open."""
     if not who.agent:
         return ["no agent login is configured, so the approver route is closed"]
+    if checker_in_tree:
+        # A second PR into a branch the agent wrote would run that branch's checker, so plan-scope's refusal of
+        # that PR, which the route rests on, proves nothing here.
+        return ["approver route closed: the repository runs its checker from its own tree"]
+    facts = read()
     if facts is None:
         return ["the approver route's facts were not read"]
     problems = []
@@ -272,6 +357,7 @@ def route_problems(who: Accounts, pr: Pr, last: dict[str, Review], facts: RouteF
         problems.append(f"the PR was opened by {facts.author or 'an unknown account'}, not {who.agent}")
     problems += push_problems(pr.head, who.agent, facts.activities)
     problems += required_run_problems(facts.containment.checks, facts.runs)
+    problems += job_problems(pr.head, facts.containment.checks, facts.runs, facts.jobs, facts.workflows)
     required = {c.context for c in facts.containment.checks}
     # The required name is what gets printed: a status's own context is anyone's text.
     problems += [f"a commit status is named for required check {name}"
@@ -283,21 +369,10 @@ def route_problems(who: Accounts, pr: Pr, last: dict[str, Review], facts: RouteF
     return [f"approver route closed: {p}" for p in problems]
 
 
-def rests_on_approver(pr: Pr, who: Accounts, paths: list[str], checker_in_tree: bool,
-                      reviews: list[Review]) -> bool:
-    """Whether the approver's approval is the one the PR would pass on, so the route has to be open."""
-    branch = planscope.plan_of(pr.head_ref)
-    if not who.approver or branch.ref is planscope.Ref.NOT_PLAN:
-        return False
-    if admin_reason(pr, branch, [p for p in paths if admin_only(p, checker_in_tree)]):
-        return False
-    last = last_reviews(reviews, (who.admin, who.approver))
-    return (_approves(last.get(who.approver.casefold()), pr.head)
-            and not _approves(last.get(who.admin.casefold()), pr.head))
-
-
 def decide(pr: Pr, who: Accounts, paths: list[str], checker_in_tree: bool, reviews: list[Review],
-           runs: list[CheckRun], route: RouteFacts | None = None) -> Result:
+           runs: list[CheckRun], route: RouteRead = lambda: None) -> Result:
+    """Judge the PR. `route` is called only when the approver's approval is the one the PR would pass on, so a
+    failed read can only stop the approver."""
     problems = []
     last = last_reviews(reviews, (who.admin, who.approver))
     for login in (who.admin, who.approver):
@@ -322,8 +397,8 @@ def decide(pr: Pr, who: Accounts, paths: list[str], checker_in_tree: bool, revie
         stale = [login for login in eligible if _stale(last.get(login.casefold()), pr.head)]
         detail = f"; {' and '.join(stale)} approved an earlier commit" if stale else ""
         problems.append(f"no approval from {names} on the head commit {pr.head[:12]}{reason}{detail}")
-    elif rests_on_approver(pr, who, paths, checker_in_tree, reviews):
-        problems += route_problems(who, pr, last, route)
+    elif approved[0] == who.approver:
+        problems += route_problems(who, pr, last, checker_in_tree, route)
     if problems:
         return Result("", tuple(problems))
     return Result(approved[0], ())
@@ -459,6 +534,7 @@ def read_containment(api: GhApi, repository: str, branch: str) -> Containment:
     approvals = 0
     strict = False
     checks: list[RequiredCheck] = []
+    locked: set[str] = set()
     try:
         for rule in rows:
             params = rule.get("parameters") or {}
@@ -471,11 +547,16 @@ def read_containment(api: GhApi, repository: str, branch: str) -> Containment:
                 # Strict is per rule, so only the rule holding plan-scope makes a plan PR take the new base.
                 strict = strict or (params.get("strict_required_status_checks_policy") is True
                                     and any(c.context == CHECK_NAME for c in held))
+            elif rule["type"] == "file_path_restriction":
+                paths = params["restricted_file_paths"]
+                if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
+                    raise MergeAuthorityError(f"{what} returned unexpected JSON")
+                locked |= set(paths)
     except (KeyError, TypeError, AttributeError) as err:
         raise MergeAuthorityError(f"{what} returned unexpected JSON") from err
     if not all(isinstance(c.context, str) and (c.app_id is None or _app_id(c.app_id)) for c in checks):
         raise MergeAuthorityError(f"{what} returned unexpected JSON")
-    return Containment(frozenset(settings), approvals, strict, tuple(checks))
+    return Containment(frozenset(settings), approvals, strict, tuple(checks), frozenset(locked))
 
 
 def read_status_contexts(api: GhApi, repository: str, head: str) -> tuple[str, ...]:
@@ -492,12 +573,64 @@ def read_status_contexts(api: GhApi, repository: str, head: str) -> tuple[str, .
     return contexts
 
 
-def read_route_facts(api: GhApi, pr: Pr, number: int) -> RouteFacts:
+def read_jobs(api: GhApi, repository: str, checks: tuple[RequiredCheck, ...], runs: tuple[CheckRun, ...],
+              workflows: Mapping[str, str]) -> tuple[JobRecord, ...]:
+    """The job and workflow run behind each Actions-bound required check's passing latest run. Two checks in one
+    workflow share a run, which is read once."""
+    wanted = _jobs_to_read(checks, runs)
+    if len(wanted) > JOB_LIMIT:
+        raise MergeAuthorityError(f"more than {JOB_LIMIT} required checks' jobs to read; refusing a partial list")
+    workflow_runs: dict[int, tuple[str, str, str]] = {}
+    found = []
+    for check, run in wanted:
+        if check.context not in workflows:
+            continue  # job_problems reports it, and there is nothing to compare the job with
+        job = _json(api, f"repos/{repository}/actions/jobs/{run.id}", "gh api actions jobs")
+        run_id, record = _job_fields(job)
+        if run_id not in workflow_runs:
+            workflow_runs[run_id] = _workflow_run_fields(
+                _json(api, f"repos/{repository}/actions/runs/{run_id}", "gh api actions runs"))
+        found.append(JobRecord(run.id, *record, *workflow_runs[run_id]))
+    return tuple(found)
+
+
+def _job_fields(job) -> tuple[int, tuple]:
+    what = "gh api actions jobs"
+    try:
+        run_id, steps = job["run_id"], job["steps"]
+        fields = (job["name"], job["status"], job.get("conclusion") or "", job["runner_id"],
+                  job["runner_name"] or "", len(steps), job["head_sha"])
+    except (KeyError, TypeError, AttributeError) as err:
+        raise MergeAuthorityError(f"{what} returned unexpected JSON") from err
+    name, status, conclusion, runner_id, runner_name, _, head_sha = fields
+    if not (_app_id(run_id) and isinstance(steps, list) and (runner_id is None or _app_id(runner_id))
+            and all(isinstance(v, str) for v in (name, status, conclusion, runner_name, head_sha))):
+        raise MergeAuthorityError(f"{what} returned unexpected JSON")
+    return run_id, fields
+
+
+def _workflow_run_fields(run) -> tuple[str, str, str]:
+    what = "gh api actions runs"
+    try:
+        fields = (run["head_sha"], run["path"], run["event"])
+    except (KeyError, TypeError) as err:
+        raise MergeAuthorityError(f"{what} returned unexpected JSON") from err
+    if not all(isinstance(v, str) for v in fields):
+        raise MergeAuthorityError(f"{what} returned unexpected JSON")
+    return fields
+
+
+def read_route_facts(api: GhApi, pr: Pr, number: int, workflows: list[str] | None = None) -> RouteFacts:
+    expected = job_workflows(workflows)
+    containment = read_containment(api, pr.repository, pr.default_branch)
+    runs = tuple(read_check_runs(api, pr.repository, pr.head, name=None))
     return RouteFacts(author=read_author(api, pr.repository, number),
                       activities=read_activities(api, pr.repository, pr.head_ref),
-                      containment=read_containment(api, pr.repository, pr.default_branch),
-                      runs=tuple(read_check_runs(api, pr.repository, pr.head, name=None)),
-                      statuses=read_status_contexts(api, pr.repository, pr.head))
+                      containment=containment,
+                      runs=runs,
+                      statuses=read_status_contexts(api, pr.repository, pr.head),
+                      jobs=read_jobs(api, pr.repository, containment.checks, runs, expected),
+                      workflows=expected)
 
 
 def _json(api: GhApi, path: str, what: str, query: dict | None = None):
@@ -508,7 +641,7 @@ def _json(api: GhApi, path: str, what: str, query: dict | None = None):
 
 
 def _app_id(value) -> bool:
-    """A real App id: a positive int, and not a bool, which Python counts as an int."""
+    """A real server id: a positive int, and not a bool, which Python counts as an int."""
     return type(value) is int and value > 0
 
 
@@ -522,9 +655,11 @@ def _login(user, what: str) -> str:
     return login
 
 
-def check(repo: str, pr: Pr, number: int, base: str, who: Accounts, run: Run | None = None) -> Result:
-    """Judge a PR. Every input but `who` comes from the platform's event; base and head must be commits in
-    repo (the job fetches the head, as plan-scope's does)."""
+def check(repo: str, pr: Pr, number: int, base: str, who: Accounts, run: Run | None = None,
+          workflows: list[str] | None = None) -> Result:
+    """Judge a PR. Every input but `who` and `workflows` comes from the platform's event; base and head must be
+    commits in repo (the job fetches the head, as plan-scope's does). `workflows` is read only for the approver
+    route, so a bad value there can't stop the admin's approval."""
     for name, sha in (("base", base), ("head", pr.head)):
         if not SHA.fullmatch(sha):
             raise MergeAuthorityError(f"--{name} must be a 40-hex commit")
@@ -546,7 +681,4 @@ def check(repo: str, pr: Pr, number: int, base: str, who: Accounts, run: Run | N
     api = GhApi(run)
     reviews = read_reviews(api, pr.repository, number)
     runs = read_check_runs(api, pr.repository, pr.head) if is_plan else []
-    # Read only when the PR rests on the approver, so a failed read cannot stop the admin's approval counting.
-    route = (read_route_facts(api, pr, number)
-             if who.agent and rests_on_approver(pr, who, paths, checker_in_tree, reviews) else None)
-    return decide(pr, who, paths, checker_in_tree, reviews, runs, route)
+    return decide(pr, who, paths, checker_in_tree, reviews, runs, lambda: read_route_facts(api, pr, number, workflows))
