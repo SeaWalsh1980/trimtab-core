@@ -3292,11 +3292,15 @@ tg 2 'gh api -X DELETE repos/o/r/labels/%2e%2e/actions/runs/1' 'an encoded .. to
 tg 0 'gh api -X PATCH repos/o/r/pulls/$N -f body=x'      'an update through an id stays open'
 tg 0 'gh api -X PATCH repos/o/r/issues/comments/$ID -f body=x'
 tg 0 'gh api -X POST repos/o/r/issues/$N/comments -f body=x' 'a named route after the id stays open'
+tg 0 'gh api -X DELETE logs'                             'a bare logs is no route, and does not crash the guard'
+# A residual, pinned: an option gh run does not take, on a built word (ADR 0055).
+tg 0 '${G}h run --json x delete 1'                       'residual: --json x reads x as the group'
 # Only a repository option marks a built word as gh; another tool's -R does not.
 tg 0 'gh pr view 1 && $TOOL -Rfoo run $X'                'another tool with a -R option'
 tg 2 '$GH -Ro/r run $X'                                  'a repository option in its short form'
 # A hook that outlives its timeout fails open, so a long command must not cost the
-# prefilter time: this shape took over 20 s through the regex.
+# prefilter time: this shape took over 20 s through the regex. $SECONDS counts whole
+# seconds, so a run reads up to 1 s long: the adapter's stop stays 2 s under the limit.
 gg_long() { # gg_long <expected-exit> <label> <word to repeat> <times> [what follows]
   python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":"echo " + sys.argv[1] * int(sys.argv[2]) + sys.argv[3]},"cwd":"/tmp"}))' "$3" "$4" "${5:-}" > "$GG/long.json"
   local start=$SECONDS rc=0
