@@ -47,7 +47,7 @@ from git (`base...head`, renames off, as plan-scope reads them); reviews and
 check runs from GitHub's REST API through `gh api`.
 
 `plan_admin_problems` is for sessions, not the job: it reads the repository's
-`TRIMTAB_ADMIN` itself, to compare with the instance's admin (ADR 0056). So is `plan_scope_job_problems`: it reads
+`TRIMTAB_ADMIN` itself, to compare with the instance's admin (ADR 0056). So is `plan_scope_job_result`: it reads
 job records, for a token that can't read check runs (ADR 0058).
 """
 
@@ -887,38 +887,54 @@ def _actions_rows(api: GhApi, path: str, key: str, what: str, limit: int, query:
         page += 1
 
 
-def read_plan_scope_jobs(api: GhApi, repository: str, head: str) -> tuple[tuple[JobRecord, ...], bool]:
-    """Every job named plan-scope on the head, every attempt, from whichever workflow ran it; and whether a run of the
-    expected workflow is unfinished, since a queued re-run may list no job for its new attempt yet."""
+@dataclass(frozen=True)
+class PlanScopeRead:
+    """What the Actions API reports of plan-scope on one head."""
+
+    jobs: tuple[JobRecord, ...]  # every job of that name, every attempt, from whichever workflow ran it
+    unfinished: bool  # a run of the expected workflow hasn't finished: a queued re-run may list no job for it yet
+    jobless: bool  # a finished run of the expected workflow lists no job of that name: it never reached the job
+
+
+@dataclass(frozen=True)
+class PlanScopeResult:
+    problems: tuple[str, ...]
+    wait: bool  # the one problem is that something hasn't finished, so another read may answer differently
+
+
+def read_plan_scope_jobs(api: GhApi, repository: str, head: str) -> PlanScopeRead:
     found = []
-    unfinished = False
+    unfinished = jobless = False
     runs = _actions_rows(api, f"repos/{repository}/actions/runs", "workflow_runs", "gh api actions runs",
                          ACTIONS_RUN_LIMIT, {"head_sha": head})
     for run in runs:
         run_id = run.get("id") if isinstance(run, dict) else None
         if not _app_id(run_id):
             raise MergeAuthorityError("gh api actions runs returned unexpected JSON")
-        workflow_run = _workflow_run_fields(run)
-        if workflow_run[1] == PLAN_SCOPE_WORKFLOW:
+        run_head, path, event = _workflow_run_fields(run)
+        finished = True
+        if path == PLAN_SCOPE_WORKFLOW:
             if not isinstance(run.get("status"), str):
                 raise MergeAuthorityError("gh api actions runs returned unexpected JSON")
-            unfinished = unfinished or run["status"] != "completed"
+            finished = run["status"] == "completed"
         rows = _actions_rows(api, f"repos/{repository}/actions/runs/{run_id}/jobs", "jobs", "gh api actions jobs",
                              ACTIONS_JOB_LIMIT, {"filter": "all"})
+        held = 0
         for row in rows:
-            if not isinstance(row, dict):
-                raise MergeAuthorityError("gh api actions jobs returned unexpected JSON")
-            if not isinstance(row.get("name"), str):
+            if not isinstance(row, dict) or not isinstance(row.get("name"), str):
                 raise MergeAuthorityError("gh api actions jobs returned unexpected JSON")
             if row["name"] != CHECK_NAME:
                 continue
             if not _app_id(row.get("id")):
                 raise MergeAuthorityError("gh api actions jobs returned unexpected JSON")
-            found.append(JobRecord(row["id"], *_job_fields(row)[1], *workflow_run))
-    return tuple(found), unfinished
+            found.append(JobRecord(row["id"], *_job_fields(row)[1], run_head, path, event))
+            held += 1
+        unfinished = unfinished or not finished
+        jobless = jobless or (path == PLAN_SCOPE_WORKFLOW and finished and not held)
+    return PlanScopeRead(tuple(found), unfinished, jobless)
 
 
-def plan_scope_job_problems(repository: str, head: str, run: Run | None = None) -> tuple[str, ...]:
+def plan_scope_job_result(repository: str, head: str, run: Run | None = None) -> PlanScopeResult:
     """Why a head has no real, passing plan-scope job, for a session whose token can't read check runs (ADR 0058). Any
     job that didn't pass voids the head, as `plan_scope_problem` has it for the merge gate. It reads the head's jobs
     from Actions, so a status or another App's check run can't answer for one."""
@@ -935,16 +951,20 @@ def plan_scope_job_problems(repository: str, head: str, run: Run | None = None) 
     required = [c for c in read_containment(api, repository, default).checks if c.context == CHECK_NAME]
     if not required or any(c.app_id != ACTIONS_APP_ID for c in required):
         problems.append(f"the default branch's ruleset does not require {CHECK_NAME} bound to GitHub Actions")
-    jobs, unfinished = read_plan_scope_jobs(api, repository, head)
-    if unfinished or any(job.status != "completed" for job in jobs):
-        problems.append(f"{PLAN_SCOPE_WORKFLOW}'s run or a {CHECK_NAME} job on the head commit has not completed; a "
-                        "re-run of any job in that workflow does this too, so retry once it finishes")
-    elif not jobs:
+    read = read_plan_scope_jobs(api, repository, head)
+    if read.unfinished or any(job.status != "completed" for job in read.jobs):
+        return PlanScopeResult((*problems, f"{PLAN_SCOPE_WORKFLOW}'s run or a {CHECK_NAME} job on the head commit has "
+                                "not completed; a re-run of any job in that workflow does this too, so retry once it "
+                                "finishes"), wait=not problems)
+    if not read.jobs:
         problems.append(f"no {CHECK_NAME} job on the head commit")
-    elif not all(_real_job(job, CHECK_NAME, head, PLAN_SCOPE_WORKFLOW) for job in jobs):
+    elif read.jobless:
+        problems.append(f"a run of {PLAN_SCOPE_WORKFLOW} on the head commit lists no {CHECK_NAME} job; any such run "
+                        "voids the head")
+    elif not all(_real_job(job, CHECK_NAME, head, PLAN_SCOPE_WORKFLOW) for job in read.jobs):
         problems.append(f"a {CHECK_NAME} job on the head commit is not a passing job from {PLAN_SCOPE_WORKFLOW}; "
                         "any that isn't voids the head")
-    return tuple(problems)
+    return PlanScopeResult(tuple(problems), wait=False)
 
 
 def _app_id(value) -> bool:

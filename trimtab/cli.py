@@ -931,13 +931,13 @@ def cmd_check_plan_admin(args) -> int:
 
 def cmd_check_plan_scope_job(args) -> int:
     try:
-        problems = mergeauthority.plan_scope_job_problems(args.repository, args.head)
+        result = mergeauthority.plan_scope_job_result(args.repository, args.head)
     except mergeauthority.MergeAuthorityError as err:
         print(f"error: {err}; nothing is vouched for", file=sys.stderr)
         return 2
-    if problems:
-        _print_problems(problems)
-        return 1
+    if result.problems:
+        _print_problems(result.problems)
+        return 3 if result.wait else 1
     print(f"plan-scope: every job on {args.head[:12]} is a real, passing one")
     return 0
 
@@ -1280,7 +1280,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     pj = sub.add_parser("check-plan-scope-job",
                         help="whether a head's plan-scope jobs are all real and passing, on a ruleset binding the check "
-                             "to GitHub Actions, read from job records (ADR 0058). For sessions only")
+                             "to GitHub Actions, read from job records (ADR 0058). Exits 0 if so, 1 if not, 2 on a failed read, "
+                             "3 while that workflow is unfinished. For sessions only")
     pj.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository the PR is in")
     pj.add_argument("--head", required=True, metavar="SHA", help="the PR's final head commit")
     pj.set_defaults(func=cmd_check_plan_scope_job)

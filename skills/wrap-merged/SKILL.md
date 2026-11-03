@@ -185,9 +185,10 @@ Everything comes from the default branch and open PRs, never from memory:
     `.github/workflows/plan-scope.yml` and the `pull_request` event. An
     earlier success does not outweigh a later failure. The default branch's
     ruleset must also require `plan-scope` bound to the GitHub Actions app.
-    If it says that workflow's run has not completed, wait up to ten minutes
-    for that run to finish, then run it once more: a re-run of any job in
-    the workflow does this. Any other exit, or a second non-zero one, fails
+    Exit 3 means that workflow's run has not completed: wait up to ten minutes
+    for it to finish, then run it once more. A re-run of any job in the
+    workflow does this. Exit 2 is a failed read: wait a minute, then run it
+    once more. One re-run in all. Exit 1, or a second non-zero exit, fails
     this test;
   - that requirement must also have held when the PR merged: read the
     `required_status_checks` rule listing `plan-scope`

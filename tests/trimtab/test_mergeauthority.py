@@ -2228,6 +2228,7 @@ class PlanAdminCli(unittest.TestCase):
 
 
 PLAN_SCOPE_WORKFLOW = ".github/workflows/plan-scope.yml"
+OWN_JOB = "merge-authority"
 REPOSITORY_PATH = f"repos/{REPOSITORY}"
 ACTIONS_RUNS_PATH = f"repos/{REPOSITORY}/actions/runs"
 SECOND_RUN = RUN_ID + 1
@@ -2250,10 +2251,10 @@ def plan_scope_answers(jobs=None, runs=None):
 
 
 class PlanScopeJob(unittest.TestCase):
-    """plan_scope_job_problems(): what a session whose token can't read check runs reads instead."""
+    """plan_scope_job_result(): what a session whose token can't read check runs reads instead."""
 
     def problems(self, answers):
-        return mergeauthority.plan_scope_job_problems(REPOSITORY, HEAD, FakeGh(answers))
+        return mergeauthority.plan_scope_job_result(REPOSITORY, HEAD, FakeGh(answers)).problems
 
     def assert_one_problem(self, answers, word):
         problems = self.problems(answers)
@@ -2270,7 +2271,7 @@ class PlanScopeJob(unittest.TestCase):
     def test_the_jobs_of_every_attempt_are_read(self):
         gh = FakeGh(plan_scope_answers())
 
-        mergeauthority.plan_scope_job_problems(REPOSITORY, HEAD, gh)
+        mergeauthority.plan_scope_job_result(REPOSITORY, HEAD, gh)
 
         queries = [query_of(argv) for argv in gh.argvs() if path_of(argv) == jobs_path()]
         self.assertEqual([q.get("filter") for q in queries], ["all"])
@@ -2278,7 +2279,7 @@ class PlanScopeJob(unittest.TestCase):
     def test_the_runs_are_read_for_the_head(self):
         gh = FakeGh(plan_scope_answers())
 
-        mergeauthority.plan_scope_job_problems(REPOSITORY, HEAD, gh)
+        mergeauthority.plan_scope_job_result(REPOSITORY, HEAD, gh)
 
         queries = [query_of(argv) for argv in gh.argvs() if path_of(argv) == ACTIONS_RUNS_PATH]
         self.assertEqual([q.get("head_sha") for q in queries], [HEAD])
@@ -2286,7 +2287,7 @@ class PlanScopeJob(unittest.TestCase):
     def test_no_check_run_is_read_since_the_session_token_gets_a_403(self):
         gh = FakeGh(plan_scope_answers())
 
-        mergeauthority.plan_scope_job_problems(REPOSITORY, HEAD, gh)
+        mergeauthority.plan_scope_job_result(REPOSITORY, HEAD, gh)
 
         self.assertEqual([path_of(argv) for argv in gh.argvs() if "check-runs" in path_of(argv)], [])
 
@@ -2379,6 +2380,51 @@ class PlanScopeJob(unittest.TestCase):
 
         self.assert_one_problem(answers, "has not completed")
 
+    def test_a_finished_run_holding_no_plan_scope_job_voids_the_head(self):
+        answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW),
+                                           workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW, run_id=SECOND_RUN)])
+        answers[jobs_path(SECOND_RUN)] = json.dumps({"jobs": []})
+
+        self.assert_one_problem(answers, "voids the head")
+
+    def test_a_finished_run_holding_only_other_jobs_voids_the_head(self):
+        answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW),
+                                           workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW, run_id=SECOND_RUN)])
+        answers[jobs_path(SECOND_RUN)] = json.dumps({"jobs": [job_row(2, OWN_JOB, HEAD, run_id=SECOND_RUN)]})
+
+        self.assert_one_problem(answers, "voids the head")
+
+    def test_another_workflows_run_with_no_plan_scope_job_is_not_judged(self):
+        answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW),
+                                           workflow_run_row(HEAD, CI_WORKFLOW, run_id=SECOND_RUN)])
+        answers[jobs_path(SECOND_RUN)] = json.dumps({"jobs": []})
+
+        self.assertEqual(self.problems(answers), ())
+
+    def test_an_unfinished_run_alone_is_something_to_wait_for(self):
+        answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW, status="queued")])
+
+        self.assertTrue(mergeauthority.plan_scope_job_result(REPOSITORY, HEAD, FakeGh(answers)).wait)
+
+    def test_an_unfinished_job_alone_is_something_to_wait_for(self):
+        answers = plan_scope_answers([plan_scope_job(status="in_progress", conclusion=None)])
+
+        self.assertTrue(mergeauthority.plan_scope_job_result(REPOSITORY, HEAD, FakeGh(answers)).wait)
+
+    def test_an_unfinished_run_on_a_bad_ruleset_is_not_something_to_wait_for(self):
+        answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW, status="queued")])
+        answers[RULES_PATH] = "[]"
+
+        self.assertFalse(mergeauthority.plan_scope_job_result(REPOSITORY, HEAD, FakeGh(answers)).wait)
+
+    def test_a_refusal_is_not_something_to_wait_for(self):
+        answers = plan_scope_answers([plan_scope_job(conclusion="failure")])
+
+        self.assertFalse(mergeauthority.plan_scope_job_result(REPOSITORY, HEAD, FakeGh(answers)).wait)
+
+    def test_a_pass_is_not_something_to_wait_for(self):
+        self.assertFalse(mergeauthority.plan_scope_job_result(REPOSITORY, HEAD, FakeGh(plan_scope_answers())).wait)
+
     def test_another_workflows_unfinished_run_is_not_judged(self):
         answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW),
                                            workflow_run_row(HEAD, CI_WORKFLOW, run_id=SECOND_RUN, status="in_progress")])
@@ -2415,7 +2461,7 @@ class PlanScopeJob(unittest.TestCase):
         gh = FakeGh({**plan_scope_answers(), ACTIONS_RUNS_PATH: [*pages, json.dumps({"workflow_runs": []})]},
                     default=json.dumps({"jobs": []}))
 
-        self.assertEqual(mergeauthority.plan_scope_job_problems(REPOSITORY, HEAD, gh), ())
+        self.assertEqual(mergeauthority.plan_scope_job_result(REPOSITORY, HEAD, gh).problems, ())
 
     def test_exactly_the_bound_of_jobs_is_read(self):
         jobs = [plan_scope_job(1), *[job_row(i, "another-job", HEAD)
@@ -2428,7 +2474,7 @@ class PlanScopeJob(unittest.TestCase):
         full_page = [plan_scope_job(i) for i in range(1, PER_PAGE + 1)]
         gh = FakeGh({**plan_scope_answers(), jobs_path(): [json.dumps({"jobs": full_page}), json.dumps({"jobs": []})]})
 
-        self.assertEqual(mergeauthority.plan_scope_job_problems(REPOSITORY, HEAD, gh), ())
+        self.assertEqual(mergeauthority.plan_scope_job_result(REPOSITORY, HEAD, gh).problems, ())
 
     def test_a_ruleset_not_requiring_plan_scope_is_a_problem(self):
         answers = plan_scope_answers()
@@ -2465,7 +2511,7 @@ class PlanScopeJob(unittest.TestCase):
 
     def test_a_refused_read_is_an_error(self):
         with self.assertRaises(MergeAuthorityError):
-            mergeauthority.plan_scope_job_problems(REPOSITORY, HEAD, FakeGh(returncode=1, stderr="HTTP 403"))
+            mergeauthority.plan_scope_job_result(REPOSITORY, HEAD, FakeGh(returncode=1, stderr="HTTP 403"))
 
     def test_an_unexpected_shape_is_an_error(self):
         cases = {REPOSITORY_PATH: ("{}", '{"default_branch": 5}', '{"default_branch": ""}', "[]"),
@@ -2487,7 +2533,7 @@ class PlanScopeJob(unittest.TestCase):
                 gh = FakeGh(answers, default=json.dumps({"jobs": [plan_scope_job()]}))
 
                 with self.assertRaises(MergeAuthorityError):
-                    mergeauthority.plan_scope_job_problems(REPOSITORY, HEAD, gh)
+                    mergeauthority.plan_scope_job_result(REPOSITORY, HEAD, gh)
 
     def test_a_job_with_no_usable_id_is_an_error(self):
         for job_id in (None, "1", True, 0):
@@ -2514,7 +2560,7 @@ class PlanScopeJob(unittest.TestCase):
         gh = FakeGh(plan_scope_answers())
 
         with self.assertRaises(MergeAuthorityError):
-            mergeauthority.plan_scope_job_problems(REPOSITORY, "main", gh)
+            mergeauthority.plan_scope_job_result(REPOSITORY, "main", gh)
 
         self.assertEqual(gh.calls, [])
 
@@ -2524,7 +2570,7 @@ class PlanScopeJob(unittest.TestCase):
                 gh = FakeGh(plan_scope_answers())
 
                 with self.assertRaises(MergeAuthorityError):
-                    mergeauthority.plan_scope_job_problems(repository, HEAD, gh)
+                    mergeauthority.plan_scope_job_result(repository, HEAD, gh)
 
                 self.assertEqual(gh.calls, [])
 
@@ -2537,12 +2583,15 @@ class PlanScopeJob(unittest.TestCase):
         self.assertIn("command of its own, with no pipe", " ".join(section.split()))
         self.assertNotIn("check-runs", section)
 
-    def test_the_skill_allows_one_bounded_retry_on_an_unfinished_run(self):
+    def test_the_skill_allows_one_bounded_re_run(self):
         skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
         start = skill.index("Then the merger.")
         section = " ".join(skill[start:skill.index("the PR changes neither `.github/`", start)].split())
 
-        self.assertIn("up to ten minutes for that run to finish, then run it once more", section)
+        self.assertIn("Exit 3 means that workflow's run has not completed: wait up to ten minutes for it to finish, "
+                      "then run it once more", section)
+        self.assertIn("Exit 2 is a failed read: wait a minute, then run it once more", section)
+        self.assertIn("One re-run in all", section)
 
 
 class PlanScopeJobCli(unittest.TestCase):
@@ -2580,6 +2629,19 @@ class PlanScopeJobCli(unittest.TestCase):
         done = self.cli()
 
         self.assertEqual((done.returncode, "FAIL  " in done.stderr), (1, True), done.stderr)
+
+    def test_an_unfinished_run_exits_3_naming_it(self):
+        self.answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW, status="queued")])
+
+        done = self.cli()
+
+        self.assertEqual((done.returncode, "has not completed" in done.stderr), (3, True), done.stderr)
+
+    def test_an_unfinished_run_on_a_bad_ruleset_exits_1(self):
+        self.answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW, status="queued")])
+        self.answers[RULES_PATH] = "[]"
+
+        self.assertEqual(self.cli().returncode, 1)
 
     def test_a_refused_read_exits_2(self):
         del self.answers[ACTIONS_RUNS_PATH]

@@ -27,8 +27,9 @@ and `wrap-merged` calls it.
 | Case | Exit |
 |---|---|
 | The ruleset requires `plan-scope` bound to GitHub Actions, and every `plan-scope` job on the head is real and passing | 0 |
-| The ruleset doesn't, no such job exists, a job or a run of the expected workflow is unfinished, or a job isn't real and passing | 1 |
+| The ruleset doesn't, no such job exists, a finished run of the expected workflow lists none, or a job isn't real and passing | 1 |
 | A read fails or returns the wrong shape, past a bound, or an argument is bad | 2 |
+| The one problem is that a job or a run of the expected workflow is unfinished | 3 |
 
 - **Real and passing** is `_real_job` from ADR 0057: finished, passing, with a runner and
   steps, on this head, from `.github/workflows/plan-scope.yml` and `pull_request`.
@@ -39,6 +40,12 @@ and `wrap-merged` calls it.
   was looser than the merge gate.
 - **An unfinished run of the expected workflow counts.** A queued re-run may list no job for its
   new attempt yet, and the earlier attempt's pass must not answer for it.
+- **A finished run of the expected workflow must list a `plan-scope` job.** One that never reached
+  the job, such as a `startup_failure`, is an attempt that didn't pass, though no job row says so.
+- **One bounded re-run, in `wrap-merged`.** Exit 3 waits up to ten minutes, exit 2 a minute, and then
+  the session runs the command once more. Exit 1, or a second non-zero exit, fails the test, so a
+  transient `gh` failure among many reads doesn't stop a plan. Exit 3 is its own code so the session
+  never has to read a message to choose.
 - **The workflow path** is a constant, `.github/workflows/plan-scope.yml`. ADR 0057 rejected
   hardcoding expected paths in core because they are each repository's own. That holds for the
   job, which gets them from configuration a PR can't change. What a session passes on its command
@@ -65,6 +72,9 @@ and `wrap-merged` calls it.
   failure (`plan_scope_problem`).
 - **Only jobs at the expected path.** A forged job elsewhere would then go unseen.
 - **A `--workflow` argument.** A session would choose what judges it.
+- **Retrying inside the command, on transient errors only.** A read's failure doesn't carry its class
+  past `_json`, and a re-run of a permanent failure costs one more failed read, so telling them
+  apart buys little. The skill's one re-run covers both.
 - **The path in the instance file.** A session can't change that file, so this would hold. But it
   needs a per-repository map in a per-operator file, a change to both readers and a pin bump, for a
   path no repository varies today. If one ever does, this is the option to re-open.
@@ -82,9 +92,8 @@ and `wrap-merged` calls it.
   on every approver merge, though its merge gate passes, and the message says the job isn't
   a passing one from the constant's path.
 - **A re-run of any job in the workflow reads as unfinished.** `plan-scope.yml` also holds
-  `merge-authority`, whose job re-runs on a review. A read at that moment exits 1. So the message
-  says to retry, and `wrap-merged` allows one re-read after waiting up to ten minutes, rather than
-  stopping a plan on a transient. Reasoned from the workflows, not tried.
+  `merge-authority`, whose job re-runs on a review. A read at that moment exits 3, which is the
+  re-run above. Reasoned from the workflows, not tried.
 - **A deleted run is invisible.** ADR 0057 reports a merge going through after a deletion, so a
   check-run read likely misses it too; that's inferred, not tried here. `guard-github` refuses
   deleting one; the agent's server rights don't.
