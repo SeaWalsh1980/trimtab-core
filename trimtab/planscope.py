@@ -52,7 +52,13 @@ HEADS = "refs/heads/"
 REGULAR_MODES = {"100644", "100755"}
 # The caller's repository-steering variables are dropped, as hooks/session-mode.sh's sm_git does.
 GIT_STEERING = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
-                "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES")
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES",
+                "GIT_GRAFT_FILE", "GIT_NAMESPACE", "GIT_REPLACE_REF_BASE", "GIT_CONFIG_PARAMETERS")
+# Settings that would change what a read reports, pinned for every call. They go in through
+# GIT_CONFIG_COUNT, which outranks the repository's own config, so git's subcommand stays args[0]
+# for the error message.
+GIT_PINNED = (("core.fsmonitor", "false"), ("core.commitGraph", "false"), ("log.showSignature", "false"))
+SHA = re.compile(r"[0-9a-f]{40}")
 
 
 class PlanScopeError(Exception):
@@ -224,11 +230,15 @@ class Result:
 
 def _git(repo: str, *args: str, stdin: bytes | None = None) -> bytes:
     # Hardened as hooks/session-mode.sh's sm_git is: no steering variables, no
-    # replace objects, literal pathspecs, no fsmonitor.
+    # replace objects, literal pathspecs, no fsmonitor; and no inherited config
+    # from the environment, no commit-graph, no signature lines. Setting the count replaces any inherited
+    # GIT_CONFIG_COUNT, so git reads only these pairs from the environment.
     env = {k: v for k, v in os.environ.items() if k not in GIT_STEERING}
-    env.update(GIT_NO_REPLACE_OBJECTS="1", GIT_LITERAL_PATHSPECS="1")
+    env.update(GIT_NO_REPLACE_OBJECTS="1", GIT_LITERAL_PATHSPECS="1", GIT_CONFIG_COUNT=str(len(GIT_PINNED)))
+    for n, (key, value) in enumerate(GIT_PINNED):
+        env.update({f"GIT_CONFIG_KEY_{n}": key, f"GIT_CONFIG_VALUE_{n}": value})
     try:
-        return git_bytes(repo, "-c", "core.fsmonitor=false", *args, env=env, stdin=stdin)
+        return git_bytes(repo, *args, env=env, stdin=stdin)
     except SourceError as err:
         raise PlanScopeError(str(err)) from err
 
@@ -302,12 +312,16 @@ def commit(repo: str, rev: str) -> str:
     return _commit(repo, rev)
 
 
-def added_by(repo: str, tip: str, path: str) -> str | None:
-    """The commit that last added path in tip's merge order (first parent), or None if none did."""
+def added_by(repo: str, tip: str, path: str) -> str:
+    """The commit that last added path in tip's merge order (first parent). Raises when git names none, which a
+    whole history holding path at tip can't do, or answers with anything but a commit id."""
+    # Limiting the log to path keeps git from pairing a rename, so a file renamed into place reads as added.
     out = _git(repo, "log", "--first-parent", "-m", "--diff-filter=A", "--format=%H", "--end-of-options", tip,
                "--", path)
     first = out.decode("ascii").split("\n", 1)[0].strip()  # first-parent order is merge order: the first is latest
-    return first or None
+    if not SHA.fullmatch(first):
+        raise PlanScopeError(f"git log names no commit adding {path}")
+    return first
 
 
 def history_cut(repo: str) -> str | None:

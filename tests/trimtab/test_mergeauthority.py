@@ -338,8 +338,10 @@ class AgreesWithTheSkill(unittest.TestCase):
     def test_the_skills_plan_check_runs_check_plan_authorised_as_a_command_of_its_own(self):
         section = " ".join(self.plan_checks().split())
 
-        self.assertIn("`trimtab check-plan-authorised --repository <owner>/<name> --plan <plan> --print-writes`",
+        self.assertIn("`trimtab check-plan-authorised --repository <owner>/<name> --plan <plan> --print-plan`",
                       section)
+        self.assertIn("Take the plan's items from that text, never from the checkout", section)
+        self.assertNotIn("Read tool", section)
         self.assertIn("as a command of its own with no pipe", section)
         self.assertNotIn("trimtab instance --json", section)
 

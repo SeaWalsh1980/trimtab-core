@@ -939,12 +939,18 @@ def cmd_check_plan_authorised(args) -> int:
     except (instance.InstanceFileError, mergeauthority.MergeAuthorityError, planauth.PlanAuthError) as err:
         print(f"error: {err}; nothing is vouched for", file=sys.stderr)
         return 2
+    except Exception as err:  # noqa: BLE001 - reported, and exit 1 would read as a verdict a session doesn't re-run
+        print(f"error: {type(err).__name__} while checking; nothing is vouched for", file=sys.stderr)
+        return 2
     if problems:
         _print_problems(problems)
         return 1
     print(f"plan {args.plan}: authorised by PR #{result.pr}, merged by {admin} as {result.merge_commit[:12]}")
-    if args.print_writes:
-        sys.stdout.write(result.writes)  # verbatim after the verdict line: the run's declared scope
+    # Verbatim after the verdict line, from the commit check 3 judged: the run's items, or its declared scope.
+    if args.print_plan:
+        sys.stdout.write(result.plan_text)
+    elif args.print_writes:
+        sys.stdout.write(result.writes)
     return 0
 
 
@@ -1303,8 +1309,11 @@ def build_parser() -> argparse.ArgumentParser:
                              "1 if not, 2 on a failed read. For sessions only")
     pp.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository the plan is in")
     pp.add_argument("--plan", required=True, metavar="NAME", help="the plan's name, as its plan/<name>/ branches spell it")
-    pp.add_argument("--print-writes", action="store_true",
-                    help="on a pass, print the declaration from the default branch after the verdict line")
+    shown = pp.add_mutually_exclusive_group()
+    shown.add_argument("--print-plan", action="store_true",
+                       help="on a pass, print the plan from the default branch after the verdict line")
+    shown.add_argument("--print-writes", action="store_true",
+                       help="on a pass, print the declaration from the default branch after the verdict line")
     pp.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout, fetched (default: .)")
     pp.set_defaults(func=cmd_check_plan_authorised)
 

@@ -44,6 +44,7 @@ class Authorisation:
     pr: int | None = None
     merge_commit: str | None = None
     writes: str | None = None  # the declaration's text on the default branch, on a pass
+    plan_text: str | None = None  # the plan's text there: what a run takes its items from, never its checkout
 
 
 def check(repo: str, repository: str, plan: str, admin: str, run: Run | None = None) -> Authorisation:
@@ -74,8 +75,6 @@ def check(repo: str, repository: str, plan: str, admin: str, run: Run | None = N
     judged: dict[str, tuple[int, str] | str] = {}  # by adding commit: both files usually share one (ENG-6.2)
     for f in files:
         added = _git(planscope.added_by, repo, tip, f)
-        if added is None:  # the tip holds it, so with a whole history some first-parent commit adds it
-            raise PlanAuthError(f"git log names no commit adding {f}, which {default} holds")
         if added not in judged:
             judged[added] = _merged_by_admin(api, repository, default, added, admin)
         found = judged[added]
@@ -95,7 +94,7 @@ def check(repo: str, repository: str, plan: str, admin: str, run: Run | None = N
     edited = _git(planscope.changed, repo, merge, tip, files)
     if edited:
         return Authorisation(tuple(f"check 3: {f} changed after PR #{number} merged it" for f in edited))
-    return Authorisation((), number, merge, texts[files[1]])
+    return Authorisation((), number, merge, texts[files[1]], texts[files[0]])
 
 
 def _merged_by_admin(api: GhApi, repository: str, default: str, added: str, admin: str) -> tuple[int, str] | str:
@@ -110,8 +109,10 @@ def _merged_by_admin(api: GhApi, repository: str, default: str, added: str, admi
     number = merged[0]
     row = _json(api, f"repos/{repository}/pulls/{number}", "gh api pull")
     if not isinstance(row, dict) or not isinstance(row.get("merge_commit_sha"), str) \
-            or not SHA.fullmatch(row["merge_commit_sha"]):
+            or not SHA.fullmatch(row["merge_commit_sha"]) or not isinstance(row.get("base"), dict):
         raise PlanAuthError("gh api pull returned unexpected JSON")
+    if row.get("merged_at") is None or row["base"].get("ref") != default:  # the PR itself, not the list's copy
+        return f"PR #{number} is not merged into {default}"
     by = row.get("merged_by")
     login = by.get("login") if isinstance(by, dict) else None
     if by is not None and not isinstance(login, str):

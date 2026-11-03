@@ -82,25 +82,29 @@ say which check failed and start nothing.
 1. **The plan and its declaration are on the default branch.** Checks 1-3
    are one command, which reads the plans folder itself (ADR 0059):
    guard-paths refuses any shell command that names `<plans>/authorised/`,
-   reads included, so never type that path in a command, and read the
-   plan's text with the Read tool, never a shell. Run `git fetch origin`,
-   then, as a command of its own with no pipe,
-   `trimtab check-plan-authorised --repository <owner>/<name> --plan <plan> --print-writes`.
-   It exits 0 only when checks 1-3 all hold. Exit 1 names each failed check
-   (`check 1:` to `check 3:`), or, unprefixed, an admin it can't use: the
-   configuration names none, or it differs from `TRIMTAB_ADMIN`. Exit 2 is
-   a read that failed or could not be parsed, a stale fetch (the default
-   branch moved after your fetch), or a cut history: a shallow clone or a
-   grafts file, under which git names the wrong commit as adding a file
-   (run `git fetch --unshallow origin` first in a shallow clone). On exit 2, wait a minute, run `git fetch origin` again,
-   then the command once more. One re-run in all. Exit 1, or a second
-   non-zero exit, fails the check. On a pass it
-   prints the PR and merge commit, then the declaration's text: keep that
-   text for the scope gate below. On a pass it prints the admin login on
-   the same line too. Check 1: `<plan>.md` and `<plan>.writes` are both
-   regular files on the fetched default branch, which must be where the
-   server says it is. A plan without a `.writes` file fails; an empty one is valid
-   and means bookkeeping only.
+   reads included, so never type that path in a command. Run
+   `git fetch origin`, then, as a command of its own with no pipe,
+   `trimtab check-plan-authorised --repository <owner>/<name> --plan <plan> --print-plan`.
+   It exits 0 only when checks 1-3 all hold. On a pass it prints one line
+   naming the PR, the admin login and the merge commit, then the plan's
+   text from the default branch. Take the plan's items from that text,
+   never from the checkout: the file there may be stale or on another
+   branch, and only the printed text is the one the checks judged. For the
+   scope gate below, run it again with `--print-writes` in place of
+   `--print-plan`, which prints the declaration instead.
+   Exit 1 names each failed check (`check 1:` to `check 3:`), or,
+   unprefixed, an admin it can't use: the configuration names none, or it
+   differs from `TRIMTAB_ADMIN`. Exit 2 is a read that failed or could not
+   be parsed, an error the command didn't expect, a stale fetch (the
+   default branch moved after your fetch), or a cut history: a shallow
+   clone or a grafts file, under which git names the wrong commit as adding
+   a file (run `git fetch --unshallow origin` first in a shallow clone). On
+   exit 2, wait a minute, run `git fetch origin` again, then the command
+   once more. One re-run in all. Exit 1, or a second non-zero exit, fails
+   the check. Check 1: `<plan>.md` and `<plan>.writes` are both regular
+   files on the fetched default branch, which must be where the server
+   says it is. A plan without a `.writes` file fails; an empty one is
+   valid and means bookkeeping only.
 2. **Both were added by one PR the admin account merged.** For each file,
    the commit that last added it in first-parent (merge) order belongs to
    exactly one PR merged into the default branch, whose `merged_by.login`
@@ -253,7 +257,8 @@ Everything comes from the default branch and open PRs, never from memory:
 The next work — `## Next`, or the item an in-flight PR works on — may
 start only if all of these hold:
 
-- It names an item that exists in the authorised plan and is not
+- It names an item that exists in the authorised plan (as
+  `check-plan-authorised --print-plan` printed it) and is not
   already complete. Anything else is a blocker — a hand-over cannot create
   work.
 - It is not `plan complete`. A `blocked: <reason>` Next is a stop, except
@@ -261,7 +266,8 @@ start only if all of these hold:
   comes from the restart rule below instead.
 - Doing it would stay inside the plan's scope: every path it writes is on
   the write allowlist **and** matches a line of `<plan>.writes` (as
-  `check-plan-authorised --print-writes` printed it; same glob syntax, `+` for create-only), or lies in
+  `check-plan-authorised --print-writes` printed it; same glob syntax,
+  `+` for create-only), or lies in
   the plan's own `<plans>/progress/<plan>/` or `<plans>/unauthorised/<plan>/`
   folder. Those two folders are always create-only, and any other path is
   create-only when either list says so. A change outside the scope is not

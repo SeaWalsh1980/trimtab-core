@@ -48,12 +48,15 @@ def listed_pull(number, merged_at=MERGED_AT, base=DEFAULT):
     return {"number": number, "merged_at": merged_at, "base": {"ref": base}}
 
 
-def pull_row(number, merge_sha, merged_by=ADMIN):
-    return json.dumps({"number": number, "merged_by": {"login": merged_by}, "merge_commit_sha": merge_sha})
+def pull_row(number, merge_sha, merged_by=ADMIN, merged_at=MERGED_AT, base=DEFAULT):
+    return json.dumps({"number": number, "merged_by": {"login": merged_by}, "merge_commit_sha": merge_sha,
+                       "merged_at": merged_at, "base": {"ref": base}})
 
 
 class GitRepository(unittest.TestCase):
     """A default branch where PR 7, merged with a merge commit, added the plan and its declaration."""
+
+    default = DEFAULT
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -66,7 +69,7 @@ class GitRepository(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, self.env, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
-        subprocess.run(["git", "init", "-q", "-b", DEFAULT, str(self.repo)], check=True)
+        subprocess.run(["git", "init", "-q", "-b", self.default, str(self.repo)], check=True)
         self.write("README.md", "readme\n")
         self.commit("base")
         self.merge = self.merge_branch("plan-pr", {PLAN_FILE: "# plan\n", WRITES_FILE: WRITES})
@@ -91,19 +94,20 @@ class GitRepository(unittest.TestCase):
         for rel in removed:
             git(self.repo, "rm", "-q", rel)
         self.commit(branch)
-        git(self.repo, "switch", "-q", DEFAULT)
+        git(self.repo, "switch", "-q", self.default)
         git(self.repo, "merge", "-q", "--no-ff", "-m", f"Merge {branch}", branch)
         return git(self.repo, "rev-parse", "HEAD")
 
     def publish(self):
         """What a fetch leaves: origin's default branch at the local tip, and the server reporting the same tip."""
         self.tip = git(self.repo, "rev-parse", "HEAD")
-        git(self.repo, "update-ref", f"refs/remotes/origin/{DEFAULT}", self.tip)
+        git(self.repo, "update-ref", f"refs/remotes/origin/{self.default}", self.tip)
         self.answers.update({
-            REPOSITORY_PATH: json.dumps({"default_branch": DEFAULT}),
-            BRANCH_PATH: json.dumps({"name": DEFAULT, "commit": {"sha": self.tip}}),
-            pulls_path(self.merge): json.dumps([listed_pull(PLAN_PR)]),
-            pull_path(PLAN_PR): pull_row(PLAN_PR, self.merge),
+            REPOSITORY_PATH: json.dumps({"default_branch": self.default}),
+            f"repos/{REPOSITORY}/branches/{self.default}": json.dumps({"name": self.default,
+                                                                       "commit": {"sha": self.tip}}),
+            pulls_path(self.merge): json.dumps([listed_pull(PLAN_PR, base=self.default)]),
+            pull_path(PLAN_PR): pull_row(PLAN_PR, self.merge, base=self.default),
         })
 
     def check(self, admin=ADMIN, gh=None, repo=None):
@@ -173,6 +177,56 @@ class Authorised(GitRepository):
         pages = [query_of(argv) for argv in gh.argvs() if path_of(argv) == pulls_path(self.merge)]
         self.assertEqual([q.get("per_page") for q in pages], [str(planauth.PULLS_LIMIT)])
 
+    def test_a_pass_carries_the_plan_from_the_default_branch_not_the_checkout(self):
+        self.write(PLAN_FILE, "# a local edit the admin never merged\n")
+
+        result = self.check()
+
+        self.assertEqual((result.problems, result.plan_text), ((), "# plan\n"))
+
+    def test_a_page_just_under_its_bound_passes(self):
+        unmerged = range(100, 100 + planauth.PULLS_LIMIT - 2)
+        self.answers[pulls_path(self.merge)] = json.dumps(
+            [listed_pull(PLAN_PR)] + [listed_pull(n, merged_at=None) for n in unmerged])
+
+        self.assertEqual(self.check().problems, ())
+
+    def test_environment_config_does_not_steer_the_reads(self):
+        """A grafts file named by the environment would cut history as info/grafts does (ADR 0059)."""
+        self.merge_branch("edit-writes", {WRITES_FILE: "src/*\n"})
+        later = self.merge_branch("unrelated", {"README.md": "later\n"})
+        self.publish()
+        self.answers[pulls_path(later)] = json.dumps([listed_pull(LATER_PR)])
+        self.answers[pull_path(LATER_PR)] = pull_row(LATER_PR, later)
+        grafts = self.root / "grafts"
+        grafts.write_text(f"{later}\n", encoding="utf-8")
+        steering = {"GIT_GRAFT_FILE": str(grafts), "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_KEY_0": "log.showSignature", "GIT_CONFIG_VALUE_0": "true"}
+
+        with mock.patch.dict(os.environ, steering):
+            result = self.check()
+
+        self.assertEqual([p[:8] for p in result.problems], ["check 3:"])
+
+    def test_a_plan_the_pr_renamed_into_place_passes(self):
+        """Rename detection is on by default; the path-limited log must still read the PR's commit as the addition."""
+        git(self.repo, "reset", "-q", "--hard", "HEAD~1")
+        self.write("draft.md", "# plan\n" * 20)
+        self.commit("draft on the default branch")
+        self.merge = self.merge_branch("rename-plan", {WRITES_FILE: WRITES})
+        git(self.repo, "reset", "-q", "--hard", "HEAD~1")
+        git(self.repo, "switch", "-q", "-c", "renamed")
+        (self.repo / PLAN_FILE).parent.mkdir(parents=True, exist_ok=True)
+        git(self.repo, "mv", "draft.md", PLAN_FILE)
+        self.write(WRITES_FILE, WRITES)
+        self.commit("rename the draft into place")
+        git(self.repo, "switch", "-q", DEFAULT)
+        git(self.repo, "merge", "-q", "--no-ff", "-m", "Merge renamed", "renamed")
+        self.merge = git(self.repo, "rev-parse", "HEAD")
+        self.publish()
+
+        self.assertEqual(self.check().problems, ())
+
     def test_the_admin_is_compared_without_case(self):
         result = self.check(admin=ADMIN.upper())
 
@@ -235,8 +289,7 @@ class Check2MergedByTheAdmin(GitRepository):
         self.assertEqual([(p[:8], AGENT in p) for p in result.problems], [("check 2:", True)] * 2)
 
     def test_a_merge_by_a_deleted_account_fails_check_2(self):
-        self.answers[pull_path(PLAN_PR)] = json.dumps({"number": PLAN_PR, "merged_by": None,
-                                                        "merge_commit_sha": self.merge})
+        self.answers[pull_path(PLAN_PR)] = json.dumps({**json.loads(pull_row(PLAN_PR, self.merge)), "merged_by": None})
 
         self.assertIn("check 2:", self.check().problems[0])
         self.assertIn("a deleted account", self.check().problems[0])
@@ -255,6 +308,23 @@ class Check2MergedByTheAdmin(GitRepository):
         self.answers[pulls_path(self.merge)] = json.dumps([listed_pull(PLAN_PR), listed_pull(LATER_PR)])
 
         self.assertIn("belongs to 2 PRs merged into", self.check().problems[0])
+
+    def test_a_pr_whose_own_row_is_unmerged_or_elsewhere_fails_check_2(self):
+        for row in (pull_row(PLAN_PR, self.merge, merged_at=None), pull_row(PLAN_PR, self.merge, base="release")):
+            with self.subTest(row=row):
+                self.answers[pull_path(PLAN_PR)] = row
+
+                self.assertIn(f"PR #{PLAN_PR} is not merged into", self.check().problems[0])
+
+    def test_a_merge_commit_with_unrelated_history_is_an_error(self):
+        git(self.repo, "switch", "-q", "--orphan", "unrelated")
+        self.write("other.txt", "other\n")
+        orphan = self.commit("unrelated root")
+        git(self.repo, "switch", "-q", "-f", DEFAULT)
+        self.answers[pull_path(PLAN_PR)] = pull_row(PLAN_PR, orphan)
+
+        with self.assertRaises(PlanAuthError):
+            self.check()
 
     def test_a_merge_commit_off_the_default_branchs_history_fails_check_2(self):
         git(self.repo, "switch", "-q", "-c", "elsewhere")
@@ -330,10 +400,10 @@ class ReadFailures(GitRepository):
         with self.assertRaises(PlanAuthError):
             self.check()
 
-    def test_no_fetched_default_branch_is_an_error(self):
+    def test_no_fetched_default_branch_is_an_error_naming_git_s_subcommand(self):
         git(self.repo, "update-ref", "-d", f"refs/remotes/origin/{DEFAULT}")
 
-        with self.assertRaises(PlanAuthError):
+        with self.assertRaisesRegex(PlanAuthError, "git rev-parse"):
             self.check()
 
     def test_a_shallow_clone_is_an_error_not_a_verdict(self):
@@ -366,7 +436,8 @@ class ReadFailures(GitRepository):
                     self.check()
 
     def test_a_pull_answer_of_the_wrong_shape_is_an_error(self):
-        for answer in ([], {"number": PLAN_PR, "merged_by": {"login": ADMIN}},
+        no_base = {k: v for k, v in json.loads(pull_row(PLAN_PR, self.merge)).items() if k != "base"}
+        for answer in ([], {**no_base, "merged_at": None}, {"number": PLAN_PR, "merged_by": {"login": ADMIN}},
                        {"number": PLAN_PR, "merged_by": {"login": ADMIN}, "merge_commit_sha": None}):
             with self.subTest(answer=answer):
                 self.answers[pull_path(PLAN_PR)] = json.dumps(answer)
@@ -411,8 +482,8 @@ class ReadFailures(GitRepository):
     def test_a_merger_of_the_wrong_shape_is_an_error(self):
         for merged_by in ({"login": 5}, {}, "the-admin"):
             with self.subTest(merged_by=merged_by):
-                self.answers[pull_path(PLAN_PR)] = json.dumps({"number": PLAN_PR, "merged_by": merged_by,
-                                                                "merge_commit_sha": self.merge})
+                self.answers[pull_path(PLAN_PR)] = json.dumps({**json.loads(pull_row(PLAN_PR, self.merge)),
+                                                               "merged_by": merged_by})
 
                 with self.assertRaises(PlanAuthError):
                     self.check()
@@ -475,8 +546,10 @@ class Cli(GitRepository):
         answers.write_text(json.dumps(self.answers), encoding="utf-8")
         gh = bin_dir / "gh"
         gh.write_text("#!/usr/bin/env python3\nimport json, os, sys\n"
+                      f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+                      "from gh_fake import path_of\n"
                       "answers = json.load(open(os.environ['FAKE_ANSWERS']))\n"
-                      "path = sys.argv[4].split('?', 1)[0]\n"
+                      "path = path_of(sys.argv)\n"
                       "if path not in answers:\n    sys.exit('gh: Not Found (HTTP 404)')\n"
                       "print(answers[path])\n", encoding="utf-8")
         gh.chmod(0o755)
@@ -496,6 +569,23 @@ class Cli(GitRepository):
         done = self.cli("--print-writes")
 
         self.assertEqual((done.returncode, done.stdout.split("\n", 1)[1]), (0, WRITES), done.stderr)
+
+    def test_a_pass_with_no_print_flag_prints_the_verdict_line_alone(self):
+        done = self.cli()
+
+        self.assertEqual((done.returncode, done.stdout.count("\n")), (0, 1), done.stderr)
+
+    def test_print_plan_puts_the_default_branch_plan_after_the_verdict(self):
+        self.write(PLAN_FILE, "# a local edit\n")
+
+        done = self.cli("--print-plan")
+
+        self.assertEqual((done.returncode, done.stdout.split("\n", 1)[1]), (0, "# plan\n"), done.stderr)
+
+    def test_print_plan_and_print_writes_cannot_be_combined(self):
+        done = self.cli("--print-plan", "--print-writes")
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""), done.stderr)
 
     def test_a_failed_check_exits_1_naming_it(self):
         self.answers[pull_path(PLAN_PR)] = pull_row(PLAN_PR, self.merge, merged_by=AGENT)
@@ -543,6 +633,32 @@ class Cli(GitRepository):
 
         self.assertEqual((done.returncode, done.stdout, "nothing is vouched for" in done.stderr), (2, "", True),
                          done.stderr)
+
+
+class OtherDefaultBranch(GitRepository):
+    """Nothing assumes the default branch is called main."""
+
+    default = "trunk"
+
+    def test_a_plan_on_a_trunk_default_branch_passes(self):
+        self.assertEqual(self.check().problems, ())
+
+
+class AddedBy(unittest.TestCase):
+    def test_a_path_no_commit_adds_is_an_error_not_a_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            env = {**isolated_git_env({k: v for k, v in os.environ.items() if k != "TRIMTAB_INSTANCE"}, root),
+                   "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+                   "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+            with mock.patch.dict(os.environ, env, clear=True):
+                subprocess.run(["git", "init", "-q", str(root)], check=True)
+                (root / "a").write_text("a\n", encoding="utf-8")
+                git(root, "add", "-A")
+                git(root, "commit", "-q", "-m", "a")
+
+                with self.assertRaises(planscope.PlanScopeError):
+                    planscope.added_by(str(root), "HEAD", "never-added")
 
 
 if __name__ == "__main__":

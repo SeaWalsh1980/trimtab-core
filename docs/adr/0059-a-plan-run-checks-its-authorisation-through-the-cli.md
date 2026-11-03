@@ -21,16 +21,15 @@ defect.
 
 ## Decision
 
-`trimtab check-plan-authorised --repository OWNER/NAME --plan NAME [--print-writes] [--repo DIR]`
+`trimtab check-plan-authorised --repository OWNER/NAME --plan NAME [--print-plan | --print-writes] [--repo DIR]`
 runs checks 1-3 in `trimtab/planauth.py`. `wrap-merged` calls it after `git fetch origin`. The
-command line names no path under the folder, so layer 1 lets it run. The plan's text is read with
-the Read tool, which layer 1 exempts.
+command line names no path under the folder, so layer 1 lets it run.
 
 | Case | Exit |
 |---|---|
-| Checks 1-3 hold | 0. Prints the PR and merge commit, then with `--print-writes` the declaration verbatim |
+| Checks 1-3 hold | 0. Prints the PR, admin and merge commit, then with `--print-plan` the plan or with `--print-writes` the declaration, verbatim |
 | A check fails, or the instance names no admin or one `TRIMTAB_ADMIN` disagrees with | 1. Names each failure, `check 1:` to `check 3:`; an admin problem is unprefixed |
-| A read fails, has the wrong shape or can't be parsed, the fetch is stale, the history is cut, the instance file or variable can't be read, or an argument is bad | 2 |
+| A read fails, has the wrong shape or can't be parsed, an exception the command didn't expect, the fetch is stale, the history is cut, the instance file or variable can't be read, or an argument is bad | 2 |
 
 - **The same checks.** Check 1: both files are on `origin/<default>`. Check 2: for each file,
   `git log --first-parent -m --diff-filter=A` finds the commit that last added it. That commit
@@ -58,8 +57,17 @@ the Read tool, which layer 1 exempts.
   would then judge whichever PR landed that commit, and check 3 would compare from its merge.
   An edit to the plan made before it, by a PR the admin never approved, would pass unseen.
   The skill, which typed the same `git log`, had this gap too.
-- **The declaration is printed** so the scope gate reads `.writes` from the same commit check 3
-  judged. Without that, the run would need a second read, which would name the folder.
+- **The plan and the declaration are printed from the commit check 3 judged.** The run takes its
+  items from `--print-plan` and its scope from `--print-writes`, never from its checkout. The
+  first version had the run read the plan with the Read tool, which reads the working tree. That
+  copy can be stale or on another branch, and nothing tied it to the commit the checks judged.
+  The flags are exclusive, so a run that needs both runs the command twice, and each run re-checks.
+- **Git can't be steered from outside.** planscope's `_git` drops `GIT_GRAFT_FILE`,
+  `GIT_NAMESPACE`, `GIT_REPLACE_REF_BASE` and `GIT_CONFIG_PARAMETERS`. It pins
+  `core.fsmonitor`, `core.commitGraph` and `log.showSignature` through `GIT_CONFIG_COUNT`, which
+  outranks the repository's config and replaces any inherited count. Taking `-c` out of argv also
+  makes git's errors name the subcommand that failed. `added_by` answers a 40-hex commit or
+  raises.
 - The git reads are planscope's hardened `_git`, the same one plan-scope uses: no steering
   variables, no replace objects, literal pathspecs.
 
@@ -113,8 +121,23 @@ Each of the six that could be killed now has a test.
 
 The in-session review then found the cut-history gap, the unchecked merge commit, and checks that
 took a link for a file. Each fix has a test, and a second run added a mutation for each new guard:
-31 of 32 caught, the one left the `..` fence. One path has no test: git output that can't be
-parsed, which only a fake git could produce. It still exits 2.
+31 of 32 caught, the one left the `..` fence.
+
+A second review round found that the plan text was read from the checkout, and that git could be
+steered through the environment. It also found the PR row trusted without re-reading its merge and
+base, and an untested boundary or branch in several places. A third mutation run, after those
+fixes, caught 37 of 40. The three left:
+
+- the `..` fence;
+- the pinned `log.showSignature` and `core.commitGraph`, and dropping `GIT_CONFIG_PARAMETERS`.
+  These change nothing a test can see without signed commits or a forged commit-graph, so they
+  stay as untested defence.
+
+`--no-renames` on the add lookup was tried and removed: limiting the log to one path already
+keeps git from pairing a rename, and a test pins that a plan renamed into place passes.
+
+Two paths have no test: git output that can't be parsed, and an exception the command didn't
+expect. Only a fake git could produce either. Both exit 2.
 
 Against the consumer, read-only, from an interactive session after `git fetch origin`:
 
