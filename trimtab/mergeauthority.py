@@ -47,7 +47,8 @@ from git (`base...head`, renames off, as plan-scope reads them); reviews and
 check runs from GitHub's REST API through `gh api`.
 
 `plan_admin_problems` is for sessions, not the job: it reads the repository's
-`TRIMTAB_ADMIN` itself, to compare with the instance's admin (ADR 0056).
+`TRIMTAB_ADMIN` itself, to compare with the instance's admin (ADR 0056). So is `plan_scope_job_problems`: it reads
+job records, for a token that can't read check runs (ADR 0058).
 """
 
 from __future__ import annotations
@@ -885,9 +886,11 @@ def _actions_rows(api: GhApi, path: str, key: str, what: str, limit: int, query:
         page += 1
 
 
-def read_plan_scope_jobs(api: GhApi, repository: str, head: str) -> tuple[JobRecord, ...]:
-    """Every job named plan-scope on the head, every attempt, from whichever workflow ran it."""
+def read_plan_scope_jobs(api: GhApi, repository: str, head: str) -> tuple[tuple[JobRecord, ...], bool]:
+    """Every job named plan-scope on the head, every attempt, from whichever workflow ran it; and whether a run of the
+    expected workflow is unfinished, since a queued re-run may list no job for its new attempt yet."""
     found = []
+    unfinished = False
     runs = _actions_rows(api, f"repos/{repository}/actions/runs", "workflow_runs", "gh api actions runs",
                          ACTIONS_RUN_LIMIT, {"head_sha": head})
     for run in runs:
@@ -895,17 +898,23 @@ def read_plan_scope_jobs(api: GhApi, repository: str, head: str) -> tuple[JobRec
         if not _app_id(run_id):
             raise MergeAuthorityError("gh api actions runs returned unexpected JSON")
         workflow_run = _workflow_run_fields(run)
+        if workflow_run[1] == PLAN_SCOPE_WORKFLOW:
+            if not isinstance(run.get("status"), str):
+                raise MergeAuthorityError("gh api actions runs returned unexpected JSON")
+            unfinished = unfinished or run["status"] != "completed"
         rows = _actions_rows(api, f"repos/{repository}/actions/runs/{run_id}/jobs", "jobs", "gh api actions jobs",
                              ACTIONS_JOB_LIMIT, {"filter": "all"})
         for row in rows:
             if not isinstance(row, dict):
                 raise MergeAuthorityError("gh api actions jobs returned unexpected JSON")
-            if row.get("name") != CHECK_NAME:
+            if not isinstance(row.get("name"), str):
+                raise MergeAuthorityError("gh api actions jobs returned unexpected JSON")
+            if row["name"] != CHECK_NAME:
                 continue
             if not _app_id(row.get("id")):
                 raise MergeAuthorityError("gh api actions jobs returned unexpected JSON")
             found.append(JobRecord(row["id"], *_job_fields(row)[1], *workflow_run))
-    return tuple(found)
+    return tuple(found), unfinished
 
 
 def plan_scope_job_problems(repository: str, head: str, run: Run | None = None) -> tuple[str, ...]:
@@ -925,11 +934,11 @@ def plan_scope_job_problems(repository: str, head: str, run: Run | None = None) 
     required = [c for c in read_containment(api, repository, default).checks if c.context == CHECK_NAME]
     if not required or any(c.app_id != ACTIONS_APP_ID for c in required):
         problems.append(f"the default branch's ruleset does not require {CHECK_NAME} bound to GitHub Actions")
-    jobs = read_plan_scope_jobs(api, repository, head)
-    if not jobs:
+    jobs, unfinished = read_plan_scope_jobs(api, repository, head)
+    if unfinished or any(job.status != "completed" for job in jobs):
+        problems.append(f"a {CHECK_NAME} run or job on the head commit has not completed")
+    elif not jobs:
         problems.append(f"no {CHECK_NAME} job on the head commit")
-    elif any(job.status != "completed" for job in jobs):
-        problems.append(f"a {CHECK_NAME} job on the head commit has not completed")
     elif not all(_real_job(job, CHECK_NAME, head, PLAN_SCOPE_WORKFLOW) for job in jobs):
         problems.append(f"a {CHECK_NAME} job on the head commit is not a passing job from {PLAN_SCOPE_WORKFLOW}; "
                         "any that isn't voids the head, so a new commit is needed to start over")

@@ -434,8 +434,8 @@ def run_path(run_id=RUN_ID):
     return f"repos/{REPOSITORY}/actions/runs/{run_id}"
 
 
-def workflow_run_row(head, path=CI_WORKFLOW, event="pull_request", run_id=RUN_ID):
-    return {"id": run_id, "path": path, "event": event, "head_sha": head}
+def workflow_run_row(head, path=CI_WORKFLOW, event="pull_request", run_id=RUN_ID, status="completed"):
+    return {"id": run_id, "path": path, "event": event, "head_sha": head, "status": status}
 
 
 def job_answers(runs, head):
@@ -2356,6 +2356,69 @@ class PlanScopeJob(unittest.TestCase):
                                 json.dumps({"jobs": [plan_scope_job(PER_PAGE + 1, conclusion="failure")]})]
 
         self.assert_one_problem(answers, "voids the head")
+
+    def test_a_queued_re_run_listing_no_new_job_yet_is_a_problem(self):
+        answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW, status="queued")])
+
+        self.assert_one_problem(answers, "has not completed")
+
+    def test_an_unfinished_run_beside_a_finished_one_is_a_problem(self):
+        answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW, status="queued"),
+                                           workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW, run_id=SECOND_RUN)])
+        answers[jobs_path(SECOND_RUN)] = json.dumps({"jobs": [plan_scope_job(2, run_id=SECOND_RUN)]})
+
+        self.assert_one_problem(answers, "has not completed")
+
+    def test_another_workflows_unfinished_run_is_not_judged(self):
+        answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW),
+                                           workflow_run_row(HEAD, CI_WORKFLOW, run_id=SECOND_RUN, status="in_progress")])
+        answers[jobs_path(SECOND_RUN)] = json.dumps({"jobs": []})
+
+        self.assertEqual(self.problems(answers), ())
+
+    def test_a_plan_scope_run_with_no_status_is_an_error(self):
+        run = workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW, status=None)
+
+        with self.assertRaises(MergeAuthorityError):
+            self.problems(plan_scope_answers(runs=[run]))
+
+    def test_a_job_row_with_no_string_name_is_an_error(self):
+        for row in ({"id": 2}, {"id": 2, "name": None}, {"id": 2, "name": 5}):
+            with self.subTest(row=row):
+                with self.assertRaises(MergeAuthorityError):
+                    self.problems(plan_scope_answers([plan_scope_job(), row]))
+
+    def test_a_bad_ruleset_and_a_bad_job_are_both_reported(self):
+        answers = plan_scope_answers([plan_scope_job(conclusion="failure")])
+        answers[RULES_PATH] = "[]"
+
+        problems = self.problems(answers)
+
+        self.assertEqual((len(problems), "ruleset" in problems[0], "voids the head" in problems[1]),
+                         (2, True, True), problems)
+
+    def test_exactly_the_bound_of_runs_is_read(self):
+        others = [workflow_run_row(HEAD, CI_WORKFLOW, run_id=i)
+                  for i in range(RUN_ID + 1, RUN_ID + mergeauthority.ACTIONS_RUN_LIMIT)]
+        runs = [workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW), *others]
+        pages = [json.dumps({"workflow_runs": runs[i:i + PER_PAGE]}) for i in range(0, len(runs), PER_PAGE)]
+        gh = FakeGh({**plan_scope_answers(), ACTIONS_RUNS_PATH: [*pages, json.dumps({"workflow_runs": []})]},
+                    default=json.dumps({"jobs": []}))
+
+        self.assertEqual(mergeauthority.plan_scope_job_problems(REPOSITORY, HEAD, gh), ())
+
+    def test_exactly_the_bound_of_jobs_is_read(self):
+        jobs = [plan_scope_job(1), *[job_row(i, "another-job", HEAD)
+                                     for i in range(2, mergeauthority.ACTIONS_JOB_LIMIT + 1)]]
+        pages = [json.dumps({"jobs": jobs[i:i + PER_PAGE]}) for i in range(0, len(jobs), PER_PAGE)]
+
+        self.assertEqual(self.problems({**plan_scope_answers(), jobs_path(): [*pages, json.dumps({"jobs": []})]}), ())
+
+    def test_a_full_last_page_ends_on_the_empty_page_after_it(self):
+        full_page = [plan_scope_job(i) for i in range(1, PER_PAGE + 1)]
+        gh = FakeGh({**plan_scope_answers(), jobs_path(): [json.dumps({"jobs": full_page}), json.dumps({"jobs": []})]})
+
+        self.assertEqual(mergeauthority.plan_scope_job_problems(REPOSITORY, HEAD, gh), ())
 
     def test_a_ruleset_not_requiring_plan_scope_is_a_problem(self):
         answers = plan_scope_answers()

@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted on merge. Adds to ADR 0057, whose guards and whose job's reads don't change.
+Accepted on merge. Adds to ADR 0057, whose guards and whose job's reads don't change, and
+departs from one option it rejected: see "The workflow path" below. Follows AGW-4 as amended
+in the instance's ADR 0024, which merges first.
 
 ## Context
 
@@ -25,18 +27,24 @@ and `wrap-merged` calls it.
 | Case | Exit |
 |---|---|
 | The ruleset requires `plan-scope` bound to GitHub Actions, and every `plan-scope` job on the head is real and passing | 0 |
-| The ruleset doesn't, no such job exists, one is unfinished, or one isn't real and passing | 1 |
+| The ruleset doesn't, no such job exists, a job or a run of the expected workflow is unfinished, or a job isn't real and passing | 1 |
 | A read fails or returns the wrong shape, past a bound, or an argument is bad | 2 |
 
 - **Real and passing** is `_real_job` from ADR 0057: finished, passing, with a runner and
   steps, on this head, from `.github/workflows/plan-scope.yml` and `pull_request`.
 - **Every job, every attempt, every workflow.** It reads all the head's workflow runs and takes
-  jobs by name, so a forged job beside the real one voids the head, as a failed attempt does.
+  jobs by their exact name, so a forged job of that name beside the real one voids the head, as a
+  failed attempt does. A lookalike name isn't judged: the ruleset requires the exact name too.
   This is `plan_scope_problem`'s every-run rule, not the skill's old "latest must pass", which
   was looser than the merge gate.
-- **The workflow path is a constant.** A session can't name another.
-- `check-merge-authority` and `check-approver-route` don't change. Their job tokens can read check
-  runs, and they judge checks from other Apps as well.
+- **An unfinished run of the expected workflow counts.** A queued re-run may list no job for its
+  new attempt yet, and the earlier attempt's pass must not answer for it.
+- **The workflow path** is a constant, `.github/workflows/plan-scope.yml`. ADR 0057 rejected
+  hardcoding expected paths in core because they are each repository's own. That holds for the
+  job, which gets them from configuration a PR can't change. A session has no such configuration:
+  whatever it passes, it chose. The cost is under Consequences.
+- `check-merge-authority` and `check-approver-route` don't change. They judge checks from other
+  Apps as well. The job's token can read check runs; the App's step is to be shown when it's wired.
 - The skill still reads `rulesets/<id>` for `updated_at`, which needs the PR's `merged_at`.
 
 ## Options rejected
@@ -47,7 +55,9 @@ and `wrap-merged` calls it.
   another App, so the required-checks guard would weaken. No skill or hook runs that command in a
   session, and there it exits 2 on the 403, which vouches for nothing.
 - **A Checks-capable token for sessions.** Fine-grained tokens have no such permission, and a
-  classic one reaches what the fine-grained token exists to keep from sessions.
+  classic one reaches what the fine-grained token exists to keep from sessions. A read-only App's
+  token would work, for a new App and a key on each machine, to read what job records already show.
+  Not tried.
 - **Reading the `merge-authority` job's result instead.** It judges approvals at that moment, not
   this test, and a PR merged by bypass may have no passing run.
 - **The latest attempt only.** A re-run reuses its old event's base, so it could outweigh a later
@@ -61,10 +71,15 @@ and `wrap-merged` calls it.
   API lists only Actions jobs. The ruleset's binding is still read. A job's id is its check run's
   id (ADR 0057), so this reads the same run through another door, with a runner and steps that a
   forged check run lacks.
-- **The rule's wording lags.** AGW-4 says the session verifies "a check run". This command reads
-  that run's job record. Raised upstream rather than narrowed here.
-- **A deleted run is invisible,** as it is to a check-run read (ADR 0057's trials). `guard-github`
-  refuses deleting one; the agent's server rights don't.
+- **AGW-4 changes first.** It said the session verifies "a check run", and a review of this
+  change raised going ahead of it as HIGH. The instance's ADR 0024 amends it to job records, on the
+  operator's approval. Nothing here should merge before that.
+- **Another path stops the plan.** A repository running `plan-scope` from any other path gets exit 1
+  on every approver merge, though its merge gate passes, and the message says the job isn't
+  a passing one from the constant's path.
+- **A deleted run is invisible.** ADR 0057 reports a merge going through after a deletion, so a
+  check-run read likely misses it too; that's inferred, not tried here. `guard-github` refuses
+  deleting one; the agent's server rights don't.
 - **A workflow run per head costs a read of its jobs.** No batch endpoint exists, and it's bounded:
   200 runs a head, 200 jobs a run. Past that it's exit 2. A session runs it once per record.
 - **Still called by an instruction,** as `check-plan-admin` is. No hook makes a session run it.
@@ -74,9 +89,10 @@ and `wrap-merged` calls it.
 ## Trial
 
 Each test was seen failing on its assertion against a stub that reported no problem, then passing.
-A mutation trial broke 27 lines one at a time. Its first run left 1 green: removing the check on a
-workflow run's id, because the fake's unanswered path failed anyway. That test's fake now answers
-any jobs path, and all 27 are caught.
+A mutation trial broke 35 lines one at a time, over two runs. Each run left 1 green: removing the
+check on a workflow run's id, because the fake's unanswered path failed anyway, and an unfinished
+run hidden by a later finished one. Each now has a test, and all 35 are caught. The tests at
+exactly a bound pass either way until `>` becomes `>=`, which the trial covers.
 
 Read-only against a real repository with a fine-grained token: a head whose `plan-scope` job was
 skipped exits 1, naming it, and a head with no runs exits 1. A passing job on a real plan head is
