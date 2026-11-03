@@ -15,7 +15,7 @@ from pathlib import Path
 from trimtab import bump
 from trimtab import config as project_config
 from trimtab import dependabot
-from trimtab import instance, mergeauthority, planscope, propose, roots, routines, scrub, upstream
+from trimtab import instance, mergeauthority, planauth, planscope, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
 from trimtab.ids import ID_SHAPE
@@ -929,6 +929,25 @@ def cmd_check_plan_admin(args) -> int:
     return 0
 
 
+def cmd_check_plan_authorised(args) -> int:
+    try:
+        admin = instance.load(_instance(args)).admin
+        problems = mergeauthority.plan_admin_problems(admin, args.repository)
+        if not problems:
+            result = planauth.check(args.repo, args.repository, args.plan, admin)
+            problems = result.problems
+    except (instance.InstanceFileError, mergeauthority.MergeAuthorityError, planauth.PlanAuthError) as err:
+        print(f"error: {err}; nothing is vouched for", file=sys.stderr)
+        return 2
+    if problems:
+        _print_problems(problems)
+        return 1
+    print(f"plan {args.plan}: authorised by PR #{result.pr}, merged by {admin} as {result.merge_commit[:12]}")
+    if args.print_writes:
+        sys.stdout.write(result.writes)  # verbatim after the verdict line: the run's declared scope
+    return 0
+
+
 def cmd_check_plan_scope_job(args) -> int:
     try:
         result = mergeauthority.plan_scope_job_result(args.repository, args.head)
@@ -1277,6 +1296,17 @@ def build_parser() -> argparse.ArgumentParser:
                              "it must match the repository's TRIMTAB_ADMIN variable (ADR 0056). For sessions only")
     pa.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository the plan is in")
     pa.set_defaults(func=cmd_check_plan_admin)
+
+    pp = sub.add_parser("check-plan-authorised", parents=[common],
+                        help="wrap-merged's checks 1-3: the plan and its declaration are on the fetched default branch, "
+                             "were added by one PR the admin merged, and are unchanged since (ADR 0059). Exits 0 if so, "
+                             "1 if not, 2 on a failed read. For sessions only")
+    pp.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository the plan is in")
+    pp.add_argument("--plan", required=True, metavar="NAME", help="the plan's name, as its plan/<name>/ branches spell it")
+    pp.add_argument("--print-writes", action="store_true",
+                    help="on a pass, print the declaration from the default branch after the verdict line")
+    pp.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout, fetched (default: .)")
+    pp.set_defaults(func=cmd_check_plan_authorised)
 
     pj = sub.add_parser("check-plan-scope-job",
                         help="whether a head's plan-scope jobs are all real and passing, on a ruleset binding the check "

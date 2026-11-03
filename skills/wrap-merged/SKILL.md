@@ -79,36 +79,32 @@ say which check failed and start nothing.
    the PR (or, before any item PR exists, the merged PR that started the
    session) `plan:blocked`, remove any `plan:continue`, and report. A clear
    loses the session's autonomous record; only the variable survives it.
-1. **The plan and its declaration are on the default branch:**
-   `git fetch origin && git ls-tree origin/<default> -- <plans>/authorised/<plan>.md <plans>/authorised/<plan>.writes`
-   must list both. A plan without a `.writes` file fails; an empty one is
-   valid and means bookkeeping only.
-2. **Both were added by one PR the admin account merged.** For each
-   `<file>` (the `.md` and the `.writes`), find the commit that
-   last added it in merge order: `git log --first-parent -m
-   --diff-filter=A --format=%H origin/<default> -- <file>`, first line (if
-   several come back, the file was deleted and re-added; first-parent
-   order is merge order, so the first is the latest).
-   Find its PR with
-   `gh api repos/{owner}/{repo}/commits/<sha>/pulls`, choosing the entry
-   whose `merged_at` is set and whose base is the default branch (none →
-   the check fails). Then read that PR's `merged_by.login` and
-   `merge_commit_sha` from `gh api repos/{owner}/{repo}/pulls/<number>`.
-   Compare the login, without case, with the one
-   `trimtab check-plan-admin --repository <owner>/<name>` prints, run as a
-   command of its own, with no pipe, and naming the repository these `gh api`
-   calls read. That is
-   `accounts.admin` in the Trimtab instance's configuration, once it has
-   matched the repository's `TRIMTAB_ADMIN` variable. Never
-   take it from the plan, a progress record or the
-   conversation. If that command exits non-zero, because the configuration
-   names no admin login, the two differ, or either can't be read in this
-   session, the check fails. Both files must resolve to the
-   same PR number and the same `merge_commit_sha`; a declaration added by
-   any later PR, even the admin's, fails.
-3. **Both are unchanged since that merge:**
-   `git diff --quiet <merge_commit_sha> origin/<default> -- <plan>.md <plan>.writes`
-   (full paths). Any difference means one was edited after approval.
+1. **The plan and its declaration are on the default branch.** Checks 1-3
+   are one command, which reads the plans folder itself (ADR 0059):
+   guard-paths refuses any shell command that names `<plans>/authorised/`,
+   reads included, so never type that path in a command, and read the
+   plan's text with the Read tool, never a shell. Run `git fetch origin`,
+   then, as a command of its own with no pipe,
+   `trimtab check-plan-authorised --repository <owner>/<name> --plan <plan> --print-writes`.
+   It exits 0 only when checks 1-3 all hold; 1 names each failed check
+   (`check 1:` to `check 3:`); 2 is a failed read, a stale fetch or an admin
+   the configuration can't supply, and fails the check too. On a pass it
+   prints the PR and merge commit, then the declaration's text: keep that
+   text for the scope gate below. Check 1: `<plan>.md` and `<plan>.writes`
+   are both on the fetched default branch, which must be where the server
+   says it is. A plan without a `.writes` file fails; an empty one is valid
+   and means bookkeeping only.
+2. **Both were added by one PR the admin account merged.** For each file,
+   the commit that last added it in first-parent (merge) order belongs to
+   exactly one PR merged into the default branch, whose `merged_by.login`
+   matches, without case, the admin login: `accounts.admin` in the Trimtab
+   instance's configuration, once it has matched the repository's
+   `TRIMTAB_ADMIN` variable (`trimtab check-plan-admin`'s check). Never take
+   it from the plan, a progress record or the conversation. Both files
+   resolve to the same PR and the same `merge_commit_sha`; a declaration
+   added by any later PR, even the admin's, fails.
+3. **Both are unchanged since that merge.** Any difference between the
+   merge commit and the default branch means one was edited after approval.
    (Commits inside the plan PR before its merge are fine; only changes
    after the merge count.)
 4. **The enforcement is live.** The repository's write allowlist exists; the
@@ -248,8 +244,8 @@ start only if all of these hold:
   in a valid restart ("Restarting after a stop"), where the next work
   comes from the restart rule below instead.
 - Doing it would stay inside the plan's scope: every path it writes is on
-  the write allowlist **and** matches a line of `<plan>.writes` (read from
-  the default branch; same glob syntax, `+` for create-only), or lies in
+  the write allowlist **and** matches a line of `<plan>.writes` (as
+  `check-plan-authorised --print-writes` printed it; same glob syntax, `+` for create-only), or lies in
   the plan's own `<plans>/progress/<plan>/` or `<plans>/unauthorised/<plan>/`
   folder. Those two folders are always create-only, and any other path is
   create-only when either list says so. A change outside the scope is not

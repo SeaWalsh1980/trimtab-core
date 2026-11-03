@@ -329,14 +329,25 @@ class AgreesWithTheSkill(unittest.TestCase):
 
         self.assertEqual([p for p in paths if f"`{p}`" not in section], [])
 
-    def test_the_skills_plan_check_takes_the_admin_from_check_plan_admin(self):
+    def plan_checks(self):
+        """Checks 1-3 of the skill's authorisation check, which a plan run types (ADR 0059)."""
         skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
-        start = skill.index("2. **Both were added by one PR the admin account merged.**")
-        section = skill[start:skill.index("3. **Both are unchanged since that merge:**", start)]
+        start = skill.index("1. **The plan and its declaration are on the default branch.**")
+        return skill[start:skill.index("4. **The enforcement is live.**", start)]
 
-        self.assertIn("trimtab check-plan-admin --repository", section)
-        self.assertIn("command of its own, with no pipe", " ".join(section.split()))
+    def test_the_skills_plan_check_runs_check_plan_authorised_as_a_command_of_its_own(self):
+        section = " ".join(self.plan_checks().split())
+
+        self.assertIn("`trimtab check-plan-authorised --repository <owner>/<name> --plan <plan> --print-writes`",
+                      section)
+        self.assertIn("as a command of its own with no pipe", section)
         self.assertNotIn("trimtab instance --json", section)
+
+    def test_the_skills_plan_check_types_no_git_read_of_the_plans_folder(self):
+        """guard-paths' layer 1 refuses any shell command naming that folder, so a plan run could not type one."""
+        section = self.plan_checks()
+
+        self.assertEqual([verb for verb in ("git ls-tree", "git log", "git diff", "gh api") if verb in section], [])
 
     def test_the_skills_in_flight_test_names_where_the_agents_login_comes_from(self):
         skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")

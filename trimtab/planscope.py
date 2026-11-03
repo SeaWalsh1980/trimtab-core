@@ -297,6 +297,26 @@ def changes(repo: str, base: str, head: str) -> list[Change]:
     return found
 
 
+def commit(repo: str, rev: str) -> str:
+    """rev as a full commit id, or PlanScopeError when the repository holds no such commit."""
+    return _commit(repo, rev)
+
+
+def added_by(repo: str, tip: str, path: str) -> str | None:
+    """The commit that last added path in tip's merge order (first parent), or None if none did."""
+    out = _git(repo, "log", "--first-parent", "-m", "--diff-filter=A", "--format=%H", "--end-of-options", tip,
+               "--", path)
+    first = out.decode("ascii").split("\n", 1)[0].strip()  # first-parent order is merge order: the first is latest
+    return first or None
+
+
+def changed(repo: str, old: str, new: str, paths: list[str]) -> list[str]:
+    """Which of paths differ between two commits."""
+    out = _git(repo, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-relative",
+               "--end-of-options", old, new, "--", *paths)
+    return [os.fsdecode(p) for p in out.split(b"\0") if p]
+
+
 def present(repo: str, sha: str, paths: list[str]) -> frozenset[str]:
     """Which of paths the commit's tree holds, in one call."""
     if not paths:
