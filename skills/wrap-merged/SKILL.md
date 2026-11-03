@@ -86,16 +86,20 @@ say which check failed and start nothing.
    plan's text with the Read tool, never a shell. Run `git fetch origin`,
    then, as a command of its own with no pipe,
    `trimtab check-plan-authorised --repository <owner>/<name> --plan <plan> --print-writes`.
-   It exits 0 only when checks 1-3 all hold; 1 names each failed check
-   (`check 1:` to `check 3:`); 2 is a failed read, a stale fetch (the
-   default branch moved after your fetch) or an admin the configuration
-   can't supply. On exit 2, wait a minute, run `git fetch origin` again,
+   It exits 0 only when checks 1-3 all hold. Exit 1 names each failed check
+   (`check 1:` to `check 3:`), or, unprefixed, an admin it can't use: the
+   configuration names none, or it differs from `TRIMTAB_ADMIN`. Exit 2 is
+   a read that failed or could not be parsed, a stale fetch (the default
+   branch moved after your fetch), or a cut history: a shallow clone or a
+   grafts file, under which git names the wrong commit as adding a file
+   (run `git fetch --unshallow origin` first in a shallow clone). On exit 2, wait a minute, run `git fetch origin` again,
    then the command once more. One re-run in all. Exit 1, or a second
    non-zero exit, fails the check. On a pass it
    prints the PR and merge commit, then the declaration's text: keep that
-   text for the scope gate below. Check 1: `<plan>.md` and `<plan>.writes`
-   are both on the fetched default branch, which must be where the server
-   says it is. A plan without a `.writes` file fails; an empty one is valid
+   text for the scope gate below. On a pass it prints the admin login on
+   the same line too. Check 1: `<plan>.md` and `<plan>.writes` are both
+   regular files on the fetched default branch, which must be where the
+   server says it is. A plan without a `.writes` file fails; an empty one is valid
    and means bookkeeping only.
 2. **Both were added by one PR the admin account merged.** For each file,
    the commit that last added it in first-parent (merge) order belongs to
@@ -105,7 +109,8 @@ say which check failed and start nothing.
    `TRIMTAB_ADMIN` variable (`trimtab check-plan-admin`'s check). Never take
    it from the plan, a progress record or the conversation. Both files
    resolve to the same PR and the same `merge_commit_sha`; a declaration
-   added by any later PR, even the admin's, fails.
+   added by any later PR, even the admin's, fails, and so does a merge
+   commit outside the default branch's history.
 3. **Both are unchanged since that merge.** Any difference between the
    merge commit and the default branch means one was edited after approval.
    (Commits inside the plan PR before its merge are fine; only changes
@@ -132,7 +137,7 @@ Everything comes from the default branch and open PRs, never from memory:
   The branch name alone proves nothing: the PR's head must be in this same
   repository (not a fork) and its author must be the agent or admin
   account from instance configuration (`accounts.agent` from `trimtab instance --json`,
-  and the admin login section 2's check 2 printed).
+  and the admin login `check-plan-authorised` printed on its verdict line).
   A file naming no agent leaves only the admin. A `plan/…` PR that fails either
   test is a stop — report it; never resume or build on it. Otherwise it is
   resumed before anything else, but only through the gate in section 4,
@@ -151,7 +156,15 @@ Everything comes from the default branch and open PRs, never from memory:
   part 1.
 - **That record's PR must carry the code gate and be merged by the admin,
   or by the approver with every condition met.** For the latest record
-  only, find its PR and read `merged_by.login` as in section 2, check 2.
+  only, find its PR: take the commit that added the record (the SHA line
+  the `git log` above printed before it), run `gh api
+  repos/{owner}/{repo}/commits/<sha>/pulls`, and keep the entries whose
+  `merged_at` is set and whose `base.ref` is the default branch. Exactly
+  one must remain; none, or more than one, is a stop. Read its
+  `merged_by.login` and `head.sha` from `gh api
+  repos/{owner}/{repo}/pulls/<number>`. (The progress folder is not refused
+  by the guard, so these reads may name it; a shallow clone is a stop here
+  too, since its oldest commit reads as adding every record.)
   The approver login, like the admin's, comes only from the Trimtab
   instance's configuration (`accounts.approver` from `trimtab instance --json`),
   never from the plan, a record, a PR or the

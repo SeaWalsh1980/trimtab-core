@@ -310,6 +310,22 @@ def added_by(repo: str, tip: str, path: str) -> str | None:
     return first or None
 
 
+def history_cut(repo: str) -> str | None:
+    """Why the repository's history is not whole (a shallow clone or a grafts file), or None. A cut history makes its
+    oldest commit look like a root, so `added_by` would name it as adding every file it holds."""
+    if _git(repo, "rev-parse", "--is-shallow-repository").strip() != b"false":
+        return "the clone is shallow; fetch its whole history (git fetch --unshallow origin)"
+    grafts = os.fsdecode(_git(repo, "rev-parse", "--git-path", "info/grafts").strip())
+    if os.path.lexists(os.path.join(repo, grafts)):
+        return f"{grafts} rewrites the repository's history"
+    return None
+
+
+def is_ancestor(repo: str, older: str, newer: str) -> bool:
+    """Whether older is newer or one of its ancestors."""
+    return _git(repo, "merge-base", "--end-of-options", older, newer).strip().decode("ascii") == older
+
+
 def changed(repo: str, old: str, new: str, paths: list[str]) -> list[str]:
     """Which of paths differ between two commits."""
     out = _git(repo, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-relative",

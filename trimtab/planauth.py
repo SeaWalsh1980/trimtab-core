@@ -57,23 +57,28 @@ def check(repo: str, repository: str, plan: str, admin: str, run: Run | None = N
     api = GhApi(run)
     default = _default_branch(api, repository)
     tip = _fetched_tip(repo, api, repository, default)
+    cut = _git(planscope.history_cut, repo)
+    if cut:
+        raise PlanAuthError(cut)
     files = [f"{planscope.AUTHORISED}/{plan}.md", f"{planscope.AUTHORISED}/{plan}.writes"]
 
-    missing = [f for f in files if f not in _git(planscope.present, repo, tip, files)]
+    texts = _git(planscope.read_files, repo, tip, files)
+    held = _git(planscope.present, repo, tip, files)
+    missing = [f"check 1: {f} is not on {default}" if f not in held else f"check 1: {f} is not a regular file"
+               for f in files if texts[f] is None]
     if missing:
-        return Authorisation(tuple(f"check 1: {f} is not on {default}" for f in missing))
+        return Authorisation(tuple(missing))
 
     merges = {}
     problems = []
     judged: dict[str, tuple[int, str] | str] = {}  # by adding commit: both files usually share one (ENG-6.2)
     for f in files:
         added = _git(planscope.added_by, repo, tip, f)
-        if added is None:
-            found: tuple[int, str] | str = "no commit adds it"
-        else:
-            if added not in judged:
-                judged[added] = _merged_by_admin(api, repository, default, added, admin)
-            found = judged[added]
+        if added is None:  # the tip holds it, so with a whole history some first-parent commit adds it
+            raise PlanAuthError(f"git log names no commit adding {f}, which {default} holds")
+        if added not in judged:
+            judged[added] = _merged_by_admin(api, repository, default, added, admin)
+        found = judged[added]
         if isinstance(found, str):
             problems.append(f"check 2: {f}: {found}")
         else:
@@ -83,14 +88,14 @@ def check(repo: str, repository: str, plan: str, admin: str, run: Run | None = N
     if len(set(merges.values())) != 1:
         return Authorisation(("check 2: the plan and its declaration were added by different PRs",))
     number, merge = next(iter(merges.values()))
+    # A merge commit git doesn't hold fails the read; one off the default branch's history isn't this merge.
+    if not _git(planscope.is_ancestor, repo, merge, tip):
+        return Authorisation((f"check 2: PR #{number}'s merge commit {merge[:12]} is not in {default}'s history",))
 
-    edited = _git(planscope.changed, repo, merge, tip, files)  # a merge commit git doesn't hold fails the read
+    edited = _git(planscope.changed, repo, merge, tip, files)
     if edited:
         return Authorisation(tuple(f"check 3: {f} changed after PR #{number} merged it" for f in edited))
-    writes = _git(planscope.read_files, repo, tip, files[1:])[files[1]]
-    if writes is None:
-        raise PlanAuthError(f"{files[1]} on {default} is not a regular file")
-    return Authorisation((), number, merge, writes)
+    return Authorisation((), number, merge, texts[files[1]])
 
 
 def _merged_by_admin(api: GhApi, repository: str, default: str, added: str, admin: str) -> tuple[int, str] | str:
@@ -158,7 +163,10 @@ def _json(api: GhApi, path: str, what: str, query: dict | None = None):
 
 
 def _git(read, *args):
+    # git output that doesn't parse (not ASCII, a short field) is a failed read too, never a check's verdict.
     try:
         return read(*args)
     except planscope.PlanScopeError as err:
         raise PlanAuthError(str(err)) from err
+    except (UnicodeDecodeError, ValueError) as err:
+        raise PlanAuthError(f"git's answer to {read.__name__} could not be parsed") from err

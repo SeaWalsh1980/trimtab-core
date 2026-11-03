@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from gh_fake import FakeGh, path_of
+from gh_fake import FakeGh, path_of, query_of
 from instance_fixture import env_for, make_instance
 from test_scrub import isolated_git_env
 from trimtab import planauth, planscope
@@ -106,8 +106,8 @@ class GitRepository(unittest.TestCase):
             pull_path(PLAN_PR): pull_row(PLAN_PR, self.merge),
         })
 
-    def check(self, admin=ADMIN, gh=None):
-        return planauth.check(str(self.repo), REPOSITORY, PLAN, admin, gh or FakeGh(self.answers))
+    def check(self, admin=ADMIN, gh=None, repo=None):
+        return planauth.check(str(repo or self.repo), REPOSITORY, PLAN, admin, gh or FakeGh(self.answers))
 
 
 class Authorised(GitRepository):
@@ -145,6 +145,34 @@ class Authorised(GitRepository):
         paths = [path_of(argv) for argv in gh.argvs()]
         self.assertEqual((paths.count(pulls_path(self.merge)), paths.count(pull_path(PLAN_PR))), (1, 1))
 
+    def test_files_two_commits_of_one_pr_added_pass(self):
+        """A rebase merge lands each of the PR's commits on the default branch; both resolve to the PR."""
+        git(self.repo, "reset", "-q", "--hard", "HEAD~1")
+        self.write(PLAN_FILE, "# plan\n")
+        first = self.commit("add plan")
+        self.write(WRITES_FILE, WRITES)
+        self.merge = self.commit("add declaration")
+        self.publish()
+        for sha in (first, self.merge):
+            self.answers[pulls_path(sha)] = json.dumps([listed_pull(PLAN_PR)])
+
+        self.assertEqual(self.check().problems, ())
+
+    def test_a_plan_edited_and_restored_after_its_merge_passes_as_its_content_is_unchanged(self):
+        self.merge_branch("edit-plan", {PLAN_FILE: "# widened\n"})
+        self.merge_branch("restore-plan", {PLAN_FILE: "# plan\n"})
+        self.publish()
+
+        self.assertEqual(self.check().problems, ())
+
+    def test_the_pull_request_list_is_asked_for_a_page_as_long_as_its_bound(self):
+        gh = FakeGh(self.answers)
+
+        self.check(gh=gh)
+
+        pages = [query_of(argv) for argv in gh.argvs() if path_of(argv) == pulls_path(self.merge)]
+        self.assertEqual([q.get("per_page") for q in pages], [str(planauth.PULLS_LIMIT)])
+
     def test_the_admin_is_compared_without_case(self):
         result = self.check(admin=ADMIN.upper())
 
@@ -175,6 +203,20 @@ class Check1Present(GitRepository):
 
         self.assertEqual([p[:8] for p in result.problems], ["check 1:"])
 
+    def test_a_plan_or_declaration_that_is_not_a_regular_file_fails_check_1(self):
+        for linked in (PLAN_FILE, WRITES_FILE):
+            with self.subTest(linked=linked):
+                git(self.repo, "rm", "-q", linked)
+                os.symlink("../../../README.md", self.repo / linked)
+                self.commit(f"link {linked}")
+                self.publish()
+
+                result = self.check()
+
+                self.assertEqual([p.startswith("check 1:") and "not a regular file" in p for p in result.problems],
+                                 [True])
+                git(self.repo, "reset", "-q", "--hard", "HEAD~1")
+
     def test_a_plan_that_is_not_there_fails_check_1_without_reading_pull_requests(self):
         gh = FakeGh(self.answers)
 
@@ -196,22 +238,34 @@ class Check2MergedByTheAdmin(GitRepository):
         self.answers[pull_path(PLAN_PR)] = json.dumps({"number": PLAN_PR, "merged_by": None,
                                                         "merge_commit_sha": self.merge})
 
-        self.assertTrue(self.check().problems[0].startswith("check 2:"))
+        self.assertIn("check 2:", self.check().problems[0])
+        self.assertIn("a deleted account", self.check().problems[0])
 
     def test_a_commit_with_no_merged_pr_fails_check_2(self):
         self.answers[pulls_path(self.merge)] = json.dumps([listed_pull(PLAN_PR, merged_at=None)])
 
-        self.assertTrue(self.check().problems[0].startswith("check 2:"))
+        self.assertIn("belongs to 0 PRs merged into", self.check().problems[0])
 
     def test_a_pr_merged_into_another_branch_fails_check_2(self):
         self.answers[pulls_path(self.merge)] = json.dumps([listed_pull(PLAN_PR, base="release")])
 
-        self.assertTrue(self.check().problems[0].startswith("check 2:"))
+        self.assertIn("belongs to 0 PRs merged into", self.check().problems[0])
 
     def test_a_commit_two_merged_prs_claim_fails_check_2(self):
         self.answers[pulls_path(self.merge)] = json.dumps([listed_pull(PLAN_PR), listed_pull(LATER_PR)])
 
-        self.assertTrue(self.check().problems[0].startswith("check 2:"))
+        self.assertIn("belongs to 2 PRs merged into", self.check().problems[0])
+
+    def test_a_merge_commit_off_the_default_branchs_history_fails_check_2(self):
+        git(self.repo, "switch", "-q", "-c", "elsewhere")
+        self.write("README.md", "elsewhere\n")
+        elsewhere = self.commit("never merged")
+        git(self.repo, "switch", "-q", DEFAULT)
+        self.answers[pull_path(PLAN_PR)] = pull_row(PLAN_PR, elsewhere)
+
+        result = self.check()
+
+        self.assertEqual([p.startswith("check 2:") and "history" in p for p in result.problems], [True])
 
     def test_a_declaration_added_by_a_later_pr_fails_check_2_even_from_the_admin(self):
         self.merge_branch("drop-writes", {}, removed=(WRITES_FILE,))
@@ -282,6 +336,52 @@ class ReadFailures(GitRepository):
         with self.assertRaises(PlanAuthError):
             self.check()
 
+    def test_a_shallow_clone_is_an_error_not_a_verdict(self):
+        """Its oldest commit reads as adding every file: here, the edit after the merge would hide behind it."""
+        self.merge_branch("edit-writes", {WRITES_FILE: "src/*\n"})
+        later = self.merge_branch("unrelated", {"README.md": "later\n"})
+        self.publish()
+        shallow = self.root / "shallow"
+        subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{self.repo}", str(shallow)], check=True)
+        self.answers[pulls_path(later)] = json.dumps([listed_pull(LATER_PR)])
+        self.answers[pull_path(LATER_PR)] = pull_row(LATER_PR, later)
+
+        with self.assertRaises(PlanAuthError):
+            self.check(repo=shallow)
+
+    def test_a_grafts_file_is_an_error_not_a_verdict(self):
+        grafts = self.repo / git(self.repo, "rev-parse", "--git-path", "info/grafts")
+        grafts.parent.mkdir(parents=True, exist_ok=True)
+        grafts.write_text(f"{self.tip}\n", encoding="utf-8")
+
+        with self.assertRaises(PlanAuthError):
+            self.check()
+
+    def test_a_repository_answer_of_the_wrong_shape_is_an_error(self):
+        for answer in ([], {}, {"default_branch": ""}, {"default_branch": 7}):
+            with self.subTest(answer=answer):
+                self.answers[REPOSITORY_PATH] = json.dumps(answer)
+
+                with self.assertRaises(PlanAuthError):
+                    self.check()
+
+    def test_a_pull_answer_of_the_wrong_shape_is_an_error(self):
+        for answer in ([], {"number": PLAN_PR, "merged_by": {"login": ADMIN}},
+                       {"number": PLAN_PR, "merged_by": {"login": ADMIN}, "merge_commit_sha": None}):
+            with self.subTest(answer=answer):
+                self.answers[pull_path(PLAN_PR)] = json.dumps(answer)
+
+                with self.assertRaises(PlanAuthError):
+                    self.check()
+
+    def test_a_pull_request_number_that_is_not_a_positive_integer_is_an_error(self):
+        for number in (0, -1, True):
+            with self.subTest(number=number):
+                self.answers[pulls_path(self.merge)] = json.dumps([{**listed_pull(PLAN_PR), "number": number}])
+
+                with self.assertRaises(PlanAuthError):
+                    self.check()
+
     def test_a_failed_gh_read_is_an_error(self):
         with self.assertRaises(PlanAuthError):
             self.check(gh=FakeGh(returncode=1, stderr="gh: Not Found (HTTP 404)"))
@@ -324,7 +424,7 @@ class ReadFailures(GitRepository):
             self.check()
 
     def test_a_branch_answer_with_no_commit_is_an_error(self):
-        for answer in ({"name": DEFAULT}, {"commit": {}}, {"commit": {"sha": self.tip[:12]}}, []):
+        for answer in ({"name": DEFAULT}, {"commit": {}}, {"commit": "x"}, {"commit": {"sha": self.tip[:12]}}, []):
             with self.subTest(answer=answer):
                 self.answers[BRANCH_PATH] = json.dumps(answer)
 
@@ -409,7 +509,32 @@ class Cli(GitRepository):
 
         done = self.cli()
 
-        self.assertEqual((done.returncode, done.stdout), (1, ""), done.stderr)
+        self.assertEqual((done.returncode, done.stdout, AGENT in done.stderr), (1, "", True), done.stderr)
+
+    def test_an_instance_naming_no_admin_exits_1(self):
+        path = self.inst / "instance.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        path.write_text(json.dumps({k: v for k, v in data.items() if k != "accounts"}), encoding="utf-8")
+
+        done = self.cli()
+
+        self.assertEqual((done.returncode, done.stdout, "names no admin" in done.stderr), (1, "", True), done.stderr)
+
+    def test_a_broken_instance_file_exits_2(self):
+        (self.inst / "instance.json").write_text("{", encoding="utf-8")
+
+        done = self.cli()
+
+        self.assertEqual((done.returncode, done.stdout, "nothing is vouched for" in done.stderr), (2, "", True),
+                         done.stderr)
+
+    def test_an_unreadable_admin_variable_exits_2(self):
+        del self.answers[VARIABLE_PATH]
+
+        done = self.cli()
+
+        self.assertEqual((done.returncode, done.stdout, "nothing is vouched for" in done.stderr), (2, "", True),
+                         done.stderr)
 
     def test_a_failed_read_exits_2(self):
         del self.answers[BRANCH_PATH]

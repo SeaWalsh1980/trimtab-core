@@ -29,8 +29,8 @@ the Read tool, which layer 1 exempts.
 | Case | Exit |
 |---|---|
 | Checks 1-3 hold | 0. Prints the PR and merge commit, then with `--print-writes` the declaration verbatim |
-| A check fails | 1. Names each failure, `check 1:` to `check 3:` |
-| A read fails or has the wrong shape, the fetch is stale, the admin can't be supplied, or an argument is bad | 2 |
+| A check fails, or the instance names no admin or one `TRIMTAB_ADMIN` disagrees with | 1. Names each failure, `check 1:` to `check 3:`; an admin problem is unprefixed |
+| A read fails, has the wrong shape or can't be parsed, the fetch is stale, the history is cut, the instance file or variable can't be read, or an argument is bad | 2 |
 
 - **The same checks.** Check 1: both files are on `origin/<default>`. Check 2: for each file,
   `git log --first-parent -m --diff-filter=A` finds the commit that last added it. That commit
@@ -46,9 +46,18 @@ the Read tool, which layer 1 exempts.
   and runs the command once more on exit 2, as it does for `check-plan-scope-job`.
 - **Reads are memoised by adding commit** (ENG-6.2). Both files are usually added by one commit,
   so a check makes two `gh` reads for them, not four.
-- **Stricter than the skill was.** If two merged PRs claim the adding commit, that is a failure;
-  the skill took the first entry it found. An answer of the wrong shape, or a full page of PRs
-  (`PULLS_LIMIT`, ENG-6.2), is exit 2.
+- **Stricter than the skill was.**
+  - If two merged PRs claim the adding commit, that is a failure; the skill took the first entry
+    it found.
+  - Check 1 needs both entries to be regular files, so a link or a submodule there fails.
+  - Check 2 needs the merge commit in the default branch's history, so a PR whose
+    `merge_commit_sha` names a commit off it fails.
+  - An answer of the wrong shape, or a full page of PRs (`PULLS_LIMIT`, ENG-6.2), is exit 2.
+- **A cut history is exit 2.** In a shallow clone, or under a grafts file, git takes the oldest
+  commit it holds for a root, so it reports every file that commit holds as added by it. Check 2
+  would then judge whichever PR landed that commit, and check 3 would compare from its merge.
+  An edit to the plan made before it, by a PR the admin never approved, would pass unseen.
+  The skill, which typed the same `git log`, had this gap too.
 - **The declaration is printed** so the scope gate reads `.writes` from the same commit check 3
   judged. Without that, the run would need a second read, which would name the folder.
 - The git reads are planscope's hardened `_git`, the same one plan-scope uses: no steering
@@ -100,8 +109,12 @@ handler, one at a time. The first run left 8 green:
 - The `..` check on the repository. GhApi refuses a `..` segment itself, so this is a second fence,
   kept to match `mergeauthority`.
 
-Each of the six that could be killed now has a test. Of the 26 lines still in the code, 25 are
-caught; the one left is the `..` fence.
+Each of the six that could be killed now has a test.
+
+The in-session review then found the cut-history gap, the unchecked merge commit, and checks that
+took a link for a file. Each fix has a test, and a second run added a mutation for each new guard:
+31 of 32 caught, the one left the `..` fence. One path has no test: git output that can't be
+parsed, which only a fake git could produce. It still exits 2.
 
 Against the consumer, read-only, from an interactive session after `git fetch origin`:
 

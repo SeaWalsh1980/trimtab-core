@@ -343,6 +343,17 @@ class AgreesWithTheSkill(unittest.TestCase):
         self.assertIn("as a command of its own with no pipe", section)
         self.assertNotIn("trimtab instance --json", section)
 
+    def test_the_skills_record_check_states_its_own_pr_lookup(self):
+        """Check 2's lookup moved into check-plan-authorised (ADR 0059), so section 3 can't point back at it."""
+        skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
+        start = skill.index("### 3. Work out the state")
+        section = " ".join(skill[start:skill.index("First, whoever merged, the code gate", start)].split())
+
+        self.assertIn("repos/{owner}/{repo}/commits/<sha>/pulls", section)
+        self.assertIn("Exactly one must remain", section)
+        self.assertNotIn("section 2, check 2", section)
+        self.assertNotIn("section 2's check 2", section)
+
     def test_the_skills_plan_check_types_no_git_read_of_the_plans_folder(self):
         """guard-paths' layer 1 refuses any shell command naming that folder, so a plan run could not type one."""
         section = self.plan_checks()
