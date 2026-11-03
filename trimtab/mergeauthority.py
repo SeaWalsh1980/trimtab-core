@@ -153,7 +153,8 @@ class Containment:
 
 @dataclass(frozen=True)
 class JobRecord:
-    """The job behind a required check's latest run, and the workflow run it belongs to."""
+    """A job and the workflow run it belongs to: the one behind a required check's latest run (ADR 0057), or any job
+    named plan-scope on a head, every attempt (ADR 0058)."""
 
     check_run_id: int
     name: str
@@ -936,7 +937,8 @@ def plan_scope_job_problems(repository: str, head: str, run: Run | None = None) 
         problems.append(f"the default branch's ruleset does not require {CHECK_NAME} bound to GitHub Actions")
     jobs, unfinished = read_plan_scope_jobs(api, repository, head)
     if unfinished or any(job.status != "completed" for job in jobs):
-        problems.append(f"a {CHECK_NAME} run or job on the head commit has not completed")
+        problems.append(f"{PLAN_SCOPE_WORKFLOW}'s run or a {CHECK_NAME} job on the head commit has not completed; a "
+                        "re-run of any job in that workflow does this too, so retry once it finishes")
     elif not jobs:
         problems.append(f"no {CHECK_NAME} job on the head commit")
     elif not all(_real_job(job, CHECK_NAME, head, PLAN_SCOPE_WORKFLOW) for job in jobs):

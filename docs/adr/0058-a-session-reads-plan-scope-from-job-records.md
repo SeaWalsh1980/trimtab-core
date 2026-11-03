@@ -13,10 +13,10 @@ passed on the PR's final head. It told a session to read that from
 `commits/<head>/check-runs`.
 
 An operator can give sessions a fine-grained token, to keep them away from Actions secrets
-and variables. GitHub's permissions for those tokens list no Checks permission, so that read
-gets a 403, as do `gh pr checks` and `statusCheckRollup`. Read on a real repository with such
-a token: check runs 403; `actions/runs`, `actions/runs/<id>/jobs`, `rules/branches/<branch>`
-and `rulesets/<id>` all answer. So every approver-merged record would stop a plan session,
+and variables. GitHub's permissions for those tokens list no Checks permission. Read on a real
+repository with such a token: check runs 403; `gh pr checks` and `gh pr view --json
+statusCheckRollup` exit 1 with GraphQL's "Resource not accessible by personal access token";
+`actions/runs`, `actions/runs/<id>/jobs`, `rules/branches/<branch>` and `rulesets/<id>` all answer. So every approver-merged record would stop a plan session,
 though nothing was wrong.
 
 ## Decision
@@ -41,8 +41,9 @@ and `wrap-merged` calls it.
   new attempt yet, and the earlier attempt's pass must not answer for it.
 - **The workflow path** is a constant, `.github/workflows/plan-scope.yml`. ADR 0057 rejected
   hardcoding expected paths in core because they are each repository's own. That holds for the
-  job, which gets them from configuration a PR can't change. A session has no such configuration:
-  whatever it passes, it chose. The cost is under Consequences.
+  job, which gets them from configuration a PR can't change. What a session passes on its command
+  line it chose, so that's out; the instance file is the alternative, rejected below. The cost is
+  under Consequences.
 - `check-merge-authority` and `check-approver-route` don't change. They judge checks from other
   Apps as well. The job's token can read check runs; the App's step is to be shown when it's wired.
 - The skill still reads `rulesets/<id>` for `updated_at`, which needs the PR's `merged_at`.
@@ -64,6 +65,9 @@ and `wrap-merged` calls it.
   failure (`plan_scope_problem`).
 - **Only jobs at the expected path.** A forged job elsewhere would then go unseen.
 - **A `--workflow` argument.** A session would choose what judges it.
+- **The path in the instance file.** A session can't change that file, so this would hold. But it
+  needs a per-repository map in a per-operator file, a change to both readers and a pin bump, for a
+  path no repository varies today. If one ever does, this is the option to re-open.
 
 ## Consequences
 
@@ -77,6 +81,9 @@ and `wrap-merged` calls it.
 - **Another path stops the plan.** A repository running `plan-scope` from any other path gets exit 1
   on every approver merge, though its merge gate passes, and the message says the job isn't
   a passing one from the constant's path.
+- **A re-run of any job in the workflow reads as unfinished.** `plan-scope.yml` also holds
+  `merge-authority`, whose job re-runs on a review. A read at that moment exits 1, and the message
+  says to retry. Reasoned from the workflows, not tried.
 - **A deleted run is invisible.** ADR 0057 reports a merge going through after a deletion, so a
   check-run read likely misses it too; that's inferred, not tried here. `guard-github` refuses
   deleting one; the agent's server rights don't.
