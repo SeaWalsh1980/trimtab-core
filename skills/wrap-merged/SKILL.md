@@ -338,7 +338,9 @@ PR's work**.
 **A session started by the `plan:continue` label** first checks who added
 it (`gh api repos/{owner}/{repo}/issues/<n>/events`, the `labeled` event
 for `plan:continue`). Unless the agent, approver or admin account added
-it, stop at once. The label only starts a session; it never authorises:
+it, stop at once. Those logins come only from instance configuration:
+`accounts.agent` and `accounts.approver` from `trimtab instance --json`, and
+the admin's from `trimtab check-plan-admin`. The label only starts a session; it never authorises:
 the session still runs section 2 and reads only an authorised record.
 
 **Restarting after a stop** takes the operator's act: a session they start
