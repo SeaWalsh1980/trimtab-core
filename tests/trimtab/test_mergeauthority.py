@@ -2294,6 +2294,12 @@ class PlanScopeJob(unittest.TestCase):
     def test_no_plan_scope_job_is_a_problem(self):
         self.assert_one_problem(plan_scope_answers([job_row(1, "another-job", HEAD)]), "no plan-scope job")
 
+    def test_a_head_with_no_workflow_runs_is_a_problem(self):
+        answers = plan_scope_answers()
+        answers[ACTIONS_RUNS_PATH] = json.dumps({"workflow_runs": []})
+
+        self.assert_one_problem(answers, "no plan-scope job on the head commit")
+
     def test_a_job_still_running_is_a_problem(self):
         self.assert_one_problem(plan_scope_answers([plan_scope_job(status="in_progress", conclusion=None)]),
                                 "has not completed")
