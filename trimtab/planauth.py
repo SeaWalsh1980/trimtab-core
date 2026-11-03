@@ -65,8 +65,15 @@ def check(repo: str, repository: str, plan: str, admin: str, run: Run | None = N
 
     merges = {}
     problems = []
+    judged: dict[str, tuple[int, str] | str] = {}  # by adding commit: both files usually share one (ENG-6.2)
     for f in files:
-        found = _merged_by_admin(repo, api, repository, default, tip, f, admin)
+        added = _git(planscope.added_by, repo, tip, f)
+        if added is None:
+            found: tuple[int, str] | str = "no commit adds it"
+        else:
+            if added not in judged:
+                judged[added] = _merged_by_admin(api, repository, default, added, admin)
+            found = judged[added]
         if isinstance(found, str):
             problems.append(f"check 2: {f}: {found}")
         else:
@@ -86,12 +93,8 @@ def check(repo: str, repository: str, plan: str, admin: str, run: Run | None = N
     return Authorisation((), number, merge, writes)
 
 
-def _merged_by_admin(repo: str, api: GhApi, repository: str, default: str, tip: str, path: str,
-                     admin: str) -> tuple[int, str] | str:
-    """The (PR, merge commit) that added path, when the admin merged it; otherwise why not."""
-    added = _git(planscope.added_by, repo, tip, path)
-    if added is None:
-        return "no commit adds it"
+def _merged_by_admin(api: GhApi, repository: str, default: str, added: str, admin: str) -> tuple[int, str] | str:
+    """The (PR, merge commit) of the PR the adding commit belongs to, when the admin merged it; otherwise why not."""
     rows = _json(api, f"repos/{repository}/commits/{added}/pulls", "gh api commit pulls",
                  {"per_page": PULLS_LIMIT})
     if not isinstance(rows, list) or len(rows) >= PULLS_LIMIT:

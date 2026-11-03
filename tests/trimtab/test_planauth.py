@@ -137,6 +137,14 @@ class Authorised(GitRepository):
 
         self.assertEqual((result.problems, result.writes), ((), ""))
 
+    def test_files_one_commit_added_read_its_pull_requests_once(self):
+        gh = FakeGh(self.answers)
+
+        self.check(gh=gh)
+
+        paths = [path_of(argv) for argv in gh.argvs()]
+        self.assertEqual((paths.count(pulls_path(self.merge)), paths.count(pull_path(PLAN_PR))), (1, 1))
+
     def test_the_admin_is_compared_without_case(self):
         result = self.check(admin=ADMIN.upper())
 

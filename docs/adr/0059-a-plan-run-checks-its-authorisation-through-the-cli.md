@@ -41,7 +41,11 @@ the Read tool, which layer 1 exempts.
   repository's `TRIMTAB_ADMIN` (ADR 0056). If they disagree, the command exits 1 before reading
   anything else.
 - **A stale fetch is an error.** `origin/<default>` must equal the commit the server reports for
-  the branch. Otherwise a run fetched before an edit to the plan would pass check 3.
+  the branch. Otherwise a run fetched before an edit to the plan would pass check 3. A merge to
+  the default branch between the fetch and the read does this too, so `wrap-merged` re-fetches
+  and runs the command once more on exit 2, as it does for `check-plan-scope-job`.
+- **Reads are memoised by adding commit** (ENG-6.2). Both files are usually added by one commit,
+  so a check makes two `gh` reads for them, not four.
 - **Stricter than the skill was.** If two merged PRs claim the adding commit, that is a failure;
   the skill took the first entry it found. An answer of the wrong shape, or a full page of PRs
   (`PULLS_LIMIT`, ENG-6.2), is exit 2.

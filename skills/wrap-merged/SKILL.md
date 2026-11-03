@@ -87,8 +87,11 @@ say which check failed and start nothing.
    then, as a command of its own with no pipe,
    `trimtab check-plan-authorised --repository <owner>/<name> --plan <plan> --print-writes`.
    It exits 0 only when checks 1-3 all hold; 1 names each failed check
-   (`check 1:` to `check 3:`); 2 is a failed read, a stale fetch or an admin
-   the configuration can't supply, and fails the check too. On a pass it
+   (`check 1:` to `check 3:`); 2 is a failed read, a stale fetch (the
+   default branch moved after your fetch) or an admin the configuration
+   can't supply. On exit 2, wait a minute, run `git fetch origin` again,
+   then the command once more. One re-run in all. Exit 1, or a second
+   non-zero exit, fails the check. On a pass it
    prints the PR and merge commit, then the declaration's text: keep that
    text for the scope gate below. Check 1: `<plan>.md` and `<plan>.writes`
    are both on the fetched default branch, which must be where the server
