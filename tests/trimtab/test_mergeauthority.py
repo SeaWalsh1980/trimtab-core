@@ -2393,6 +2393,13 @@ class PlanScopeJob(unittest.TestCase):
 
         self.assert_one_problem(answers, "voids the head")
 
+    def test_a_jobless_run_before_a_passing_one_voids_the_head(self):
+        answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW, run_id=SECOND_RUN),
+                                           workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW)])
+        answers[jobs_path(SECOND_RUN)] = json.dumps({"jobs": []})
+
+        self.assert_one_problem(answers, "voids the head")
+
     def test_a_finished_run_holding_only_other_jobs_voids_the_head(self):
         answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW),
                                            workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW, run_id=SECOND_RUN)])

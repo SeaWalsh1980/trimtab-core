@@ -930,7 +930,7 @@ def read_plan_scope_jobs(api: GhApi, repository: str, head: str) -> PlanScopeRea
             found.append(JobRecord(row["id"], *_job_fields(row)[1], run_head, path, event))
             held += 1
         unfinished = unfinished or not finished
-        jobless = jobless or (path == PLAN_SCOPE_WORKFLOW and finished and not held)
+        jobless = jobless or (path == PLAN_SCOPE_WORKFLOW and not held)  # an unfinished run is reported first
     return PlanScopeRead(tuple(found), unfinished, jobless)
 
 
