@@ -17,6 +17,7 @@ SHA = "a" * 40
 VALID = {"schema_version": 1, "repo": "owner/inst", "base": {"repo": "owner/base", "sha": SHA}}
 ADMIN = "some-owner"
 AGENT = "some-agent"
+APPROVER = "some-approver[bot]"
 
 
 def with_(**changes):
@@ -156,6 +157,29 @@ class Parse(unittest.TestCase):
     def test_one_login_for_admin_and_agent_is_refused_whatever_its_case(self):
         self.refuses(with_(accounts={"admin": ADMIN, "agent": ADMIN.upper()}), "accounts.agent")
 
+    def test_a_file_naming_no_approver_reads_as_no_approver(self):
+        self.assertIsNone(instance.parse(with_(accounts={"admin": ADMIN})).approver)
+
+    def test_the_approver_named_as_an_app_is_read(self):
+        f = instance.parse(with_(accounts={"admin": ADMIN, "approver": APPROVER}))
+        self.assertEqual((f.admin, f.approver), (ADMIN, APPROVER))
+
+    def test_an_approver_with_no_admin_is_refused(self):
+        self.refuses(with_(accounts={"approver": APPROVER}), "accounts.admin")
+
+    def test_a_user_cannot_be_the_approver(self):
+        self.refuses(with_(accounts={"admin": ADMIN, "approver": AGENT}), "App's")
+
+    def test_an_approver_login_that_is_no_app_login_is_refused(self):
+        for login in ("", " ", None, 5, "[bot]", "-leading[bot]", "some-app[BOT]", "some-app[bot]\n",
+                      "some.app[bot]", "a" * 35 + "[bot]"):
+            with self.subTest(login=login):
+                self.refuses(with_(accounts={"admin": ADMIN, "approver": login}), "App's")
+
+    def test_an_app_login_of_the_longest_name_is_read(self):
+        login = "a" * 34 + "[bot]"
+        self.assertEqual(instance.parse(with_(accounts={"admin": ADMIN, "approver": login})).approver, login)
+
 
 class PatternsPath(unittest.TestCase):
     """Integration at the file boundary: resolves against a temporary instance root."""
@@ -293,13 +317,13 @@ class CliInstanceJson(unittest.TestCase):
         self.assertEqual(json.loads(done.stdout), {
             "schema_version": 1, "root": str(self.inst), "repo": REPO_NAME,
             "base": {"repo": "owner/base", "sha": "0" * 40},
-            "accounts": {"admin": None, "agent": None},
+            "accounts": {"admin": None, "agent": None, "approver": None},
             "env": {"TRIMTAB_SECRET_PACKS": None,
                     "TRIMTAB_SECRET_PATTERNS": str(self.inst / "guards" / "secrets.patterns")},
         })
 
     def test_prints_the_logins_the_file_names(self):
-        named = {"admin": ADMIN, "agent": AGENT}
+        named = {"admin": ADMIN, "agent": AGENT, "approver": APPROVER}
         data = json.loads((self.inst / instance.FILE).read_text())
         (self.inst / instance.FILE).write_text(json.dumps({**data, "accounts": named}))
 
