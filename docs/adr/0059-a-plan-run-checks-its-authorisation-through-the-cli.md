@@ -67,11 +67,17 @@ command line names no path under the folder, so layer 1 lets it run.
   config the environment carries (`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` and its pairs). It
   pins `core.fsmonitor`, `core.commitGraph`, `log.showSignature`, `log.follow` and
   `diff.renames` with `-c`, which every git version honours and which outranks every config file.
-  git still reads the global, system and repository config files for every other key. No other
+  git still reads the global, system and repository config files for every other key, so
+  `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM`, which choose those files,
+  are kept: the `-c` pins outrank them. `GIT_EXEC_PATH` is kept too, because dropping it can break
+  an installed git, and it chooses git's own programs rather than what a read reports. No other
   key found changes what these reads report; any one that does needs a pin and a test. Errors
   name git's subcommand, not `-c`, and `added_by` answers a 40-hex commit or raises.
   An earlier version put the pins in `GIT_CONFIG_COUNT`, which git before 2.31 ignores without a
   word.
+- **Output is written once, as UTF-8 bytes, after everything is known.** A plan with text the
+  locale can't encode would otherwise print the verdict line and then crash with exit 1, which
+  reads as a failed check. A write that fails exits 2.
 - **The two print flags are separate runs.** The skill has the run compare the PR and merge
   commit on both verdict lines, so a plan and a declaration from different merges can't be
   paired.
@@ -151,6 +157,10 @@ caught 41 of 44. The three left:
 Both drops stay as defence. A test sets `log.follow=true` both in a config file and in the
 environment, on a plan renamed into place, and the check still passes. Another drives plan-scope
 with a grafts file named by the environment.
+
+CI's review then found that output could fail to write after the verdict line. After that fix,
+with tests that run the CLI under an ASCII locale and against a full device, a fifth run caught
+43 of 46. The three left are the same three.
 
 `--no-renames` on the add lookup was tried and removed: limiting the log to one path already
 keeps git from pairing a rename, and a test pins that a plan renamed into place passes.

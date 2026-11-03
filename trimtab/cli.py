@@ -945,12 +945,20 @@ def cmd_check_plan_authorised(args) -> int:
     if problems:
         _print_problems(problems)
         return 1
-    print(f"plan {args.plan}: authorised by PR #{result.pr}, merged by {admin} as {result.merge_commit[:12]}")
     # Verbatim after the verdict line, from the commit check 3 judged: the run's items, or its declared scope.
-    if args.print_plan:
-        sys.stdout.write(result.plan_text)
-    elif args.print_writes:
-        sys.stdout.write(result.writes)
+    body = result.plan_text if args.print_plan else result.writes if args.print_writes else ""
+    out = f"plan {args.plan}: authorised by PR #{result.pr}, merged by {admin} as {result.merge_commit[:12]}\n{body}"
+    # As UTF-8 bytes in one write, whatever the locale: a write that fails after the verdict must not read as one.
+    try:
+        sys.stdout.flush()
+        sys.stdout.buffer.write(out.encode("utf-8"))
+        sys.stdout.buffer.flush()
+    except (OSError, ValueError) as err:
+        print(f"error: the output could not be written ({type(err).__name__}); nothing is vouched for",
+              file=sys.stderr)
+        # Python flushes stdout again at exit, and that failure would replace exit 2 with 120.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 2
     return 0
 
 

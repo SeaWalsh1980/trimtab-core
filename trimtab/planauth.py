@@ -57,6 +57,7 @@ def check(repo: str, repository: str, plan: str, admin: str, run: Run | None = N
         raise PlanAuthError("no admin login to compare the merge with")
     api = GhApi(run)
     default = _default_branch(api, repository)
+    # Every read below names this commit, never the branch, so a push after this point changes nothing judged.
     tip = _fetched_tip(repo, api, repository, default)
     cut = _git(planscope.history_cut, repo)
     if cut:
@@ -101,8 +102,10 @@ def _merged_by_admin(api: GhApi, repository: str, default: str, added: str, admi
     """The (PR, merge commit) of the PR the adding commit belongs to, when the admin merged it; otherwise why not."""
     rows = _json(api, f"repos/{repository}/commits/{added}/pulls", "gh api commit pulls",
                  {"per_page": PULLS_LIMIT})
-    if not isinstance(rows, list) or len(rows) >= PULLS_LIMIT:
+    if not isinstance(rows, list):
         raise PlanAuthError("gh api commit pulls returned unexpected JSON")
+    if len(rows) >= PULLS_LIMIT:
+        raise PlanAuthError(f"{PULLS_LIMIT} or more PRs list {added[:12]}; refusing to judge a partial list")
     merged = [_listed_number(row) for row in rows if _merged_into(row, default)]
     if len(merged) != 1:
         return f"{added[:12]} belongs to {len(merged)} PRs merged into {default}, not one"

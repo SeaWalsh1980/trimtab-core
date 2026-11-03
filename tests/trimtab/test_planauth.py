@@ -481,7 +481,7 @@ class ReadFailures(GitRepository):
         rows = [listed_pull(PLAN_PR)] + [listed_pull(n, merged_at=None) for n in unmerged]
         self.answers[pulls_path(self.merge)] = json.dumps(rows)
 
-        with self.assertRaises(PlanAuthError):
+        with self.assertRaisesRegex(PlanAuthError, f"{planauth.PULLS_LIMIT} or more PRs list"):
             self.check()
 
     def test_a_pull_request_numbered_as_text_is_an_error(self):
@@ -550,7 +550,7 @@ class Cli(GitRepository):
         path.write_text(json.dumps({**data, "accounts": {"admin": ADMIN}}), encoding="utf-8")
         self.answers[VARIABLE_PATH] = json.dumps({"name": "TRIMTAB_ADMIN", "value": ADMIN})
 
-    def cli(self, *extra):
+    def cli(self, *extra, env_extra=None, stdout=None):
         bin_dir = self.root / "bin"
         bin_dir.mkdir(exist_ok=True)
         answers = self.root / "answers.json"
@@ -565,9 +565,12 @@ class Cli(GitRepository):
                       "print(answers[path])\n", encoding="utf-8")
         gh.chmod(0o755)
         env = {**self.env, **env_for(self.inst), "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-               "FAKE_ANSWERS": str(answers)}
-        return subprocess.run([str(TRIMTAB), "check-plan-authorised", "--repository", REPOSITORY, "--plan", PLAN,
-                               "--repo", str(self.repo), *extra], capture_output=True, text=True, env=env)
+               "FAKE_ANSWERS": str(answers), **(env_extra or {})}
+        argv = [str(TRIMTAB), "check-plan-authorised", "--repository", REPOSITORY, "--plan", PLAN,
+                "--repo", str(self.repo), *extra]
+        if stdout is not None:
+            return subprocess.run(argv, stdout=stdout, stderr=subprocess.PIPE, encoding="utf-8", env=env)
+        return subprocess.run(argv, capture_output=True, encoding="utf-8", env=env)
 
     def test_a_pass_exits_0_naming_the_pr_and_merge_commit(self):
         done = self.cli()
@@ -592,6 +595,23 @@ class Cli(GitRepository):
         done = self.cli("--print-plan")
 
         self.assertEqual((done.returncode, done.stdout.split("\n", 1)[1]), (0, "# plan\n"), done.stderr)
+
+    def test_a_plan_the_locale_cannot_encode_is_printed_as_utf_8(self):
+        plan_text = "# plan \u2014 caf\u00e9\n"
+        self.merge = self.merge_branch("accented", {PLAN_FILE: plan_text})
+        self.publish()
+        self.answers[pulls_path(self.merge)] = json.dumps([listed_pull(LATER_PR)])
+        self.answers[pull_path(LATER_PR)] = pull_row(LATER_PR, self.merge)
+
+        done = self.cli("--print-plan", env_extra={"LANG": "C", "LC_ALL": "C", "PYTHONIOENCODING": "ascii"})
+
+        self.assertEqual((done.returncode, done.stdout.split("\n", 1)[1]), (0, plan_text), done.stderr)
+
+    def test_output_that_cannot_be_written_exits_2(self):
+        with open(os.devnull if not Path("/dev/full").exists() else "/dev/full", "wb") as full:
+            done = self.cli("--print-plan", stdout=full)
+
+        self.assertEqual((done.returncode, "nothing is vouched for" in done.stderr), (2, True), done.stderr)
 
     def test_print_plan_and_print_writes_cannot_be_combined(self):
         done = self.cli("--print-plan", "--print-writes")
