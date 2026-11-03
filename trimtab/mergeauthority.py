@@ -47,7 +47,8 @@ from git (`base...head`, renames off, as plan-scope reads them); reviews and
 check runs from GitHub's REST API through `gh api`.
 
 `plan_admin_problems` is for sessions, not the job: it reads the repository's
-`TRIMTAB_ADMIN` itself, to compare with the instance's admin (ADR 0056).
+`TRIMTAB_ADMIN` itself, to compare with the instance's admin (ADR 0056). So is `plan_scope_job_result`: it reads
+job records, for a token that can't read check runs (ADR 0058).
 """
 
 from __future__ import annotations
@@ -65,6 +66,7 @@ ADMIN_VARIABLE = "TRIMTAB_ADMIN"
 ACTIONS_APP = "github-actions"
 ACTIONS_APP_ID = 15368
 JOB_EVENT = "pull_request"
+PLAN_SCOPE_WORKFLOW = ".github/workflows/plan-scope.yml"
 WORKFLOW_LOCK = ".github/**/*"
 PIN_FILES = (".claude/trimtab.json", "instance.json")
 CHECKER_MARK = "bin/trimtab"
@@ -81,6 +83,8 @@ WORKFLOW = re.compile(r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml")
 STATUS_LIMIT = 1000
 COMMENT_LIMIT = 1000
 TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")  # what GitHub writes, so text order is time order
+ACTIONS_RUN_LIMIT = 200  # workflow runs on one head, each read for its jobs
+ACTIONS_JOB_LIMIT = 200  # jobs in one run, every attempt
 JOB_LIMIT = 50  # job reads per PR: one per Actions-bound required check, so far past any real ruleset
 RULE_LIMIT = 1000
 ACT, NOOP, REFUSE = "act", "noop", "refuse"
@@ -149,7 +153,8 @@ class Containment:
 
 @dataclass(frozen=True)
 class JobRecord:
-    """The job behind a required check's latest run, and the workflow run it belongs to."""
+    """A job and the workflow run it belongs to: the one behind a required check's latest run (ADR 0057), or any job
+    named plan-scope on a head, every attempt (ADR 0058)."""
 
     check_run_id: int
     name: str
@@ -863,6 +868,103 @@ def plan_admin_problems(named: str | None, repository: str, run: Run | None = No
         return (f"accounts.admin is {named} but {repository}'s {ADMIN_VARIABLE} is {configured}, so the plan check "
                 "and the merge gate would judge different accounts",)
     return ()
+
+
+def _actions_rows(api: GhApi, path: str, key: str, what: str, limit: int, query: dict) -> list:
+    """Every row of an Actions list, every page, wrapped in an object under `key`; past `limit`, an error."""
+    rows: list = []
+    page = 1
+    while True:
+        data = _json(api, path, what, query={**query, "per_page": PER_PAGE, "page": page})
+        batch = data.get(key) if isinstance(data, dict) else None
+        if not isinstance(batch, list):
+            raise MergeAuthorityError(f"{what} returned unexpected JSON")
+        rows += batch
+        if len(rows) > limit:
+            raise MergeAuthorityError(f"{what} holds more than {limit} rows; refusing a partial list")
+        if len(batch) < PER_PAGE:
+            return rows
+        page += 1
+
+
+@dataclass(frozen=True)
+class PlanScopeRead:
+    """What the Actions API reports of plan-scope on one head."""
+
+    jobs: tuple[JobRecord, ...]  # every job of that name, every attempt, from whichever workflow ran it
+    unfinished: bool  # a run of the expected workflow hasn't finished: a queued re-run may list no job for it yet
+    jobless: bool  # a finished run of the expected workflow lists no job of that name: it never reached the job
+
+
+@dataclass(frozen=True)
+class PlanScopeResult:
+    problems: tuple[str, ...]
+    wait: bool  # the one problem is that something hasn't finished, so another read may answer differently
+
+
+def read_plan_scope_jobs(api: GhApi, repository: str, head: str) -> PlanScopeRead:
+    found = []
+    unfinished = jobless = False
+    runs = _actions_rows(api, f"repos/{repository}/actions/runs", "workflow_runs", "gh api actions runs",
+                         ACTIONS_RUN_LIMIT, {"head_sha": head})
+    for run in runs:
+        run_id = run.get("id") if isinstance(run, dict) else None
+        if not _app_id(run_id):
+            raise MergeAuthorityError("gh api actions runs returned unexpected JSON")
+        run_head, path, event = _workflow_run_fields(run)
+        finished = True
+        if path == PLAN_SCOPE_WORKFLOW:
+            if not isinstance(run.get("status"), str):
+                raise MergeAuthorityError("gh api actions runs returned unexpected JSON")
+            finished = run["status"] == "completed"
+        rows = _actions_rows(api, f"repos/{repository}/actions/runs/{run_id}/jobs", "jobs", "gh api actions jobs",
+                             ACTIONS_JOB_LIMIT, {"filter": "all"})
+        held = 0
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("name"), str):
+                raise MergeAuthorityError("gh api actions jobs returned unexpected JSON")
+            if row["name"] != CHECK_NAME:
+                continue
+            if not _app_id(row.get("id")):
+                raise MergeAuthorityError("gh api actions jobs returned unexpected JSON")
+            found.append(JobRecord(row["id"], *_job_fields(row)[1], run_head, path, event))
+            held += 1
+        unfinished = unfinished or not finished
+        jobless = jobless or (path == PLAN_SCOPE_WORKFLOW and not held)  # an unfinished run is reported first
+    return PlanScopeRead(tuple(found), unfinished, jobless)
+
+
+def plan_scope_job_result(repository: str, head: str, run: Run | None = None) -> PlanScopeResult:
+    """Why a head has no real, passing plan-scope job, for a session whose token can't read check runs (ADR 0058). Any
+    job that didn't pass voids the head, as `plan_scope_problem` has it for the merge gate. It reads the head's jobs
+    from Actions, so a status or another App's check run can't answer for one."""
+    if not REPOSITORY.fullmatch(repository) or ".." in repository:
+        raise MergeAuthorityError(f"{repository!r} is not owner/name")
+    if not SHA.fullmatch(head):
+        raise MergeAuthorityError("--head must be a 40-hex commit")
+    api = GhApi(run)
+    row = _json(api, f"repos/{repository}", "gh api repository")
+    default = row.get("default_branch") if isinstance(row, dict) else None
+    if not isinstance(default, str) or not default:
+        raise MergeAuthorityError("gh api repository returned unexpected JSON")
+    problems = []
+    required = [c for c in read_containment(api, repository, default).checks if c.context == CHECK_NAME]
+    if not required or any(c.app_id != ACTIONS_APP_ID for c in required):
+        problems.append(f"the default branch's ruleset does not require {CHECK_NAME} bound to GitHub Actions")
+    read = read_plan_scope_jobs(api, repository, head)
+    if read.unfinished or any(job.status != "completed" for job in read.jobs):
+        return PlanScopeResult((*problems, f"{PLAN_SCOPE_WORKFLOW}'s run or a {CHECK_NAME} job on the head commit has "
+                                "not completed; a re-run of any job in that workflow does this too, so retry once it "
+                                "finishes"), wait=not problems)
+    if not read.jobs:
+        problems.append(f"no {CHECK_NAME} job on the head commit")
+    elif read.jobless:
+        problems.append(f"a run of {PLAN_SCOPE_WORKFLOW} on the head commit lists no {CHECK_NAME} job; any such run "
+                        "voids the head")
+    elif not all(_real_job(job, CHECK_NAME, head, PLAN_SCOPE_WORKFLOW) for job in read.jobs):
+        problems.append(f"a {CHECK_NAME} job on the head commit is not a passing job from {PLAN_SCOPE_WORKFLOW}; "
+                        "any that isn't voids the head")
+    return PlanScopeResult(tuple(problems), wait=False)
 
 
 def _app_id(value) -> bool:

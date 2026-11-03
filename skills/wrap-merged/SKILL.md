@@ -177,22 +177,24 @@ Everything comes from the default branch and open PRs, never from memory:
     the item and part of the record it carries, and its `base.ref` is the
     default branch. The checker passes any other head without judging it,
     so a `plan-scope` success on a non-plan PR proves nothing;
-  - a **check run** (never a commit status: anyone with write access can
-    post a status under any name) named `plan-scope`, whose `app.slug` is
-    `github-actions`, concluded `success` on the PR's final head commit
-    (its `head.sha`, not the merge commit;
-    `gh api --paginate 'repos/{owner}/{repo}/commits/<head_sha>/check-runs?check_name=plan-scope&per_page=100'`;
-    read every page, or the tests below cannot hold).
-    Among that app's `plan-scope` runs on that commit, the latest (by
-    `started_at`) must be the successful one, and none may be still
-    running; an earlier success does not outweigh a later failure;
-  - the default branch's ruleset requires `plan-scope` bound to the GitHub
-    Actions app (`gh api repos/{owner}/{repo}/rules/branches/<default>`):
-    a `required_status_checks` rule lists `plan-scope` with an
-    `integration_id` equal to the passing check run's `app.id`. An entry
-    with no `integration_id` accepts any source, so it fails this test.
-    The requirement must also have held when the PR merged: read that
-    rule's ruleset (`gh api repos/{owner}/{repo}/rulesets/<ruleset_id>`);
+  - `trimtab check-plan-scope-job --repository <owner>/<name> --head <head_sha>`
+    exits 0, run as a command of its own, with no pipe, on the PR's final
+    head commit (its `head.sha`, not the merge commit). It reads job
+    records, never a commit status (anyone with write access can post a
+    status under any name): every `plan-scope` job on that commit, on every
+    attempt, must be a finished, passing job with a runner and steps, from
+    `.github/workflows/plan-scope.yml` and the `pull_request` event. An
+    earlier success does not outweigh a later failure. The default branch's
+    ruleset must also require `plan-scope` bound to the GitHub Actions app.
+    Exit 3 means that workflow's run has not completed: wait up to ten minutes
+    for it to finish, then run it once more. A re-run of any job in the
+    workflow does this. Exit 2 is a failed read: wait a minute, then run it
+    once more. One re-run in all. Exit 1, or a second non-zero exit, fails
+    this test;
+  - that requirement must also have held when the PR merged: read the
+    `required_status_checks` rule listing `plan-scope`
+    (`gh api repos/{owner}/{repo}/rules/branches/<default>`), then its
+    ruleset (`gh api repos/{owner}/{repo}/rulesets/<ruleset_id>`);
     its `updated_at` must be earlier than the PR's `merged_at`. A ruleset
     changed since the merge cannot show what it required then, so the test
     fails, even for an unrelated edit; the admin's removal of
