@@ -286,6 +286,16 @@ class Repository(unittest.TestCase):
 
         self.assertEqual(self.check().problems, ())
 
+    def test_the_callers_environment_does_not_steer_the_check(self):
+        """A grafts file the environment names, making the head a root, would break base...head (ADR 0059)."""
+        self.write(NEW_ADR, "# new\n")
+        head = self.commit("item")
+        grafts = Path(self.tmp.name) / "grafts"
+        grafts.write_text(f"{head}\n", encoding="utf-8")
+
+        with mock.patch.dict(os.environ, {"GIT_GRAFT_FILE": str(grafts)}):
+            self.assertEqual(self.check().problems, ())
+
     def test_an_undeclared_path_fails(self):
         self.write("src/app.py", "x = 2\n")
         self.commit("item")

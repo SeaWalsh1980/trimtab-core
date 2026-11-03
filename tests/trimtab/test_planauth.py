@@ -227,6 +227,17 @@ class Authorised(GitRepository):
 
         self.assertEqual(self.check().problems, ())
 
+    def test_the_operators_git_config_does_not_steer_the_add_lookup(self):
+        """log.follow=true in a config file would trace a plan renamed into place back to the file it was."""
+        self.test_a_plan_the_pr_renamed_into_place_passes()
+        config = self.root / "gitconfig"
+        config.write_text("[log]\n\tfollow = true\n[diff]\n\trenames = true\n", encoding="utf-8")
+        inherited = {"GIT_CONFIG_GLOBAL": str(config), "GIT_CONFIG_COUNT": "1",
+                     "GIT_CONFIG_KEY_0": "log.follow", "GIT_CONFIG_VALUE_0": "true"}
+
+        with mock.patch.dict(os.environ, inherited):
+            self.assertEqual(self.check().problems, ())
+
     def test_the_admin_is_compared_without_case(self):
         result = self.check(admin=ADMIN.upper())
 

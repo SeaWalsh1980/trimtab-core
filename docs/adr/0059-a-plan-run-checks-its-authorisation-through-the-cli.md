@@ -62,12 +62,19 @@ command line names no path under the folder, so layer 1 lets it run.
   first version had the run read the plan with the Read tool, which reads the working tree. That
   copy can be stale or on another branch, and nothing tied it to the commit the checks judged.
   The flags are exclusive, so a run that needs both runs the command twice, and each run re-checks.
-- **Git can't be steered from outside.** planscope's `_git` drops `GIT_GRAFT_FILE`,
-  `GIT_NAMESPACE`, `GIT_REPLACE_REF_BASE` and `GIT_CONFIG_PARAMETERS`. It pins
-  `core.fsmonitor`, `core.commitGraph` and `log.showSignature` through `GIT_CONFIG_COUNT`, which
-  outranks the repository's config and replaces any inherited count. Taking `-c` out of argv also
-  makes git's errors name the subcommand that failed. `added_by` answers a 40-hex commit or
-  raises.
+- **Git is shielded from the caller's environment, and pins what the reads depend on.**
+  planscope's `_git` drops `GIT_GRAFT_FILE`, `GIT_NAMESPACE`, `GIT_REPLACE_REF_BASE`, and all
+  config the environment carries (`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` and its pairs). It
+  pins `core.fsmonitor`, `core.commitGraph`, `log.showSignature`, `log.follow` and
+  `diff.renames` with `-c`, which every git version honours and which outranks every config file.
+  git still reads the global, system and repository config files for every other key. No other
+  key found changes what these reads report; any one that does needs a pin and a test. Errors
+  name git's subcommand, not `-c`, and `added_by` answers a 40-hex commit or raises.
+  An earlier version put the pins in `GIT_CONFIG_COUNT`, which git before 2.31 ignores without a
+  word.
+- **The two print flags are separate runs.** The skill has the run compare the PR and merge
+  commit on both verdict lines, so a plan and a declaration from different merges can't be
+  paired.
 - The git reads are planscope's hardened `_git`, the same one plan-scope uses: no steering
   variables, no replace objects, literal pathspecs.
 
@@ -129,9 +136,21 @@ base, and an untested boundary or branch in several places. A third mutation run
 fixes, caught 37 of 40. The three left:
 
 - the `..` fence;
-- the pinned `log.showSignature` and `core.commitGraph`, and dropping `GIT_CONFIG_PARAMETERS`.
-  These change nothing a test can see without signed commits or a forged commit-graph, so they
-  stay as untested defence.
+- the pinned `log.showSignature` and `core.commitGraph`, which change nothing a test can see
+  without signed commits or a forged commit-graph, so they stay as untested defence.
+
+A third review round found the `GIT_CONFIG_COUNT` pins ignored by old git, and found `log.follow`
+and the `diff.renames` setting unpinned. It also found the two print runs unlinked, and the
+environment hardening untested from plan-scope's side. After those fixes, a fourth mutation run
+caught 41 of 44. The three left:
+
+- the `..` fence;
+- dropping `GIT_NAMESPACE`, which local reads ignore;
+- dropping `GIT_CONFIG_PARAMETERS`, which a `-c` pin already outranks.
+
+Both drops stay as defence. A test sets `log.follow=true` both in a config file and in the
+environment, on a plan renamed into place, and the check still passes. Another drives plan-scope
+with a grafts file named by the environment.
 
 `--no-renames` on the add lookup was tried and removed: limiting the log to one path already
 keeps git from pairing a rename, and a test pins that a plan renamed into place passes.

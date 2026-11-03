@@ -91,7 +91,9 @@ say which check failed and start nothing.
    never from the checkout: the file there may be stale or on another
    branch, and only the printed text is the one the checks judged. For the
    scope gate below, run it again with `--print-writes` in place of
-   `--print-plan`, which prints the declaration instead.
+   `--print-plan`, which prints the declaration instead. Both verdict
+   lines must name the same PR and merge commit; if they differ, the
+   default branch moved between the runs: run both again, once.
    Exit 1 names each failed check (`check 1:` to `check 3:`), or,
    unprefixed, an admin it can't use: the configuration names none, or it
    differs from `TRIMTAB_ADMIN`. Exit 2 is a read that failed or could not

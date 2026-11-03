@@ -396,17 +396,20 @@ def changed_files(root: Path, base: str) -> list[str]:
     return [line for line in done.stdout.splitlines() if line.strip()]
 
 
-def git_bytes(cwd: Path | str, *args: str, env: dict[str, str] | None = None, stdin: bytes | None = None) -> bytes:
-    """git's stdout as bytes: a path need not be UTF-8. env replaces the inherited environment when given."""
+def git_bytes(cwd: Path | str, *args: str, env: dict[str, str] | None = None, stdin: bytes | None = None,
+              name: str | None = None) -> bytes:
+    """git's stdout as bytes: a path need not be UTF-8. env replaces the inherited environment when given. name is
+    the subcommand errors report, for a caller whose args open with `-c` options."""
+    name = name or args[0]
     try:
         done = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, timeout=GIT_TIMEOUT_SECONDS,
                               env=env, input=stdin)
     except (OSError, subprocess.TimeoutExpired) as err:
-        raise SourceError(f"git {args[0]}: {type(err).__name__}") from err
+        raise SourceError(f"git {name}: {type(err).__name__}") from err
     if done.returncode != 0:
         # git names the paths it could not use, and a path can hold a run's ID.
         stderr = ANY_ID_SHAPE.sub("<id>", done.stderr.decode("utf-8", errors="replace")).strip()[:300]
-        raise SourceError(f"git {args[0]} exited {done.returncode}: {stderr}")
+        raise SourceError(f"git {name} exited {done.returncode}: {stderr}")
     return done.stdout
 
 

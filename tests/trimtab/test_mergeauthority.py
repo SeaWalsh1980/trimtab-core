@@ -341,6 +341,7 @@ class AgreesWithTheSkill(unittest.TestCase):
         self.assertIn("`trimtab check-plan-authorised --repository <owner>/<name> --plan <plan> --print-plan`",
                       section)
         self.assertIn("Take the plan's items from that text, never from the checkout", section)
+        self.assertIn("Both verdict lines must name the same PR and merge commit", section)
         self.assertNotIn("Read tool", section)
         self.assertIn("as a command of its own with no pipe", section)
         self.assertNotIn("trimtab instance --json", section)
