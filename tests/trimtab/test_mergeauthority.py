@@ -345,12 +345,14 @@ class AgreesWithTheSkill(unittest.TestCase):
 
         self.assertIn("`accounts.agent` from `trimtab instance --json`", section)
 
-    def test_the_skills_label_check_names_where_the_approvers_login_comes_from(self):
+    def test_the_skills_label_check_names_where_each_login_comes_from(self):
         skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
         start = skill.index("**A session started by the `plan:continue` label**")
         section = skill[start:skill.index("**Restarting after a stop**", start)]
 
-        self.assertIn("`accounts.approver` from `trimtab instance --json`", " ".join(section.split()))
+        said = " ".join(section.split())
+        self.assertIn("`accounts.agent` and `accounts.approver` from `trimtab instance --json`", said)
+        self.assertIn("the admin's from `trimtab check-plan-admin`", said)
 
 
 class Configuration(unittest.TestCase):
