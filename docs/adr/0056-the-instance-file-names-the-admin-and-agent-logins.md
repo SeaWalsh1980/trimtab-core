@@ -4,7 +4,7 @@
 
 Accepted on merge. Narrows nothing in ADR 0044, which still decides where the
 merge-authority job reads its logins. Amended 2026-11-02: "The plan check reads this in
-code", below.
+code", below. Amended again: "The approver's login", below.
 
 ## Context
 
@@ -131,3 +131,41 @@ optional; each now has a test case, and all 28 are caught.
 
 Read-only against real repositories, with the agent's token: a consumer, the base and the
 instance each exit 0 in under half a second, and a repository that doesn't exist exits 2.
+
+## Amendment (2026-11-02): The approver's login
+
+Added after the decision above, on the owner's decision that the instance file names the
+approver's login once the App exists. The option rejected above, "The approver's login in
+this change", said it was additive and needed its own pattern and a base move. This is that
+change.
+
+`accounts.approver` is optional, and it is an App's login: `<name>[bot]`, where the name is
+up to 34 characters, GitHub's limit. A user's login is refused, as an App's is for `admin`
+and `agent`. So the two patterns can't both match one login, and no collision check is
+needed. `trimtab instance --json` prints it, `null` when the file names none, and
+`wrap-merged` names it as the source. `schema_version` stays 1, and the order under
+"Order matters" above applies again.
+
+### Options rejected
+
+- **The approver in the user login pattern.** The account that will hold the role is an App,
+  and its login carries `[bot]`, which that pattern exists to refuse.
+- **Either form.** Nothing plans a user as approver, and an agent's account could then be
+  named by mistake and pass the file's check.
+- **An empty string for "none".** `agent` refuses it, and an absent key already says it.
+- **A new record.** This finishes a change the record above already deferred, with no new
+  decision about where logins live.
+
+### Consequences
+
+- **Two sources again.** A consumer's merge-authority job reads its approver from outside
+  this file, and nothing compares that with `accounts.approver`. If they differ, the merge
+  gate and `wrap-merged` judge different accounts. `check-plan-admin` compares only the admin.
+- **Still read by instruction.** `wrap-merged` tells a session to read the field, and no code
+  yet refuses a plan on it. The `plan:continue` gap under "Consequences" above closes the
+  same way: the file can name the login, and a session reads it.
+
+### Trial
+
+Each new test was seen failing against a stub that took the key and checked nothing, then
+passing. The parity test holds the shim and the package to the same answer on each form.

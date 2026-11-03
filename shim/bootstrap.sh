@@ -78,6 +78,7 @@ from pathlib import PurePosixPath
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 PACK = re.compile(r"[a-z0-9-]+")
 LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,38}")
+APP_LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,33}\[bot\]")
 def bad(why):
     print(f"instance.json: {why}", file=sys.stderr); sys.exit(1)
 def repo(value):
@@ -112,7 +113,7 @@ if "accounts" in data:
     for key in accounts:
         if key in ("cloud", "routines"):
             bad(f"accounts.{key}: no file holds routine or environment IDs; remove the key")
-        if key not in ("admin", "agent"):
+        if key not in ("admin", "agent", "approver"):
             bad(f"accounts.{key}: unknown key")
     for key in ("admin", "agent"):
         login = accounts.get(key)
@@ -120,6 +121,8 @@ if "accounts" in data:
             bad(f"accounts.{key} must be a GitHub user's login, never an App's")
     if "agent" in accounts and accounts["agent"].casefold() == accounts["admin"].casefold():
         bad("accounts.agent and accounts.admin must be different logins")
+    if "approver" in accounts and (not isinstance(accounts["approver"], str) or not APP_LOGIN.fullmatch(accounts["approver"])):
+        bad("accounts.approver must be a GitHub App's login, ending [bot]")
 guards = data.get("guards", {})
 if not isinstance(guards, dict):
     bad("guards must be an object")
