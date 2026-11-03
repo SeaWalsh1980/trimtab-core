@@ -2297,6 +2297,16 @@ class PlanScopeJob(unittest.TestCase):
         self.assert_one_problem(plan_scope_answers([plan_scope_job(status="in_progress", conclusion=None)]),
                                 "has not completed")
 
+    def test_an_unfinished_run_says_to_retry_once_it_finishes(self):
+        answers = plan_scope_answers(runs=[workflow_run_row(HEAD, PLAN_SCOPE_WORKFLOW, status="queued")])
+
+        self.assertIn("retry once it finishes", self.problems(answers)[0])
+
+    def test_a_voided_head_gives_no_advice_a_merged_pr_cannot_take(self):
+        problem = self.problems(plan_scope_answers([plan_scope_job(conclusion="failure")]))[0]
+
+        self.assertNotIn("new commit", problem)
+
     def test_a_job_that_did_not_pass_is_a_problem(self):
         for conclusion in ("failure", "cancelled", "skipped", None):
             with self.subTest(conclusion=conclusion):
@@ -2526,6 +2536,13 @@ class PlanScopeJob(unittest.TestCase):
         self.assertIn("trimtab check-plan-scope-job --repository", section)
         self.assertIn("command of its own, with no pipe", " ".join(section.split()))
         self.assertNotIn("check-runs", section)
+
+    def test_the_skill_allows_one_bounded_retry_on_an_unfinished_run(self):
+        skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
+        start = skill.index("Then the merger.")
+        section = " ".join(skill[start:skill.index("the PR changes neither `.github/`", start)].split())
+
+        self.assertIn("up to ten minutes for that run to finish, then run it once more", section)
 
 
 class PlanScopeJobCli(unittest.TestCase):

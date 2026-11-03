@@ -82,8 +82,9 @@ and `wrap-merged` calls it.
   on every approver merge, though its merge gate passes, and the message says the job isn't
   a passing one from the constant's path.
 - **A re-run of any job in the workflow reads as unfinished.** `plan-scope.yml` also holds
-  `merge-authority`, whose job re-runs on a review. A read at that moment exits 1, and the message
-  says to retry. Reasoned from the workflows, not tried.
+  `merge-authority`, whose job re-runs on a review. A read at that moment exits 1. So the message
+  says to retry, and `wrap-merged` allows one re-read after waiting up to ten minutes, rather than
+  stopping a plan on a transient. Reasoned from the workflows, not tried.
 - **A deleted run is invisible.** ADR 0057 reports a merge going through after a deletion, so a
   check-run read likely misses it too; that's inferred, not tried here. `guard-github` refuses
   deleting one; the agent's server rights don't.
@@ -103,4 +104,4 @@ exactly a bound pass either way until `>` becomes `>=`, which the trial covers.
 
 Read-only against a real repository with a fine-grained token: a head whose `plan-scope` job was
 skipped exits 1, naming it, and a head with no runs exits 1. A passing job on a real plan head is
-unread: no plan head has run yet.
+unread: no authorised plan's head has run yet.

@@ -943,7 +943,7 @@ def plan_scope_job_problems(repository: str, head: str, run: Run | None = None) 
         problems.append(f"no {CHECK_NAME} job on the head commit")
     elif not all(_real_job(job, CHECK_NAME, head, PLAN_SCOPE_WORKFLOW) for job in jobs):
         problems.append(f"a {CHECK_NAME} job on the head commit is not a passing job from {PLAN_SCOPE_WORKFLOW}; "
-                        "any that isn't voids the head, so a new commit is needed to start over")
+                        "any that isn't voids the head")
     return tuple(problems)
 
 
