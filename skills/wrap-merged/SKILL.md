@@ -189,9 +189,9 @@ Everything comes from the default branch and open PRs, never from memory:
 
   Then the merger. An admin merge with the code gate counts. An approver
   merge counts only when all of these hold too, read from the API. The
-  approver's own review may be the code gate for its own merge: the
-  operator accepts that, because the plan's scope, enforced by the
-  `plan-scope` check, is what bounds the PR.
+  approver's own review may be the code gate for its own merge, because
+  the plan's scope, enforced by the `plan-scope` check, is what bounds the
+  PR (trimtab-core ADR 0043).
   - the PR's `head.ref` is `plan/<plan>/item-NN-partK` for this plan, with
     the item and part of the record it carries, and its `base.ref` is the
     default branch. The checker passes any other head without judging it,
