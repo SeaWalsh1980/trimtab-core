@@ -394,8 +394,10 @@ next item. An unmerged blocked PR is resumed as an in-flight PR.
 
 **A session started for an item PR's CI review** (by the operator, or a
 routine on review events) fixes the CI findings within scope, as in step 4
-of "Working a plan item" below. Count CI rounds from the PR's own review
-history, not from this session alone.
+of "Working a plan item" below, and reviews the new head in step 4's one
+to three in-session rounds before marking the PR ready again. Count CI
+fix rounds (at most two per PR) from the PR's own review history, not
+from this session alone.
 
 ### Working a plan item
 
@@ -459,25 +461,49 @@ One item, or one part of an item, per session, ending in one PR:
    label it `plan:continue` too: its merge starts item 01 part 1. Put it on
    a branch outside `plan/`: `plan/*` branches are for item PRs only, and
    any other `plan/…` branch has every write refused.)
-4. **Review in session** with `/trimtab-review` plus `/code-review`. Fix
-   findings inside the item's scope; log the rest in the register. When no
-   CRITICAL or HIGH finding remains and the local checks pass, **mark the
-   PR ready**, through what the guards permit (`gh pr ready`, or
-   `update_pull_request` with `draft` false where `gh pr` is blocked).
-   Ready describes one head: return the PR to draft before pushing
-   anything more (`gh pr ready --undo`, or `update_pull_request` with
-   `draft` true where `gh pr` is blocked), and mark it ready again only
-   after reviewing the new head. If a guard refuses, stop as in step 5.
-   Then fix CI review findings the same way. At most three review rounds in
-   session, then at most two CI fix rounds; an infrastructure failure is
-   re-run once and does not count. The item PR
+4. **Review in session**, in one to three rounds before you mark the PR
+   ready and again before each later return to ready (trimtab-core
+   ADR 0060). A round runs `/trimtab-review` plus `/code-review` on the
+   PR's current head. Grade each finding at the higher of the pass's own
+   severity and the doctrine's finding-severity rule: raise a pass's
+   grade, never lower it. Record each finding outside the item's scope as
+   its own register entry in this PR (step 2), unless one in this PR
+   already records it; one graded CRITICAL or HIGH is also a stop
+   (step 5), in any round.
+   - After round 1 or 2, fix every finding within scope, whatever its
+     severity, push, and start the next round. The authorised plan covers
+     these fixes: `/trimtab-review`'s "never auto-remediate" does not
+     apply to them. A round with no finding within scope ends the
+     review.
+   - Round 3's findings are not fixed in session: a CRITICAL or HIGH is a
+     stop, and each MEDIUM or LOW becomes its own register entry.
+
+   The rounds gate ready, not the draft. **Mark the PR ready** once the
+   last round left no CRITICAL or HIGH finding, in scope or out, every
+   MEDIUM or LOW it left is a register entry, and the local checks pass,
+   through what the guards permit (`gh pr ready`, or `update_pull_request`
+   with `draft` false where `gh pr` is blocked). Ready describes one head:
+   return the PR to draft before pushing anything more (`gh pr ready
+   --undo`, or `update_pull_request` with `draft` true where `gh pr` is
+   blocked), and mark it ready again only after reviewing the new head.
+   The one exception is the commit that only adds the last round's
+   register entries and the progress record's links to them, touching
+   nothing outside the plan's register folder and this PR's progress
+   record: it needs no further round. If a guard refuses, stop as in
+   step 5.
+
+   Then fix CI review findings within scope, at most two CI fix rounds per
+   PR; each fix goes back through these rounds before ready. An
+   infrastructure failure is re-run once and does not count. The item PR
    needs an approving review from the approver or the admin on its final
    head commit, and is merged by the admin, or by the approver when the
    conditions in section 3 hold. The agent account never merges.
 5. **Stop when** the work cannot be finished, needs work outside its scope,
-   needs a write a hook refuses, needs the authorised plan changed, uses up
-   a round limit, or you can already see the next work would fail the gate
-   in section 4. Set `## Status` to say whether this part finished
+   needs a write a hook refuses, needs the authorised plan changed, ends
+   its third review round with a CRITICAL or HIGH finding, finds a
+   CRITICAL or HIGH outside its scope in any round, exhausts the CI
+   fix-round limit, or you can already see the next work would fail the
+   gate in section 4. Set `## Status` to say whether this part finished
    (`stopped unfinished` if not) and `## Next` to `blocked: <reason>`; label
    the PR `plan:blocked` and remove any `plan:continue` added in step 3 (the
    labels always follow the final `## Next`); and tell the user, with ways
@@ -486,5 +512,5 @@ One item, or one part of an item, per session, ending in one PR:
    normally, and its merge starts no session — say so rather than promising
    one.
 
-The session ends once the PR is marked ready and any CI rounds it can act on
-are done, or it has stopped. The PR's merge starts the session after.
+The session ends once the PR is marked ready and any CI fix rounds it can
+act on are done, or it has stopped. The PR's merge starts the session after.
