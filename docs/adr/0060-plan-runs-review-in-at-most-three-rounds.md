@@ -61,8 +61,10 @@ to three rounds. A round runs `/trimtab-review` plus `/code-review` on the PR's 
 
 - More stops: any out-of-scope CRITICAL or HIGH now stops a run, even when the item is otherwise
   finished.
-- The register-only commit reaches ready without a round. It is bounded by its paths, which the
-  guard's plan-run scope enforces (ADR 0041); nothing checks what the entries say. Accepted.
+- The register-only commit reaches ready without a round. Nothing enforces its path bound: the
+  guard's plan-run scope (ADR 0041) allows every path the plan declares, not only the register
+  folder and the progress record, so a run that puts other changes in that commit gets them to
+  ready unreviewed. Only the skill's text holds it, and CI review still sees the head. Accepted.
 - The skill restates the rule rather than citing it, because the base cannot name an instance's
   IDs. It can drift again when the doctrine changes.
 

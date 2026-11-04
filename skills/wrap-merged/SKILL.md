@@ -393,8 +393,8 @@ next item. An unmerged blocked PR is resumed as an in-flight PR.
 
 **A session started for an item PR's CI review** (by the operator, or a
 routine on review events) fixes the CI findings within scope, as in step 4
-of "Working a plan item" below, and reviews the new head in its rounds
-before marking the PR ready again. Count CI fix rounds (at most two per
+of "Working a plan item" below, and reviews the new head in step 4's one
+to three in-session rounds before marking the PR ready again. Count CI fix rounds (at most two per
 PR) from the PR's own review history, not from this session alone.
 
 ### Working a plan item
@@ -469,7 +469,9 @@ One item, or one part of an item, per session, ending in one PR:
    already records it; one graded CRITICAL or HIGH is also a stop
    (step 5), in any round.
    - After round 1 or 2, fix every finding within scope, whatever its
-     severity, push, and start the next round. A round with no finding
+     severity, push, and start the next round. The authorised plan covers
+     these fixes: `/trimtab-review`'s "never auto-remediate" does not
+     apply to them. A round with no finding
      within scope ends the review.
    - Round 3's findings are not fixed in session: a CRITICAL or HIGH is a
      stop, and each MEDIUM or LOW becomes its own register entry.
@@ -508,5 +510,5 @@ One item, or one part of an item, per session, ending in one PR:
    normally, and its merge starts no session — say so rather than promising
    one.
 
-The session ends once the PR is marked ready and any CI rounds it can act on
+The session ends once the PR is marked ready and any CI fix rounds it can act on
 are done, or it has stopped. The PR's merge starts the session after.
