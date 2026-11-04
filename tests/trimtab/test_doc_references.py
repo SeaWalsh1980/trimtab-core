@@ -11,13 +11,18 @@ docs/adr/, every tracked file must:
 
 Text read inside other repositories (the SHIPPED directories), which number
 their own ADRs, must also write every ADR number as `trimtab-core ADR NNNN`
-(README "Contributing"). The check reads plural and listed cites (`ADRs
-NNNN and NNNN`, one qualifier for the list) and lets a cite wrap once at a
-space, but not past a blank line or a quote or comment marker. Strings the
-CLI prints fall under the same README rule but are not checked here.
+(README "Contributing"). Strings the CLI prints fall under the same README
+rule but are not checked here.
+
+Both number checks read plural and listed cites (`ADRs NNNN and NNNN`, one
+qualifier for the list; the existence check reads every number of the list)
+and let a cite wrap once at a space, but not past a blank line or a quote or
+comment marker.
 
 It cannot catch an in-range number used with another repository's meaning, or
 an unnumbered plan reference; cite by full file name where the meaning matters.
+A four-digit number listed after a cite (`ADR NNNN, 2024 and`) reads as an ADR
+number; reword such text.
 A path written after `adr:` is exempt by that pattern, in any file: it is how
 an overrides entry names the consumer's own ADR. Forbidden spellings are
 assembled at run time so this file passes itself.
@@ -31,7 +36,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 ADR_DIR = "docs/" + "adr/"
 ADR_PATH = re.compile(r"(adr:\s*)?" + re.escape(ADR_DIR) + r"(\d{4})(-[a-z0-9-]+\.md)?")
-ADR_NUMBER = re.compile(r"\b" + "AD" + r"R[ -](\d{4})\b", re.IGNORECASE)
 PRIVATE_RECORD = re.compile(r"\b(?:" + "pla" + "n|" + "spe" + r"c) \d{4}\b|" + re.escape("docs/" + "plans/"),
                             re.IGNORECASE)
 SHIPPED = ("agents/", "commands/", "skills/", "templates/", "routines/templates/")
@@ -57,11 +61,13 @@ def problems(text: str, adr_files: set[str]) -> list[str]:
                 found.append(f"line {n}: {ADR_DIR}{name} names no file")
             elif name not in adr_files:
                 found.append(f"line {n}: {ADR_DIR}{name} does not exist")
-        for m in ADR_NUMBER.finditer(line):
-            if m.group(1) not in numbers:
-                found.append(f"line {n}: ADR {m.group(1)} does not exist")
         for m in PRIVATE_RECORD.finditer(line):
             found.append(f"line {n}: {m.group(0)!r} cites a record this repository does not have")
+    for m in QUALIFIED_NUMBER.finditer(text):  # whole text: a list or a cite may wrap
+        for d in re.finditer(r"\d{4}", text[m.start(2):m.end()]):
+            if d.group() not in numbers:
+                line = text.count("\n", 0, m.start(2) + d.start()) + 1
+                found.append(f"line {line}: ADR {d.group()} does not exist")
     return found
 
 
@@ -111,6 +117,19 @@ class Problems(unittest.TestCase):
 
     def test_a_lower_case_adr_number_the_series_lacks_fails(self):
         self.assertEqual(len(problems("see ad" + "r 0011", self.ADRS)), 1)
+
+    def test_a_plural_cite_with_a_number_the_series_lacks_fails(self):
+        self.assertEqual(len(problems("AD" + "Rs 0001 and 0012", self.ADRS)), 1)
+
+    def test_a_later_list_number_the_series_lacks_fails(self):
+        self.assertEqual(len(problems("AD" + "R 0001, 0002 and 0012", self.ADRS)), 1)
+
+    def test_a_number_wrapped_onto_the_next_line_the_series_lacks_fails(self):
+        self.assertEqual(len(problems("see AD" + "R\n   0012", self.ADRS)), 1)
+
+    def test_the_failure_names_the_line_of_a_wrapped_later_number(self):
+        self.assertEqual(problems("one\nAD" + "R 0001 and\n0012", self.ADRS),
+                         ["line 3: AD" + "R 0012 does not exist"])
 
     def test_a_numbered_plan_fails(self):
         self.assertEqual(len(problems("see pla" + "n 0009's decision log", self.ADRS)), 1)
