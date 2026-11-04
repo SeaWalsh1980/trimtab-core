@@ -80,9 +80,10 @@ say which check failed and start nothing.
    session) `plan:blocked`, remove any `plan:continue`, and report. A clear
    loses the session's autonomous record; only the variable survives it.
 1. **The plan and its declaration are on the default branch.** Checks 1-3
-   are one command, which reads the plans folder itself (ADR 0059):
-   guard-paths refuses any shell command that names `<plans>/authorised/`,
-   reads included, so never type that path in a command. Run
+   are one command, which reads the plans folder itself
+   (trimtab-core ADR 0059): guard-paths refuses any shell command that
+   names `<plans>/authorised/`, reads included, so never type that path in
+   a command. Run
    `git fetch origin`, then, as a command of its own with no pipe,
    `trimtab check-plan-authorised --repository <owner>/<name> --plan <plan> --print-plan`.
    It exits 0 only when checks 1-3 all hold. On a pass it prints one line
@@ -188,9 +189,9 @@ Everything comes from the default branch and open PRs, never from memory:
 
   Then the merger. An admin merge with the code gate counts. An approver
   merge counts only when all of these hold too, read from the API. The
-  approver's own review may be the code gate for its own merge: ADR 0018
-  (Trimtab) accepts that, with the operator's confirmation, because the
-  plan's scope, enforced by the `plan-scope` check, is what bounds the PR.
+  approver's own review may be the code gate for its own merge: the
+  operator accepts that, because the plan's scope, enforced by the
+  `plan-scope` check, is what bounds the PR.
   - the PR's `head.ref` is `plan/<plan>/item-NN-partK` for this plan, with
     the item and part of the record it carries, and its `base.ref` is the
     default branch. The checker passes any other head without judging it,
@@ -312,10 +313,10 @@ say; never delete a branch or worktree holding unmerged work.
 Then, if this session did the merged work, remove the temporary files it
 made for it. A run keeps them only in its session scratch directory: the
 one the session-scratch hook named at session start, or the harness's
-scratchpad (ADR 0049), or, where neither exists, one directory under the
-system temp directory named after its session. The hook removes the first
-two when the session ends; tidying now keeps the next item's session
-clear of them. Remove only this session's own files there, nothing wider
+scratchpad (trimtab-core ADR 0049), or, where neither exists, one
+directory under the system temp directory named after its session. The
+hook removes the first two when the session ends; tidying now keeps the
+next item's session clear of them. Remove only this session's own files there, nothing wider
 (caches, another session's scratch). A session that
 did not do the merged work leaves the other session's directory alone:
 cloud containers are discarded, and a directory the merged record names as
@@ -449,10 +450,10 @@ One item, or one part of an item, per session, ending in one PR:
    the item needs it. Keep temporary files only in the session scratch
    directory: the one the session-scratch hook named at session start, or
    the harness's scratchpad; the hook removes both when the session ends
-   (ADR 0049). Where neither exists, make one directory under the system
-   temp directory named after the session and remove it before the session
-   ends. Name in `## Done` anything you leave that the hook does not
-   remove.
+   (trimtab-core ADR 0049). Where neither exists, make one directory
+   under the system temp directory named after the session and remove it
+   before the session ends. Name in `## Done` anything you leave that the
+   hook does not remove.
 3. **Label** the PR `plan:continue` unless `## Next` is `plan complete` or
    `blocked: <reason>`. (When you author a PR that adds an authorised plan,
    label it `plan:continue` too: its merge starts item 01 part 1. Put it on

@@ -9,6 +9,11 @@ docs/adr/, every tracked file must:
 - cite only ADR numbers that exist here;
 - cite no numbered plan or spec, and no plans directory: the base has none.
 
+Text read inside other repositories (the SHIPPED directories), which number
+their own ADRs, must also write every ADR number as `trimtab-core ADR NNNN`
+(README "Contributing"); the qualifier may end the line before. Strings the
+CLI prints fall under the same README rule but are not checked here.
+
 It cannot catch an in-range number used with another repository's meaning, or
 an unnumbered plan reference; cite by full file name where the meaning matters.
 A path written after `adr:` is exempt by that pattern, in any file: it is how
@@ -27,8 +32,11 @@ ADR_PATH = re.compile(r"(adr:\s*)?" + re.escape(ADR_DIR) + r"(\d{4})(-[a-z0-9-]+
 ADR_NUMBER = re.compile(r"\b" + "AD" + r"R[ -](\d{4})\b", re.IGNORECASE)
 PRIVATE_RECORD = re.compile(r"\b(?:" + "pla" + "n|" + "spe" + r"c) \d{4}\b|" + re.escape("docs/" + "plans/"),
                             re.IGNORECASE)
+SHIPPED = ("agents/", "commands/", "skills/", "templates/", "routines/templates/")
+QUALIFIED_NUMBER = re.compile(r"(\btrimtab-core(?:[ \t]+|[ \t]*\n[ \t]*))?(?i:\b" + "AD" + r"R[ -](\d{4})\b)")
 RULE = ("cite only this repository's ADRs, by existing number or full file name, "
-        "and never an instance's ADR, plan or spec")
+        "and never an instance's ADR, plan or spec; under " + ", ".join(SHIPPED)
+        + ", write trimtab-core AD" + "R NNNN")
 
 
 def problems(text: str, adr_files: set[str]) -> list[str]:
@@ -49,6 +57,16 @@ def problems(text: str, adr_files: set[str]) -> list[str]:
                 found.append(f"line {n}: ADR {m.group(1)} does not exist")
         for m in PRIVATE_RECORD.finditer(line):
             found.append(f"line {n}: {m.group(0)!r} cites a record this repository does not have")
+    return found
+
+
+def unqualified(text: str) -> list[str]:
+    """Each ADR number in `text` not written as `trimtab-core ADR NNNN`."""
+    found = []
+    for m in QUALIFIED_NUMBER.finditer(text):
+        if not m.group(1):
+            line = text.count("\n", 0, m.start(2)) + 1
+            found.append(f"line {line}: ADR {m.group(2)} needs the trimtab-core qualifier")
     return found
 
 
@@ -100,6 +118,32 @@ class Problems(unittest.TestCase):
         self.assertEqual(problems("  adr: " + self.path("0009-consumer-own.md"), self.ADRS), [])
 
 
+class Unqualified(unittest.TestCase):
+    def test_a_bare_adr_number_fails_even_when_it_exists(self):
+        self.assertEqual(len(unqualified("blocks (AD" + "R 0001)")), 1)
+
+    def test_a_hyphenated_bare_adr_number_fails(self):
+        self.assertEqual(len(unqualified("see AD" + "R-0001")), 1)
+
+    def test_a_lower_case_bare_adr_number_fails(self):
+        self.assertEqual(len(unqualified("see ad" + "r 0001")), 1)
+
+    def test_a_qualified_adr_number_passes(self):
+        self.assertEqual(unqualified("blocks (trimtab-core AD" + "R 0001)"), [])
+
+    def test_a_qualifier_ending_the_line_before_passes(self):
+        self.assertEqual(unqualified("reads the folder (trimtab-core\n   AD" + "R 0001): ok"), [])
+
+    def test_another_word_before_the_number_fails(self):
+        self.assertEqual(len(unqualified("the instance AD" + "R 0001")), 1)
+
+    def test_a_qualifier_two_lines_before_fails(self):
+        self.assertEqual(len(unqualified("trimtab-core\n\nAD" + "R 0001")), 1)
+
+    def test_the_failure_names_the_line_of_the_number(self):
+        self.assertEqual(unqualified("one\ntwo AD" + "R 0001"), ["line 2: AD" + "R 0001 needs the trimtab-core qualifier"])
+
+
 class Repository(unittest.TestCase):
     def test_every_tracked_file_cites_only_this_repositorys_records(self):
         adr_files = {p.name for p in (REPO / ADR_DIR).glob("[0-9][0-9][0-9][0-9]-*.md")}
@@ -115,6 +159,8 @@ class Repository(unittest.TestCase):
                 continue
             text = data.decode("utf-8", errors="replace")  # a non-UTF-8 file is still scanned
             found += [f"{rel}: {p}" for p in problems(text, adr_files)]
+            if rel.startswith(SHIPPED):
+                found += [f"{rel}: {p}" for p in unqualified(text)]
         self.assertEqual(found, [], f"{RULE}:\n" + "\n".join(found))
 
 
