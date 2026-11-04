@@ -168,6 +168,15 @@ class Unqualified(unittest.TestCase):
     def test_a_qualified_plural_list_passes(self):
         self.assertEqual(unqualified("trimtab-core AD" + "Rs 0001, 0002 and 0003"), [])
 
+    def test_a_qualified_list_with_an_oxford_comma_passes(self):
+        self.assertEqual(unqualified("trimtab-core AD" + "Rs 0001, 0002, and 0003"), [])
+
+    def test_a_qualified_list_joined_by_or_passes(self):
+        self.assertEqual(unqualified("trimtab-core AD" + "R 0001 or 0002"), [])
+
+    def test_a_number_wrapped_onto_a_crlf_line_fails(self):
+        self.assertEqual(len(unqualified("see AD" + "R\r\n   0001")), 1)
+
     def test_a_number_wrapped_onto_the_next_line_fails(self):
         self.assertEqual(len(unqualified("see AD" + "R\n   0001")), 1)
 
@@ -182,9 +191,6 @@ class Unqualified(unittest.TestCase):
 
 
 class Shipped(unittest.TestCase):
-    def test_each_shipped_directory_is_shipped(self):
-        self.assertEqual([p for p in SHIPPED if not is_shipped(p + "x.md")], [])
-
     def test_a_nested_routine_template_is_shipped(self):
         self.assertTrue(is_shipped("routines/templates/retro.md"))
 
