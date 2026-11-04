@@ -131,6 +131,18 @@ class Problems(unittest.TestCase):
         self.assertEqual(problems("one\nAD" + "R 0001 and\n0012", self.ADRS),
                          ["line 3: AD" + "R 0012 does not exist"])
 
+    def test_a_list_whose_numbers_all_exist_passes(self):
+        self.assertEqual(problems("AD" + "Rs 0001 and 0002", self.ADRS), [])
+
+    def test_a_qualified_cite_with_a_number_the_series_lacks_fails(self):
+        self.assertEqual(problems("trimtab-core AD" + "R 0012", self.ADRS), ["line 1: AD" + "R 0012 does not exist"])
+
+    def test_a_number_past_a_blank_line_is_not_read_as_a_list_number(self):
+        self.assertEqual(problems("AD" + "R 0001,\n\n0012 rows", self.ADRS), [])
+
+    def test_a_number_after_a_comment_marker_is_not_read_as_a_list_number(self):
+        self.assertEqual(problems("# AD" + "R 0001,\n# 0012 rows", self.ADRS), [])
+
     def test_a_numbered_plan_fails(self):
         self.assertEqual(len(problems("see pla" + "n 0009's decision log", self.ADRS)), 1)
 
