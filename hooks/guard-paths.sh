@@ -655,7 +655,8 @@ check_path "$file" "file access"
 #    project's rules directory, agents, commands, skills, the Trimtab lock,
 #    the write allowlist itself) except .claude/worktrees/; a .claude
 #    directory or file below the root, which Claude Code loads as harness
-#    when it works there; CLAUDE.md and CLAUDE.local.md at any depth; .github/; CODEOWNERS (root and docs/);
+#    when it works there; CLAUDE.md and CLAUDE.local.md at any depth;
+#    .github/; CODEOWNERS (root and docs/);
 #    the scanner exemption lists; and the authorised plans. A Bash command
 #    naming one of these paths is refused the same way, reads included: as
 #    with the control plane, a path set is enumerable and a verb set is not.
