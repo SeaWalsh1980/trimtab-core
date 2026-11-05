@@ -23,6 +23,8 @@ PROGRESS = f"{planscope.PLANS_DIR}/progress/{PLAN}/{ITEM}.md"
 REGISTER = f"{planscope.PLANS_DIR}/unauthorised/{PLAN}/{ITEM}-01.md"
 EXISTING_ADR = "docs/adr/existing.md"
 NEW_ADR = "docs/adr/new.md"
+NESTED_SKILL = "src/pkg/.claude/skills/x/SKILL.md"  # under src/**, which both lists allow
+NESTED_LOOKALIKE = "src/pkg/.claudex/a.py"
 ALLOWLIST = "\n".join(["README.md", "src/**", "+docs/adr/**",
                        f"+{planscope.PLANS_DIR}/progress/**", f"{planscope.PLANS_DIR}/unauthorised/**", ""])
 WRITES = "# what this plan may write\nREADME.md\n+docs/adr/**\n"
@@ -167,6 +169,16 @@ class Judge(unittest.TestCase):
 
         self.assertIn("harness or control", problems[0])
 
+    def test_a_nested_claude_skill_fails_whatever_the_lists_say(self):
+        problems = judged(change(NESTED_SKILL), writes="**\n")
+
+        self.assertIn("harness or control", problems[0])
+
+    def test_a_nested_name_that_only_starts_with_claude_is_judged_by_the_lists(self):
+        problems = judged(change(NESTED_LOOKALIKE), writes="**\n")
+
+        self.assertEqual(list(problems), [])
+
     def test_an_authorised_plan_fails_whatever_the_lists_say(self):
         problems = judged(change(f"{planscope.AUTHORISED}/{PLAN}.writes", "M"), writes="**\n")
 
@@ -200,7 +212,10 @@ PARITY_PATHS = ["README.md", "readme.md", "src/a/b.py", "docs/adr/n.md", "docs/x
                 "tests/sub/b.py", "lib/a.py", "lib/_a.py", "other"]
 REFUSED_PATHS = [".claude/rules/x.md", ".claude/worktrees/x", ".GitHub/w.yml", "docs/Readme.md", "sub/CLAUDE.md",
                  "Claude.local.md", f"{planscope.AUTHORISED}/x.md", ".gitleaks.toml", ".trivyignore",
-                 ".bandit-allowlist.yml", "src/a.py", ".claudex", "CODE" + "OWNERS", "docs/code" + "owners"]
+                 ".bandit-allowlist.yml", "src/a.py", ".claudex", "CODE" + "OWNERS", "docs/code" + "owners",
+                 "sub/.claude/skills/x/SKILL.md", "a/b/.claude/settings.json", "sub/.Claude/rules/x.md", "sub/.claude",
+                 ".claude/worktrees/w/.claude/x", "sub/.claudex/a", "sub/x.claude", "sub/.claude-notes.md",
+                 "sub/.claude.json"]
 LISTED_RC = {Listed.YES: 0, Listed.NO: 1, Listed.CREATE_ONLY: 3}
 CALLS = {"hl_match_lines": 'hl_match_lines "$LIST" "$p"', "hl_refused": 'hl_refused "$p"'}
 

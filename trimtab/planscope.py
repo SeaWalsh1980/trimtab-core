@@ -116,9 +116,13 @@ def match(entries: tuple[Entry, ...], path: str) -> Listed:
 
 
 def refused(path: str) -> bool:
-    """guard-paths' layer 1 (hl_refused): the harness and controls, compared lower-cased."""
+    """guard-paths' layer 1 (hl_refused): the harness and controls, compared lower-cased.
+
+    A `.claude` segment below the root is refused before the worktrees exemption (ADR 0061)."""
     rel = path.lower()
     base = rel.rsplit("/", 1)[-1]
+    if ".claude" in rel.split("/")[1:]:
+        return True
     if rel == ".claude/worktrees" or rel.startswith(".claude/worktrees/"):
         return False
     if rel in (".claude", ".github") or rel.startswith((".claude/", ".github/")):

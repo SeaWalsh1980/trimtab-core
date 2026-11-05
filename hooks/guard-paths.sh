@@ -653,8 +653,9 @@ check_path "$file" "file access"
 # 1. Always refused, in every repository and for every tool but Read: the
 #    repository's harness and controls. .claude/ (settings, hooks, the
 #    project's rules directory, agents, commands, skills, the Trimtab lock,
-#    the write allowlist itself) except .claude/worktrees/; CLAUDE.md and
-#    CLAUDE.local.md at any depth; .github/; CODEOWNERS (root and docs/);
+#    the write allowlist itself) except .claude/worktrees/; a .claude
+#    directory or file below the root, which Claude Code loads as harness
+#    when it works there; CLAUDE.md and CLAUDE.local.md at any depth; .github/; CODEOWNERS (root and docs/);
 #    the scanner exemption lists; and the authorised plans. A Bash command
 #    naming one of these paths is refused the same way, reads included: as
 #    with the control plane, a path set is enumerable and a verb set is not.
@@ -717,6 +718,11 @@ hl_refused() {   # $1 = a path relative to its repository root
   # `Claude.md` or `.GitHub/` names the same file as the protected spelling.
   local rel="${1,,}" base plans="${hl_plans,,}"
   base="${rel##*/}"
+  # A .claude directory or file below the root is refused before the
+  # worktrees exemption (ADR 0061): Claude Code loads a nested .claude/ as
+  # harness, and a real worktree has its own .git, so it is judged as its
+  # own root and never reaches this with a .claude/worktrees/ prefix.
+  [[ "$rel" == */.claude || "$rel" == */.claude/* ]] && return 0
   case "$rel" in
     .claude/worktrees|.claude/worktrees/*) return 1 ;;
     .claude|.claude/*|.github|.github/*) return 0 ;;

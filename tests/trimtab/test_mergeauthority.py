@@ -183,6 +183,9 @@ class AdminOnly(unittest.TestCase):
     def test_the_same_paths_are_not_checker_code_elsewhere(self):
         self.assertEqual(decided(review(APPROVER), paths=["bin/tool"], checker_in_tree=False).problems, ())
 
+    def test_a_nested_claude_directory_needs_the_admin(self):
+        self.assertEqual(len(decided(review(APPROVER), paths=["pkg/.claude/rules/x.md"]).problems), 1)
+
     def test_admin_only_paths_are_compared_without_case(self):
         self.assertEqual(len(decided(review(APPROVER), paths=["Instance.JSON"]).problems), 1)
 
