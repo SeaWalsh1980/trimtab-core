@@ -55,8 +55,11 @@ closed.
   made for every layer 1 path.
 - An item PR changing a nested `.claude/` fails plan-scope, and merge-authority sends it to the
   admin.
-- Consumers should still cover `**/.claude/**` in CODEOWNERS: shell writes are not confined by
-  the session hook, and CODEOWNERS is the merge backstop. That is each consumer's own change.
+- A nested `.claude/` is now an always-refused path, and the authorised-plan check (AGW-4)
+  requires the repository's CODEOWNERS to cover every always-refused file path. A consumer whose
+  CODEOWNERS does not give `**/.claude/**` to the admin no longer meets that check until it adds
+  the entry; shell writes are not confined by the session hook, so CODEOWNERS is also the merge
+  backstop. The entry is each consumer's own change.
 - guard-security already matches `.claude/hooks/` and `.claude/settings*.json` at any depth, so
   the two guards now agree on nested settings and hooks.
 - The change reaches a machine only when the instance pin moves past it and bootstrap runs.

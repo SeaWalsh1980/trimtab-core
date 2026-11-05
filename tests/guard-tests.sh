@@ -1149,7 +1149,10 @@ t guard-paths.sh 2 "harness: a nested .claude hook"            "$(e Write "$HL/s
 t guard-paths.sh 2 "harness: nested .CLAUDE, any case"         "$(e Write "$HL/src/.CLAUDE/rules/r.md")"
 t guard-paths.sh 2 "harness: a file named .claude, nested"     "$(e Write "$HL/src/.claude")"
 t guard-paths.sh 2 "harness: bash naming a nested .claude path" "$(bsh 'cat src/.claude/skills/x/SKILL.md')" "$HL"
-t guard-paths.sh 0 "harness: a nested .claudex is ordinary"    "$(e Edit "$HL/src/.claudex/a")"
+mkdir -p "$HL/.claude/worktrees/stale/src"   # no .git: judged from HL's root
+t guard-paths.sh 2 "harness: nested .claude in a stale worktree dir" "$(e Write "$HL/.claude/worktrees/stale/.claude/skills/x/SKILL.md")"
+t guard-paths.sh 0 "harness: ordinary code in a stale worktree dir" "$(e Edit "$HL/.claude/worktrees/stale/src/a.py")"
+t guard-paths.sh 0 "harness: a nested .claudex is ordinary"   "$(e Edit "$HL/src/.claudex/a")"
 t guard-paths.sh 0 "harness: a nested x.claude is ordinary"    "$(e Edit "$HL/src/x.claude")"
 t guard-paths.sh 0 "harness: Read of a nested .claude"         "$(e Read "$HL/src/.claude/settings.json")"
 t guard-paths.sh 2 "harness: a workflow"                       "$(e Edit "$HL/.github/workflows/ci.yml")"

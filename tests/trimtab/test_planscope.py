@@ -25,6 +25,7 @@ EXISTING_ADR = "docs/adr/existing.md"
 NEW_ADR = "docs/adr/new.md"
 NESTED_SKILL = "src/pkg/.claude/skills/x/SKILL.md"  # under src/**, which both lists allow
 NESTED_LOOKALIKE = "src/pkg/.claudex/a.py"
+STALE_WORKTREE_HARNESS = ".claude/worktrees/w/.claude/skills/x/SKILL.md"  # a worktree path with no .git of its own
 ALLOWLIST = "\n".join(["README.md", "src/**", "+docs/adr/**",
                        f"+{planscope.PLANS_DIR}/progress/**", f"{planscope.PLANS_DIR}/unauthorised/**", ""])
 WRITES = "# what this plan may write\nREADME.md\n+docs/adr/**\n"
@@ -171,6 +172,11 @@ class Judge(unittest.TestCase):
 
     def test_a_nested_claude_skill_fails_whatever_the_lists_say(self):
         problems = judged(change(NESTED_SKILL), writes="**\n")
+
+        self.assertIn("harness or control", problems[0])
+
+    def test_a_nested_claude_under_a_worktree_path_fails_whatever_the_lists_say(self):
+        problems = judged(change(STALE_WORKTREE_HARNESS), writes="**\n")
 
         self.assertIn("harness or control", problems[0])
 
