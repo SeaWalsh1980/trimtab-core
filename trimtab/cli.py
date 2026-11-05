@@ -15,7 +15,7 @@ from pathlib import Path
 from trimtab import bump
 from trimtab import config as project_config
 from trimtab import dependabot
-from trimtab import instance, mergeauthority, planscope, propose, roots, routines, scrub, upstream
+from trimtab import instance, mergeauthority, planauth, planscope, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
 from trimtab.ids import ID_SHAPE
@@ -837,6 +837,7 @@ def cmd_instance(args) -> int:
         print(json.dumps({
             "schema_version": instance.SCHEMA_VERSION, "root": str(base), "repo": found.repo,
             "base": {"repo": found.base_repo, "sha": found.base_sha},
+            "accounts": {"admin": found.admin, "agent": found.agent, "approver": found.approver},
             "env": {"TRIMTAB_SECRET_PACKS": instance.packs_env(found),
                     "TRIMTAB_SECRET_PATTERNS": str(patterns) if patterns else None},
         }))
@@ -887,8 +888,8 @@ def cmd_check_merge_authority(args) -> int:
     pr = mergeauthority.Pr(repository=args.repository, head_repo=args.head_repo, head_ref=args.head_ref,
                            head=args.head, base_ref=args.base_ref, default_branch=args.default_branch)
     try:
-        who = mergeauthority.accounts(args.admin, args.approver)
-        result = mergeauthority.check(args.repo, pr, args.pr, args.base, who)
+        who = mergeauthority.accounts(args.admin, args.approver, args.agent)
+        result = mergeauthority.check(args.repo, pr, args.pr, args.base, who, workflows=args.job_workflow)
     except mergeauthority.MergeAuthorityError as err:
         print(f"error: {err}; nothing is vouched for", file=sys.stderr)
         return 2
@@ -897,6 +898,80 @@ def cmd_check_merge_authority(args) -> int:
         print(f"merge-authority: {len(result.problems)} problem(s) for PR {args.pr}")
         return 1
     print(f"merge-authority: PR {args.pr} approved by {result.approved_by} on {args.head[:12]}")
+    return 0
+
+
+def cmd_check_approver_route(args) -> int:
+    try:
+        who = mergeauthority.accounts(args.admin, args.approver, args.agent)
+        result = mergeauthority.check_action(args.repo, args.repository, args.pr, args.base, args.head, args.action,
+                                             who, args.gate, reviewer=args.reviewer, workflows=args.job_workflow)
+    except mergeauthority.MergeAuthorityError as err:
+        print(f"error: {err}; nothing is vouched for", file=sys.stderr)
+        return 2
+    _print_problems(result.problems)
+    # On stdout alone, for $GITHUB_OUTPUT: exit 0 covers both act and noop, and only act may write.
+    print(f"verdict={result.verdict}")
+    return 1 if result.verdict == mergeauthority.REFUSE else 0
+
+
+def cmd_check_plan_admin(args) -> int:
+    try:
+        named = instance.load(_instance(args)).admin
+        problems = mergeauthority.plan_admin_problems(named, args.repository)
+    except (instance.InstanceFileError, mergeauthority.MergeAuthorityError) as err:
+        print(f"error: {err}; nothing is vouched for", file=sys.stderr)
+        return 2
+    if problems:
+        _print_problems(problems)
+        return 1
+    print(named)  # on stdout alone: the login a plan's merge is compared with
+    return 0
+
+
+def cmd_check_plan_authorised(args) -> int:
+    try:
+        admin = instance.load(_instance(args)).admin
+        problems = mergeauthority.plan_admin_problems(admin, args.repository)
+        if not problems:
+            result = planauth.check(args.repo, args.repository, args.plan, admin)
+            problems = result.problems
+    except (instance.InstanceFileError, mergeauthority.MergeAuthorityError, planauth.PlanAuthError) as err:
+        print(f"error: {err}; nothing is vouched for", file=sys.stderr)
+        return 2
+    except Exception as err:  # noqa: BLE001 - reported, and exit 1 would read as a verdict a session doesn't re-run
+        print(f"error: {type(err).__name__} while checking; nothing is vouched for", file=sys.stderr)
+        return 2
+    if problems:
+        _print_problems(problems)
+        return 1
+    # Verbatim after the verdict line, from the commit check 3 judged: the run's items, or its declared scope.
+    body = result.plan_text if args.print_plan else result.writes if args.print_writes else ""
+    out = f"plan {args.plan}: authorised by PR #{result.pr}, merged by {admin} as {result.merge_commit[:12]}\n{body}"
+    # As UTF-8 bytes in one write, whatever the locale: a write that fails after the verdict must not read as one.
+    try:
+        sys.stdout.flush()
+        sys.stdout.buffer.write(out.encode("utf-8"))
+        sys.stdout.buffer.flush()
+    except (OSError, ValueError) as err:
+        print(f"error: the output could not be written ({type(err).__name__}); nothing is vouched for",
+              file=sys.stderr)
+        # Python flushes stdout again at exit, and that failure would replace exit 2 with 120.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 2
+    return 0
+
+
+def cmd_check_plan_scope_job(args) -> int:
+    try:
+        result = mergeauthority.plan_scope_job_result(args.repository, args.head)
+    except mergeauthority.MergeAuthorityError as err:
+        print(f"error: {err}; nothing is vouched for", file=sys.stderr)
+        return 2
+    if result.problems:
+        _print_problems(result.problems)
+        return 3 if result.wait else 1
+    print(f"plan-scope: every job on {args.head[:12]} is a real, passing one")
     return 0
 
 
@@ -1198,8 +1273,65 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the admin login, from configuration the PR cannot change")
     ma.add_argument("--approver", metavar="LOGIN",
                     help="the approver login, from the same configuration; without it no approver review counts")
+    ma.add_argument("--agent", metavar="LOGIN",
+                    help="the agent login, from the same configuration; without it the approver route is closed")
+    ma.add_argument("--job-workflow", action="append", metavar="CHECK=PATH",
+                    help="the workflow that must run this Actions-bound required check, from the same configuration; "
+                         "repeat per check. A check with none closes the approver route")
     ma.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout (default: .)")
     ma.set_defaults(func=cmd_check_merge_authority)
+
+    ar = sub.add_parser("check-approver-route",
+                        help="what the approver App runs before each write: prints verdict=act, noop or refuse for one "
+                             "action on one head, from the server's facts (ADR 0057). Only verdict=act may write")
+    ar.add_argument("--action", required=True, choices=mergeauthority.ACTIONS, help="the write about to be made")
+    ar.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository")
+    ar.add_argument("--pr", required=True, type=int, metavar="N", help="the PR's number")
+    ar.add_argument("--head", required=True, metavar="SHA",
+                    help="the commit the write will be pinned to; it must be the PR's head on the server")
+    ar.add_argument("--base", required=True, metavar="SHA", help="the default branch's tip, in the checkout")
+    ar.add_argument("--admin", required=True, metavar="LOGIN",
+                    help="the admin login, from configuration the PR cannot change")
+    ar.add_argument("--approver", required=True, metavar="LOGIN", help="the approver login, from the same configuration")
+    ar.add_argument("--agent", required=True, metavar="LOGIN", help="the agent login, from the same configuration")
+    ar.add_argument("--gate", action="append", required=True, metavar="CHECK",
+                    help="a check the ruleset must require, from the same configuration; repeat per check")
+    ar.add_argument("--reviewer", metavar="LOGIN",
+                    help="the login posting the review's tracking comment, from the same configuration; its "
+                         "conversation comments need no reply. Without it they do")
+    ar.add_argument("--job-workflow", action="append", metavar="CHECK=PATH",
+                    help="the workflow that must run this Actions-bound required check, from the same configuration; "
+                         "repeat per check. A check with none refuses")
+    ar.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout (default: .)")
+    ar.set_defaults(func=cmd_check_approver_route)
+
+    pa = sub.add_parser("check-plan-admin", parents=[common],
+                        help="print the admin login a plan's merge is compared with: the instance must name one, and "
+                             "it must match the repository's TRIMTAB_ADMIN variable (ADR 0056). For sessions only")
+    pa.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository the plan is in")
+    pa.set_defaults(func=cmd_check_plan_admin)
+
+    pp = sub.add_parser("check-plan-authorised", parents=[common],
+                        help="wrap-merged's checks 1-3: the plan and its declaration are on the fetched default branch, "
+                             "were added by one PR the admin merged, and are unchanged since (ADR 0059). Exits 0 if so, "
+                             "1 if not, 2 on a failed read. For sessions only")
+    pp.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository the plan is in")
+    pp.add_argument("--plan", required=True, metavar="NAME", help="the plan's name, as its plan/<name>/ branches spell it")
+    shown = pp.add_mutually_exclusive_group()
+    shown.add_argument("--print-plan", action="store_true",
+                       help="on a pass, print the plan from the default branch after the verdict line")
+    shown.add_argument("--print-writes", action="store_true",
+                       help="on a pass, print the declaration from the default branch after the verdict line")
+    pp.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout, fetched (default: .)")
+    pp.set_defaults(func=cmd_check_plan_authorised)
+
+    pj = sub.add_parser("check-plan-scope-job",
+                        help="whether a head's plan-scope jobs are all real and passing, on a ruleset binding the check "
+                             "to GitHub Actions, read from job records (ADR 0058). Exits 0 if so, 1 if not, 2 on a failed read, "
+                             "3 while that workflow is unfinished. For sessions only")
+    pj.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository the PR is in")
+    pj.add_argument("--head", required=True, metavar="SHA", help="the PR's final head commit")
+    pj.set_defaults(func=cmd_check_plan_scope_job)
 
     rt = sub.add_parser("routine", help="routine specs")
     rts = rt.add_subparsers(dest="routine_command", required=True)

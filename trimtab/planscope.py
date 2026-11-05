@@ -52,7 +52,13 @@ HEADS = "refs/heads/"
 REGULAR_MODES = {"100644", "100755"}
 # The caller's repository-steering variables are dropped, as hooks/session-mode.sh's sm_git does.
 GIT_STEERING = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
-                "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES")
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES",
+                "GIT_GRAFT_FILE", "GIT_NAMESPACE", "GIT_REPLACE_REF_BASE", "GIT_CONFIG_PARAMETERS")
+# Settings that would change what a read reports, pinned for every call as `-c`, which every git version
+# honours and which outranks every config file. Config the environment carries is dropped instead.
+GIT_PINNED = (("core.fsmonitor", "false"), ("core.commitGraph", "false"), ("log.showSignature", "false"),
+              ("log.follow", "false"), ("diff.renames", "false"))
+SHA = re.compile(r"[0-9a-f]{40}")
 
 
 class PlanScopeError(Exception):
@@ -224,11 +230,15 @@ class Result:
 
 def _git(repo: str, *args: str, stdin: bytes | None = None) -> bytes:
     # Hardened as hooks/session-mode.sh's sm_git is: no steering variables, no
-    # replace objects, literal pathspecs, no fsmonitor.
-    env = {k: v for k, v in os.environ.items() if k not in GIT_STEERING}
+    # replace objects, literal pathspecs, no fsmonitor; and no config from the
+    # environment, with the settings a read depends on pinned.
+    env = {k: v for k, v in os.environ.items()
+           if k not in GIT_STEERING and not k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
+           and k != "GIT_CONFIG_COUNT"}
     env.update(GIT_NO_REPLACE_OBJECTS="1", GIT_LITERAL_PATHSPECS="1")
+    pins = [arg for key, value in GIT_PINNED for arg in ("-c", f"{key}={value}")]
     try:
-        return git_bytes(repo, "-c", "core.fsmonitor=false", *args, env=env, stdin=stdin)
+        return git_bytes(repo, *pins, *args, env=env, stdin=stdin, name=args[0])
     except SourceError as err:
         raise PlanScopeError(str(err)) from err
 
@@ -295,6 +305,46 @@ def changes(repo: str, base: str, head: str) -> list[Change]:
             raise PlanScopeError("git diff --raw returned an entry that could not be parsed") from err
         found.append(Change(status[:1], os.fsdecode(path), mode))
     return found
+
+
+def commit(repo: str, rev: str) -> str:
+    """rev as a full commit id, or PlanScopeError when the repository holds no such commit."""
+    return _commit(repo, rev)
+
+
+def added_by(repo: str, tip: str, path: str) -> str:
+    """The commit that last added path in tip's merge order (first parent). Raises when git names none, which a
+    whole history holding path at tip can't do, or answers with anything but a commit id."""
+    # Limiting the log to path keeps git from pairing a rename, so a file renamed into place reads as added.
+    out = _git(repo, "log", "--first-parent", "-m", "--diff-filter=A", "--format=%H", "--end-of-options", tip,
+               "--", path)
+    first = out.decode("ascii").split("\n", 1)[0].strip()  # first-parent order is merge order: the first is latest
+    if not SHA.fullmatch(first):
+        raise PlanScopeError(f"git log names no commit adding {path}")
+    return first
+
+
+def history_cut(repo: str) -> str | None:
+    """Why the repository's history is not whole (a shallow clone or a grafts file), or None. A cut history makes its
+    oldest commit look like a root, so `added_by` would name it as adding every file it holds."""
+    if _git(repo, "rev-parse", "--is-shallow-repository").strip() != b"false":
+        return "the clone is shallow; fetch its whole history (git fetch --unshallow origin)"
+    grafts = os.fsdecode(_git(repo, "rev-parse", "--git-path", "info/grafts").strip())
+    if os.path.lexists(os.path.join(repo, grafts)):
+        return f"{grafts} rewrites the repository's history"
+    return None
+
+
+def is_ancestor(repo: str, older: str, newer: str) -> bool:
+    """Whether older is newer or one of its ancestors."""
+    return _git(repo, "merge-base", "--end-of-options", older, newer).strip().decode("ascii") == older
+
+
+def changed(repo: str, old: str, new: str, paths: list[str]) -> list[str]:
+    """Which of paths differ between two commits."""
+    out = _git(repo, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-relative",
+               "--end-of-options", old, new, "--", *paths)
+    return [os.fsdecode(p) for p in out.split(b"\0") if p]
 
 
 def present(repo: str, sha: str, paths: list[str]) -> frozenset[str]:

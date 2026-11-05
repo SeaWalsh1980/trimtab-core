@@ -122,7 +122,7 @@ is opened non-blocking and read only if it is a regular file of at most 1 MiB;
 a FIFO, a device or a larger file is refused unread (a FIFO hung the first
 draft for the full timeout, and `/dev/zero` exhausted memory). The adapter
 blocks itself at 7 s, and the hook runs it under `timeout`, which kills it at
-8 s; both end in a block, inside the 10 s timeout.
+8 s (6 s and 7 s since ADR 0055); both end in a block, inside the 10 s timeout.
 
 The hook blocks on an empty payload, one that is not a JSON object, a missing
 or older python3, a missing loader, and any adapter error. A bash prefilter
@@ -225,3 +225,7 @@ The guard reads the command text, so it does not see:
   for the operator.
 
 Each is a reason the server stays the boundary.
+
+## Amendments
+
+- [ADR 0055](0055-guard-github-refuses-deleting-runs-and-dispatching-workflows.md) adds deleting a workflow run or its logs, and dispatching a workflow, to what this guard refuses.

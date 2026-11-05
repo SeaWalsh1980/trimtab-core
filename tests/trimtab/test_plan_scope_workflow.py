@@ -16,7 +16,10 @@ from pathlib import Path
 
 import yaml
 
-WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
+from trimtab import mergeauthority
+
+ROOT = Path(__file__).resolve().parents[2]
+WORKFLOWS = ROOT / ".github" / "workflows"
 WORKFLOW = WORKFLOWS / "plan-scope.yml"
 RERUN = WORKFLOWS / "merge-authority-rerun.yml"
 
@@ -158,6 +161,14 @@ class MergeAuthorityRerunWorkflowTest(unittest.TestCase):
     def test_a_failed_api_call_fails_the_step(self):
         self.assertTrue(self.script.startswith("set -euo pipefail"))
         self.assertNotIn("< <(", self.script)
+
+
+
+class SessionCommandConstant(unittest.TestCase):
+    def test_the_session_commands_constant_names_this_workflow_and_its_job(self):
+        workflow = load(ROOT / mergeauthority.PLAN_SCOPE_WORKFLOW)
+
+        self.assertEqual(workflow["jobs"][mergeauthority.CHECK_NAME]["name"], mergeauthority.CHECK_NAME)
 
 
 if __name__ == "__main__":

@@ -77,6 +77,8 @@ import json, re, sys
 from pathlib import PurePosixPath
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 PACK = re.compile(r"[a-z0-9-]+")
+LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,38}")
+APP_LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,33}\[bot\]")
 def bad(why):
     print(f"instance.json: {why}", file=sys.stderr); sys.exit(1)
 def repo(value):
@@ -90,7 +92,7 @@ if not isinstance(data, dict):
 for key in data:
     if key in ("cloud", "routines"):
         bad(f"{key}: no file holds routine or environment IDs; remove the key")
-    if key not in ("schema_version", "repo", "base", "guards"):
+    if key not in ("schema_version", "repo", "base", "guards", "accounts"):
         bad(f"{key}: unknown key")
 version = data.get("schema_version")
 if type(version) is not int or version != 1:
@@ -104,6 +106,23 @@ for key, value in (("repo", data.get("repo")), ("base.repo", base.get("repo"))):
 sha = base.get("sha")
 if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
     bad("base.sha must be a full 40-character lower-case commit SHA")
+if "accounts" in data:
+    accounts = data["accounts"]
+    if not isinstance(accounts, dict):
+        bad("accounts must be an object")
+    for key in accounts:
+        if key in ("cloud", "routines"):
+            bad(f"accounts.{key}: no file holds routine or environment IDs; remove the key")
+        if key not in ("admin", "agent", "approver"):
+            bad(f"accounts.{key}: unknown key")
+    for key in ("admin", "agent"):
+        login = accounts.get(key)
+        if (key == "admin" or key in accounts) and (not isinstance(login, str) or not LOGIN.fullmatch(login)):
+            bad(f"accounts.{key} must be a GitHub user's login, never an App's")
+    if "agent" in accounts and accounts["agent"].casefold() == accounts["admin"].casefold():
+        bad("accounts.agent and accounts.admin must be different logins")
+    if "approver" in accounts and (not isinstance(accounts["approver"], str) or not APP_LOGIN.fullmatch(accounts["approver"])):
+        bad("accounts.approver must be a GitHub App's login, ending [bot]")
 guards = data.get("guards", {})
 if not isinstance(guards, dict):
     bad("guards must be an object")

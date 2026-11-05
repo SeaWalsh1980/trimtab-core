@@ -15,6 +15,8 @@ Refused, in every spelling read below:
 - a write to the default branch (named `main` or `master`) through the API: a ref update or
   delete, a merge, a contents write, a fork sync, and the GraphQL ref and commit mutations;
   and `gh repo sync --force`;
+- deleting a workflow run or its logs, and dispatching a workflow, by `gh run delete`, `gh workflow run`
+  or the API (ADR 0055);
 - a write to a github.com host through `curl` or `wget`, which this guard cannot read.
 
 How it reads the command. Two passes, and either may refuse:
@@ -75,7 +77,7 @@ HOLE = "\x00"
 MAX_FILE = 1 << 20
 # Seconds before the adapter gives up and blocks, inside the hook's 10 s timeout (a timeout
 # fails open). The hook also runs it under `timeout`, which kills it shortly after.
-DEADLINE = 7
+DEADLINE = 6
 
 
 class Refused(Exception):
@@ -359,6 +361,17 @@ API_VALUED = {"-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--
               "-t", "--template", "--hostname", "-p", "--preview", "--cache"}
 API_BOOL = {"-i", "--include", "--paginate", "--silent", "--verbose", "--slurp"}
 GH_GLOBAL_VALUED = {"-R", "--repo"}
+RUN_DELETE = "deleting a workflow run or its logs is the owner's: it erases what a merge check reads"
+DISPATCH = "dispatching a workflow is the owner's: it can start a production deploy or rollback"
+# The group, the subcommand this guard refuses in it, and why.
+GROUP_REFUSALS = {"run": ("delete", RUN_DELETE), "workflow": ("run", DISPATCH)}
+
+
+def _after_options(words: list[Word], i: int) -> int:
+    """The index of the first word at or after `i` that isn't a literal option (and its value, for a repository)."""
+    while i < len(words) and words[i].text.startswith("-") and not words[i].dynamic:
+        i += 2 if words[i].text in GH_GLOBAL_VALUED else 1
+    return i
 
 
 def check_pr_create(args: list[Word], ctx: Ctx) -> None:
@@ -389,9 +402,7 @@ def check_repo_sync(args: list[Word], ctx: Ctx) -> None:
 
 def check_gh(args: list[Word], ctx: Ctx) -> None:
     """Judge the arguments after a `gh` command word."""
-    i = 0
-    while i < len(args) and args[i].text.startswith("-") and not args[i].dynamic:
-        i += 2 if args[i].text in GH_GLOBAL_VALUED else 1
+    i = _after_options(args, 0)
     if i >= len(args):
         return
     group = args[i]
@@ -400,9 +411,7 @@ def check_gh(args: list[Word], ctx: Ctx) -> None:
         return
     rest = args[i + 1:]
     # Persistent options may sit between the group and its command (`gh pr -R o/r create`).
-    j = 0
-    while j < len(rest) and rest[j].text.startswith("-") and not rest[j].dynamic:
-        j += 2 if rest[j].text in GH_GLOBAL_VALUED else 1
+    j = _after_options(rest, 0)
     sub = rest[j] if j < len(rest) else None
     tail = rest[j + 1:]
     if group.text == "api":
@@ -411,7 +420,7 @@ def check_gh(args: list[Word], ctx: Ctx) -> None:
     if sub is None:
         return
     if sub.dynamic:
-        if group.text in ("pr", "repo", "alias"):
+        if group.text in ("pr", "repo", "alias", "run", "workflow"):
             ctx.unknown("the gh command is a shell expansion")
         return
     if group.text == "pr" and sub.text in ("create", "new"):  # cobra registers `new` as create's alias
@@ -420,6 +429,8 @@ def check_gh(args: list[Word], ctx: Ctx) -> None:
         check_pr_review(tail, ctx)
     elif group.text == "repo" and sub.text == "sync":
         check_repo_sync(tail, ctx)
+    elif group.text in GROUP_REFUSALS and sub.text == GROUP_REFUSALS[group.text][0]:
+        raise Refused(GROUP_REFUSALS[group.text][1])
     elif group.text == "alias" and sub.text == "set":
         check_alias_set(tail, ctx)
     elif group.text == "alias" and sub.text == "import":
@@ -428,6 +439,9 @@ def check_gh(args: list[Word], ctx: Ctx) -> None:
 
 def check_alias_set(args: list[Word], ctx: Ctx) -> None:
     """An alias runs later under its own name, so its expansion is judged when it is defined."""
+    # A literal word with a space is an expansion that starts with an option, not an option.
+    if any(not w.dynamic and w.text.startswith("-") and " " in w.text for w in args):
+        ctx.unknown("an alias's expansion starts with an option")
     _, positional = parse_options(args, set(), {"--clobber", "-s", "--shell"}, strict=False)
     if len(positional) < 2:
         return
@@ -437,7 +451,26 @@ def check_alias_set(args: list[Word], ctx: Ctx) -> None:
         return
     text = expansion.text
     shell = text.startswith("!") or any(w.text in ("-s", "--shell") for w in args)
+    if not shell and _alias_stops_short(text.split()):
+        ctx.unknown("an alias takes more words when it runs, and this one leaves what it does to them")
     judge(text.removeprefix("!") if shell else "gh " + text, ctx)
+
+
+def _alias_stops_short(words: list[str]) -> bool:
+    """What the words a later call appends would decide: the expansion names a group or `api` and not what it
+    runs, or a command this guard judges by its options. `pr create --draft` stays open (ADR 0055)."""
+    named = []
+    i = 0
+    while i < len(words):
+        if words[i] in GH_GLOBAL_VALUED or words[i] in API_VALUED:
+            i += 2
+            continue
+        if not words[i].startswith("-"):
+            named.append(words[i])
+        i += 1
+    if named[:2] in (["pr", "review"], ["repo", "sync"]):
+        return True
+    return len(named) == 1 and named[0] in ("api", "pr", "repo", "run", "workflow")
 
 
 # ---- gh api ------------------------------------------------------------------------------
@@ -461,7 +494,8 @@ def _norm_path(raw: str) -> str:
     path = unquote(path).lstrip("/")
     path = re.sub(r"^api/v3/", "", path, flags=re.I)
     path = posixpath.normpath("/" + path).lstrip("/") if path else ""
-    return path.lower()
+    # GitHub also serves a repository by its id (`repositories/<id>/…`); the id fills both slots.
+    return re.sub(r"^repositories/([^/]+)", r"repos/\1/\1", path.lower())
 
 
 def _readable_path(path: str) -> bool:
@@ -477,6 +511,27 @@ def _readable_path(path: str) -> bool:
         if k == 0 or parts[k - 1] not in _ID_PARENTS:
             return False
     return True
+
+
+def _may_hide_route(path: str, method: str | None) -> bool:
+    """An expansion can hold slashes, so `repos/$P/123` can be a run's route.
+
+    A named route after the repository (`repos/$REPO/issues/1/comments`) shows what it is. Only nothing,
+    an id, or `logs` after the slots leaves the route to the expansion. GitHub also resolves `..`, so one
+    at the end of a delete or a create (`labels/$X`, `labels/$X/logs`) can hold a route too; PATCH and PUT
+    stay open there, since a run's and a dispatch's routes take neither (ADR 0055).
+    """
+    parts = path.split("/")
+    ending = parts[:-1] if parts[-1] == "logs" else parts
+    if ending and HOLE in ending[-1] and method not in ("PATCH", "PUT"):
+        return True
+    held = [k for k in (1, 2) if k < len(parts) and HOLE in parts[k]]
+    if parts[0] != "repos" or not held:
+        return False
+    tail = parts[held[-1] + 1:]
+    if tail and tail[-1] == "logs":
+        tail.pop()
+    return not tail or (len(tail) == 1 and (tail[0].isdigit() or HOLE in tail[0]))
 
 
 def parse_api(args: list[Word], ctx: Ctx) -> Request | None:
@@ -628,6 +683,8 @@ R_REFS = re.compile(r"repos/.+/git/refs")
 R_MERGES = re.compile(r"repos/.+/merges")
 R_CONTENTS = re.compile(r"repos/.+/contents(?:/.*)?")
 R_UPSTREAM = re.compile(r"repos/.+/merge-upstream")
+R_RUN = re.compile(r"repos/.+/actions/runs/[^/]+(?:/logs)?")
+R_DISPATCH = re.compile(r"repos/.+/(?:actions/workflows/[^/]+/)?dispatches")
 
 
 def check_api(args: list[Word], ctx: Ctx) -> None:
@@ -642,6 +699,9 @@ def check_api(args: list[Word], ctx: Ctx) -> None:
         return
     if not _readable_path(req.path):
         ctx.unknown("a write to an API path built by the shell")
+        return
+    if _may_hide_route(req.path, req.method):
+        ctx.unknown("a write to an API path whose route a shell expansion may hold")
         return
     path = req.path
     if R_PULLS.fullmatch(path):
@@ -674,6 +734,10 @@ def check_api(args: list[Word], ctx: Ctx) -> None:
         branch = _get(body_of(req, ctx), "branch", ctx, "the sync's branch is unreadable")
         if _branch_is_default(branch, ctx, "the sync's branch is unreadable"):
             raise Refused("a fork sync of the default branch through the API")
+    elif R_RUN.fullmatch(path):
+        raise Refused(RUN_DELETE)
+    elif R_DISPATCH.fullmatch(path):
+        raise Refused(DISPATCH)
 
 
 _RESOLVE = re.compile(r"(?<![A-Za-z0-9_])resolveReviewThread(?![A-Za-z0-9_])", re.I)
@@ -814,15 +878,44 @@ def check_http(tool: str, args: list[Word], ctx: Ctx) -> None:
 
 # ---- one command -------------------------------------------------------------------------
 
+def _repo_option(word: Word) -> bool:
+    """A repository option; a short form needs its owner/name, since another tool may have its own `-R`."""
+    return word.text in GH_GLOBAL_VALUED or word.text.startswith("--repo=") or (
+        word.text.startswith("-R") and "/" in word.text)
+
+
+def _may_be_gh(rest: list[Word]) -> bool:
+    """What follows a command word the shell builds says it may be gh.
+
+    `run` is a common second word for other tools (`$NPM run $SCRIPT`), so for `run` and `workflow`
+    a repository option before it or the refused subcommand after it has to show it. `${G}h run $SUB` is
+    read as another tool and passes (ADR 0055).
+    """
+    k = _after_options(rest, 0)
+    if k >= len(rest) or rest[k].dynamic:
+        return False
+    group = rest[k].text
+    if group in ("pr", "api", "repo", "alias"):
+        return True
+    if group not in GROUP_REFUSALS:
+        return False
+    if any(_repo_option(w) for w in rest[:k] if not w.dynamic):
+        return True
+    # An expansion here may be an option, so the refused subcommand can stand after one.
+    j = _after_options(rest, k + 1)
+    while j < len(rest) and rest[j].dynamic:
+        j = _after_options(rest, j + 1)
+    return j < len(rest) and rest[j].text == GROUP_REFUSALS[group][0]
+
+
 def check_segment(words: list[Word], ctx: Ctx) -> None:
     appends = False  # an earlier word (xargs, parallel) adds arguments the guard never sees
     for k, w in enumerate(words):
         name = _ASSIGNMENT.sub("", w.text) if not ctx.strict else w.text
         base = posixpath.basename(name)
         rest = words[k + 1:]
-        is_gh = (not w.dynamic and base == "gh") or (
-            # An expansion that may be gh, anywhere a wrapper (sudo, env, nice) could put it.
-            w.dynamic and bool(rest) and rest[0].text in ("pr", "api", "repo", "alias") and not rest[0].dynamic)
+        # An expansion may be gh, anywhere a wrapper (sudo, env, nice) could put it.
+        is_gh = (not w.dynamic and base == "gh") or (w.dynamic and _may_be_gh(rest))
         if is_gh:
             if appends:
                 ctx.unknown("xargs or parallel appends arguments to gh that this guard cannot read")

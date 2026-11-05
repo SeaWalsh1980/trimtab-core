@@ -3190,6 +3190,147 @@ tg 0 "sh -c 'gh pr view 1'"                              'a shell script without
 tg 0 'env FOO=1 gh pr create --draft --title t'          'env with an assignment still reads gh'
 tg 0 "env -S 'gh pr create --draft --title t'"
 
+# --- workflow runs: no deleting a run or its logs, no dispatch (ADR 0055) ---
+tg 2 'gh run delete 123'
+tg 2 'gh run -R o/r delete 123'
+tg 2 'gh -R o/r run delete 123'
+tg 2 '/usr/bin/gh run delete 123'
+tg 2 'g"h" run delete 123'
+tg 2 '${G}h run delete 123'                              'a command word the shell builds, carrying run delete'
+tg 2 'gh run $SUB 123'                                   'a shell expansion as the run command'
+tg 2 "bash -c 'gh run delete 123'"
+tg 2 'echo 123 | xargs gh run delete'
+tg 2 'gh workflow run cd.yml'
+tg 2 'gh workflow run rollback.yml -f target_sha=x'
+tg 2 'gh workflow -R o/r run cd.yml'
+tg 2 '${G}h workflow run cd.yml'                         'a command word the shell builds, carrying workflow run'
+tg 2 'gh workflow $SUB cd.yml'                           'a shell expansion as the workflow command'
+tg 2 'gh api -X DELETE repos/o/r/actions/runs/1'
+tg 2 'gh api --method=DELETE /repos/o/r/actions/runs/1/'
+tg 2 'gh api -XDELETE repos/o/r/actions/runs/1/logs'
+tg 2 'gh api -X DELETE https://api.github.com/repos/o/r/actions/runs/1'
+tg 2 'gh api -X DELETE repos/$O/$R/actions/runs/$ID'     'the route is literal after the expansions'
+tg 2 'gh api -X $M repos/o/r/actions/runs/1'             'an unreadable method on a run'
+tg 2 'gh api -X POST repos/o/r/actions/runs/1/logs'      'any write to the logs route, not only DELETE'
+tg 2 'gh api repos/o/r/actions/runs/1 -f a=b'            'a field implies a write to the run'
+tg 2 'curl -X DELETE https://api.github.com/repos/o/r/actions/runs/1'
+tg 2 'gh api -X POST repos/o/r/actions/workflows/cd.yml/dispatches -f ref=main'
+tg 2 'gh api repos/o/r/actions/workflows/1/dispatches -f ref=main' 'a field implies POST'
+tg 2 'gh api repos/o/r/dispatches -f event_type=x'       'a repository dispatch'
+tg 2 'gh api -X POST repos/o/r/actions/workflows/$W/dispatches' 'an unreadable route word before dispatches'
+# An expansion in the repository's slots can hold slashes, so it can hide the route.
+tg 2 'gh api -X DELETE repos/$PREFIX/123'                'a variable that may hold .../actions/runs'
+tg 2 'gh api -X DELETE repos/$RUN/logs'                  'a variable that may hold the run, before logs'
+tg 2 'gh api -X DELETE repos/$PREFIX/123/logs'           'the same, with the id and logs literal'
+tg 2 'gh api -X DELETE repos/$PREFIX/$ID/logs'           'the same, with the id an expansion'
+tg 2 'gh api -X POST repos/$A/$B -f ref=main'            'no literal route word after the repository'
+tg 2 'gh api -X POST repos/$WHOLE -f ref=main'           'one variable for the whole route'
+tg 0 'gh api -X POST "repos/$OWNER/$REPO/issues/1/comments" -f body=x' 'a named route after two variables stays open'
+tg 0 'gh api -X POST "repos/$REPO/issues/$N/comments" -f body=x' 'a named route after one variable stays open'
+tg 0 'gh api -X POST "repos/$REPO/labels" -f name=x'     'a one-word named route stays open'
+tg 0 'gh api "repos/$PREFIX/123"'                        'a read through a variable stays open'
+# GitHub also serves a repository by its numeric id.
+tg 2 'gh api -X DELETE repositories/1/actions/runs/2'
+tg 2 'gh api -X DELETE repositories/1/actions/runs/2/logs'
+tg 2 'gh api repositories/1/dispatches -f event_type=x'
+tg 2 'gh api repositories/1/actions/workflows/2/dispatches -f ref=main'
+tg 2 'gh api -X DELETE repositories/1/git/refs/heads/main' 'the older rules read the numeric route too'
+tg 2 'gh api -X DELETE repositories/$ID/123'             'an id variable that may hold the route'
+tg 0 'gh api repositories/1/actions/runs/2'              'reading by numeric id stays open'
+tg 0 'gh api -X POST repositories/1/actions/runs/2/rerun'
+# A command word the shell builds, with options in the way.
+tg 2 '${G}h -R o/r run delete 123'
+tg 2 '$GH --repo o/r workflow run cd.yml'
+tg 2 '$GH --repo=o/r run delete 123'
+tg 2 '${G}h run -R o/r delete 123'
+tg 2 '${G}h workflow -R o/r run cd.yml'
+tg 2 '/usr/bin/g? run -R o/r delete 123'
+tg 2 '/usr/bin/g? workflow -R o/r run cd.yml'
+tg 2 '$GH --repo o/r run $SUB 123'                       'a repository option marks the word as gh'
+tg 2 'G=g; env ${G}h run delete 1'                       'a wrapper before the built word'
+tg 2 '${G}h run -R o/r -R o/r delete 123'                'more than one option before the command'
+tg 2 '${G}h workflow -R o/r -R o/r run cd.yml'
+tg 2 '${G}h -R o/r pr create --title t'                  'the older rules read past the option too'
+tg 2 '${G}h pr -R o/r create --title t'
+# Other tools: `run` is a common second word. Each is sent to the adapter by a
+# real gh command beside it, as a gh elsewhere in the payload would.
+tg 0 'gh pr view 1 && $NPM run $SCRIPT'                  'another tool with a variable script'
+tg 0 'gh pr view 1 && $HOME/.local/bin/uv run $TEST'     'another tool by a built path'
+tg 0 'gh pr view 1 && $NPM run -s build'                 'an option and another word after run'
+tg 0 'gh pr view 1 && npm run delete'                    'a literal other tool is never read as gh'
+# Accepted false positives: indistinguishable from a built gh word.
+tg 2 '$NPM run delete'                                   'accepted: a built word, then run delete'
+tg 2 '$TEMPORAL workflow run x'                          'accepted: a built word, then workflow run'
+# An alias that stops at a group or at api takes the rest when it runs.
+tg 2 'gh alias set r run'
+tg 2 'gh alias set w workflow'
+tg 2 "gh alias set d 'api -X DELETE'"
+tg 2 "gh alias set r 'run -R o/r'"
+tg 2 'gh alias set p pr'                                 'the older rules, the same way'
+tg 2 "gh alias set x '!gh run \"\$@\"'"                     'a shell alias that passes its arguments on'
+tg 0 "gh alias set rv 'run view'"
+tg 0 "gh alias set prv 'pr view'"
+tg 0 "gh alias set g 'api repos/o/r/pulls'"              'an alias with its own path, which is a read'
+# An alias takes options when it runs, so one to a command judged by its options can't be read.
+tg 2 "gh alias set a 'repo sync'"
+tg 2 "gh alias set v 'pr review'"
+tg 2 "gh alias set v 'pr review 1 --comment'"
+# An expansion that starts with an option, which the option parser would otherwise swallow.
+tg 2 'gh alias set r "--repo o/r run"'
+tg 2 'gh alias set r -- "--repo o/r run"'
+# A built option before the refused subcommand, on a built command word.
+tg 2 '${G}h run $F delete 1'
+tg 2 '${G}h workflow $F run cd.yml'
+tg 0 'gh pr view 1 && $NPM run $SCRIPT build'            'another tool: no refused subcommand follows'
+# GitHub resolves `..` in a path (seen on a read), so an expansion after an id can hold a route.
+tg 2 'gh api -X DELETE repos/o/r/labels/$X'              'a delete that ends in an expansion'
+tg 2 'gh api -X POST repos/o/r/issues/$X -f ref=main'    'a create that ends in an expansion'
+tg 2 'gh api -X DELETE repos/o/r/labels/$X/logs'         'an expansion, then logs'
+tg 2 'gh api -X $M repos/o/r/labels/$X'                  'an unreadable method and an expansion'
+tg 2 'gh api -X DELETE repos/o/r/labels/../actions/runs/1' 'a literal .. is normalised first'
+tg 2 'gh api -X DELETE repos/o/r/labels/%2e%2e/actions/runs/1' 'an encoded .. too'
+tg 0 'gh api -X PATCH repos/o/r/pulls/$N -f body=x'      'an update through an id stays open'
+tg 0 'gh api -X PATCH repos/o/r/issues/comments/$ID -f body=x'
+tg 0 'gh api -X POST repos/o/r/issues/$N/comments -f body=x' 'a named route after the id stays open'
+tg 0 'gh api -X DELETE logs'                             'a bare logs is no route, and does not crash the guard'
+# A residual, pinned: an option gh run does not take, on a built word (ADR 0055).
+tg 0 '${G}h run --json x delete 1'                       'residual: --json x reads x as the group'
+# Only a repository option marks a built word as gh; another tool's -R does not.
+tg 0 'gh pr view 1 && $TOOL -Rfoo run $X'                'another tool with a -R option'
+tg 2 '$GH -Ro/r run $X'                                  'a repository option in its short form'
+# A hook that outlives its timeout fails open, so a long command must not cost the
+# prefilter time: this shape took over 20 s through the regex. $SECONDS counts whole
+# seconds, so a run reads up to 1 s long: the adapter's stop stays 2 s under the limit.
+gg_long() { # gg_long <expected-exit> <label> <word to repeat> <times> [what follows]
+  python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":"echo " + sys.argv[1] * int(sys.argv[2]) + sys.argv[3]},"cwd":"/tmp"}))' "$3" "$4" "${5:-}" > "$GG/long.json"
+  local start=$SECONDS rc=0
+  bash "$HOOKS/guard-github.sh" < "$GG/long.json" >/dev/null 2>&1 || rc=$?
+  if [[ $rc -eq $1 && $((SECONDS - start)) -lt 8 ]]; then
+    echo "PASS  guard-github.sh exit=$rc  $2"
+  else
+    echo "FAIL  guard-github.sh exit=$rc (want $1, under 8 s; took $((SECONDS - start)) s)  $2"
+    fails=$((fails + 1))
+  fi
+}
+gg_long 2 'a long crafted command ending in a refused write' 'run -a ' 20000 ' ; gh pr create --title t'
+gg_long 2 'the same shape on another group'                  'pr -a ' 20000 ' ; gh pr create --title t'
+gg_long 2 'a very long one'                                  'run -a ' 100000 ' ; gh pr create --title t'
+gg_long 0 'a long harmless command still passes'             'run -a ' 20000
+tg 0 'gh run view 123'
+tg 0 'gh run list'
+tg 0 'gh run watch 123'
+tg 0 'gh run rerun 123 --failed'                         're-running CI stays open'
+tg 0 'gh run cancel 123'
+tg 0 'gh workflow list'
+tg 0 'gh workflow view cd.yml'
+tg 0 'gh api repos/o/r/actions/runs/1'
+tg 0 'gh api repos/o/r/actions/runs/1/logs'              'reading the logs'
+tg 0 'gh api -X POST repos/o/r/actions/runs/1/rerun'
+tg 0 'gh api -X POST repos/o/r/actions/runs/1/cancel'
+tg 0 'gh api -X POST repos/o/r/actions/jobs/1/rerun'
+tg 0 'gh api repos/o/r/actions/workflows/1'
+tg 0 'git commit -m "gh run delete and gh workflow run are refused"' 'a commit message naming them'
+
 # --- the payload, the parser and the override ------------------------------
 t guard-github.sh 2 "empty payload"                      ''
 t guard-github.sh 2 "garbage payload"                    'not json'

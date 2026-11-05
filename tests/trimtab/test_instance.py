@@ -15,6 +15,9 @@ TRIMTAB = roots.code_root() / "bin" / "trimtab"
 
 SHA = "a" * 40
 VALID = {"schema_version": 1, "repo": "owner/inst", "base": {"repo": "owner/base", "sha": SHA}}
+ADMIN = "some-owner"
+AGENT = "some-agent"
+APPROVER = "some-approver[bot]"
 
 
 def with_(**changes):
@@ -101,6 +104,81 @@ class Parse(unittest.TestCase):
 
     def test_not_an_object_is_refused(self):
         self.refuses([], "object")
+
+    def test_a_file_naming_no_accounts_reads_as_no_admin(self):
+        self.assertIsNone(instance.parse(VALID).admin)
+
+    def test_the_admin_login_is_read(self):
+        self.assertEqual(instance.parse(with_(accounts={"admin": ADMIN})).admin, ADMIN)
+
+    def test_accounts_that_are_not_an_object_are_refused(self):
+        self.refuses(with_(accounts=ADMIN), "accounts")
+
+    def test_accounts_naming_no_admin_are_refused(self):
+        self.refuses(with_(accounts={}), "accounts.admin")
+
+    def test_an_unknown_accounts_key_is_refused(self):
+        self.refuses(with_(accounts={"admin": ADMIN, "other": "x"}), "accounts.other")
+
+    def test_a_routine_id_in_accounts_is_refused_as_one(self):
+        self.refuses(with_(accounts={"admin": ADMIN, "routines": {}}), "routine")
+
+    def test_an_app_cannot_be_the_admin(self):
+        self.refuses(with_(accounts={"admin": f"{ADMIN}[bot]"}), "accounts.admin")
+
+    def test_an_admin_login_that_is_no_login_is_refused(self):
+        for login in ("", " ", f"{ADMIN}\n", "-leading", "a" * 40, "owner/name", None, 5):
+            with self.subTest(login=login):
+                self.refuses(with_(accounts={"admin": login}), "accounts.admin")
+
+    def test_every_shape_of_user_login_is_read(self):
+        for login in ("a", "a" * 39, "user_corp", "user1"):
+            with self.subTest(login=login):
+                self.assertEqual(instance.parse(with_(accounts={"admin": login})).admin, login)
+
+    def test_a_file_naming_no_agent_reads_as_no_agent(self):
+        self.assertIsNone(instance.parse(with_(accounts={"admin": ADMIN})).agent)
+
+    def test_the_agent_login_is_read(self):
+        f = instance.parse(with_(accounts={"admin": ADMIN, "agent": AGENT}))
+        self.assertEqual((f.admin, f.agent), (ADMIN, AGENT))
+
+    def test_an_agent_with_no_admin_is_refused(self):
+        self.refuses(with_(accounts={"agent": AGENT}), "accounts.admin")
+
+    def test_an_app_cannot_be_the_agent(self):
+        self.refuses(with_(accounts={"admin": ADMIN, "agent": f"{AGENT}[bot]"}), "accounts.agent")
+
+    def test_an_agent_login_that_is_no_login_is_refused(self):
+        for login in ("", None, 5):
+            with self.subTest(login=login):
+                self.refuses(with_(accounts={"admin": ADMIN, "agent": login}), "accounts.agent")
+
+    def test_one_login_for_admin_and_agent_is_refused_whatever_its_case(self):
+        self.refuses(with_(accounts={"admin": ADMIN, "agent": ADMIN.upper()}), "accounts.agent")
+
+    def test_a_file_naming_no_approver_reads_as_no_approver(self):
+        self.assertIsNone(instance.parse(with_(accounts={"admin": ADMIN})).approver)
+
+    def test_the_approver_named_as_an_app_is_read(self):
+        f = instance.parse(with_(accounts={"admin": ADMIN, "approver": APPROVER}))
+        self.assertEqual((f.admin, f.approver), (ADMIN, APPROVER))
+
+    def test_an_approver_with_no_admin_is_refused(self):
+        self.refuses(with_(accounts={"approver": APPROVER}), "accounts.admin")
+
+    def test_a_user_cannot_be_the_approver(self):
+        self.refuses(with_(accounts={"admin": ADMIN, "approver": AGENT}), "App's")
+
+    def test_an_approver_login_that_is_no_app_login_is_refused(self):
+        for login in ("", " ", None, 5, "[bot]", "-leading[bot]", "some-app[BOT]", "some-app[bot]\n",
+                      "some.app[bot]", "a" * 35 + "[bot]"):
+            with self.subTest(login=login):
+                self.refuses(with_(accounts={"admin": ADMIN, "approver": login}), "App's")
+
+    def test_an_app_login_of_the_longest_name_is_read(self):
+        login = "a" * 34 + "[bot]"
+        self.assertEqual(instance.parse(with_(accounts={"admin": ADMIN, "approver": login})).approver, login)
 
 
 class PatternsPath(unittest.TestCase):
@@ -239,9 +317,20 @@ class CliInstanceJson(unittest.TestCase):
         self.assertEqual(json.loads(done.stdout), {
             "schema_version": 1, "root": str(self.inst), "repo": REPO_NAME,
             "base": {"repo": "owner/base", "sha": "0" * 40},
+            "accounts": {"admin": None, "agent": None, "approver": None},
             "env": {"TRIMTAB_SECRET_PACKS": None,
                     "TRIMTAB_SECRET_PATTERNS": str(self.inst / "guards" / "secrets.patterns")},
         })
+
+    def test_prints_the_logins_the_file_names(self):
+        named = {"admin": ADMIN, "agent": AGENT, "approver": APPROVER}
+        data = json.loads((self.inst / instance.FILE).read_text())
+        (self.inst / instance.FILE).write_text(json.dumps({**data, "accounts": named}))
+
+        done = self.run_json()
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(json.loads(done.stdout)["accounts"], named)
 
     def test_routine_ids_in_the_file_exit_2_naming_the_key(self):
         data = json.loads((self.inst / instance.FILE).read_text())
