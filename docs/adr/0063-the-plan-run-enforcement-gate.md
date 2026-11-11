@@ -49,13 +49,60 @@ Constraints in force:
 `<config dir>/guard-state/plan-runs/<sha256 of owner/name>/<plan>/item-NN-partK.jsonl` is
 append-only, and only hooks write it. Each line is one event: `push` (branch, old and new SHA,
 `TRIMTAB_PLAN_RUN` value, time), `round` (head, the passes recorded on it, whether it was
-before the draft), `draft` (PR number, head), `ci-fix` (head, what it answers), `rerequest`
-(head, reason), `stop` (reason). It is machine-local. A run that finds a `plan/…` branch on the
-remote with no ledger for its part stops: a cloud session cannot resume another machine's
-branch. This is tighter than the row, which is allowed. The forgery residual is the one ADR 0028
-accepts for its list: a Bash command that hides the config dir's path from guard-paths. E22
-below rechecks every row that rests on server facts, so a forged ledger buys at most the
-ledger-only rows (E10, E11, E12, E23), which are named under Consequences.
+before the draft), `draft` (PR number, head), `rerequest` (head, reason), `stop` (reason). It
+is keyed by repository, plan and part, never by session, so a later session on the same machine
+and config dir reads the same ledger. It is machine-local, and a cloud session's ledger ends
+with its container.
+
+Only the rows that no server fact can show read it: E10, E11 and E23 (rounds) and E13 (that
+each push was made under E14). E12's count is taken from server facts (§5), so it survives any
+hand-over. A hook never starts a ledger for a part whose branch already exists on the remote:
+a fresh ledger would vouch for pushes it never saw.
+
+A run with no ledger for its part acts under §1a or stops. This is tighter than the rows, which
+is allowed. The forgery residual is the one ADR 0028 accepts for its list: a Bash command that
+hides the config dir's path from guard-paths. E22 below rechecks every row that rests on server
+facts, so a forged ledger buys at most the ledger-only rows (E10, E11, E23), which are named
+under Consequences.
+
+### 1a. Watch-only: a session without the ledger, after ready
+
+A run session whose part's PR is open and **not a draft**, and which holds no ledger for that
+part, is watch-only. The plan-run layer and guard-github then allow:
+
+- reads;
+- PR comments;
+- replies to review comments, opening with the `wrong`, `intentional` or `moot` tag (E8 still
+  applies at E22);
+- adding `plan:blocked` and removing `plan:continue`.
+
+They refuse:
+
+- every file write, push and ref write;
+- returning the PR to draft;
+- a re-request;
+- a reply opening with the fixed or deferral tag. Both need a push: a commit for fixed (E9), a
+  register entry for deferral (E7).
+
+So a check that fails after ready, or a thread that needs a fix or a deferral, is a stop in
+watch-only. The operator restarts the part, or a session with the ledger takes it back. E19 and
+E21 apply unchanged. With a ledger, the full rules apply instead.
+
+### 1b. Hand-over at part boundaries
+
+Context rot is bounded by part size, never by moving a part's state between sessions. A session
+hands over only at these points:
+
+- **A part boundary.** The part's PR merges with `## Status` `item NN part K complete; item
+  continues`, and a fresh session starts part K+1 from `## Next`, with a new ledger.
+- **After ready**, into watch-only (§1a).
+- **Mid-part before ready**, only to a later session on the same machine and config dir.
+
+A session that expects not to finish its part before ready ends the part early at a clean
+point (in-scope work done so far, register entries for the rest of the part's scope within the
+item), rather than handing over mid-part. Where that cannot be done, it stops. `wrap-merged`
+sizes parts to fit one session and names when to end one early. That is guidance, not
+enforcement: a part too big for its session costs a stop, never a weaker gate.
 
 ### 2. E20 — `trimtab check-enforcement`
 
@@ -168,14 +215,25 @@ goes through `trimtab plan-rerequest-check`. A `plan/*` push or ref write goes t
   call. A round is complete when all three are recorded on one head. A slash command the
   operator types, or a pass run any other way, records nothing, so it counts for nothing. The
   hook's registration is the operator's control PR.
-- **E12.** At each `plan/*` push after a `draft` entry, `plan-push-check` decides whether the
-  push answers something. It answers a failing check when any job record on the PR's previous
-  head concluded `failure`, `timed_out` or `cancelled`. It answers a CI review when an E3 facts
-  run on the previous head has no later push. Either case adds one `ci-fix`, counted once
-  however many it answers. The exclusions are the draft-opening run, the one E6 re-request, the
-  E7 register commit, and the round's own fix push (E10). A push that would make a fourth
-  `ci-fix` for the part refuses and writes a `stop`. "Answers a failing check" is a pure
-  function of the job records and the ledger, tested on recorded fixtures.
+- **E12.** Counted from server facts only, so any session reaches the same count.
+  - **What counts.** The part's CI-fix rounds are the heads H, pushed to any of its branches
+    since its first PR opened as a draft, that meet both of these:
+    - H was answered: some later push's `before` is H, in the branch-activity events (E13's
+      read);
+    - H has either a job record that concluded `failure`, `timed_out` or `cancelled`, or an E3
+      facts run.
+  - **Counting.** Each such H counts once, however many jobs or attempts it has and whichever
+    it answers.
+  - **Excluded.**
+    - The draft-opening run is not a push. Pushes that answer its review do count.
+    - The E6 re-request adds no push.
+    - A push whose diff from H has the E7 register-commit shape is excluded.
+  - **Tighter than the row.** The round's own fix push (E10) is counted when the head it
+    answers itself had a failing job. A server fact cannot tell that push from a CI fix.
+  - **The limit.** `plan-push-check` refuses a push that would make the fourth, and writes a
+    `stop`.
+  - **The test.** "Answers a failing check" is a pure function of the activity events and job
+    records, tested on recorded fixtures. E22 recomputes it on the server.
 - **E13.** `trimtab plan-resume-check` passes only when four things hold. Every commit in
   `origin/<default>..origin/<branch>` lies inside a ledger `push` with `TRIMTAB_PLAN_RUN=1`.
   The repository's branch-activity events (`GET /repos/{owner}/{repo}/activity`, filtered to the
@@ -235,7 +293,8 @@ operator's control change. It runs two commands on the PR head:
 
 - `trimtab check-enforcement --server`;
 - `trimtab plan-ready-check --server`, which re-checks every row resting on server facts: E5,
-  E7, E8, E9, E14 and E15 through the activity events, E16, E18 on the whole diff, and E19.
+  E7, E8, E9, E12, E14 and E15 through the activity events, E16, E18 on the whole diff, and
+  E19.
 
 The approver reads the job like `plan-scope` (ADR 0058): every attempt on the head passed, from
 the pinned path and the `pull_request` event. Until the approver reads it, only the admin merges
@@ -246,6 +305,11 @@ a run's PR, as the doctrine record says.
 | Option | Why it lost |
 |---|---|
 | Keep counts and push records on GitHub (labels, comments, commit statuses) | The agent's token can write every one of them |
+| Hold the whole ledger on the server (an Actions artifact, a store the project owns) | Round entries come from the session's hooks, so the session would upload what the agent could forge; and it is new infrastructure (ENG-5) |
+| Require the ledger for every act in a part (this record's first draft) | Any session lost mid-part stops the run, the watch to merge (up to 24 hours) outlives a cloud session, and every loss costs the operator a branch deletion |
+| Let a ledgerless session after ready reply with the fixed or deferral tag | Each needs a push that only a session with the ledger may make |
+| Count E12 in the ledger | A fresh session would restart at zero, so a hand-over would reset the cap |
+| Hand a part's state between sessions in the progress record | The agent writes the progress record, so counts there are facts the agent can write |
 | A ledger with an HMAC | The key would sit where the agent's shell can read it; the protection is still guard-paths, so it adds code and no fact |
 | Cache the E20 pass with a time-to-live instead of keying it to the default-branch head | A merge to the default branch inside the window would run under a stale gate |
 | Run the full E20 command in every hook | Dozens of API reads per write; it outlives the 6 s deadline, and a timeout fails open |
@@ -266,13 +330,20 @@ a run's PR, as the doctrine record says.
 - No plan run starts until every PR here, the operator's recorder registration, and the
   project's rows (E1–E4, the E19 job, the E22 workflow, the `enforcement` and `review` keys)
   all land. This is by design.
-- A run is tied to the machine that started its part. A cloud run cannot resume a local one, and
-  the reverse. Lost guard state (a new machine, a wiped config dir) stops a part, and only the
-  operator's branch deletion starts part K+1.
+- Before ready, a part is tied to the machine and config dir that started it. A session lost
+  mid-part before ready stops the part, which is every such loss in the cloud. Only the
+  operator's branch deletion then starts part K+1. Between parts, and after ready, any session
+  anywhere continues.
+- More, smaller parts: each is its own PR, CI review and approver merge, so more billed reviews
+  and more merges. A slow merge stalls the next part.
+- Watch-only cannot fix: a check failing after ready, or a thread that needs a fix or deferral,
+  stops unless a session with the ledger is still alive.
+- E12 rests on the branch-activity events, so their paging and expiry are new ways to fail
+  closed. Each one is a stop.
 - Deferral needs a CI review whose tree equals the merge-base's. A project that wants deferrals
   to be possible needs a review of each default-branch head. Without one, every out-of-scope CI
   thread stops the run. Accepted as the strict reading.
-- E10, E11, E12 and E23 rest on the ledger only. E22 cannot recheck them server-side. A session
+- E10, E11 and E23 rest on the ledger only. E22 cannot recheck them server-side. A session
   that forges its ledger past guard-paths could skip in-session rounds, but it could not change
   what CI review, the E22 job or the approver see.
 - Every guarded write in a run costs one `git ls-remote`.
