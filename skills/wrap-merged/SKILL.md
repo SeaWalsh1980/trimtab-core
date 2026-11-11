@@ -463,8 +463,10 @@ One item, or one part of an item, per session, ending in one PR:
    any other `plan/…` branch has every write refused.)
 4. **Review in session**, in one to three rounds before you mark the PR
    ready and again before each later return to ready (trimtab-core
-   ADR 0060). A round runs `/trimtab-review` plus `/code-review` on the
-   PR's current head. Grade each finding at the higher of the pass's own
+   ADRs 0060, 0062). A round runs `/trimtab-review`, `/security-review`
+   and `/code-review` on the PR's current head, in parallel, folded into
+   one report; a pass that fails or returns nothing usable is named in it,
+   and the round is incomplete until it runs. Grade each finding at the higher of the pass's own
    severity and the doctrine's finding-severity rule: raise a pass's
    grade, never lower it. Record each finding outside the item's scope as
    its own register entry in this PR (step 2), unless one in this PR
