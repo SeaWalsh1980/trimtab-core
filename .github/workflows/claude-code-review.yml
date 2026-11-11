@@ -96,6 +96,23 @@ jobs:
             with secrets. Then correctness and tests. Report findings with a
             severity (CRITICAL, HIGH, MEDIUM, LOW) and a file:line for each.
 
+            Review in three passes, one after another, yourself (ADR 0062;
+            the in-session skills cannot run here):
+            1. Harness: the guard, test and fail-closed weighting above;
+               test coverage of every new branch and error path; and silent
+               failure (swallowed errors, broad catches, fail-open
+               fallbacks, unbounded retries).
+            2. Security: injection, authentication and authorisation,
+               secrets in code or logs, unsafe shell or deserialisation,
+               SSRF, new trust in PR-controlled input, and workflow triggers
+               that expose secrets. Report only findings you would defend.
+            3. Correctness: bugs, edge cases and broken contracts.
+            Fold the three into one set of findings, de-duplicated, each
+            tagged [harness], [security] or [correctness] with its severity
+            and file:line. In the summary, list all three passes with a
+            finding count each, so a pass that found nothing is visibly run,
+            not skipped.
+
             Post concise, actionable comments: inline for specific issues, plus
             a brief top-level summary. Do not nitpick style.
 
