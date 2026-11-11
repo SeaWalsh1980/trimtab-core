@@ -108,14 +108,29 @@ enforcement: a part too big for its session costs a stop, never a weaker gate.
 
 `trimtab check-enforcement [--repo DIR] [--server]` exits 0 only when every row is shown.
 
-- **Rows come from the doctrine record, never the manifest.** It reads the lock's `trimtab_sha`,
-  finds the PR that added the doctrine record to Trimtab's default branch, and reads the file at
-  that PR's merge commit, which the Trimtab admin merged and from which the lock's commit
-  descends. It parses the §Enforcement table into exactly E1–E23, each with its condition,
-  fact and owner text. A missing, extra or duplicate row, or any failed read, fails.
+- **Rows come from the doctrine record, never the manifest**, and every input is a git object
+  named by a SHA that only an admin's merge sets:
+  1. **The lock.** It is read from the project's default-branch head, as fetched, after checking
+     that head against the server, never from the working tree. The lock moves only by an
+     admin-merged PR.
+  2. **The record's path.** It comes from the instance file at the lock's `trimtab_sha`, as an
+     object in the instance checkout.
+  3. **The record's text.** It is the record at the first-parent commit of `trimtab_sha` that
+     added it: the merge that put it on Trimtab's default branch, so the text "as merged". A
+     later edit to the record is not read.
+  4. **The table.** The §Enforcement table is parsed into exactly E1–E23, each with its
+     condition, fact and owner text. A missing, extra or duplicate row, or any failed read,
+     fails.
+
+  No Trimtab API read is made. A project's agent token cannot read a private instance, and a SHA
+  cannot be forged, so the git objects are a stronger fact than the API would give. The admin's
+  identity rests on the project's lock PR, not on Trimtab's merge.
 - **Owners decide the source.** "Guard", "Guard (plan-run layer)", "guard-github" and
   "trimtab-core" rows are this base's. "Consuming project" rows are the project's. E22 is both.
-- **A base row is shown** when `trimtab/enforcement/manifest.json` at the pinned base maps it,
+- **The pinned base** is the instance file's `base.sha` at `trimtab_sha`. The lock's derived
+  `base_sha` must equal it, when the lock has one.
+- **A base row is shown** when `trimtab/enforcement/manifest.json`, read as the object at the
+  pinned base (never the working tree), maps it,
   and all of these hold:
   - the entry's `row_sha256` equals the SHA-256 of the row's text as merged, so a changed row
     is a stale entry until this base records the change;
@@ -124,13 +139,19 @@ enforcement: a part too big for its session costs a stop, never a weaker gate.
   - its tests exist and are among those `lint-test` runs, which a contract test here pins;
   - every attempt of `lint-test` in `.github/workflows/ci.yml`, on the `push` event, for the
     pinned base commit, passed, read from trimtab-core's job records;
-  - the pinned base descends from the commit that added the entry;
-  - outside `--server`: the hook is installed from the pinned base and registered live, by the
-    ADR 0004 liveness check.
-- **A project row is shown** when the instance file's `enforcement` key names a workflow path
-  and job for it, and every attempt of that job on the `push` event for the default branch's
+  - the pinned base descends from the commit that added the entry. This holds by construction,
+    because the manifest is read at the pinned base;
+  - outside `--server`, the hook is live, which takes three facts:
+    - the config dir's `hooks/<file>` resolves to this checkout's file;
+    - the config dir's `settings.json` registers it for the manifest's event and matcher;
+    - this checkout's `HEAD` is the pinned base, with no change to `hooks/` or `trimtab/`.
+- **A project row is shown** when the instance file at `trimtab_sha` names, under
+  `enforcement.projects.<owner/name>`, a workflow path and job for it, and every attempt of that job on the `push` event for the default branch's
   latest commit passed, read from the project's job records. A row the file does not name is not
   shown.
+- **`--server`** runs in a project's CI, which has no instance checkout (ADR 0015). It reads
+  the rows from a derived lock field that `trimtab bump` writes, as it writes `base_sha`. That
+  field is designed and added with E22's PR, and until then `--server` fails.
 - **Output** is one line per row (`E7 shown` or `E7 not shown: <reason>`), never a value read
   from a file. A pass is cached at `guard-state/enforcement/<sha256 of owner/name>.json` under
   the key (lock SHA, pinned base SHA, default-branch head). Only a pass is cached.
@@ -313,6 +334,8 @@ a run's PR, as the doctrine record says.
 | A ledger with an HMAC | The key would sit where the agent's shell can read it; the protection is still guard-paths, so it adds code and no fact |
 | Cache the E20 pass with a time-to-live instead of keying it to the default-branch head | A merge to the default branch inside the window would run under a stale gate |
 | Run the full E20 command in every hook | Dozens of API reads per write; it outlives the 6 s deadline, and a timeout fails open |
+| Read the doctrine record and its merge through Trimtab's API | A project's agent token gets 403 on a private instance, and every run would stop; the git objects behind the admin-merged lock are a stronger fact |
+| Read the lock and manifest from the working tree | The agent's shell can edit both; objects named by an admin-set SHA it cannot |
 | Read E3 facts from the review job's own log | The model step writes to the same log and could print a facts line |
 | Read thread resolution by GraphQL | ADR 0021: REST only. The facts job, which runs with the project's token, reports state instead |
 | Defer on any earlier review that saw the same line | Looser than "a review of the merge-base"; rows may only tighten |
