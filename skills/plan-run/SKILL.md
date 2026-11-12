@@ -43,7 +43,9 @@ find exactly what it says comes next, and then continue, hand over, or stop and 
 widen it: a hand-over cannot create work, nothing found along the way gets done without a new plan,
 and you never edit an authorised plan or an earlier progress record.
 
-Every stop follows plan-run/references/stops.md.
+Every stop follows plan-run/references/stops.md. If you cannot read it, stop anyway: label the item
+PR (or, before one exists, the merged PR that started the session) `plan:blocked`, remove any
+`plan:continue`, in an item PR set its record's `## Next` to `blocked: <reason>`, and report.
 
 ### 1. Confirm the merge
 
@@ -111,12 +113,14 @@ Everything comes from the default branch and open PRs, never from memory:
 The next work — `## Next`, or the item an in-flight PR works on — may start only if all of these
 hold:
 
-- Read them in plan-run/references/gate.md. If you cannot read it, the gate fails.
+The conditions are in plan-run/references/gate.md, and every one must hold. If you cannot read it,
+the gate fails.
 
 If the gate fails: say "needs approval: <reason>", list the open issues with their PR links, propose
 ways forward, and stop. If `## Next` is `plan complete`, say so and stop.
 
-A stop before any item PR exists: see plan-run/references/stops.md.
+A stop before any item PR exists: see plan-run/references/stops.md. If you cannot read it, label the
+merged PR that started the session `plan:blocked`.
 
 ### 5. Record
 
@@ -164,10 +168,11 @@ session still runs section 2 and reads only an authorised record.
 **Restarting after a stop** takes the operator's act: a session they start for the plan (locally, or
 the routine's run-now). A PR they merge to fix the blocker carries no record and no `plan:continue`,
 so it starts nothing by itself. Whether a session counts as a restart, and what it works on: see
-plan-run/references/restart.md.
+plan-run/references/restart.md. If you cannot read it, no session is a restart: the stop stands.
 
 **A session started for an item PR's CI review** (by the operator, or a routine on review events)
 fixes the CI findings within scope, as in step 4 of "Working a plan item" below, and reviews the new
 head in step 4's one to three in-session rounds before marking the PR ready again. Count CI fix
 rounds (at most two per PR) from the PR's own review history, not from this session alone. Step 4 is
-plan-pr/SKILL.md.
+plan-pr/SKILL.md. The scope rules (step 2) and stop conditions (step 5) are in plan-item/SKILL.md:
+read it before fixing anything.

@@ -71,4 +71,5 @@ ADR 0043).
 A record without the code gate, merged by any other account, or merged by the approver without every
 condition authorises nothing: stop and label that PR `plan:blocked`. Never fall back to an earlier
 record; it points at work already merged. The admin's removal of `plan:blocked` from that PR accepts
-its merge (see "Restarting after a stop"). That is plan-run/references/restart.md.
+its merge (see "Restarting after a stop"). That is plan-run/references/restart.md. If you cannot
+read it, no session is a restart: the stop stands.

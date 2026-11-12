@@ -9,7 +9,10 @@ Paths such as `plan-run/references/stops.md` are relative to the skills director
 this skill's own directory.
 
 This is step 4 of plan-item/SKILL.md. Section numbers below are plan-run/SKILL.md's; other step
-numbers are plan-item/SKILL.md's. Every stop follows plan-run/references/stops.md.
+numbers are plan-item/SKILL.md's. Every stop follows plan-run/references/stops.md. If you cannot
+read it, stop anyway: label the item PR (or, before one exists, the merged PR that started the
+session) `plan:blocked`, remove any `plan:continue`, in an item PR set its record's `## Next` to
+`blocked: <reason>`, and report.
 
 ## In-session review rounds
 
