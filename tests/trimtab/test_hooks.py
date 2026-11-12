@@ -552,7 +552,10 @@ def shebang_fault(first_line):
     interpreter = PurePosixPath(words[0])
     if interpreter.name == "env":
         return f"{interpreter} resolves the interpreter from PATH"
-    if str(interpreter.parent) not in TRUSTED_DIRS:
+    # PurePosixPath folds `/bin/bash/`, `/bin//bash` and `/bin/./bash` into
+    # `/bin/bash`; the kernel does not (a trailing slash is ENOTDIR), so only
+    # the path as spelled is judged.
+    if str(interpreter) != words[0] or str(interpreter.parent) not in TRUSTED_DIRS:
         return f"{words[0]} is outside {' and '.join(sorted(TRUSTED_DIRS))}"
     if interpreter.name not in INTERPRETERS:
         return f"{words[0]} is not one of {', '.join(sorted(INTERPRETERS))}"
@@ -624,13 +627,34 @@ class ShebangFault(unittest.TestCase):
     def test_a_double_leading_slash_is_refused(self):
         self.assertIsNotNone(shebang_fault(b"#!//bin/bash"))
 
+    def test_a_trailing_slash_is_refused(self):
+        self.assertIsNotNone(shebang_fault(b"#!/bin/bash/"))
+
 
 class MissingShebang(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
     def test_a_shell_hook_without_one_is_refused(self):
         self.assertIsNotNone(missing_shebang(PurePosixPath("hooks/x.sh"), b"# no shebang"))
 
+    def test_an_executable_without_one_is_refused(self):
+        tool = self.dir / "tool"
+        tool.write_bytes(b"echo hi\n")
+        tool.chmod(0o755)
+
+        self.assertIsNotNone(missing_shebang(tool, b"echo hi"))
+
     def test_a_module_run_by_python3_is_not_judged(self):
-        self.assertIsNone(missing_shebang(HOOKS / "run_module.py", b'"""A module."""'))
+        module = self.dir / "module.py"
+        module.write_bytes(b'"""A module."""\n')
+        module.chmod(0o644)
+
+        self.assertIsNone(missing_shebang(module, b'"""A module."""'))
 
 
 class HookShebangs(unittest.TestCase):
