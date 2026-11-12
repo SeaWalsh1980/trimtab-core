@@ -1,4 +1,4 @@
-"""The plan authorisation check: wrap-merged's checks 1-3, from real git and a faked gh (ADR 0059)."""
+"""The plan authorisation check: plan-run's checks 1-3, from real git and a faked gh (ADR 0059)."""
 
 import json
 import os

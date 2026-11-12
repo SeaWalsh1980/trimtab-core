@@ -1335,7 +1335,7 @@ def build_parser() -> argparse.ArgumentParser:
     pa.set_defaults(func=cmd_check_plan_admin)
 
     pp = sub.add_parser("check-plan-authorised", parents=[common],
-                        help="wrap-merged's checks 1-3: the plan and its declaration are on the fetched default branch, "
+                        help="plan-run's checks 1-3: the plan and its declaration are on the fetched default branch, "
                              "were added by one PR the admin merged, and are unchanged since (ADR 0059). Exits 0 if so, "
                              "1 if not, 2 on a failed read. For sessions only")
     pp.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository the plan is in")
