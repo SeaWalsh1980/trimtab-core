@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Session mode: is this session interactive, or an autonomous plan run?
 #
 # Two kinds of session exist. In an interactive one a person is in the loop.
@@ -150,7 +150,7 @@ sm_payload() {
     cwd=$(printf '%s' "$payload" | jq -r '(.cwd // "") | tostring' 2>/dev/null) || cwd=""
     sid=$(printf '%s' "$payload" | jq -r '(.session_id // "") | tostring' 2>/dev/null) || sid=""
   elif command -v python3 >/dev/null 2>&1; then
-    { IFS= read -r cwd; IFS= read -r sid; } < <(printf '%s' "$payload" | python3 -I -c '
+    { IFS= read -r cwd; IFS= read -r sid; } < <(printf '%s' "$payload" | python3 -I -X pycache_prefix=/dev/null/no-pycache -c '
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -178,9 +178,10 @@ SM_NO_PYCACHE=/dev/null/no-pycache
 # change, or nothing. What runs is where the name resolves, so that file and its
 # directory are judged (a link's own mode is always 0777, so the link itself is
 # not), and the link's directory too, since whoever can write it can re-point it.
+SM_TRUSTED_DIRS="/usr/bin /bin"  # set here, never read from the environment
 sm_trusted() {
   local PATH="$SM_SYSTEM_PATH" d p real x
-  for d in /usr/bin /bin; do
+  for d in $SM_TRUSTED_DIRS; do
     p="$d/$1"
     [[ -f "$p" && -x "$p" ]] || continue
     real=$(readlink -f -- "$p") || return 1
@@ -210,39 +211,51 @@ sm_clear_passes() {
   return 0
 }
 
-# sm_new_epoch: a new epoch for the cache. A recorder writes a pass only if the
-# epoch it started under is still current, so a recorder an earlier session left
-# running cannot write after this session's clear.
+# sm_new_epoch: start a new epoch for the cache and print it. A recorder writes a
+# pass only under the epoch the hook handed it, still current, so a recorder an
+# earlier session left running (or still waiting on the lock) cannot write after
+# this session's clear. The epoch is written to a private temporary file and
+# renamed over .epoch, which replaces a planted link rather than following it.
+# Fails (status 1) when it cannot; the caller then leaves no pass.
 sm_new_epoch() {
-  local PATH="$SM_SYSTEM_PATH" dir
-  dir=$(sm_enforcement_dir) || return 0
-  [[ -d "$dir" && ! -L "$dir" ]] || return 0
-  ( umask 077 && od -An -tx1 -N16 /dev/urandom | tr -d ' \n' > "$dir/.epoch" ) 2>/dev/null
-  return 0
+  local PATH="$SM_SYSTEM_PATH" dir epoch tmp
+  dir=$(sm_enforcement_dir) || return 1
+  [[ -n "$dir" ]] || return 1
+  ( umask 077 && mkdir -p -- "$dir" ) 2>/dev/null || return 1
+  [[ -d "$dir" && ! -L "$dir" ]] || return 1
+  epoch=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n') && [[ ${#epoch} -eq 32 ]] || return 1
+  tmp=$( umask 077 && mktemp -- "$dir/.epoch.XXXXXX" ) 2>/dev/null || return 1
+  if ! { printf '%s' "$epoch" > "$tmp" && mv -f -- "$tmp" "$dir/.epoch"; } 2>/dev/null; then
+    rm -f -- "$tmp" 2>/dev/null
+    return 1
+  fi
+  printf '%s\n' "$epoch"
 }
 
-# sm_record_enforcement <project dir>: in a run session, first remove the
-# project's cached E20 pass synchronously, bounded well inside this hook's 10 s
-# timeout and falling back to removing every pass, and start a new epoch; then
-# start the recorder in the background: the only writer of the pass the guards
-# read (ADR 0063 §2-§3). It reads the network, which a SessionStart hook cannot
-# wait for, so it is detached and bounded; until it writes a pass, guards refuse.
+# sm_record_enforcement <project dir>: in a run session, start a new epoch, then
+# remove every cached E20 pass synchronously (bounded well inside this hook's
+# 10 s timeout, falling back to the bash clear), then start the recorder in the
+# background with that epoch: the only writer of the pass the guards read (ADR
+# 0063 §2-§3). It reads the network, which a SessionStart hook cannot wait for,
+# so it is detached and bounded; until it writes a pass, guards refuse.
 # Whatever fails here, no pass is left.
 sm_record_enforcement() {
-  local PATH="$SM_SYSTEM_PATH" here py setsid_bin timeout_bin
+  local PATH="$SM_SYSTEM_PATH" here py setsid_bin timeout_bin epoch
   here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
   if ! { py=$(sm_trusted python3) && setsid_bin=$(sm_trusted setsid) && timeout_bin=$(sm_trusted timeout) \
          && [[ -r "$here/run_module.py" ]]; }; then
     sm_clear_passes
     return 0
   fi
+  # The epoch first: any recorder that checks it after this point sees it is not its own.
+  epoch=$(sm_new_epoch) || epoch=""
   ( cd / && "$timeout_bin" -k 1 4 "$py" -I -B -X pycache_prefix="$SM_NO_PYCACHE" "$here/run_module.py" "$here/.." \
       trimtab.adapters.enforcement_record clear "$1" </dev/null >/dev/null 2>&1 ) || sm_clear_passes
-  sm_new_epoch
+  [[ -n "$epoch" ]] || return 0  # no epoch, no recorder: it could not write a pass anyway
   # Off only, never on: with no recorder no pass is written, and guards refuse. Tests set it.
   [[ "${TRIMTAB_ENFORCEMENT_RECORDER:-1}" == 0 ]] && return 0
   ( cd / && "$setsid_bin" "$timeout_bin" -k 5 300 "$py" -I -B -X pycache_prefix="$SM_NO_PYCACHE" \
-      "$here/run_module.py" "$here/.." trimtab.adapters.enforcement_record record "$1" \
+      "$here/run_module.py" "$here/.." trimtab.adapters.enforcement_record record "$1" "$epoch" \
       </dev/null >/dev/null 2>&1 & ) 2>/dev/null
   return 0
 }

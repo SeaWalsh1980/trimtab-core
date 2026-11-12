@@ -1,17 +1,18 @@
 """The only writer of E20's pass cache: run by hooks/session-mode.sh in a run session (ADR 0063 §2-§3).
 
     python3 -I -B -X pycache_prefix=<none> hooks/run_module.py <root> trimtab.adapters.enforcement_record clear <dir>
-    python3 -I -B -X pycache_prefix=<none> hooks/run_module.py <root> trimtab.adapters.enforcement_record record <dir>
+    python3 -I -B -X pycache_prefix=<none> hooks/run_module.py <root> trimtab.adapters.enforcement_record record <dir> [<epoch>]
 
-The hook runs `clear` synchronously (bounded at 4 s, its git reads at 2 s), starts a new epoch,
-then starts `record` in the background, both with the operator's launch environment, never the
-session's shell. `record` holds one lock for its whole run, notes the epoch, removes the
-project's cached pass before it reads anything, fetches the default branch into a fresh
-repository, runs the gate, and writes a pass only when every row is shown and the epoch is still
-the one it started under (so a recorder an earlier session left running cannot write after a
-later session's clear). Every other way out leaves no pass: an error, SIGTERM from the hook's
-timeout (raised as an exit, so the cleanup runs), or a kill (the pass was already removed). A
-one-line status beside the cache names why.
+The hook starts a new epoch, runs `clear` synchronously (bounded at 4 s; it removes every pass and
+reads no git), then starts `record` in the background with that epoch, both with the operator's
+launch environment, never the session's shell. `record` holds one lock for its whole run, removes
+the project's cached pass before it reads anything, fetches the default branch into a fresh
+repository, runs the gate, and writes a pass only when every row is shown and the epoch it was
+handed is still current, checked before and after the write (so a recorder an earlier session
+left running, or still waiting on the lock, cannot write after a later session's clear). With no
+epoch, or one it cannot read, it writes no pass. Every other way out leaves no pass: an error,
+SIGTERM from the hook's timeout (raised as an exit, so the cleanup runs), or a kill (the pass was
+already removed). A one-line status beside the cache names why.
 
 `clear` exits 1 when it fails, so the hook removes every pass itself; `record` exits 0 whatever
 happens: a background step has no one to tell, and no pass is what guards refuse on.
@@ -45,8 +46,8 @@ UNKNOWN = "unknown-repository"
 LOCK = ".lock"
 EPOCH = ".epoch"
 PASSED = "passed"
-CLEAR_GIT_TIMEOUT_SECONDS = 2
 CLEAR_LOCK_SECONDS = 1.0
+EPOCH_SHAPE = re.compile(r"[0-9a-f]{32}")
 
 
 def repository_of(project: Path, git: tools.Git) -> str:
@@ -84,11 +85,14 @@ def _locked(config: Path, wait: float | None = None):
 
 
 def _epoch(config: Path) -> str | None:
+    """The current epoch, or None when there is none or it cannot be read as a private file (a planted link,
+    another owner): never a value a recorder could match, since a recorder with no epoch writes no pass."""
     try:
         directory = guardstate.directory(config, *gate.CACHE_PARTS, create=False)
-        return guardstate.read(directory / EPOCH)
+        text = guardstate.read(directory / EPOCH)
     except guardstate.GuardStateError:
         return None
+    return text if text and EPOCH_SHAPE.fullmatch(text) else None
 
 
 def _status(config: Path, repository: str | None, line: str) -> None:
@@ -98,24 +102,25 @@ def _status(config: Path, repository: str | None, line: str) -> None:
 
 
 def clear(project: Path) -> None:
-    """Remove this project's cached pass, or every cached pass when the project cannot be named."""
+    """Remove every cached pass. A session start clears them all, not by the project's `origin`, which the
+    session could point elsewhere to spare its own project's pass. It reads no git, so nothing can stall it."""
+    del project  # named for the hook's call; deliberately not read
     config = guardstate.config_dir()
-    try:
-        repository = repository_of(project, tools.Git(timeout=CLEAR_GIT_TIMEOUT_SECONDS))
-    except (gate.GateError, tools.ToolError):
-        repository = None
     with _locked(config, wait=CLEAR_LOCK_SECONDS):
-        gate.clear_pass(config, repository)
+        gate.clear_pass(config, None)
 
 
-def record(project: Path) -> str:
-    """Run the gate for `project`; cache a pass only if every row is shown. Returns the status line."""
+def record(project: Path, epoch: str | None = None) -> str:
+    """Run the gate for `project`; cache a pass only if every row is shown and `epoch` (the one the hook handed
+    over, else the current one) is still current, before and after the write. Returns the status line."""
     config = guardstate.config_dir()
     repository = None
     line = "not passed: the recorder did not finish"
+    expected = epoch if epoch is None or EPOCH_SHAPE.fullmatch(epoch) else ""
     try:
         with _locked(config):
-            epoch = _epoch(config)
+            if expected is None:
+                expected = _epoch(config)  # a recorder a guard starts mid-session (E21) takes the current one
             scratch = None
             try:
                 git = tools.Git()
@@ -127,11 +132,14 @@ def record(project: Path) -> str:
                 failing = [f"{r.id}: {r.problem}" for r in gate.decide(facts) if r.problem]
                 if failing:
                     line = "not passed: " + " | ".join(failing)
-                elif _epoch(config) != epoch:
+                elif not expected:
+                    line = "not passed: there is no epoch to write a pass under"
+                elif _epoch(config) != expected:
                     line = "not passed: a later session started a new epoch while this ran"
                 else:
                     gate.record_pass(config, repository, facts.pinned)
-                    line = PASSED
+                    # Checked again after the write: an epoch that moved during it voids the pass.
+                    line = PASSED if _epoch(config) == expected else "not passed: the epoch moved as the pass was written"
             except (gate.GateError, tools.ToolError, roots.InstanceError, instance.InstanceFileError) as err:
                 line = f"not passed: {err}"
             finally:
@@ -152,11 +160,15 @@ def _terminate(signum, frame):
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2 or argv[0] not in ("clear", "record"):
+    shapes = {"clear": (2,), "record": (2, 3)}
+    if not argv or argv[0] not in shapes or len(argv) not in shapes[argv[0]]:
         return 0
     signal.signal(signal.SIGTERM, _terminate)
     try:
-        (clear if argv[0] == "clear" else record)(Path(argv[1]))
+        if argv[0] == "clear":
+            clear(Path(argv[1]))
+        else:
+            record(Path(argv[1]), argv[2] if len(argv) == 3 else None)
     except Exception:  # noqa: BLE001 - reported by exit code only: the hook has no channel, and no pass is left
         # A failed clear exits 1, so the hook removes every pass itself; a failed record has already removed its own.
         return 1 if argv[0] == "clear" else 0

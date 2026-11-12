@@ -32,10 +32,12 @@ import atexit
 import hashlib
 import os
 import re
+import select
 import shutil
 import stat
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -43,9 +45,15 @@ from trimtab.planscope import GIT_PINNED
 
 SYSTEM_DIRS = ("/usr/bin", "/bin")
 GIT_KEEP = ("HOME", "LANG", "LC_ALL")
-# Egress settings: kept so a proxied host still reaches GitHub. They can only make a read fail.
-NETWORK_KEEP = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy",
-                "ALL_PROXY", "all_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE")
+# Egress settings, kept so a proxied host still reaches GitHub. A proxy alone can only make a read fail,
+# since TLS is verified against the trusted CAs; so a CA setting is kept only when what it names is root-only.
+PROXY_KEEP = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy",
+              "ALL_PROXY", "all_proxy")
+CA_KEEP = ("SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE")
+# What `gh auth token` needs to reach a keyring-held token (the Secret Service on a desktop).
+KEYRING_KEEP = ("DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR")
+OBJECT_LIMIT = 64 << 20  # bytes in one object the gate reads; past it, refused before it is buffered
+READ_DEADLINE_SECONDS = 10  # for one object from the batch process
 GIT_TIMEOUT_SECONDS = 10
 GH_TIMEOUT_SECONDS = 30
 FETCH_TIMEOUT_SECONDS = 60
@@ -84,17 +92,33 @@ def trusted(name: str, dirs: tuple[str, ...] = SYSTEM_DIRS) -> str:
     raise ToolError(f"no {name} in {', '.join(dirs)}")
 
 
+def _root_only_tree(path: str) -> bool:
+    """`path` and every directory above it are root-owned and writable only by root."""
+    real = os.path.realpath(path)
+    while True:
+        if not _root_only(real):
+            return False
+        parent = os.path.dirname(real)
+        if parent == real:
+            return True
+        real = parent
+
+
 def _network(environ: Mapping[str, str]) -> dict[str, str]:
-    return {k: environ[k] for k in NETWORK_KEEP if k in environ}
+    env = {k: environ[k] for k in PROXY_KEEP if k in environ}
+    env.update({k: environ[k] for k in CA_KEEP if k in environ and _root_only_tree(environ[k])})
+    return env
 
 
 def git_env(environ: Mapping[str, str] = os.environ) -> dict[str, str]:
     """Only what git needs and nothing that steers it: built from an allowlist, never by removal."""
     env = {k: environ[k] for k in GIT_KEEP if k in environ}
     env.update(_network(environ))
-    # No system or global config: ~/.gitconfig is the session's to write.
+    # No system or global config (~/.gitconfig is the session's to write), and no lazy fetch: a repository the
+    # session configured as a partial clone would otherwise run its fetch command for any missing object.
     env.update(PATH=":".join(SYSTEM_DIRS), GIT_NO_REPLACE_OBJECTS="1", GIT_LITERAL_PATHSPECS="1",
-               GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0")
+               GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0",
+               GIT_NO_LAZY_FETCH="1")
     return env
 
 
@@ -121,7 +145,7 @@ class GhAuth:
 
     def _read(self, environ: Mapping[str, str]) -> str:
         # The user's own config, once, for the token alone: a forged one only makes every read fail.
-        env = {k: environ[k] for k in ("HOME", "GH_CONFIG_DIR", "XDG_CONFIG_HOME") if k in environ}
+        env = {k: environ[k] for k in ("HOME", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", *KEYRING_KEEP) if k in environ}
         env.update(_network(environ), PATH=":".join(SYSTEM_DIRS), GH_PROMPT_DISABLED="1")
         try:
             done = subprocess.run([self.binary, "auth", "token", "-h", "github.com"], capture_output=True,
@@ -144,7 +168,10 @@ class Git:
         self._checked: set[tuple[str, bool]] = set()
 
     def _pins(self) -> list[str]:
-        return [a for key, value in (*GIT_PINNED, ("core.hooksPath", os.devnull)) for a in ("-c", f"{key}={value}")]
+        # No hooks, and no transport a read could start: a lazy fetch is off by environment, and these
+        # pins close it again for a git too old to know GIT_NO_LAZY_FETCH.
+        extra = (("core.hooksPath", os.devnull), ("protocol.allow", "never"), ("core.sshCommand", ""))
+        return [a for key, value in (*GIT_PINNED, *extra) for a in ("-c", f"{key}={value}")]
 
     def argv(self, repo: Path, *args: str) -> list[str]:
         return [self._binary, "-C", str(repo), *self._pins(), *args]
@@ -179,6 +206,11 @@ class Git:
                           ("objects/info/alternates", "alternates, whose objects live elsewhere")):
             if os.path.lexists(self._path(repo, name)):
                 raise ToolError(f"{repo.name} has {why}")
+        # A partial clone fetches what it lacks, running whatever command its config names.
+        for entry in self._raw(repo, "config", "--list", "-z").split(b"\0"):
+            name = entry.split(b"\n", 1)[0].decode("utf-8", "replace").lower()
+            if name == "extensions.partialclone" or (name.startswith("remote.") and name.endswith(".promisor")):
+                raise ToolError(f"{repo.name} is configured as a partial clone, which fetches what it lacks")
         self._checked.add(key)
 
     def config_get(self, repo: Path, key: str) -> str:
@@ -224,22 +256,29 @@ class Git:
 class Objects:
     """Objects read by SHA through one `cat-file --batch` and re-hashed here; history walked from verified commits."""
 
-    def __init__(self, git: Git, repo: Path):
+    def __init__(self, git: Git, repo: Path, deadline: float = READ_DEADLINE_SECONDS):
         self._repo = repo
+        self._deadline = deadline
         self._cache: dict[str, tuple[str, bytes]] = {}
+        self._buffer = b""
         try:
             self._proc = subprocess.Popen(git.argv(repo, "cat-file", "--batch"), stdin=subprocess.PIPE,
-                                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=git.env)
+                                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=git.env, bufsize=0)
         except OSError as err:
             raise ToolError(f"git cat-file in {repo.name} failed ({type(err).__name__})") from err
 
     def close(self) -> None:
-        if self._proc.poll() is None:
-            self._proc.stdin.close()
+        """End the batch process and release its pipes; each step on its own, so one failure skips none."""
+        for pipe in (self._proc.stdin, self._proc.stdout):
             try:
-                self._proc.wait(timeout=GIT_TIMEOUT_SECONDS)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
+                pipe.close()
+            except OSError:
+                continue  # a pipe the process already broke: nothing left to release
+        try:
+            self._proc.wait(timeout=GIT_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+            self._proc.wait()
 
     def __del__(self):
         try:
@@ -247,19 +286,48 @@ class Objects:
         except (OSError, ValueError, AttributeError):
             pass  # interpreter shutdown: the process goes with us
 
+    def _fill(self, until: float, want: int = 65536) -> None:
+        """Read more from the batch process into the buffer, or ToolError once `until` passes or it ends."""
+        fd = self._proc.stdout.fileno()
+        left = until - time.monotonic()
+        if left <= 0 or not select.select([fd], [], [], left)[0]:
+            raise ToolError(f"git cat-file in {self._repo.name} did not answer within {self._deadline} s")
+        chunk = os.read(fd, max(65536, want))
+        if not chunk:
+            raise ToolError(f"git cat-file in {self._repo.name} ended early")
+        self._buffer += chunk
+
+    def _take(self, n: int, until: float) -> bytes:
+        """Exactly `n` bytes from the batch process."""
+        while len(self._buffer) < n:
+            self._fill(until, n - len(self._buffer))
+        out, self._buffer = self._buffer[:n], self._buffer[n:]
+        return out
+
+    def _line(self, until: float) -> bytes:
+        while b"\n" not in self._buffer:
+            if len(self._buffer) > 4096:
+                raise ToolError(f"git cat-file in {self._repo.name} sent a header past 4096 bytes")
+            self._fill(until)
+        line, _, self._buffer = self._buffer.partition(b"\n")
+        return line
+
     def _read_one(self, sha: str) -> tuple[str, bytes]:
+        until = time.monotonic() + self._deadline
         try:
             self._proc.stdin.write(sha.encode("ascii") + b"\n")
             self._proc.stdin.flush()
-            header = self._proc.stdout.readline().decode("ascii").split(" ")
+            header = self._line(until).decode("ascii").split(" ")
             if len(header) != 3 or header[0] != sha:
                 raise ToolError(f"{self._repo.name} has no object {sha[:12]}")
             kind, size = header[1], int(header[2])
-            body = self._proc.stdout.read(size)
-            trailer = self._proc.stdout.read(1)
+            if not 0 <= size <= OBJECT_LIMIT:
+                raise ToolError(f"{self._repo.name}'s object {sha[:12]} is past {OBJECT_LIMIT} bytes")
+            body = self._take(size, until)
+            trailer = self._take(1, until)
         except (OSError, ValueError, UnicodeDecodeError) as err:
             raise ToolError(f"{self._repo.name}'s object {sha[:12]} could not be read ({type(err).__name__})") from err
-        if len(body) != size or trailer != b"\n":
+        if trailer != b"\n":
             raise ToolError(f"{self._repo.name}'s object {sha[:12]} was cut short")
         if hashlib.sha1(f"{kind} {size}\0".encode("ascii") + body).hexdigest() != sha:
             raise ToolError(f"{self._repo.name}'s object {sha[:12]} does not hash to its name")

@@ -152,8 +152,15 @@ def _walk(code: Path) -> dict[str, tuple[bool, bytes]] | str:
                 if stat.S_ISLNK(st.st_mode):
                     return "this checkout holds a symlink under hooks/ or trimtab/"
                 if stat.S_ISREG(st.st_mode):
+                    rel = full.relative_to(code).as_posix()
+                    try:
+                        rel.encode("utf-8")
+                    except UnicodeEncodeError:
+                        return "this checkout holds a file name under hooks/ or trimtab/ that is not UTF-8"
                     body = _read_regular(full, 1 << 24)
-                    out[full.relative_to(code).as_posix()] = (bool(st.st_mode & stat.S_IXUSR), body or b"")
+                    if body is None:  # gone between the listing and the read: the tree is changing under us
+                        raise OSError(f"{rel} vanished while the checkout was read")
+                    out[rel] = (bool(st.st_mode & stat.S_IXUSR), body)
                 elif not stat.S_ISDIR(st.st_mode):
                     return "this checkout holds a special file under hooks/ or trimtab/"
     if failed:  # a directory it cannot list could hold anything a module would load
@@ -180,7 +187,11 @@ def head_of(code: Path) -> str:
     pointer = _read_regular(git_dir / "commondir", 4096)
     if pointer is not None:
         common = (git_dir / pointer.decode("utf-8").strip()).resolve()
-    for base in (git_dir, common):
+    # As git does: only its per-worktree namespaces live in a worktree's own dir; every other ref is shared.
+    per_worktree = name.startswith(("refs/bisect/", "refs/worktree/", "refs/rewritten/"))
+    if ".." in name.split("/"):
+        raise OSError("HEAD names a ref outside refs/")
+    for base in ((git_dir,) if per_worktree else (common,)):
         value = _read_regular(base / name, 4096)
         if value is not None and SHA.fullmatch(value.decode("utf-8").strip()):
             return value.decode("utf-8").strip()
@@ -203,8 +214,8 @@ def snapshot(code: Path, config: Path, project: Path, instance_root: Path, hooks
         links = {h.file: str((config / "hooks" / h.file).resolve()) for h in hooks}
         return Install(_walk(code), head_of(code), settings, links,
                        (str(code.resolve()), str(instance_root.resolve())))
-    except (OSError, UnicodeDecodeError) as err:
-        raise GateError(f"the install cannot be read ({type(err).__name__})") from err
+    except (OSError, UnicodeError) as err:
+        raise GateError(f"the install cannot be read ({type(err).__name__}: {err})") from err
 
 
 def install_digest(install: Install) -> str:
@@ -264,7 +275,10 @@ class _Reads:
 
     def close(self) -> None:
         for objects in self._objects.values():
-            objects.close()
+            try:
+                objects.close()
+            except OSError:
+                continue  # one batch process that broke must not keep the others open or mask the real error
 
     def text(self, repo: Path, *args: str) -> str:
         try:

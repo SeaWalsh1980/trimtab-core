@@ -426,10 +426,25 @@ class JudgesTheCheckout(World):
     def test_refuses_a_head_it_cannot_read(self):
         head = Path(git(self.code, "rev-parse", "--path-format=absolute", "--git-path", "HEAD"))
         head.unlink()
-        os.mkfifo(head)
+        os.mkfifo(head)  # snapshot reads it directly, so git (which would block on it) never runs here
 
         with self.assertRaises(GateError):
-            self.gather()
+            gate.snapshot(self.code, self.config, self.proj, self.inst, [])
+
+    def test_refuses_a_file_name_that_is_not_utf8(self):
+        os.close(os.open(os.fsencode(self.code / "hooks") + b"/\xff.sh", os.O_CREAT | os.O_WRONLY, 0o644))
+
+        self.assertIn("not UTF-8", self.found()["E20"])
+
+    def test_judges_the_checkout_as_it_is_after_every_network_read(self):
+        fake = self.gh()
+
+        def edit_during_the_reads(argv, stdin):
+            if "actions/runs" in " ".join(argv):
+                (self.code / "hooks" / "guard-github.sh").write_text("#!/bin/sh\nexit 0\n")
+            return fake(argv, stdin)
+
+        self.assertIn("differ from the pinned base", self.found(edit_during_the_reads)["E20"])
 
     def test_refuses_a_hook_whose_mode_changed(self):
         (self.code / "hooks" / "guard-github.sh").chmod(0o644)
@@ -547,6 +562,21 @@ class DigestsTheInstall(World):
         (self.proj / ".claude" / "settings.json").write_text("{}")
 
         self.assertNotEqual(self.digest(), before)
+
+
+class FramesTheDigest(unittest.TestCase):
+    def install(self, files):
+        return gate.Install(files, "a" * 40, {}, {}, ("/c", "/i"))
+
+    def test_moving_bytes_between_a_path_and_its_body_changes_the_digest(self):
+        one = self.install({"hooks/ab": (False, b"c")})
+        two = self.install({"hooks/a": (False, b"bc")})
+
+        self.assertNotEqual(gate.install_digest(one), gate.install_digest(two))
+
+    def test_the_executable_bit_changes_the_digest(self):
+        self.assertNotEqual(gate.install_digest(self.install({"hooks/a": (False, b"x")})),
+                            gate.install_digest(self.install({"hooks/a": (True, b"x")})))
 
 
 class ReadsOnlyWhatItJudges(World):

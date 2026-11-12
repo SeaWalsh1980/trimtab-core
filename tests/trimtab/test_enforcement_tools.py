@@ -3,8 +3,10 @@
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from test_scrub import isolate_git
 from trimtab.enforcement import tools
@@ -85,7 +87,7 @@ class BuildsItsEnvironment(unittest.TestCase):
 
         self.assertEqual(sorted(k for k in env if k.startswith("GIT_") and k not in
                                 ("GIT_NO_REPLACE_OBJECTS", "GIT_LITERAL_PATHSPECS", "GIT_CONFIG_NOSYSTEM",
-                                 "GIT_CONFIG_GLOBAL", "GIT_TERMINAL_PROMPT")), [])
+                                 "GIT_CONFIG_GLOBAL", "GIT_TERMINAL_PROMPT", "GIT_NO_LAZY_FETCH")), [])
 
     def test_git_reads_no_global_config(self):
         self.assertEqual(tools.git_env({})["GIT_CONFIG_GLOBAL"], os.devnull)
@@ -237,6 +239,81 @@ class ReadsWorktrees(Repo):
         git(clone, "config", "remote.origin.url", "https://github.com/o/r.git")
 
         self.assertEqual(self.git.config_get(clone, "remote.origin.url"), "https://github.com/o/r.git")
+
+
+class RunsNoFetchOnARead(Repo):
+    """A session-written partial-clone config would make a read of a missing object run a fetch command."""
+
+    def plant(self):
+        marker = self.tmp / "fetched"
+        script = self.tmp / "ssh.sh"
+        script.write_text(f"#!/bin/sh\ntouch {marker}\nexit 1\n")
+        script.chmod(0o755)
+        for key, value in (("core.repositoryformatversion", "1"), ("extensions.partialClone", "evil"),
+                           ("remote.evil.promisor", "true"), ("remote.evil.url", "ssh://x/y"),
+                           ("core.sshCommand", str(script))):
+            git(self.repo, "config", key, value)
+        return marker
+
+    def test_refuses_a_repository_configured_as_a_partial_clone(self):
+        self.plant()
+
+        with self.assertRaises(ToolError):
+            self.git.objects(self.repo)
+
+    def test_a_missing_object_runs_no_command_even_unchecked(self):
+        marker = self.plant()
+        objects = tools.Objects(self.git, self.repo)  # past check(): the environment alone must stop it
+        self.addCleanup(objects.close)
+
+        with self.assertRaises(ToolError):
+            objects.get("1" * 40, "blob")
+
+        self.assertFalse(marker.exists())
+
+
+class BoundsEachRead(Repo):
+    def objects_dir(self):
+        return Path(git(self.repo, "rev-parse", "--path-format=absolute", "--git-path", "objects"))
+
+    def test_refuses_an_object_past_its_size_limit(self):
+        blob = git(self.repo, "rev-parse", f"{self.genuine}:f")
+        objects = self.git.objects(self.repo)
+        self.addCleanup(objects.close)
+
+        with mock.patch.object(tools, "OBJECT_LIMIT", 3), self.assertRaises(ToolError):
+            objects.get(blob, "blob")
+
+    def test_gives_up_on_an_object_that_never_comes(self):
+        blob = git(self.repo, "rev-parse", f"{self.genuine}:f")
+        loose = self.objects_dir() / blob[:2] / blob[2:]
+        loose.unlink()
+        os.mkfifo(loose)  # git's open of it blocks forever
+        objects = tools.Objects(self.git, self.repo, deadline=1)
+        self.addCleanup(objects._proc.kill)
+
+        started = time.monotonic()
+        with self.assertRaises(ToolError):
+            objects.get(blob, "blob")
+
+        self.assertLess(time.monotonic() - started, 5)
+
+
+class KeepsOnlyTrustedCaSettings(unittest.TestCase):
+    @unittest.skipUnless(os.path.isfile("/etc/ssl/certs/ca-certificates.crt"), "no system CA bundle here")
+    def test_keeps_a_ca_file_only_root_can_change(self):
+        self.assertEqual(tools.git_env({"SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"}).get("SSL_CERT_FILE"),
+                         "/etc/ssl/certs/ca-certificates.crt")
+
+    def test_drops_a_ca_file_this_user_can_write(self):
+        handle, path = tempfile.mkstemp()
+        os.close(handle)
+        self.addCleanup(os.unlink, path)
+
+        self.assertNotIn("SSL_CERT_FILE", tools.git_env({"SSL_CERT_FILE": path}))
+
+    def test_keeps_the_proxy(self):
+        self.assertEqual(tools.git_env({"https_proxy": "http://proxy:3128"})["https_proxy"], "http://proxy:3128")
 
 
 class Fetches(Repo):
