@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # PreToolUse hook, matcher: Bash
 #
 # Blocks destructive infrastructure commands. Exit 2 = blocked, stderr is fed

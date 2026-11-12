@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Rule-usage observer: records which instruction files a session loads.
 
 Invoked by hooks/rule-usage.sh, registered in settings.base.json for three

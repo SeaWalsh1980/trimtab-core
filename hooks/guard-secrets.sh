@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # PreToolUse hook, matcher: Write|Edit|MultiEdit|NotebookEdit
 #
 # Blocks writes to credential files, and writes whose *content* looks like a

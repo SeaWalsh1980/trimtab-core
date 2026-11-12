@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # PreToolUse hook, matcher: mcp__.*
 #
 # MCP write policy: an MCP tool call that may write waits for the operator to
