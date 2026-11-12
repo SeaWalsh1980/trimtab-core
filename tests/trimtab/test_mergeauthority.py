@@ -3073,6 +3073,16 @@ class Freshness(ApproverAction):
         self.assertIn(f"{sorted(paths)[mergeauthority.SHOWN_PATHS - 1]} and 2 more since", judged[0])
         self.assertNotIn(sorted(paths)[mergeauthority.SHOWN_PATHS], judged[0])
 
+    def test_a_git_without_merge_tree_write_tree_is_an_error_naming_the_version(self):
+        real = planscope.git_answer
+
+        def old_git(repo, *args, **kwargs):
+            return (planscope.USAGE, b"") if "merge-tree" in args else real(repo, *args, **kwargs)
+
+        with mock.patch.object(planscope, "git_answer", old_git), \
+                self.assertRaisesRegex(planscope.PlanScopeError, "git 2.38"):
+            planscope.merges_cleanly(str(self.repo), self.base, self.head)
+
     def test_judging_a_conflict_writes_no_object_into_the_repository(self):
         self.on_main(("src/app.py", "x = 3\n"))
         before = git(self.repo, "count-objects", "-v")

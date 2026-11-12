@@ -62,6 +62,7 @@ GIT_STEERING = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECT
 GIT_PINNED = (("core.fsmonitor", "false"), ("core.commitGraph", "false"), ("log.showSignature", "false"),
               ("log.follow", "false"), ("diff.renames", "false"))
 SHA = re.compile(r"[0-9a-f]{40}")
+USAGE = 129  # git's exit for an option it does not know
 
 
 class PlanScopeError(Exception):
@@ -392,10 +393,12 @@ def merges_cleanly(repo: str, base: str, head: str) -> bool:
     try:
         with tempfile.TemporaryDirectory(prefix="trimtab-merge-tree-") as scratch:
             code, out = _git_answer(repo, "merge-tree", "--write-tree", "--end-of-options", base, head,
-                                    answers=(0, 1), objects={"GIT_OBJECT_DIRECTORY": scratch,
-                                                             "GIT_ALTERNATE_OBJECT_DIRECTORIES": objects})
+                                    answers=(0, 1, USAGE), objects={"GIT_OBJECT_DIRECTORY": scratch,
+                                                                    "GIT_ALTERNATE_OBJECT_DIRECTORIES": objects})
     except OSError as err:
         raise PlanScopeError(f"the scratch object directory for git merge-tree failed: {type(err).__name__}") from err
+    if code == USAGE:
+        raise PlanScopeError("git merge-tree does not know --write-tree; the freshness check needs git 2.38 or later")
     # Clean or conflicted, the first line is the tree written; anything else is git failing to answer.
     if not SHA.fullmatch(out.split(b"\n", 1)[0].decode("ascii", errors="replace")):
         raise PlanScopeError("git merge-tree gave no tree id, so the merge cannot be read")

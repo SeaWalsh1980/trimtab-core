@@ -104,6 +104,11 @@ unread, and unread closes the route.
 - A lock bump on `main` holds every open plan PR until it merges `main`. That holds too
   much: most bumps don't change plan-scope's verdict. Accepted, because the checker the
   pin selects is the verdict.
+- A path `main` deleted and later re-added since the merge-base still counts as deleted, so
+  a head that changes it is held although the file exists again. This holds too much,
+  never too little, and merging `main` clears it.
+- The check needs git 2.38 or later (`merge-tree --write-tree`). An older git refuses,
+  naming the version.
 - A clean merge can still clash in meaning: `main` changes code the head's change relies
   on, and no file plan-scope reads moved. The owner accepts this risk. CI on the merged
   result is not re-run by this check.
