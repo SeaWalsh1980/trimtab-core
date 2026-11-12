@@ -22,9 +22,11 @@ BARE_LINK = re.compile(r"(?<![\w./-])([a-z][a-z0-9-]*/(?:SKILL|references/[\w-]*
 MD_MENTION = re.compile(r"(?<![\w./<>{}*-])([\w./<>{}*-]*\.md)\b")
 
 SHARED_RULE = " ".join("""
-**If you cannot read a file this skill links to, stop.** Make no file write and change no label.
-Report the blocker, naming the file, with one to three ways forward. Where a link below says more
-about an unreadable file, that adds to this rule.
+**If you cannot read a file this skill links to, that is a stop:** follow
+plan-run/references/stops.md. If you cannot read that either, make no file write; in a plan run,
+label `plan:blocked` and remove any `plan:continue` on the open item PR or, with none open, on the
+merged PR that started the session; and report the blocker, naming the file, with one to three ways
+forward. Where a link below says more about an unreadable file, that adds to this rule.
 """.split())
 
 # A link to one of these files must say, in its own paragraph, what an unreadable copy means.

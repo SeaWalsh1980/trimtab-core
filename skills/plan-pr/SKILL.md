@@ -8,9 +8,11 @@ description: Review and ready a plan item's PR — the one to three in-session r
 Paths such as `plan-run/references/stops.md` are relative to the skills directory, the parent of
 this skill's own directory.
 
-**If you cannot read a file this skill links to, stop.** Make no file write and change no label.
-Report the blocker, naming the file, with one to three ways forward. Where a link below says more
-about an unreadable file, that adds to this rule.
+**If you cannot read a file this skill links to, that is a stop:** follow
+plan-run/references/stops.md. If you cannot read that either, make no file write; in a plan run,
+label `plan:blocked` and remove any `plan:continue` on the open item PR or, with none open, on the
+merged PR that started the session; and report the blocker, naming the file, with one to three ways
+forward. Where a link below says more about an unreadable file, that adds to this rule.
 
 This is step 4 of plan-item/SKILL.md. Section numbers below are plan-run/SKILL.md's; other step
 numbers are plan-item/SKILL.md's. Every stop follows plan-run/references/stops.md.

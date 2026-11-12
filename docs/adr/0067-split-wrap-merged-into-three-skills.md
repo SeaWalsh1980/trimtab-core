@@ -46,10 +46,14 @@ No measurement drove this beyond the line count; the finding was readability.
     (for example, that section numbers in `plan-item` are `plan-run`'s);
   - a line at the top of every file saying what its paths are relative to;
   - **the added behaviour:** one shared rule at the top of each SKILL.md, quoted here:
-    "**If you cannot read a file this skill links to, stop.** Make no file write and change no
-    label. Report the blocker, naming the file, with one to three ways forward. Where a link below
-    says more about an unreadable file, that adds to this rule." A session that cannot read its
-    rules changes nothing; the operator learns of the stop from the report;
+    "**If you cannot read a file this skill links to, that is a stop:** follow
+    plan-run/references/stops.md. If you cannot read that either, make no file write; in a plan
+    run, label `plan:blocked` and remove any `plan:continue` on the open item PR or, with none open,
+    on the merged PR that started the session; and report the blocker, naming the file, with one to
+    three ways forward. Where a link below says more about an unreadable file, that adds to this
+    rule." An unreadable file is an ordinary stop, labelled as the moved stop protocol and the
+    doctrine's stop clause require. Only when `stops.md` itself can't be read does the rule spell
+    the stop out, in that clause's own terms;
   - for a link whose file decides something, its own meaning when unreadable: the authorisation
     check fails, the record authorises nothing, the gate fails, no session is a restart.
 - `wrap-merged` is deleted, with no alias.
@@ -64,7 +68,8 @@ No measurement drove this beyond the line count; the finding was readability.
 | Keep `wrap-merged` as the entry's name | Same misleading name; consumers would still need to learn the two new ones, so it saves no migration |
 | Rewrite the text while splitting | Mixes a move with behaviour changes, so neither can be reviewed on its own; the sync PR does the rewrite |
 | No fallback for an unreadable link (rely on the reader) | A link the run fails to follow silently loses that part's rules, and the run carries on; reviews of this PR found it for checks 1–4, the gate, the record check, restarts and the stop protocol |
-| A shared rule that also writes the record and labels the PR (tried in review rounds 4–6, then cut down) | To write and label safely it needed facts the unreadable file was meant to supply: whether check 0 passed and still holds after a clear, which PR started the session, whether this is a valid restart. Each round found another case where it labelled the wrong PR, labelled in a session that is not a plan run, or wrote without check 0. Changing nothing has no such case; the cost is that the stop leaves no `plan:blocked` label, only a report |
+| A shared rule of its own that writes the record and labels the PR (tried in review rounds 4–5) | To write and label safely it needed facts the unreadable file was meant to supply: whether check 0 passed and still holds after a clear, which PR started the session, whether this is a valid restart. Each round found another case where it labelled the wrong PR, labelled in a session that is not a plan run, or wrote without check 0 |
+| A shared rule that changes nothing (round 6, then replaced) | Breaks the doctrine's requirement that every plan-run stop carries `plan:blocked` and drops `plan:continue`: a stopped item PR kept `plan:continue`, and nothing was left for the admin to remove. It also contradicted the per-link meanings, since a failed check or gate is itself a stop the protocol labels |
 | A fallback copied next to each link (tried in review rounds 1–4, then replaced) | Each copy restated part of the stop protocol and drifted: the copies dropped `## Status` and the ways forward, could read as a write after the merge or before check 0, and named a PR a restart doesn't have. Every new link needed another copy, and each review round found one missing |
 
 ## Consequences

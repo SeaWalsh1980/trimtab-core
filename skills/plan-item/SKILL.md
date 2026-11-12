@@ -8,9 +8,11 @@ description: Work one item, or one part of an item, of an authorised plan in one
 Paths such as `plan-run/references/stops.md` are relative to the skills directory, the parent of
 this skill's own directory.
 
-**If you cannot read a file this skill links to, stop.** Make no file write and change no label.
-Report the blocker, naming the file, with one to three ways forward. Where a link below says more
-about an unreadable file, that adds to this rule.
+**If you cannot read a file this skill links to, that is a stop:** follow
+plan-run/references/stops.md. If you cannot read that either, make no file write; in a plan run,
+label `plan:blocked` and remove any `plan:continue` on the open item PR or, with none open, on the
+merged PR that started the session; and report the blocker, naming the file, with one to three ways
+forward. Where a link below says more about an unreadable file, that adds to this rule.
 
 `<plans>` and `<plan>` are as plan-run/SKILL.md defines them. Section numbers below are
 plan-run/SKILL.md's.
