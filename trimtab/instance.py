@@ -10,8 +10,9 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 
 SCHEMA_VERSION = 1
 FILE = "instance.json"
@@ -21,11 +22,25 @@ COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
 PACK = re.compile(r"^[a-z0-9-]+$")
 LOGIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,38}$")  # a user's: an App's `[bot]` can't match
 APP_LOGIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,33}\[bot\]$")  # an App's name stops at 34 characters
-TOP = {"schema_version", "repo", "base", "guards", "accounts"}
+TOP = {"schema_version", "repo", "base", "guards", "accounts", "enforcement"}
 BASE = {"repo", "sha"}
 GUARDS = {"secrets_packs", "secrets_patterns"}
 ACCOUNTS = {"admin", "agent", "approver"}
 NO_ID_FIELDS = {"cloud", "routines"}
+ENFORCEMENT = {"record", "projects"}
+JOB = {"workflow", "job"}
+ROW_ID = re.compile(r"^E([1-9]|1[0-9]|2[0-3])$")  # E1-E23, the labels AGW-1 names
+WORKFLOW = re.compile(r"^\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$")
+JOB_NAME = re.compile(r"^[^\x00-\x1f]{1,100}$")
+RECORD = re.compile(r"^docs/adr/[0-9]{4}-[a-z0-9-]+\.md$")
+
+
+@dataclass(frozen=True)
+class JobRef:
+    """The Actions job whose records show a consuming project's enforcement row (ADR 0063 §2)."""
+
+    workflow: str
+    job: str
 
 
 class InstanceFileError(Exception):
@@ -42,6 +57,9 @@ class InstanceFile:
     admin: str | None = None  # None: the file names none, and whatever needs one fails (ADR 0056)
     agent: str | None = None  # the same
     approver: str | None = None  # the same, and an App's login
+    # ADR 0063: the doctrine record holding the §Enforcement table, and each project's row jobs.
+    enforcement_record: str | None = None
+    enforcement_jobs: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
 
 
 def _keys(obj: dict, allowed: set[str], where: str) -> None:
@@ -105,6 +123,43 @@ def _accounts(accounts: object) -> tuple[str, str | None, str | None]:
     return admin, agent, approver
 
 
+def _enforcement(obj: object) -> tuple[str, MappingProxyType]:
+    if not isinstance(obj, dict):
+        raise InstanceFileError("enforcement must be an object")
+    _keys(obj, ENFORCEMENT, "enforcement.")
+    record = obj.get("record")
+    if not isinstance(record, str) or not RECORD.fullmatch(record):
+        raise InstanceFileError("enforcement.record must be docs/adr/NNNN-name.md")
+    projects = obj.get("projects", {})
+    if not isinstance(projects, dict):
+        raise InstanceFileError("enforcement.projects must be an object")
+    out = {}
+    seen: set[str] = set()
+    for repo, rows in projects.items():
+        _repo(repo, "enforcement.projects key")
+        if repo.casefold() in seen:  # GitHub compares repository names without case
+            raise InstanceFileError(f"enforcement.projects names {repo} twice, in different cases")
+        seen.add(repo.casefold())
+        if not isinstance(rows, dict):
+            raise InstanceFileError(f"enforcement.projects.{repo} must be an object")
+        jobs = {}
+        for rid, ref in rows.items():
+            where = f"enforcement.projects.{repo}.{rid}"
+            if not ROW_ID.fullmatch(rid):
+                raise InstanceFileError(f"{where}: not a row id E1-E23")
+            if not isinstance(ref, dict):
+                raise InstanceFileError(f"{where} must be an object")
+            _keys(ref, JOB, where + ".")
+            workflow, job = ref.get("workflow"), ref.get("job")
+            if not isinstance(workflow, str) or not WORKFLOW.fullmatch(workflow):
+                raise InstanceFileError(f"{where}.workflow must be .github/workflows/<file>.yml")
+            if not isinstance(job, str) or not JOB_NAME.fullmatch(job):
+                raise InstanceFileError(f"{where}.job must be a job name of 1-100 printable characters")
+            jobs[rid] = JobRef(workflow, job)
+        out[repo] = MappingProxyType(jobs)
+    return record, MappingProxyType(out)
+
+
 def parse(data: object) -> InstanceFile:
     if not isinstance(data, dict):
         raise InstanceFileError(f"{FILE} must hold a JSON object")
@@ -126,6 +181,7 @@ def parse(data: object) -> InstanceFile:
         raise InstanceFileError("guards must be an object")
     _keys(guards, GUARDS, "guards.")
     admin, agent, approver = _accounts(data["accounts"]) if "accounts" in data else (None, None, None)
+    record, jobs = _enforcement(data["enforcement"]) if "enforcement" in data else (None, MappingProxyType({}))
     return InstanceFile(
         repo=_repo(data.get("repo"), "repo"),
         base_repo=_repo(base.get("repo"), "base.repo"),
@@ -135,6 +191,8 @@ def parse(data: object) -> InstanceFile:
         admin=admin,
         agent=agent,
         approver=approver,
+        enforcement_record=record,
+        enforcement_jobs=jobs,
     )
 
 

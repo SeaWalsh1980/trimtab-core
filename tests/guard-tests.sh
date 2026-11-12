@@ -112,6 +112,9 @@ mkdir -p "$CP_HOME/commands" "$CP_HOME/agents" "$CP_HOME/skills" \
          "$CP_HOME/projects/-a-project/memory" "$CP_HOME/plans" \
          "$CP_HOME/todos" "$CP_HOME/logs"
 export CLAUDE_CONFIG_DIR="$CP_HOME"
+# A run-mode SessionStart starts E20's recorder, which reads the network; these
+# cases test the announcement, not the recorder (tests/trimtab covers it).
+export TRIMTAB_ENFORCEMENT_RECORDER=0
 # guard-paths also derives the snapshot store from XDG_DATA_HOME (else
 # ~/.local/share) and resolves its deepest existing ancestor. Pin it inside the
 # fixture too, or every case would read the operator's real data directory, and

@@ -57,7 +57,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
-from trimtab import planscope
+from trimtab import actions, planscope
 from trimtab.capture.sources import PER_PAGE, GhApi, Run, SourceError
 
 CHECK_NAME = "plan-scope"
@@ -872,19 +872,8 @@ def plan_admin_problems(named: str | None, repository: str, run: Run | None = No
 
 def _actions_rows(api: GhApi, path: str, key: str, what: str, limit: int, query: dict) -> list:
     """Every row of an Actions list, every page, wrapped in an object under `key`; past `limit`, an error."""
-    rows: list = []
-    page = 1
-    while True:
-        data = _json(api, path, what, query={**query, "per_page": PER_PAGE, "page": page})
-        batch = data.get(key) if isinstance(data, dict) else None
-        if not isinstance(batch, list):
-            raise MergeAuthorityError(f"{what} returned unexpected JSON")
-        rows += batch
-        if len(rows) > limit:
-            raise MergeAuthorityError(f"{what} holds more than {limit} rows; refusing a partial list")
-        if len(batch) < PER_PAGE:
-            return rows
-        page += 1
+    return actions.rows(lambda p, w, q: _json(api, p, w, query=q), path, key, what, limit, query,
+                        error=MergeAuthorityError)
 
 
 @dataclass(frozen=True)
