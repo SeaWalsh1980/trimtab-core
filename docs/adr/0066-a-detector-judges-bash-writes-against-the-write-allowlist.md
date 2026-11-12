@@ -1,4 +1,4 @@
-# 0065. A detector judges Bash writes against the write allowlist
+# 0066. A detector judges Bash writes against the write allowlist
 
 ## Status
 

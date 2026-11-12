@@ -400,17 +400,24 @@ def git_bytes(cwd: Path | str, *args: str, env: dict[str, str] | None = None, st
               name: str | None = None) -> bytes:
     """git's stdout as bytes: a path need not be UTF-8. env replaces the inherited environment when given. name is
     the subcommand errors report, for a caller whose args open with `-c` options."""
+    return git_answer(cwd, *args, env=env, stdin=stdin, name=name)[1]
+
+
+def git_answer(cwd: Path | str, *args: str, env: dict[str, str] | None = None, stdin: bytes | None = None,
+               name: str | None = None, answers: tuple[int, ...] = (0,)) -> tuple[int, bytes]:
+    """git's exit code and stdout, for a command whose exit code is part of its answer (`merge-base` exits 1 for
+    no common ancestor, `merge-tree` 1 for a conflict). Any code outside `answers` raises, as in `git_bytes`."""
     name = name or args[0]
     try:
         done = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, timeout=GIT_TIMEOUT_SECONDS,
                               env=env, input=stdin)
     except (OSError, subprocess.TimeoutExpired) as err:
         raise SourceError(f"git {name}: {type(err).__name__}") from err
-    if done.returncode != 0:
+    if done.returncode not in answers:
         # git names the paths it could not use, and a path can hold a run's ID.
         stderr = ANY_ID_SHAPE.sub("<id>", done.stderr.decode("utf-8", errors="replace")).strip()[:300]
         raise SourceError(f"git {name} exited {done.returncode}: {stderr}")
-    return done.stdout
+    return done.returncode, done.stdout
 
 
 GITLINK = b"160000"  # a submodule's entry: a commit, with no content of its own to read

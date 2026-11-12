@@ -1,4 +1,4 @@
-"""The Bash write detector (ADR 0065).
+"""The Bash write detector (ADR 0066).
 
 The pure rules are tested directly. The hook is tested as Claude Code runs it: hooks/bash-writes.sh
 with a JSON payload on stdin, `pre` before a command and `post` after it, in a throwaway repository
@@ -381,7 +381,7 @@ class Hook(unittest.TestCase):
         self.assertIn("makefile", done.stderr)
 
     def test_residual_a_commit_dated_before_the_call_is_not_judged(self):
-        # Accepted residual, pinned so a change to it is seen (ADR 0065, routes a deliberate command can
+        # Accepted residual, pinned so a change to it is seen (ADR 0066, routes a deliberate command can
         # take): the commit check tells the call's commits from others' work by committer time.
         done = self.around("echo two > Makefile && GIT_COMMITTER_DATE=2020-01-01T00:00:00Z "
                            "git -c user.email=t@t -c user.name=t commit -qam x")

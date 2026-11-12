@@ -1237,7 +1237,7 @@ ln -s "$CPTMP/elsewhere-empty" "$DL4/.claude"
 t guard-paths.sh 2 "allowlist: a symlinked .claude with no allowlist also fails closed" "$(e Edit "$DL4/src/a.py")"
 # guard-paths never judges Bash against the allowlist (ADR 0039); the
 # bash-writes detector judges what a shell call changed, after it ran
-# (ADR 0065), and CODEOWNERS and plan-scope gate the merge. Pinned so a
+# (ADR 0066), and CODEOWNERS and plan-scope gate the merge. Pinned so a
 # change to guard-paths' part is seen.
 t guard-paths.sh 0 "allowlist: a shell write is not judged against it" "$(bsh 'sed -i s/a/b/ src/a.py')" "$DL2"
 # Accepted residual: a shell command reaching a protected file through a hard
@@ -3568,7 +3568,7 @@ fails=$((fails + $?))
 pm_report $? state "the registered recorder ships executable"
 
 echo "== bash-writes registration (settings.base.json) =="
-# The Bash write detector (ADR 0065) needs three registrations on Bash alone:
+# The Bash write detector (ADR 0066) needs three registrations on Bash alone:
 # `pre` on PreToolUse to snapshot, and `post` on PostToolUse and on
 # PostToolUseFailure, since a command that exits non-zero raises the second
 # and would otherwise go unjudged. Checked as the file ships.

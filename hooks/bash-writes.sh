@@ -8,7 +8,7 @@
 # whose commands cannot be listed (ADR 0039). This hook judges what a Bash
 # call changed instead: `pre` snapshots the repository's changed paths, and
 # `post` judges every path the call changed by the same layers. See
-# docs/adr/0065-a-detector-judges-bash-writes-against-the-write-allowlist.md
+# docs/adr/0066-a-detector-judges-bash-writes-against-the-write-allowlist.md
 # and trimtab/adapters/bash_writes.py.
 #
 # It detects, it cannot prevent: by `post` the command has run. Exit 2 from
@@ -32,7 +32,7 @@ phase="${1:-}"
 
 payload=$(cat) || { echo "bash-writes: the hook payload could not be read; this call was not judged" >&2; exit 2; }
 # The adapter checks the version itself (3.11 or later): a separate probe
-# would cost one more interpreter start on every Bash call (ADR 0065).
+# would cost one more interpreter start on every Bash call (ADR 0066).
 if ! command -v python3 >/dev/null 2>&1; then
   echo "bash-writes: python3 is not available, so Bash writes cannot be judged" >&2
   exit 2

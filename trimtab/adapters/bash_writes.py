@@ -1,11 +1,11 @@
-"""The Bash write detector: what one Bash call changed in its repository, judged as guard-paths judges a write (ADR 0065).
+"""The Bash write detector: what one Bash call changed in its repository, judged as guard-paths judges a write (ADR 0066).
 
 guard-paths judges the Edit-family tools against the repository's write allowlist (layer 2) and, in an
 autonomous plan run, the plan's scope (layer 3) before they write. It cannot do that for Bash, whose
 writing commands cannot be listed (ADR 0039). The paths a command changed can be: this module compares
 the repository before and after the call, and judges every path the call changed by the same rules.
 
-It detects; it cannot prevent, and it is no defence against a command built to evade it (ADR 0065
+It detects; it cannot prevent, and it is no defence against a command built to evade it (ADR 0066
 lists the routes). The call has run by the time it judges, so a refusal reaches the agent as loud
 feedback naming the paths (CFG-2: undo the change, or stop and ask), and in a run as a blocker. The
 merge gates (CODEOWNERS, admin merge, the plan-scope check of ADR 0042) stay the guarantee.
@@ -660,7 +660,7 @@ def _plan_scope(repo: Repo, branch: str, base: str | None) -> tuple[str | None, 
 def main(argv: list[str] | None = None) -> int:
     deadline = Deadline(PHASE_SECONDS)
     args = sys.argv[1:] if argv is None else argv
-    if sys.version_info < (3, 11):  # the hook starts no probe of its own (ADR 0065)
+    if sys.version_info < (3, 11):  # the hook starts no probe of its own (ADR 0066)
         print("bash-writes: python3 3.11 or later is required; this call was not judged", file=sys.stderr)
         return 2
     if len(args) != 3 or args[0] not in ("snapshot", "judge"):

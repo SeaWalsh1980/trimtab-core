@@ -35,11 +35,14 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from fnmatch import fnmatchcase
 
 MAX_CHANGES = 5000  # bounded: a diff longer than this is refused, not judged in part (ENG-6.2)
+MAX_MAIN_CHANGES = 20000  # paths main's first-parent history names since a merge-base, repeats counted (ENG-6.2)
 ALLOWLIST = ".claude/write-allowlist"
 # Spelt in two pieces so the base's citation test, which refuses any plans
 # directory path in a tracked file, does not read this as a citation.
@@ -57,6 +60,7 @@ GIT_STEERING = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECT
 GIT_PINNED = (("core.fsmonitor", "false"), ("core.commitGraph", "false"), ("log.showSignature", "false"),
               ("log.follow", "false"), ("diff.renames", "false"))
 SHA = re.compile(r"[0-9a-f]{40}")
+USAGE = 129  # git's exit for an option it does not know
 
 
 class PlanScopeError(Exception):
@@ -163,6 +167,11 @@ def plan_of(head_ref: str) -> Branch:
     return Branch(Ref.PLAN, m.group(1), m.group(2))
 
 
+def plan_files(plan: str) -> tuple[str, str]:
+    """The authorised plan and its .writes declaration, as paths in the repository."""
+    return f"{AUTHORISED}/{plan}.md", f"{AUTHORISED}/{plan}.writes"
+
+
 def scope(writes: str, plan: str, item: str) -> tuple[Entry, ...]:
     """The plan's declaration plus this PR's own progress record and register entries, always
     create-only. Tied to the branch's item and part, so one PR cannot write another item's record and
@@ -231,21 +240,34 @@ class Result:
 # ---- git -----------------------------------------------------------------
 
 def _git(repo: str, *args: str, stdin: bytes | None = None) -> bytes:
+    return _git_answer(repo, *args, stdin=stdin)[1]
+
+
+def _git_answer(repo: str, *args: str, stdin: bytes | None = None, answers: tuple[int, ...] = (0,),
+                objects: Mapping[str, str] | None = None) -> tuple[int, bytes]:
     # Hardened as hooks/session-mode.sh's sm_git is: no steering variables, no
     # replace objects, literal pathspecs, no fsmonitor; and no config from the
-    # environment, with the settings a read depends on pinned.
+    # environment, with the settings a read depends on pinned. `objects` is the
+    # one steering this module sets itself: where merge-tree writes (merges_cleanly).
     env = {k: v for k, v in os.environ.items()
            if k not in GIT_STEERING and not k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
            and k != "GIT_CONFIG_COUNT"}
-    env.update(GIT_NO_REPLACE_OBJECTS="1", GIT_LITERAL_PATHSPECS="1")
+    env.update(GIT_NO_REPLACE_OBJECTS="1", GIT_LITERAL_PATHSPECS="1", **(objects or {}))
     pins = [arg for key, value in GIT_PINNED for arg in ("-c", f"{key}={value}")]
-    # Imported here, not at the top: capture.sources pulls in PyYAML, and the Bash write detector
-    # (trimtab.adapters.bash_writes, ADR 0065) imports this module's pure rules under `python3 -S`.
-    from trimtab.capture.sources import SourceError, git_bytes
+    from trimtab.capture.sources import SourceError  # see git_answer below
     try:
-        return git_bytes(repo, *pins, *args, env=env, stdin=stdin, name=args[0])
+        return git_answer(repo, *pins, *args, env=env, stdin=stdin, name=args[0], answers=answers)
     except SourceError as err:
         raise PlanScopeError(str(err)) from err
+
+
+def git_answer(*args, **kwargs):
+    """capture.sources.git_answer, imported when first called rather than with this module:
+    capture.sources pulls in PyYAML, and the Bash write detector (trimtab.adapters.bash_writes,
+    ADR 0066) imports this module's pure rules under `python3 -S`. A module-level name, so a test
+    can still patch it."""
+    from trimtab.capture.sources import git_answer as answer
+    return answer(*args, **kwargs)
 
 
 def _commit(repo: str, rev: str) -> str:
@@ -360,6 +382,62 @@ def present(repo: str, sha: str, paths: list[str]) -> frozenset[str]:
     return frozenset(os.fsdecode(p) for p in out.split(b"\0") if p)
 
 
+def merge_bases(repo: str, base: str, head: str) -> tuple[str, ...]:
+    """Every merge-base of two commits; none when their histories share no commit."""
+    code, out = _git_answer(repo, "merge-base", "--all", "--end-of-options", base, head, answers=(0, 1))
+    found = tuple(out.decode("ascii", errors="replace").split())
+    if (code == 0) != bool(found) or not all(SHA.fullmatch(sha) for sha in found):
+        raise PlanScopeError("git merge-base --all gave an unreadable answer")
+    return found
+
+
+def merges_cleanly(repo: str, base: str, head: str) -> bool:
+    """Whether git merges head into base with no conflict. merge-tree writes the merge's objects, so they go to a
+    scratch object directory that is deleted at once (SEC-2.3), with the repository's own read through it."""
+    objects = os.fsdecode(_git(repo, "rev-parse", "--path-format=absolute", "--git-path", "objects").strip())
+    if os.pathsep in objects or objects.startswith('"'):
+        # git splits the alternates variable on the separator and C-unquotes an entry opening with a quote.
+        raise PlanScopeError(f"the repository's object directory {shown(objects)} can't be named as an alternate")
+    try:
+        with tempfile.TemporaryDirectory(prefix="trimtab-merge-tree-") as scratch:
+            code, out = _git_answer(repo, "merge-tree", "--write-tree", "--end-of-options", base, head,
+                                    answers=(0, 1, USAGE), objects={"GIT_OBJECT_DIRECTORY": scratch,
+                                                                    "GIT_ALTERNATE_OBJECT_DIRECTORIES": objects})
+    except OSError as err:
+        raise PlanScopeError(f"the scratch object directory for git merge-tree failed: {type(err).__name__}") from err
+    if code == USAGE:
+        raise PlanScopeError("git merge-tree does not know --write-tree; the freshness check needs git 2.38 or later")
+    # Clean or conflicted, the first line is the tree written; anything else is git failing to answer.
+    if not SHA.fullmatch(out.split(b"\n", 1)[0].decode("ascii", errors="replace")):
+        raise PlanScopeError("git merge-tree gave no tree id, so the merge cannot be read")
+    return code == 0
+
+
+def main_changes(repo: str, since: str, tip: str) -> tuple[frozenset[str], frozenset[str]]:
+    """Each path main's first-parent history changed from `since` to `tip`, and of those the ones it deleted, in one
+    walk. Merges are read against their first parent, so a revert still shows, and renames are off, so a rename
+    deletes its old path. `--first-parent` already implies `--diff-merges=first-parent` in the git versions this
+    runs on; it is pinned as well, so a merge's changes never depend on that default."""
+    out = _git(repo, "log", "-z", "--format=", "--name-status", "--no-renames", "--first-parent",
+               "--diff-merges=first-parent", "--no-relative", "--ignore-submodules=none", "--no-ext-diff",
+               "--no-textconv", "--end-of-options", f"{since}..{tip}")
+    fields = [f for f in out.split(b"\0") if f]
+    if len(fields) % 2:
+        raise PlanScopeError("git log --name-status returned an entry that could not be parsed")
+    if len(fields) // 2 > MAX_MAIN_CHANGES:
+        raise PlanScopeError(f"main changed more than {MAX_MAIN_CHANGES} paths since the merge-base; merge main "
+                             "into the head")
+    touched, deleted = set(), set()
+    for status, path in zip(fields[0::2], fields[1::2]):
+        # With renames and copies off, git writes one letter per path; anything else is not an answer to judge.
+        if status not in (b"A", b"D", b"M", b"T"):
+            raise PlanScopeError("git log --name-status returned an entry that could not be parsed")
+        touched.add(os.fsdecode(path))
+        if status == b"D":
+            deleted.add(os.fsdecode(path))
+    return frozenset(touched), frozenset(deleted)
+
+
 def check(repo: str, *, base: str, head: str, head_ref: str, base_ref: str, default_branch: str) -> Result:
     """Judge a PR. base, head_ref, base_ref and default_branch come from the platform's event; head is
     the PR's head commit, always named: the job runs from a base checkout, where HEAD is the base."""
@@ -371,7 +449,7 @@ def check(repo: str, *, base: str, head: str, head_ref: str, base_ref: str, defa
         return Result(branch.ref, plan, (f"the PR targets {base_ref!r}, not the default branch "
                                          f"{default_branch!r}; only the default branch's lists can scope it",))
     base_sha, head_sha = _commit(repo, base), _commit(repo, head)
-    plan_md, writes_path = f"{AUTHORISED}/{plan}.md", f"{AUTHORISED}/{plan}.writes"
+    plan_md, writes_path = plan_files(plan)
     texts = read_files(repo, base_sha, [ALLOWLIST, plan_md, writes_path])
     missing = [what for what, path in (("the write allowlist", ALLOWLIST), ("the authorised plan", plan_md),
                                        ("its .writes declaration", writes_path)) if texts[path] is None]
