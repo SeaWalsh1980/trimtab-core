@@ -74,7 +74,7 @@ GIT_PINNED = (("core.fsmonitor", "false"), ("core.commitGraph", "false"), ("log.
 # And the settings that decide whether git status sees a change at all, which a command can weaken in
 # the repository's own config (found in review): pinned to git's defaults for this detector's reads.
 STATUS_PINNED = (("core.trustctime", "true"), ("core.checkStat", "default"), ("core.fileMode", "true"),
-                 ("core.untrackedCache", "false"))
+                 ("core.untrackedCache", "false"), ("core.ignoreCase", "false"))
 
 
 class BashWritesError(Exception):
@@ -128,11 +128,18 @@ def fingerprint(status: str, st: os.stat_result | None) -> str:
 
 
 def moved(before: dict[str, str], after: dict[str, str]) -> list[str]:
-    """Paths listed after the call that were not listed before it or whose fingerprint differs.
+    """Paths listed after the call that were not listed before it or whose fingerprint differs, and
+    harness paths listed before and gone after.
 
-    A path changed before and clean after is not judged: its content is HEAD's again (a `git restore`),
-    or a commit took it, which the commit check covers."""
-    return sorted(p for p, fp in after.items() if before.get(p) != fp)
+    Any other path changed before and clean after is not judged: its content is HEAD's again (a
+    `git restore`), or a commit took it, which the commit check covers. A harness entry git does not
+    track (a gitignored `CLAUDE.local.md`, `.claude/` with nothing tracked) has no HEAD content to
+    return to, so its going is a write (found in review)."""
+    from trimtab import planscope  # its pure rules only; no git
+
+    changed = {p for p, fp in after.items() if before.get(p) != fp}
+    gone = {p for p in before if p not in after and planscope.refused(p)}
+    return sorted(changed | gone)
 
 
 def judged_mode(pre_mode: str, post_mode: str, pre_branch: str, root_branch: str) -> bool:

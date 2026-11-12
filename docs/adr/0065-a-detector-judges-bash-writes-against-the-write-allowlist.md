@@ -68,7 +68,9 @@ git failing inside a repository, and the state directory failing.
 **PostToolUse and PostToolUseFailure (`post`)** take the snapshot (removing
 it) and judge two sets of paths:
 
-- every path listed now that was not listed before or has a new fingerprint;
+- every path listed now that was not listed before or has a new fingerprint,
+  and every harness path listed before and gone now (an untracked harness
+  file has no HEAD content to return to, so its deletion is a write);
 - every path changed by a commit the call made on any branch. That is a commit
   reachable from a tip that is new since the snapshot, from no tip the
   snapshot held, and committed since the snapshot was taken (one second's
@@ -97,8 +99,10 @@ Every git call names the repository outright (`--git-dir`, `--work-tree`),
 which outranks `core.bare`, `core.worktree` and steering variables. The
 environment is hardened as `planscope._git` does it. The settings that decide
 whether `git status` notices a change at all (`core.trustctime`,
-`core.checkStat`, `core.fileMode`, `core.untrackedCache`) are pinned to
-git's defaults, since a command can weaken them in the repository's config. Each phase has one 7 s
+`core.checkStat`, `core.fileMode`, `core.untrackedCache`, `core.ignoreCase`)
+are pinned to git's defaults on Linux, since a command can weaken them in the
+repository's config. Clean filters and ignore rules are not pinned; they are
+listed below as routes. Each phase has one 7 s
 deadline for all its git calls together, inside the hook's 10 s timeout. A hook
 killed at its timeout reports nothing, so the adapter gives up first and says
 so.
@@ -162,8 +166,10 @@ the guards are whole without it.
 - rewriting its own snapshot, which lives where only a shell path built at run
   time reaches it (as with the session-mode record, ADR 0041). The snapshot
   carries nothing the agent cannot forge;
-- committing with a date set before the snapshot (`GIT_COMMITTER_DATE`), so
-  the commit reads as others' work;
+- committing with a date set before the snapshot (`GIT_COMMITTER_DATE`, or
+  `git rebase` / `git am --committer-date-is-author-date` folding the call's
+  change into an older commit), so the commit reads as others' work. A test
+  pins this as a residual;
 - a clean filter set in the repository's config with `.git/info/attributes`
   (a same-size edit then reads as unchanged), or an ignore rule the command
   writes (a `.gitignore` that ignores itself, `core.excludesFile`,
@@ -185,7 +191,8 @@ the guards are whole without it.
 
 - fail closed has a price. A repository too large or slow for the bounds
   (more than 20,000 changed, untracked or flagged paths, such as an unignored
-  virtualenv; 5,000 tips; or `git status` slower than the 7 s deadline) has
+  virtualenv; more than 20,000 entries under the root's `.claude/` outside
+  `worktrees/`; 5,000 tips; or `git status` slower than the 7 s deadline) has
   every Bash call refused at `pre`, read-only ones included, on every project
   the base is installed into. The way out is the operator exporting
   `HOOK_ALLOW_BASH_WRITES=1` (or ignoring the directory), not a fail-open;
@@ -200,6 +207,20 @@ the guards are whole without it.
   reported again. This is loud, not silent;
 - others' commits dated within a second of the snapshot, then fetched or
   pulled in the same call, are judged as the call's. This is loud, and rare;
+- PreToolUse runs before Claude Code's permission prompt. A "don't ask again"
+  answer makes Claude Code write the project's `.claude/settings.local.json`
+  between the snapshot and the command, and `post` reports it as the call's
+  harness write. This is loud, and the operator can tell it from the prompt
+  just answered; the path is not excluded, since an agent's write to it must
+  still be reported;
+- a `.claude` that is a symlink is recorded as one entry and not followed, so
+  writes inside its target are not seen. It is also refused as an allowlist
+  source, so a run in such a repository writes nothing anyway;
+- the harness walk is bounded by entry count, not by the phase deadline; on a
+  very slow filesystem the hook could reach its own timeout, and a `post`
+  killed there reports nothing;
+- a lift (`HOOK_ALLOW_HARNESS` or `HOOK_ALLOW_BASH_WRITES`) leaves no trace in
+  the session, as guard-paths' lift does not;
 - a cancelled call raises neither post event (Claude Code's hooks reference),
   so its snapshot is pruned after 24 hours unjudged;
 - parallel Bash calls in one repository may each see the other's writes; a

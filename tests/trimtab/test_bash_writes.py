@@ -69,6 +69,9 @@ class Moved(unittest.TestCase):
     def test_a_path_restored_to_head_is_not_judged(self):
         self.assertEqual(bw.moved({"src/a.py": "f1"}, {}), [])
 
+    def test_a_harness_entry_that_is_gone_has_moved(self):
+        self.assertEqual(bw.moved({"CLAUDE.local.md": "[fs]|f1"}, {}), ["CLAUDE.local.md"])
+
     def test_a_change_to_the_index_alone_changes_the_fingerprint(self):
         st = os.stat(__file__)
 
@@ -343,6 +346,54 @@ class Hook(unittest.TestCase):
 
         self.assertIn("Makefile", done.stderr)
 
+    def test_turning_off_file_modes_does_not_hide_a_mode_change(self):
+        done = self.around("git config core.fileMode false && chmod +x Makefile")
+
+        self.assertIn("Makefile", done.stderr)
+
+    def test_turning_on_the_untracked_cache_does_not_hide_a_new_file(self):
+        # The cache hides a file only with ctime checks off and a directory's mtime reset, so this does
+        # not isolate the core.untrackedCache pin; it pins that a new file is still reported.
+        done = self.around("git config core.untrackedCache true && git status -s >/dev/null && echo x > stray.txt")
+
+        self.assertIn("stray.txt", done.stderr)
+
+    def test_turning_on_ignore_case_does_not_hide_a_new_file(self):
+        done = self.around("git config core.ignoreCase true && echo x > makefile")
+
+        self.assertIn("makefile", done.stderr)
+
+    def test_residual_a_commit_dated_before_the_call_is_not_judged(self):
+        # Accepted residual, pinned so a change to it is seen (ADR 0065, routes a deliberate command can
+        # take): the commit check tells the call's commits from others' work by committer time.
+        done = self.around("echo two > Makefile && GIT_COMMITTER_DATE=2020-01-01T00:00:00Z "
+                           "git -c user.email=t@t -c user.name=t commit -qam x")
+
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
+
+    def test_a_write_to_a_gitignored_instruction_file_is_reported(self):
+        (self.repo / ".git" / "info" / "exclude").write_text("CLAUDE.local.md\n")
+
+        done = self.around("echo x > CLAUDE.local.md")
+
+        self.assertIn("CLAUDE.local.md: a repository harness or control path", done.stderr)
+
+    def test_deleting_a_gitignored_instruction_file_is_reported(self):
+        (self.repo / ".git" / "info" / "exclude").write_text("CLAUDE.local.md\n")
+        (self.repo / "CLAUDE.local.md").write_text("local\n")
+
+        done = self.around("rm CLAUDE.local.md")
+
+        self.assertIn("CLAUDE.local.md", done.stderr)
+
+    def test_writes_under_claude_worktrees_are_not_judged_as_harness(self):
+        (self.repo / ".claude" / "worktrees").mkdir()
+        (self.repo / ".git" / "info" / "exclude").write_text(".claude/worktrees/\n")
+
+        done = self.around("mkdir .claude/worktrees/w && echo x > .claude/worktrees/w/f")
+
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
+
     def test_core_bare_does_not_hide_a_write(self):
         done = self.around("echo x > stray.txt && git config core.bare true")
 
@@ -533,6 +584,16 @@ class Hook(unittest.TestCase):
                               timeout=60)
 
         self.assertEqual(done.returncode, 2)
+
+    def test_a_snapshot_whose_time_is_not_a_number_is_refused(self):
+        self.assertEqual(self.hook("pre", "toolu_time").returncode, 0)
+        data = json.loads(self.snapshot_file("toolu_time").read_text())
+        data["taken"] = True
+        self.snapshot_file("toolu_time").write_text(json.dumps(data))
+
+        done = self.hook("post", "toolu_time")
+
+        self.assertIn("malformed", done.stderr)
 
     def test_a_run_on_a_branch_that_names_no_plan_is_refused(self):
         env = {**self.env, "TRIMTAB_PLAN_RUN": "1"}
