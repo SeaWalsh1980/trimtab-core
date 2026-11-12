@@ -1,4 +1,4 @@
-"""The plan authorisation check: wrap-merged's checks 1-3, run as one command (ADR 0059).
+"""The plan authorisation check: plan-run's checks 1-3, run as one command (ADR 0059).
 
 A plan run cannot type these checks itself: guard-paths' layer 1 refuses any
 shell command that names the authorised plans folder, reads included (ADR

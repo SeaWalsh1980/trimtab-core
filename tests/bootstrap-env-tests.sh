@@ -927,10 +927,14 @@ check_instance_without_claude_md_drops_a_dangling_link() {
 
 # Skills (ADR 0050): ~/.claude/skills is a real directory the operator's own
 # skills share, with one link per base skill. The checkout is the base here.
-base_skill="$repo/skills/wrap-merged"
-skill_linked() { # skill_linked <home>: the base skill is linked from a real skills/ directory
-  [[ -d "$1/.claude/skills" && ! -L "$1/.claude/skills" && -L "$1/.claude/skills/wrap-merged" \
-     && "$(readlink -f "$1/.claude/skills/wrap-merged")" == "$(readlink -f "$base_skill")" ]]
+base_skills=(plan-run plan-item plan-pr)
+skill_linked() { # skill_linked <home>: each base skill is linked from a real skills/ directory
+  [[ -d "$1/.claude/skills" && ! -L "$1/.claude/skills" ]] || return 1
+  local s
+  for s in "${base_skills[@]}"; do
+    [[ -L "$1/.claude/skills/$s" \
+       && "$(readlink -f "$1/.claude/skills/$s")" == "$(readlink -f "$repo/skills/$s")" ]] || return 1
+  done
 }
 old_snap() { printf '%s/share/trimtab/core/%040d' "$1" 7; }
 
@@ -960,10 +964,10 @@ check_skills_keep_the_operators_own() {
 check_skills_replace_an_installs_whole_directory_link() {
   local h inst snap
   h=$(new_home); inst=$(inst_of "$h")
-  snap=$(old_snap "$h"); mkdir -p "$snap/skills/wrap-merged" "$h/.claude"
+  snap=$(old_snap "$h"); mkdir -p "$snap/skills/plan-run" "$h/.claude"
   ln -s "$snap/skills" "$h/.claude/skills"
   boot "$h" "$live" --instance "$inst"
-  if [[ $rc -eq 0 && -d "$snap/skills/wrap-merged" ]] && skill_linked "$h"; then
+  if [[ $rc -eq 0 && -d "$snap/skills/plan-run" ]] && skill_linked "$h"; then
     pass "skills: an earlier install's whole-directory link becomes a directory of links"
   else
     fail "skills: an earlier install's whole-directory link becomes a directory of links" "rc=$rc"
@@ -973,10 +977,10 @@ check_skills_replace_an_installs_whole_directory_link() {
 check_skills_clash_is_refused_before_anything_is_written() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
-  mkdir -p "$h/.claude/skills/wrap-merged"; echo "operator's" > "$h/.claude/skills/wrap-merged/SKILL.md"
+  mkdir -p "$h/.claude/skills/plan-run"; echo "operator's" > "$h/.claude/skills/plan-run/SKILL.md"
   boot "$h" "$live" --instance "$inst"
-  if [[ $rc -ne 0 && "$out" == *"skills/wrap-merged"* && ! -e "$h/.claude/settings.json" ]] \
-     && no_links "$h" && [[ "$(cat "$h/.claude/skills/wrap-merged/SKILL.md")" == "operator's" ]]; then
+  if [[ $rc -ne 0 && "$out" == *"skills/plan-run"* && ! -e "$h/.claude/settings.json" ]] \
+     && no_links "$h" && [[ "$(cat "$h/.claude/skills/plan-run/SKILL.md")" == "operator's" ]]; then
     pass "skills: an operator's entry with a base skill's name is refused, nothing written"
   else
     fail "skills: an operator's entry with a base skill's name is refused, nothing written" "rc=$rc"
@@ -1035,7 +1039,7 @@ check_skills_replace_a_dangling_link_into_a_deleted_snapshot() {
 }
 
 fake_core() { # fake_core <dir>: a tree that reads as a trimtab-core checkout
-  mkdir -p "$1/hooks" "$1/skills/wrap-merged"
+  mkdir -p "$1/hooks" "$1/skills/plan-run"
   : > "$1/settings.base.json"; : > "$1/hooks/guard-paths.sh"; : > "$1/bootstrap.sh"
 }
 
@@ -1043,7 +1047,7 @@ check_skills_relink_from_another_core_checkout() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
   fake_core "$h/core-checkout"
-  mkdir -p "$h/.claude/skills"; ln -s "$h/core-checkout/skills/wrap-merged" "$h/.claude/skills/wrap-merged"
+  mkdir -p "$h/.claude/skills"; ln -s "$h/core-checkout/skills/plan-run" "$h/.claude/skills/plan-run"
   boot "$h" "$live" --instance "$inst"
   local one=$rc
   local h2 inst2
@@ -1062,7 +1066,7 @@ check_skills_clash_writes_no_machine_json() {
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
   rm -f "$inst/machine.json"
-  mkdir -p "$h/.claude/skills/wrap-merged"
+  mkdir -p "$h/.claude/skills/plan-run"
   boot "$h" "$live" --instance "$inst"
   if [[ $rc -ne 0 && ! -e "$inst/machine.json" ]]; then
     pass "skills: a clash is refused before machine.json is created"
@@ -1091,7 +1095,7 @@ check_skills_keep_sibling_links_and_aliases() {
   mkdir -p "$h/.claude/skills/gstack/qa"
   ln -s "$h/.claude/skills/gstack/qa" "$h/.claude/skills/qa"
   # An operator's alias to a base skill, under another name.
-  ln -s "$base_skill" "$h/.claude/skills/wm"
+  ln -s "$repo/skills/plan-run" "$h/.claude/skills/wm"
   boot "$h" "$live" --instance "$inst"
   if [[ $rc -eq 0 && -L "$h/.claude/skills/qa" && -L "$h/.claude/skills/wm" ]] && skill_linked "$h"; then
     pass "skills: an operator's sibling link and alias stay"
@@ -1181,9 +1185,9 @@ check_commands_relink_from_another_core_checkout() {
   mkdir -p "$h/.claude/agents"
   ln -s "$h/core-checkout/commands" "$h/.claude/commands"
   ln -s "$h/core-checkout/agents/x" "$h/.claude/agents/x"
-  ln -s "$h/core-checkout/skills/wrap-merged" "$h/.claude/agents/wrap-merged"
+  ln -s "$h/core-checkout/skills/plan-run" "$h/.claude/agents/plan-run"
   boot "$h" "$live" --instance "$inst"
-  if [[ $rc -eq 0 && ! -L "$h/.claude/agents/x" && -L "$h/.claude/agents/wrap-merged" ]] \
+  if [[ $rc -eq 0 && ! -L "$h/.claude/agents/x" && -L "$h/.claude/agents/plan-run" ]] \
      && entries_linked "$h" commands && entries_linked "$h" agents; then
     pass "commands, agents: links into the same directory of a core checkout are an install's; others stay"
   else

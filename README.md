@@ -45,14 +45,15 @@ Trimtab is split in two, and this repository is only one half.
 
 - **The base** (this repository) holds the mechanism: the `trimtab` Python
   package and its CLI, the guards and hooks, the `/trimtab-*` commands, the
-  `trimtab-*` agents, the skills (`wrap-merged`: in a project that runs an
-  instance's authorised plans, verify the plan when a plan PR merges, then
-  continue, hand over or stop on the merged progress record's `## Next`;
-  it does nothing for other merges),
+  `trimtab-*` agents, the skills (`plan-run`, `plan-item` and `plan-pr`: in a
+  project that runs an instance's authorised plans, `plan-run` verifies the
+  plan when a plan PR merges, then continues, hands over or stops on the
+  merged progress record's `## Next`, `plan-item` works one item in one PR,
+  and `plan-pr` reviews that PR to ready; they do nothing for other merges),
   `bootstrap.sh`, the routine templates and the tests.
   It holds no rules and no deployment values: no repository names, no
   paths, no identities. A skill may carry the procedure an instance's rule
-  requires (as `wrap-merged` does for authorised-plan runs); the rule itself
+  requires (as the `plan-*` skills do for authorised-plan runs); the rule itself
   stays in the instance, and the skill changes when it does.
 - **An instance** holds what is particular to one operator: the doctrine
   (`rules/`, from which `HARNESS.md` is generated), the list of consuming

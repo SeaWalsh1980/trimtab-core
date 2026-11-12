@@ -324,10 +324,10 @@ class NoFacts(unittest.TestCase):
 
 
 class AgreesWithTheSkill(unittest.TestCase):
-    """The wrap-merged skill's approver file test reads the same lists after the merge; they must not drift."""
+    """The plan-run skill's approver file test reads the same lists after the merge; they must not drift."""
 
     def test_the_skills_approver_file_test_names_every_admin_only_pin_and_checker_path(self):
-        skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
+        skill = (ROOT / "skills" / "plan-run" / "references" / "record-authority.md").read_text(encoding="utf-8")
         start = skill.index("the PR changes neither `.github/`")
         section = skill[start:skill.index("the `plan-scope` job runs its checker", start)]
         paths = (*mergeauthority.PIN_FILES, *mergeauthority.CHECKER_DIRS, *mergeauthority.CHECKER_FILES, ".github/")
@@ -336,7 +336,7 @@ class AgreesWithTheSkill(unittest.TestCase):
 
     def plan_checks(self):
         """Checks 1-3 of the skill's authorisation check, which a plan run types (ADR 0059)."""
-        skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
+        skill = (ROOT / "skills" / "plan-run" / "references" / "authorisation.md").read_text(encoding="utf-8")
         start = skill.index("1. **The plan and its declaration are on the default branch.**")
         return skill[start:skill.index("4. **The enforcement is live.**", start)]
 
@@ -353,8 +353,8 @@ class AgreesWithTheSkill(unittest.TestCase):
 
     def test_the_skills_record_check_states_its_own_pr_lookup(self):
         """Check 2's lookup moved into check-plan-authorised (ADR 0059), so section 3 can't point back at it."""
-        skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
-        start = skill.index("### 3. Work out the state")
+        skill = (ROOT / "skills" / "plan-run" / "references" / "record-authority.md").read_text(encoding="utf-8")
+        start = skill.index("## Its PR: the code gate and the merger")
         section = " ".join(skill[start:skill.index("First, whoever merged, the code gate", start)].split())
 
         self.assertIn("repos/{owner}/{repo}/commits/<sha>/pulls", section)
@@ -369,14 +369,14 @@ class AgreesWithTheSkill(unittest.TestCase):
         self.assertEqual([verb for verb in ("git ls-tree", "git log", "git diff", "gh api") if verb in section], [])
 
     def test_the_skills_in_flight_test_names_where_the_agents_login_comes_from(self):
-        skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
+        skill = (ROOT / "skills" / "plan-run" / "SKILL.md").read_text(encoding="utf-8")
         start = skill.index("- **In flight:**")
         section = skill[start:skill.index("- **Next:**", start)]
 
         self.assertIn("`accounts.agent` from `trimtab instance --json`", section)
 
     def test_the_skills_label_check_names_where_each_login_comes_from(self):
-        skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
+        skill = (ROOT / "skills" / "plan-run" / "SKILL.md").read_text(encoding="utf-8")
         start = skill.index("**A session started by the `plan:continue` label**")
         section = skill[start:skill.index("**Restarting after a stop**", start)]
 
@@ -2629,7 +2629,7 @@ class PlanScopeJob(unittest.TestCase):
                 self.assertEqual(gh.calls, [])
 
     def test_the_skills_merger_test_takes_plan_scope_from_the_command(self):
-        skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
+        skill = (ROOT / "skills" / "plan-run" / "references" / "record-authority.md").read_text(encoding="utf-8")
         start = skill.index("Then the merger.")
         section = skill[start:skill.index("the PR changes neither `.github/`", start)]
 
@@ -2638,7 +2638,7 @@ class PlanScopeJob(unittest.TestCase):
         self.assertNotIn("check-runs", section)
 
     def test_the_skill_allows_one_bounded_re_run(self):
-        skill = (ROOT / "skills" / "wrap-merged" / "SKILL.md").read_text(encoding="utf-8")
+        skill = (ROOT / "skills" / "plan-run" / "references" / "record-authority.md").read_text(encoding="utf-8")
         start = skill.index("Then the merger.")
         section = " ".join(skill[start:skill.index("the PR changes neither `.github/`", start)].split())
 

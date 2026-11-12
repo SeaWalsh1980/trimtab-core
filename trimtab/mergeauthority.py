@@ -33,7 +33,7 @@ An approval counts only as the account's last review that is not `COMMENTED`
 or `PENDING`, in state `APPROVED`, on the head commit. A last review in state
 `DISMISSED` means the account has no review; an earlier one never stands in.
 A last review in state `CHANGES_REQUESTED` from either account fails the PR.
-This is the wrap-merged skill's code gate, so the gate at merge and the
+This is the plan-run skill's code gate, so the gate at merge and the
 skill's check after it agree.
 
 `check_action` is what the approver App runs before each write, since a check
