@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from enum import Enum
 from fnmatch import fnmatchcase
 
-from trimtab.capture.sources import SourceError, git_bytes
+from trimtab.capture.ghapi import SourceError, git_bytes
 
 MAX_CHANGES = 5000  # bounded: a diff longer than this is refused, not judged in part (ENG-6.2)
 ALLOWLIST = ".claude/write-allowlist"

@@ -610,3 +610,65 @@ a run's PR, as the doctrine record says.
 
 None. The 3 s `ls-remote` bound and the defaults are unmeasured starting values. The 60-minute
 and 24-hour bounds come from the doctrine record.
+
+## Amendment 1: guard-github's rows (E12, E14-E17, E19), second PR of four
+
+The record above is unchanged; this amendment records what the second PR built and the choices
+the rows left open. Status of the record: still proposed.
+
+**What ships.** `hooks/guard-github.sh` now sends any command naming `push`, `send-pack`,
+`http-push`, a git subcommand the shell builds, `gh pr close|merge|update-branch` or
+`gh issue close` to `trimtab/adapters/guard_github.py`, which reads the spellings of a `plan/*`
+write and hands them to `trimtab/planrows.py`. Each row is its own decision function
+(`check_e12`, `check_e14` to `check_e17`, `check_e19`), so the mutation test removes one row at a
+time. `trimtab/planfacts.py` reads GitHub and the checkout; `trimtab/planguard.py` joins the two
+for the hook.
+
+**Spellings read.**
+- `git push`: options with git's abbreviation rule, refspecs (`src:dst`, `+`, `:dst`, `HEAD`,
+  `refs/heads/`, `heads/`), `--delete`, `--mirror`, `--prune`, `--all`, and a bare push resolved
+  through `@{push}`. A branch it cannot resolve, a refspec built by the shell or holding a
+  pattern, an option it does not know, `-C` through a shell expansion, `--git-dir` and
+  `--work-tree` all refuse.
+- `--mirror` refuses as E15 and `--prune` as E16, whatever the refs. `--all` is judged ref by ref
+  for the local `plan/*` branches.
+- REST: a ref create, update (with `force`) and delete, a contents write with a `branch`, a
+  merge with a `base`, a branch rename, `update-branch`, and a PATCH to `pulls/N` or `issues/N`
+  with `state=closed` (the head is looked up). A GraphQL `createRef`, `createCommitOnBranch` or
+  `mergeBranch` naming `plan/` refuses, as does every `closePullRequest`, because it names the PR
+  by an ID this guard cannot read.
+- `gh pr close`, `gh pr merge --delete-branch`, `gh pr update-branch` and `gh issue close`, by
+  number, URL, branch or the current branch.
+- Branch names are compared case-folded and looked up as spelled.
+
+**Choices.**
+- **E12 counts the run, not each job.** A head fails when a run for the branch concluded
+  `failure`, `timed_out` or `cancelled` on its latest attempt. One list read replaces a job read
+  per head (ENG-6.2); a failure re-run to success reads as passed, which is AGW-4's "an
+  infrastructure failure is re-run once and does not count". An E3 facts run is a run of the
+  instance's `review.facts` workflow. With no `review` key E12 cannot be counted and refuses.
+- **The conflict count has a gap until the ledger.** A head that conflicted with the default
+  branch counts when `mergeable` is `false` for the head the push answers, read at that push. The
+  record of past conflicts is the ledger's (the plan-run layer's PR); until it lands, an earlier
+  conflict-only round is not counted, and E22 has no server fact for it either. The cap is
+  therefore weaker by conflict-only rounds until then.
+- **E19 is stateless.** Each guarded write re-reads the scan job's records for the branch's
+  latest head, so a failing head keeps the stop standing without a stored stop. Writing a `stop`
+  to the ledger is the plan-run layer's. No `secret_scan` key refuses.
+- **The instance schema gains `secret_scan` and `review`** (the job, the review's login, the
+  re-request label, the five tags and the two bounds, as §4 lists them). `fix_limits` is E18's,
+  in the next PR.
+- **Hook-path imports are standard library only.** `GhApi`, its errors and `git_bytes` moved to
+  `trimtab/capture/ghapi.py`, re-exported from `capture/sources.py`. The hook runs Python with
+  `-I -S`, where PyYAML (reached through `capture/sources.py`) is not found; so did the recorder
+  under `-I` on a host that installs PyYAML for the user only, which left the recorder without a
+  pass. Both now import without it.
+
+**Residuals accepted.**
+- A git alias (`git -c alias.x=push x`) or a push through a binary the guard does not name is not
+  read; the push still faces E22 at merge.
+- The hook's 10 s limit holds the adapter to 6 s for several GitHub reads. A slow read refuses
+  the push (closed), and the run retries.
+- A bare push in a shallow clone refuses, because the gate's git refuses shallow history.
+- `update-branch`, a contents write and a ref update by REST carry no source commit, so on a ready
+  PR they refuse (E17) and cannot take the register-commit exception.

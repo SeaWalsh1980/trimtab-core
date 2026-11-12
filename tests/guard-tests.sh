@@ -3347,6 +3347,42 @@ tg 0 'gh api -X POST repos/o/r/actions/jobs/1/rerun'
 tg 0 'gh api repos/o/r/actions/workflows/1'
 tg 0 'git commit -m "gh run delete and gh workflow run are refused"' 'a commit message naming them'
 
+# --- plan/* writes: E14 (a plan run only), E15 (no force), E16 (no delete or close) (ADR 0063 §5) ---
+# Every case here refuses, or allows, before any fact is read, so no gh or network is needed. The rows
+# that read GitHub (E12, E17, E19) are tested with injected facts in tests/trimtab/test_guard_github_plan.py.
+PB='plan/0008-slug/item-02-part1'
+PSHA=$(printf 'a%.0s' $(seq 40))
+tg 2 "git push origin $PB"                               'E14: a push to plan/* outside a plan run'
+tg 2 "git push origin HEAD:refs/heads/$PB"               'E14: the same, as a refspec'
+tg 2 "git push --force origin $PB"                       'E15: a forced push to plan/*'
+tg 2 "git push --force-with-lease origin $PB"            'E15: with a lease too'
+tg 2 "git push origin +HEAD:$PB"                         'E15: a + refspec'
+tg 2 'git push --mirror origin'                          'E15: a mirror push'
+tg 2 "git push origin :$PB"                              'E16: a delete refspec'
+tg 2 "git push --delete origin $PB"                      'E16: --delete'
+tg 2 'git push --prune origin'                           'E16: --prune'
+tg 2 "git -C /tmp push origin $PB"                       'a push through git -C'
+tg 2 "sudo git push origin $PB"                          'a push behind sudo'
+tg 2 "bash -c 'git push origin $PB'"                     'a push in a shell string'
+tg 2 "\$G push origin $PB"                               'a command word the shell builds, then push'
+tg 2 'git push origin $B'                                'a refspec the shell builds'
+tg 0 'git push origin feature/x'                         'a push of another branch reads nothing'
+tg 0 'git push -u origin feature/x'
+tg 0 'git status'
+tg 0 'echo push'                                         'the word push alone'
+tg 2 "gh api -X DELETE repos/o/r/git/refs/heads/$PB"     'E16: a REST ref delete'
+tg 2 "gh api -X POST repos/o/r/git/refs -f ref=refs/heads/$PB -f sha=$PSHA" 'E14: a REST ref create'
+tg 2 "gh api -X PATCH repos/o/r/git/refs/heads/$PB -f sha=$PSHA -F force=true" 'E15: a REST forced update'
+tg 2 "gh api -X PUT repos/o/r/contents/a.txt -f branch=$PB -f message=m" 'E14: a contents write'
+tg 2 "gh api -X POST repos/o/r/branches/$PB/rename -f new_name=x" 'E16: a rename of plan/*'
+tg 0 "gh api -X POST repos/o/r/git/refs -f ref=refs/heads/feature/x -f sha=$PSHA" 'another ref is not a plan write'
+tg 2 "gh pr close $PB"                                   'E16: closing a PR by its plan branch'
+tg 2 "gh pr close -R o/r $PB --comment x"
+tg 2 "gh pr merge $PB --delete-branch"                   'E16: merge with --delete-branch'
+tg 0 'gh pr close feature/x'                             'closing another branch'"'"'s PR'
+tg 2 'gh api graphql -f query='"'"'mutation { closePullRequest(input:{pullRequestId:"PR_x"}) { clientMutationId } }'"'"'' 'E16: closePullRequest'
+tg 2 "gh api graphql -f query='mutation { createRef(input:{name:\"refs/heads/$PB\"}) { ref { id } } }'" 'E14: createRef on plan/*'
+
 # --- the payload, the parser and the override ------------------------------
 t guard-github.sh 2 "empty payload"                      ''
 t guard-github.sh 2 "garbage payload"                    'not json'

@@ -5,10 +5,12 @@
 # Refuses the GitHub writes the operator owns: a PR opened as anything but a
 # draft, an approving review, resolving a review thread, API writes to the
 # default branch (and `gh repo sync --force`), deleting a workflow run or its
-# logs, and dispatching a workflow. The rules, the spellings read
-# and the residuals are in trimtab/adapters/guard_github.py,
-# docs/adr/0037-guard-github-refuses-the-github-writes-the-operator-owns.md and
-# docs/adr/0055-guard-github-refuses-deleting-runs-and-dispatching-workflows.md.
+# logs, and dispatching a workflow; and, for plan runs, the writes to a plan/*
+# ref and the closing of a plan PR (E12, E14-E17, E19). The rules, the spellings
+# read and the residuals are in trimtab/adapters/guard_github.py,
+# docs/adr/0037-guard-github-refuses-the-github-writes-the-operator-owns.md,
+# docs/adr/0055-guard-github-refuses-deleting-runs-and-dispatching-workflows.md
+# and docs/adr/0063-the-plan-run-enforcement-gate.md.
 # Exit 2 = blocked, with a message that names the rule and never quotes the
 # command.
 #
@@ -19,8 +21,8 @@
 # ANSI-C quoting) goes to the adapter.
 #
 # Fast path: python3 starts only for a command naming gh, graphql, a
-# github.com host or a gh subcommand (pr create, api, …) once quotes and
-# backslashes are removed. Anything else exits after one bash startup.
+# github.com host, a gh subcommand (pr create, api, …) or a push, once quotes
+# and backslashes are removed. Anything else exits after one bash startup.
 #
 # Session override: export HOOK_ALLOW_GITHUB=1
 #   (must be exported before launching claude — an inline prefix on a Bash
@@ -53,7 +55,10 @@ about_github='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-]|$)|graphql|github\.com'
 # Options, or expansions that may be options, may sit between a group and its
 # command (`run -R o/r delete`, `run $F delete`).
 opt='((-|\$)[^[:space:]]+[[:space:]]+([^[:space:]-][^[:space:]]*[[:space:]]+)?)*'
-about_github+="|(^|[^A-Za-z0-9_])(pr[[:space:]]+${opt}(create|new|review)|api[[:space:]]|repo[[:space:]]+${opt}sync|alias[[:space:]]+(set|import)|run[[:space:]]+${opt}delete|workflow[[:space:]]+${opt}run)"
+about_github+="|(^|[^A-Za-z0-9_])(pr[[:space:]]+${opt}(create|new|review|close|merge|update-branch)|api[[:space:]]|repo[[:space:]]+${opt}sync|alias[[:space:]]+(set|import)|run[[:space:]]+${opt}delete|workflow[[:space:]]+${opt}run|issue[[:space:]]+${opt}close)"
+# A push writes remote refs, plan/* among them (ADR 0063 §5): the word `push`, a plumbing push, or a git
+# subcommand the shell builds (`git $C origin x`) goes to the adapter, which reads it.
+about_github+="|(^|[^A-Za-z0-9_.-])(push|send-pack|http-push)([^A-Za-z0-9_.-]|$)|(^|[^A-Za-z0-9_.-])git[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[^[:space:]]*[\$\`]"
 # The regex's time grows steeply with a long crafted command (over 20 s at 140 KB,
 # ADR 0055), and a hook that outlives its timeout fails open. So a long payload
 # goes to the adapter, which stops itself and blocks.

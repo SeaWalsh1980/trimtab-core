@@ -19,6 +19,7 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Iterable, Mapping, Protocol
 
+from trimtab.capture.ghapi import HostError  # noqa: F401  (re-exported)
 from trimtab.capture.prblock import APPLIED, COST, FEEDBACK, SECTIONS, check_body
 from trimtab.items import Item, Problem
 
@@ -46,10 +47,6 @@ BLOCK = f"""## {APPLIED}
 {{}}
 ```
 """
-
-
-class HostError(Exception):
-    """The host (GitHub) failed, timed out, or answered with something unexpected."""
 
 
 class NotDependabot(Exception):

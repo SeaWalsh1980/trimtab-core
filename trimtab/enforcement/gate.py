@@ -33,7 +33,7 @@ from urllib.parse import quote
 
 from trimtab import actions, guardstate, instance
 from trimtab import config as lock_config
-from trimtab.capture.sources import GhApi, Run, SourceError
+from trimtab.capture.ghapi import GhApi, Run, SourceError
 from trimtab.enforcement import manifest as manifest_mod
 from trimtab.enforcement import record as record_mod
 from trimtab.enforcement import tools

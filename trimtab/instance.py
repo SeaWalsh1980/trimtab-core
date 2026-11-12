@@ -22,13 +22,19 @@ COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
 PACK = re.compile(r"^[a-z0-9-]+$")
 LOGIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,38}$")  # a user's: an App's `[bot]` can't match
 APP_LOGIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,33}\[bot\]$")  # an App's name stops at 34 characters
-TOP = {"schema_version", "repo", "base", "guards", "accounts", "enforcement"}
+TOP = {"schema_version", "repo", "base", "guards", "accounts", "enforcement", "secret_scan", "review"}
 BASE = {"repo", "sha"}
 GUARDS = {"secrets_packs", "secrets_patterns"}
 ACCOUNTS = {"admin", "agent", "approver"}
 NO_ID_FIELDS = {"cloud", "routines"}
 ENFORCEMENT = {"record", "projects"}
 JOB = {"workflow", "job"}
+REVIEW = {"run", "facts", "login", "rerequest_label", "tags", "review_minutes", "watch_hours"}
+RUN_JOB = {"workflow", "job", "event"}
+TAGS = {"fixed", "wrong", "intentional", "moot", "deferred"}
+TAG = re.compile(r"^\[[a-z-]{1,20}\]$")
+LABEL = re.compile(r"^[^\x00-\x1f]{1,50}$")
+EVENTS = {"pull_request", "pull_request_target", "push", "workflow_run"}
 ROW_ID = re.compile(r"^E([1-9]|1[0-9]|2[0-3])$")  # E1-E23, the labels AGW-1 names
 WORKFLOW = re.compile(r"^\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$")
 JOB_NAME = re.compile(r"^[^\x00-\x1f]{1,100}$")
@@ -41,6 +47,20 @@ class JobRef:
 
     workflow: str
     job: str
+
+
+@dataclass(frozen=True)
+class ReviewConfig:
+    """The consuming project's review rows E2-E4 (ADR 0063 §4): the jobs, the review's login, the label and the tags."""
+
+    run: JobRef
+    run_event: str
+    facts: JobRef
+    login: str
+    rerequest_label: str
+    tags: MappingProxyType
+    review_minutes: int = 60
+    watch_hours: int = 24
 
 
 class InstanceFileError(Exception):
@@ -60,6 +80,9 @@ class InstanceFile:
     # ADR 0063: the doctrine record holding the §Enforcement table, and each project's row jobs.
     enforcement_record: str | None = None
     enforcement_jobs: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
+    # ADR 0063 §5: E19's secret-scan Actions job, and the review rows' jobs, login, label and tags.
+    secret_scan: JobRef | None = None
+    review: ReviewConfig | None = None
 
 
 def _keys(obj: dict, allowed: set[str], where: str) -> None:
@@ -121,6 +144,57 @@ def _accounts(accounts: object) -> tuple[str, str | None, str | None]:
     # A user's login can't match an App's, so the approver can't collide with either.
     approver = _app_login(accounts["approver"], "accounts.approver") if "approver" in accounts else None
     return admin, agent, approver
+
+
+def _job_ref(ref: object, where: str) -> JobRef:
+    if not isinstance(ref, dict):
+        raise InstanceFileError(f"{where} must be an object")
+    _keys(ref, JOB, where + ".")
+    workflow, job = ref.get("workflow"), ref.get("job")
+    if not isinstance(workflow, str) or not WORKFLOW.fullmatch(workflow):
+        raise InstanceFileError(f"{where}.workflow must be a workflow file under the Actions workflows folder")
+    if not isinstance(job, str) or not JOB_NAME.fullmatch(job):
+        raise InstanceFileError(f"{where}.job must be a job name of 1-100 printable characters")
+    return JobRef(workflow, job)
+
+
+def _bound(value: object, key: str, default: int, top: int) -> int:
+    if value is None:
+        return default
+    if type(value) is not int or not 1 <= value <= top:
+        raise InstanceFileError(f"{key} must be a whole number from 1 to {top}")
+    return value
+
+
+def _review(obj: object) -> ReviewConfig:
+    if not isinstance(obj, dict):
+        raise InstanceFileError("review must be an object")
+    _keys(obj, REVIEW, "review.")
+    run = obj.get("run")
+    if not isinstance(run, dict):
+        raise InstanceFileError("review.run must be an object")
+    _keys(run, RUN_JOB, "review.run.")
+    event = run.get("event")
+    if event not in EVENTS:
+        raise InstanceFileError(f"review.run.event must be one of {sorted(EVENTS)}")
+    run_ref = _job_ref({k: v for k, v in run.items() if k in JOB}, "review.run")
+    facts = _job_ref(obj.get("facts"), "review.facts")
+    if facts == run_ref:  # E3: the facts come from a separate job, with no model step
+        raise InstanceFileError("review.facts must be a different job from review.run")
+    login = obj.get("login")  # the review's login may be an App's ([bot]) or a user's
+    if not isinstance(login, str) or not (LOGIN.fullmatch(login) or APP_LOGIN.fullmatch(login)):
+        raise InstanceFileError("review.login must be a GitHub login")
+    label = obj.get("rerequest_label")
+    if not isinstance(label, str) or not LABEL.fullmatch(label):
+        raise InstanceFileError("review.rerequest_label must be a label name")
+    tags = obj.get("tags")
+    if not isinstance(tags, dict) or set(tags) != TAGS:
+        raise InstanceFileError(f"review.tags must name exactly {sorted(TAGS)}")
+    if not all(isinstance(v, str) and TAG.fullmatch(v) for v in tags.values()) or len(set(tags.values())) != len(TAGS):
+        raise InstanceFileError("review.tags: each tag is a distinct word in square brackets, such as [fixed]")
+    return ReviewConfig(run_ref, event, facts, login, label, MappingProxyType(dict(tags)),
+                        _bound(obj.get("review_minutes"), "review.review_minutes", 60, 24 * 60),
+                        _bound(obj.get("watch_hours"), "review.watch_hours", 24, 24 * 14))
 
 
 def _enforcement(obj: object) -> tuple[str, MappingProxyType]:
@@ -193,6 +267,8 @@ def parse(data: object) -> InstanceFile:
         approver=approver,
         enforcement_record=record,
         enforcement_jobs=jobs,
+        secret_scan=_job_ref(data["secret_scan"], "secret_scan") if "secret_scan" in data else None,
+        review=_review(data["review"]) if "review" in data else None,
     )
 
 
