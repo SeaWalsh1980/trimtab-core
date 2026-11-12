@@ -78,17 +78,19 @@ class ConfigRefusalIsNotNoRepository(unittest.TestCase):
         git(self.repo, "init", "-q", "-b", "main")
         commit(self.repo, "f", "x\n")
 
-    def test_a_directory_with_no_repository_has_no_configuration(self):
+    def test_a_directory_with_no_repository_has_no_repository_configuration(self):
         plain = self.tmp / "plain"
         plain.mkdir()
-        self.assertEqual(planguard.PlanSupport(plain, environ=self.env).config(plain), {})
+        got = planguard.PlanSupport(plain, environ=self.env).config(plain)
+        self.assertEqual([k for k in got if k.startswith("remote.")], [])
 
-    def test_a_shallow_clone_is_refused_not_skipped(self):
+    def test_a_shallow_clone_is_read_like_any_other(self):
+        # A config read needs none of the object checks, so a shallow, partial or alternates clone pushes as usual.
         commit(self.repo, "g", "y\n")
         clone = self.tmp / "clone"
         subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{self.repo}", str(clone)], check=True)
-        with self.assertRaisesRegex(FactsError, "cannot be read"):
-            planguard.PlanSupport(clone, environ=self.env).config(clone)
+        got = planguard.PlanSupport(clone, environ=self.env).config(clone)
+        self.assertIn("remote.origin.url", got)
 
     def test_a_normal_repository_reads_its_configuration(self):
         git(self.repo, "config", "remote.origin.push", "+HEAD:refs/heads/plan/x")

@@ -306,6 +306,7 @@ class Ctx:
     strict: bool          # quote-aware pass
     command: str = ""     # the whole command the hook was given
     plan: planguard.PlanSupport | None = None  # the plan-run rows' view (ADR 0063 §5)
+    stability: planguard.Stability = planguard.STABLE  # what git commands earlier in the command change
 
     def unknown(self, what: str) -> None:
         """Something the decision needs cannot be read: refused by the quote-aware pass only."""
@@ -909,8 +910,9 @@ PR_UPDATE_VALUED, PR_UPDATE_BOOL = {"-R", "--repo"}, {"--rebase"}
 ISSUE_CLOSE_VALUED = {"-c", "--comment", "-r", "--reason", "-R", "--repo"}
 _PR_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([0-9]+)(?:[/?#].*)?", re.I)
 GH_ENV_REPO = re.compile(r"(?<![A-Za-z0-9_])GH_(?:REPO|HOST)=")
+GH_PLACEHOLDER = re.compile(r"\{(?:owner|repo|branch)\}")  # gh expands these from the current checkout
 _REPO_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
-_BRANCH_WRITE_MUTATION = re.compile(r"(?<![A-Za-z0-9_])(?:createRef|createCommitOnBranch|mergeBranch)(?![A-Za-z0-9_])",
+_BRANCH_WRITE_MUTATION = re.compile(r"(?<![A-Za-z0-9_])(?:createRef|createLinkedBranch|createCommitOnBranch|mergeBranch)(?![A-Za-z0-9_])",
                                     re.I)
 # A mutation that writes a plan branch's head or closes its PR by an ID this guard cannot read.
 _PR_ID_MUTATION = re.compile(r"(?<![A-Za-z0-9_])(?:closePullRequest|updatePullRequestBranch|mergePullRequest|enablePullRequestAutoMerge)(?![A-Za-z0-9_])", re.I)
@@ -925,6 +927,8 @@ _DIR_CHANGE_TEXT = re.compile(r"(?<![A-Za-z0-9_./=-])(?:cd|pushd|popd)(?![A-Za-z
                               r"|(?<![A-Za-z0-9_-])env\b[^;|&\n]*[ \t]-[A-Za-z]*C", re.I)
 STEER_ANYWHERE = re.compile(r"(?<![A-Za-z0-9_])(?:GIT_(?:CONFIG|DIR|WORK_TREE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE"
                             r"|NAMESPACE|EXEC_PATH|SSH|PROXY)[A-Za-z0-9_]*|HOME|XDG_CONFIG_HOME)=", re.I)
+# A variable assigned in the command: a command word the shell builds from it can be anything.
+_DEFINES_VARS = re.compile(r"(?:^|[;&|(\s])[A-Za-z_][A-Za-z0-9_]*=")
 # A command that names a push or a plan branch: where an unreadable command word may hide one.
 _PUSHY = re.compile(r"(?<![A-Za-z0-9_.-])push(?![A-Za-z0-9_.-])|plan/|(?<![A-Za-z0-9_.-])git(?![A-Za-z0-9_-])", re.I)
 
@@ -973,19 +977,19 @@ def check_git(args: list[Word], before: list[Word], ctx: Ctx) -> None:
     if sub.dynamic:
         ctx.unknown("the git command is a shell expansion")
         return
-    if sub.text in ("send-pack", "http-push"):
+    if sub.text in ("send-pack", "http-push", "subtree"):
         ctx.unknown(f"`git {sub.text}` writes remote refs this guard does not read")
         return
     if sub.text != "push":
         return
-    if steered or any(d.dynamic for d in dirs) or STEER_ANYWHERE.search(ctx.command):
+    if steered or any(d.dynamic or d.text.startswith("~") for d in dirs) or STEER_ANYWHERE.search(ctx.command):
         ctx.unknown("a push run with configuration, a repository or a directory chosen by an option, a variable "
                     "or a shell expansion")
         return
     cwd = ctx.cwd if ctx.cwd_known else None
     for d in dirs:
         cwd = (cwd / d.text) if cwd is not None else None
-    why = planguard.judge_push([(w.text, w.dynamic) for w in args[i + 1:]], plan, cwd)
+    why = planguard.judge_push([(w.text, w.dynamic) for w in args[i + 1:]], plan, cwd, ctx.stability)
     if why:
         ctx.unknown(f"a push this guard cannot read: {why}")
 
@@ -1008,11 +1012,14 @@ def _selected(group: list[Word], tail: list[Word], valued: set[str], boolean: se
             ctx.unknown("the repository option is a shell expansion or not owner/name")
             return None, opts, None
         repo = value.text
+    if repo is None and ctx.cwd_known and _plan_ref(plan.gh_default_configured, ctx.cwd):
+        ctx.unknown("gh acts on a repository set with `gh repo set-default`, which may not be origin's")
+        return None, opts, None
     if not positional:
         head = _plan_ref(plan.pr_branch, ctx.cwd) if ctx.cwd_known else None
         if head is None:
             ctx.unknown("the PR is the current branch's, which cannot be read here")
-        return head, opts, None
+        return head, opts, ((None, repo) if repo else None)
     sel = positional[0]
     if sel.dynamic:
         ctx.unknown("the PR is selected by a shell expansion")
@@ -1031,13 +1038,16 @@ def _selected(group: list[Word], tail: list[Word], valued: set[str], boolean: se
     if text.lstrip("#").isascii() and text.lstrip("#").isdigit():
         number = int(text.lstrip("#"))
         return (_plan_head(plan, number, repo) if want_head else None), opts, (number, repo)
-    return text.rpartition(":")[2], opts, None  # a branch, or owner:branch
+    return text.rpartition(":")[2], opts, ((None, repo) if repo else None)  # a branch, or owner:branch
 
 
 def _base_of(plan: planguard.PlanSupport, head: str | None, ref) -> str | None:
     """The branch the selected PR merges into."""
-    if ref is not None:
+    if ref is not None and ref[0] is not None:
         return _plan_ref(plan.facts.pr_base, ref[0], ref[1])
+    if ref is not None:  # a branch in a repository other than origin: its PR is not one the facts can read
+        raise planrows.Refusal("a PR selected by branch in another repository cannot be read and is refused "
+                               "(ADR 0063 §5)")
     if head is None:
         return None
     pr = _plan_ref(plan.facts.open_pr, head)
@@ -1061,11 +1071,11 @@ def check_plan_gh(group: str, sub: str, pre: list[Word], tail: list[Word], ctx: 
             planrows.judge_close(head)
         base = _base_of(plan, head, ref)
         if base is not None and planrows.plan_branch(base):
-            _ref_write(plan, base)  # the merge writes the base branch
+            _ref_write(plan, base, repo=ref[1] if ref else None)  # the merge writes the base branch
     elif group == "pr" and sub == "update-branch":
-        head, _, _ = _selected(pre, tail, PR_UPDATE_VALUED, PR_UPDATE_BOOL, ctx)
+        head, _, ref = _selected(pre, tail, PR_UPDATE_VALUED, PR_UPDATE_BOOL, ctx)
         if head is not None and planrows.plan_branch(head):
-            _ref_write(plan, head)
+            _ref_write(plan, head, repo=ref[1] if ref else None)
     elif group == "issue" and sub == "close":
         head, _, _ = _selected(pre, tail, ISSUE_CLOSE_VALUED, set(), ctx)
         planrows.judge_close(head)
@@ -1118,6 +1128,9 @@ def check_plan_api(req: Request, ctx: Ctx) -> None:
             ctx.unknown("the repository of an API write is a shell expansion")
         return
     repo, rest = f"{found[1]}/{found[2]}", found[3]
+    if _PLAN_ROUTE.match(rest) and GH_PLACEHOLDER.search(ctx.command):
+        ctx.unknown("gh fills {owner}, {repo} or {branch} in this call, which the guard cannot read")
+        return
     if req.query and _PLAN_ROUTE.match(rest):
         ctx.unknown("a write to a ref, contents, merge or PR route with a query string, which may carry its fields")
         return
@@ -1224,6 +1237,7 @@ def _may_be_gh(rest: list[Word]) -> bool:
 
 def check_segment(words: list[Word], ctx: Ctx) -> None:
     appends = False  # an earlier word (xargs, parallel) adds arguments the guard never sees
+    first = next((j for j, x in enumerate(words) if not _ASSIGNMENT.match(x.text)), len(words))
     for k, w in enumerate(words):
         name = _ASSIGNMENT.sub("", w.text) if not ctx.strict else w.text
         base = posixpath.basename(name)
@@ -1240,10 +1254,10 @@ def check_segment(words: list[Word], ctx: Ctx) -> None:
             check_git(rest, words[:k], ctx)
         elif not w.dynamic and base == "git-push":  # the binary behind the push subcommand
             check_git([Word("push", False), *rest], words[:k], ctx)
-        elif not w.dynamic and base in ("git-send-pack", "git-http-push"):
+        elif not w.dynamic and base in ("git-send-pack", "git-http-push", "git-subtree"):
             ctx.unknown(f"`{base}` writes remote refs this guard does not read")
-        elif w.dynamic and (_PUSHY.search(w.text) or any(x.dynamic or x.text == "push" for x in rest)) \
-                and _PUSHY.search(ctx.command):
+        elif w.dynamic and k == first and (_PUSHY.search(w.text) or any(x.dynamic or x.text == "push" for x in rest)) \
+                and (_PUSHY.search(ctx.command) or _DEFINES_VARS.search(ctx.command)):
             ctx.unknown("a command word the shell builds is followed by a push or by words it builds")
         elif not w.dynamic and base in APPENDERS:
             appends = True
@@ -1307,7 +1321,7 @@ def judge(command: str, ctx: Ctx, parsed: list[list[Word]] | None = None) -> Non
     if ctx.strict and runs_text(command, naive):
         passes.append((False, naive))
     for strict, segs in passes:
-        sub = Ctx(ctx.cwd, ctx.cwd_known, strict, ctx.command, ctx.plan)
+        sub = Ctx(ctx.cwd, ctx.cwd_known, strict, ctx.command, ctx.plan, ctx.stability)
         for words in segs:
             check_segment(words, sub)
 
@@ -1326,7 +1340,8 @@ def decide(payload: dict, plan: planguard.PlanSupport | None = None) -> tuple[in
         w.text in DIR_CHANGERS for s in parsed for w in s) and not _DIR_CHANGE_TEXT.search(command)
     where = Path(cwd) if isinstance(cwd, str) and cwd else Path("/")
     try:
-        judge(command, Ctx(where, cwd_known, True, command, plan or planguard.PlanSupport(where)), parsed)
+        judge(command, Ctx(where, cwd_known, True, command, plan or planguard.PlanSupport(where),
+                           planguard.stability_of(command)), parsed)
     except planrows.Refusal as why:
         return BLOCK, (f"guard-github: blocked: {why}. This is a plan-run rule "
                        "(docs/adr/0063-the-plan-run-enforcement-gate.md); do not look for another route. "

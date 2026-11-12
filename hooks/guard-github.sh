@@ -47,7 +47,11 @@ trimmed="${payload#"${payload%%[![:space:]]*}"}"
 # line still starts a word; then quotes and backslashes go, so g"h" and g\h
 # read as gh. A \u escape or $'…' can spell any letter, so either sends the
 # payload to the adapter.
-flat=${payload//\\[nrtbf]/ }
+# A backslash before a newline joins the lines (`pu\<newline>sh` is `push`); in the JSON it is the four
+# characters `\\\n`. It goes first, before the escape for the newline would turn it into a space.
+bsnl='\\\n'
+flat=${payload//"$bsnl"/}
+flat=${flat//\\[nrtbf]/ }
 flat=${flat//[\"\'\\]/}
 # Besides the names, gh's own subcommands: a command word the shell builds
 # (${G}h, /usr/bin/g?) hides `gh` but not what follows it.
@@ -61,16 +65,18 @@ about_github+="|(^|[^A-Za-z0-9_])(pr[[:space:]]+${opt}(create|new|review|close|m
 # `git-push`, and a brace expansion that can spell either word (`git pu{s,}h`, `{git,push}`): the braces of
 # the payload's own JSON hold no comma between them and the command, so they do not match.
 about_github+="|(^|[^A-Za-z0-9_.-])(push|send-pack|http-push)([^A-Za-z0-9_.-]|$)|(^|[^A-Za-z0-9_.-])git[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[^[:space:]]*[\$\`]"
-about_github+="|git-(push|send-pack|http-push)|(^|[^A-Za-z0-9_.-])git[[:space:]][^{}]{0,200}\{[^{}]{0,200},[^{}]{0,200}\}|\{[^{}]{0,200}(git|push|gh)[^{}]{0,200},[^{}]{0,200}\}|\{[^{}]{0,200},[^{}]{0,200}(git|push|gh)[^{}]{0,200}\}"
+about_github+="|git-(push|send-pack|http-push)|(^|[^A-Za-z0-9_.-])git[[:space:]][^{}]{0,200}\{[^{}]{0,200},[^{}]{0,200}\}|\{[^{}]{0,200}(git|push|gh)[^{}]{0,200},[^{}]{0,200}\}|\{[^{}]{0,200},[^{}]{0,200}(git|push|gh)[^{}]{0,200}\}|\{[^{}]{0,50}\.\.[^{}]{0,50}\}"
 # The regex's time grows steeply with a long crafted command (over 20 s at 140 KB,
 # ADR 0055), and a hook that outlives its timeout fails open. So a long payload
 # goes to the adapter, which stops itself and blocks.
 if (( ${#payload} <= 32768 )) && [[ "$payload" != *'\u'* && "$payload" != *"\$'"* ]]; then
   shopt -s nocasematch
   if ! [[ "$flat" =~ $about_github ]]; then
-    # git beside a word the shell builds (`G=git P=pus; $G ${P}h …`) can spell a push without ever naming it.
+    # git beside a word the shell builds (`G=git P=pus; $G ${P}h …`), or a command that assigns variables and
+    # expands them (`A=gi B=t; $A$B …`), can spell a push without ever naming it.
     git_word='(^|[^A-Za-z0-9_.-])git([^A-Za-z0-9_.-]|$)'
-    [[ "$flat" =~ $git_word && "$flat" == *[\$\`]* ]] || exit 0
+    assigned='(^|[^A-Za-z0-9_.-])[A-Za-z_][A-Za-z0-9_]*='
+    [[ "$flat" == *[\$\`]* ]] && [[ "$flat" =~ $git_word || "$flat" =~ $assigned ]] || exit 0
   fi
   shopt -u nocasematch
 fi

@@ -50,7 +50,8 @@
         "test_guard_github_plan_bypasses.MergeIntoAPlanBase.test_rest_merge",
         "test_guard_github_plan_bypasses.RouteOrder.test_a_contents_path_that_looks_like_a_ref_route_is_still_contents",
         "test_guard_github_plan_round2.GraphqlLookingRoute.test_a_rest_route_ending_in_graphql_is_still_rest",
-        "test_guard_github_plan_round3.NormalisedBranchFields.test_a_prefixed_or_padded_branch_in_a_body_is_still_a_plan_branch"
+        "test_guard_github_plan_round3.NormalisedBranchFields.test_a_prefixed_or_padded_branch_in_a_body_is_still_a_plan_branch",
+        "test_guard_github_plan_round4.GhRepositoryReachesTheWrite.test_the_same_repository_named_explicitly_is_judged"
       ],
       "decision": {
         "function": "trimtab.planrows:check_e14",

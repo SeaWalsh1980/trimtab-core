@@ -744,3 +744,50 @@ Residuals added:
   paging may need cursors, a binary change to the progress record can pass as register-only, E19 reads
   only the latest head, selector URLs are matched case-sensitively, and `merge-upstream` of a
   `plan/*` branch is not read.
+
+**Triage after round 2 (4e0e8d3), and review round 3's HIGH findings.** Earlier rounds above are
+unchanged; this records what changed since and supersedes their "Not done in this PR" list.
+
+Changed in 4e0e8d3:
+- REST branch fields are normalised (`refs/heads/`, `heads/`, padding) before the `plan/` test.
+- A binary change to the progress record is neither register-only nor progress-only.
+- A configuration read needs none of the object checks, so a shallow, partial or alternates clone
+  pushes like any other (round 3 removed the check; 4e0e8d3 had kept it).
+- Git booleans are read as git reads them, integers included.
+- `gh` selectors: `GH_REPO` or `GH_HOST` in the command, a repository option in the attached forms,
+  a number selected after a directory change, and a URL the guard cannot read all refuse.
+- A scan workflow that never runs on a branch that has runs of others reads "unreadable", so a typo
+  cannot switch E19 off. E19 still reads the latest head, as the row says.
+- Refusal text names the kind of problem, not words from the command or `gh`'s stderr.
+- GraphQL `updatePullRequest` refuses for a `state` argument or variable, not the word in a body.
+- Branch activity is one page of 100 events, and a full page refuses: the endpoint pages by a cursor
+  in a Link header (`after=`), which `gh api` does not return, and ignores `page=`.
+
+Changed for round 3's HIGH findings:
+- **Prefilter:** a backslash before a newline inside a word, a brace sequence (`{a..b}`), and a
+  command that assigns variables and expands them all reach the adapter.
+- **Dynamic command word:** only the command word is judged, so `git add src/*.py` and
+  `git diff "$A" "$B"` pass again (round 2 refused them). A command word built from variables in a
+  command that assigns variables refuses.
+- **State changed earlier in the same command.** A name change (`switch`, `checkout`, `branch`), a
+  content change (`commit`, `merge`, `reset`, `rebase`) and a configuration change (`config`,
+  `remote`) are told apart. A push that names a plan branch after a name or content change, a bare or
+  `HEAD` push after a name change, and a bare or destination-less push after a configuration change all
+  refuse. A plan run therefore commits and pushes in separate commands. An ordinary
+  `git commit … && git push origin feature/x` passes.
+- **`push.default=upstream`** maps a refspec with no `:dst` onto the branch's upstream; it refuses
+  when any branch's upstream is a `plan/*` branch.
+- **`git subtree`, `git-subtree` and a `{}` refspec** (`find -exec`) are not read and refuse. GraphQL
+  `createLinkedBranch` is judged like `createRef`.
+- **gh placeholders** (`{owner}`, `{repo}`, `{branch}`) on a ref, contents, merge or PR route refuse.
+- **`gh pr update-branch` and `merge`** carry the repository of `-R` or the URL to the write, so it is
+  judged against that repository's facts or refused; a branch selected in another repository refuses.
+  `gh repo set-default` (a `remote.*.gh-resolved` setting) refuses, because gh then acts on a
+  repository that may not be origin's.
+- **`git -C ~/x`** refuses: the guard does not expand a tilde.
+
+Left on purpose, still bounded by E22: the cost of the prefilter's new alternatives is unmeasured
+beyond the guard suite's long-command cases; `cancelled` runs count as E12 rounds; selector forms
+`http://…` refuse rather than parse; the unmeasured 6 s budget; a push from a repository reached by
+`cd` is judged without that repository's configuration; a gh alias, a legacy `.git/remotes` push
+line, and a command assembled wholly from variables that the command does not itself assign.

@@ -7,9 +7,10 @@ writes no `plan/*` ref reads nothing and starts no `gh`. A build that fails is a
 the read, which the rows turn into a refusal (ADR 0063 §5).
 
 A push is judged against the checkout it runs in (`-C`) and the repository it writes: the named
-remote's effective push URL, or the literal URL. The repository's own configuration is read first,
-because it can change what a push writes (`remote.<r>.mirror`, `remote.<r>.push`, `push.default`)
-or where it goes (`pushurl`, `url.<base>.insteadOf`).
+remote's effective push URL, or the literal URL. The configuration a push runs under (the
+repository's, and the global and system files, read for steering keys only) is read first, because
+it can change what a push writes (`remote.<r>.mirror`, `remote.<r>.push`, `push.default`) or where
+it goes (`pushurl`, `url.<base>.insteadOf`).
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import os
 import re
 import subprocess
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from trimtab import instance, planfacts, planrows, roots
@@ -73,6 +75,30 @@ class LazyFacts(Facts):
     def pr_head(self, number: int, repo: str | None) -> str | None: return self._facts().pr_head(number, repo)
     def pr_base(self, number: int, repo: str | None) -> str | None: return self._facts().pr_base(number, repo)
     def repository(self) -> str: return self._facts().repository()
+
+
+@dataclass(frozen=True)
+class Stability:
+    """Whether what a push resolves still holds when the push runs, given the git commands before it in the
+    same command. The guard reads HEAD, the upstream, the diff and the configuration when the hook runs, before
+    any of them has."""
+
+    name: bool = True  # the checked-out branch (switch, checkout, branch, symbolic-ref, clone, init)
+    content: bool = True  # the commits HEAD holds (commit, merge, rebase, reset, cherry-pick, pull, ...)
+    config: bool = True  # the push configuration (config, remote, branch, switch, checkout, clone, init)
+
+
+STABLE = Stability()
+_GIT = r"(?<![A-Za-z0-9_.-])git\s+(?:-\S+\s+)*(?:{})(?![A-Za-z0-9_-])"
+_NAME_CHANGE = re.compile(_GIT.format("switch|checkout|branch|symbolic-ref|worktree|clone|init"), re.I)
+_CONTENT_CHANGE = re.compile(_GIT.format("commit|merge|rebase|reset|cherry-pick|am|apply|stash|pull|restore|revert|"
+                                         "update-ref"), re.I)
+_CONFIG_CHANGE = re.compile(_GIT.format("config|remote|branch|switch|checkout|clone|init|worktree"), re.I)
+
+
+def stability_of(command: str) -> Stability:
+    return Stability(not _NAME_CHANGE.search(command), not _CONTENT_CHANGE.search(command),
+                     not _CONFIG_CHANGE.search(command))
 
 
 def parse_config(raw: str) -> dict[str, list[str]]:
@@ -150,6 +176,10 @@ class PlanSupport:
             return True
         return tools.Git(environ=self._environ).is_repository(cwd)
 
+    def gh_default_configured(self, cwd: Path) -> bool:
+        """`gh repo set-default` was used: gh then acts on a repository that may not be origin's."""
+        return any(key.startswith("remote.") and key.endswith(".gh-resolved") for key in self.config(cwd))
+
     def pr_branch(self, cwd: Path) -> str | None:
         """The branch `gh` takes the current PR from: the checked-out branch's upstream if it has one, else it."""
         head = self.head_branch(cwd)
@@ -172,7 +202,6 @@ class PlanSupport:
         for key in ("HOME", "XDG_CONFIG_HOME"):
             if key in self._environ:
                 env[key] = self._environ[key]
-        git.check(cwd)
         try:
             done = subprocess.run(git.argv(cwd, "config", "--list", "-z"), capture_output=True, env=env,
                                   timeout=tools.GIT_TIMEOUT_SECONDS)
@@ -222,14 +251,21 @@ def _steering(found: planrows.PushRead, config: Mapping[str, list[str]], support
     if found.bare or found.colonless:  # git maps these through remote.<r>.push
         if config.get(f"remote.{name}.push"):
             raise FactsError("this push takes its refspecs from configuration, which this guard does not read")
+    if (found.bare or found.colonless) and any(
+            v.lower() in ("upstream", "tracking") for v in config.get("push.default", [])) and any(
+            value.casefold().startswith("refs/heads/plan/") for key, values in config.items()
+            if key.startswith("branch.") and key.endswith(".merge") for value in values):
+        raise FactsError("push.default=upstream would map this push onto a plan/* upstream branch")
     if found.bare:
         if "matching" in [v.lower() for v in config.get("push.default", [])] and facts.local_plan_branches():
             raise FactsError("push.default=matching would push every local plan/* branch")
 
 
-def judge_push(args: Sequence[tuple[str, bool]], support: PlanSupport, cwd: Path | None) -> str | None:
-    """Judge `git push <args>` run in `cwd` (None: not known, so nothing resolves). Returns why it cannot
-    be read, or None; raises planrows.Refusal."""
+def judge_push(args: Sequence[tuple[str, bool]], support: PlanSupport, cwd: Path | None,
+               stable: Stability = STABLE) -> str | None:
+    """Judge `git push <args>` run in `cwd` (None: not known, so nothing resolves). `stable` says what an earlier
+    part of the same command changes about what the push resolves. Returns why it cannot be read, or None;
+    raises planrows.Refusal."""
     found = planrows.read_push(args, lambda: support.push_branch(cwd) if cwd else None,
                                lambda: support.head_branch(cwd) if cwd else None)
     if found.unreadable:
@@ -237,6 +273,12 @@ def judge_push(args: Sequence[tuple[str, bool]], support: PlanSupport, cwd: Path
     plan_involved = bool(found.broad) or any(planrows.plan_branch(w.branch) for w in found.writes)
     if cwd is None:
         return "a push touching plan/* runs in a directory the guard cannot tell" if plan_involved else None
+    if stable != STABLE:  # HEAD, @{push}, the diff and the configuration are read before the earlier part has run
+        risky = ((plan_involved and not (stable.name and stable.content))
+                 or ((found.bare or found.head_ref) and not stable.name)
+                 or ((found.bare or found.colonless) and not stable.config))
+        if risky:
+            return "a push judged on state an earlier part of the command changes"
     facts = support.facts_for(cwd)
     try:
         config = support.config(cwd)

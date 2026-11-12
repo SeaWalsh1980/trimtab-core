@@ -63,6 +63,7 @@ class PushRead:
     remote: str | None = None  # the repository word: a remote's name or a URL (None: the default remote)
     bare: bool = False  # no refspec was given, so configuration chooses what is pushed
     colonless: bool = False  # a refspec had no `:dst`, so `remote.<r>.push` can map it elsewhere
+    head_ref: bool = False  # a destination was taken from HEAD, so the checked-out branch decides it
 
 
 @dataclass(frozen=True)
@@ -223,12 +224,12 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
     if broad is not None and not refspecs:
         return PushRead(broad=broad, force=force, delete=delete, remote=remote)
     writes: list[Write] = []
-    colonless = False
+    colonless = head_ref = False
     j = 0
     while j < len(refspecs):
         text, dynamic = refspecs[j]
         j += 1
-        if dynamic or "*" in text or "[" in text or "?" in text:
+        if dynamic or "*" in text or "[" in text or "?" in text or "{}" in text:  # {} is find -exec's placeholder
             return PushRead(unreadable="a refspec built by the shell or holding a pattern")
         if text == "tag" and j < len(refspecs):
             j += 1  # `tag <name>` pushes refs/tags/<name>
@@ -245,6 +246,7 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
             source, dest, gone = spec, spec, False
             colonless = True
         if dest in ("HEAD", "@"):
+            head_ref = True
             dest = (head or current)() or ""
             if not dest:
                 return PushRead(unreadable="HEAD does not resolve to a branch")
@@ -268,7 +270,8 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
         writes.append(Write(branch, "HEAD", force, delete))
     if maybe_option:  # an unquoted expansion splits into words: options, or refspecs of its own (`:plan/x`)
         return PushRead(unreadable="a remote built by the shell may be options or refspecs")
-    return PushRead(writes=tuple(writes), broad=broad, remote=remote, bare=not refspecs, colonless=colonless)
+    return PushRead(writes=tuple(writes), broad=broad, remote=remote, bare=not refspecs, colonless=colonless,
+                    head_ref=head_ref)
 
 
 # ---- the diff shapes ---------------------------------------------------------------------
