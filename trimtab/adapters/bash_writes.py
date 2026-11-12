@@ -5,25 +5,29 @@ autonomous plan run, the plan's scope (layer 3) before they write. It cannot do 
 writing commands cannot be listed (ADR 0039). The paths a command changed can be: this module compares
 the repository before and after the call, and judges every path the call changed by the same rules.
 
-It detects; it cannot prevent. The call has run by the time it judges, so a refusal reaches the agent as
-loud feedback naming the paths (CFG-2: undo the change, or stop and ask), and in a run as a blocker. The
-server-side plan-scope check (ADR 0042) stays the gate for what a plan PR may merge.
+It detects; it cannot prevent, and it is no defence against a command built to evade it (ADR 0065
+lists the routes). The call has run by the time it judges, so a refusal reaches the agent as loud
+feedback naming the paths (CFG-2: undo the change, or stop and ask), and in a run as a blocker. The
+merge gates (CODEOWNERS, admin merge, the plan-scope check of ADR 0042) stay the guarantee.
 
-The pure part comes first: parsing `git status`, the fingerprint a changed path is known by, which paths
-moved between two snapshots, and the problems with those paths. Data in, value out.
+The pure part comes first: parsing git's listings, the fingerprint a path is known by, which paths moved
+between two snapshots, and the problems with those paths. Data in, value out.
 
 The edge comes last, run by hooks/bash-writes.sh through hooks/run_module.py (ADR 0035) as
 `trimtab.adapters.bash_writes` with:
 
-    snapshot             PreToolUse (Bash). Records the repository's changed paths, HEAD and the write
-                         allowlist's text, keyed by session and tool_use_id. Exit 0, or 2 (blocks the
-                         call) when no snapshot could be recorded, since nothing could then be judged.
-    judge <mode> <branch> PostToolUse and PostToolUseFailure (Bash). mode and branch come from
-                         hooks/session-mode.sh's sm_classify, so the mode judged here is the one the
-                         guard enforces (ADR 0041). Exit 0, or 2 with the problems on stderr.
+    snapshot <mode> <branch>  PreToolUse (Bash). Records the repository's changed and index-flagged
+                              paths, every branch and remote-tracking tip, the write allowlist's text
+                              and the mode, keyed by session and tool_use_id. Exit 0, or 2 (blocks the
+                              call) when no snapshot could be recorded, since nothing could be judged.
+    judge <mode> <branch>     PostToolUse and PostToolUseFailure (Bash). Exit 0, or 2 with the
+                              problems, or with why the call could not be judged, on stderr.
 
-Snapshots live at `<config dir>/guard-state/bash-writes/`, private to this user, as pr_monitor keeps its
-lists (ADR 0028). No output carries a session ID, a tool_use_id or a file's contents.
+mode and branch come from hooks/session-mode.sh's sm_classify, so the mode judged here is the one the
+guard enforces (ADR 0041); the call is judged autonomous when either phase, or the judged repository's
+own branch, says so. Snapshots live at `<config dir>/guard-state/bash-writes/`, private to this user,
+as pr_monitor keeps its lists (ADR 0028). No output carries a session ID, a tool_use_id or a file's
+contents. Each phase has one deadline for all its git calls, inside the hook's 10 s timeout.
 """
 
 from __future__ import annotations
@@ -42,21 +46,26 @@ from pathlib import Path
 
 from trimtab.adapters.pr_monitor import READ_FLAGS, PrMonitorError, _private, config_dir, state_dir
 
-SNAPSHOT_VERSION = 1
+SNAPSHOT_VERSION = 2
 STATE_PARTS = ("guard-state", "bash-writes")
 ALLOWLIST = ".claude/write-allowlist"
 PLANS_DIR = "docs/" + "plans"  # in two pieces, as in planscope, so the citation test does not read a path
-# Bounds (ENG-6.2). A repository with more changed paths than this is refused, not judged in part.
+MODES = ("interactive", "autonomous")
+# Bounds (ENG-6.2). More than these is refused as too much to judge, never judged in part.
 MAX_PATHS = 20000
+MAX_REFS = 5000
 MAX_COMMITS = 200
+MAX_LIST_BYTES = 1 << 20
 MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024
-TTL_SECONDS = 24 * 60 * 60  # a snapshot whose call never reached PostToolUse (a cancel) is pruned after this
+TTL_SECONDS = 24 * 60 * 60  # a snapshot whose call never reached a post event (a cancel) is pruned after this
 MAX_PRUNE_FILES = 1000
-GIT_TIMEOUT_SECONDS = 8  # inside the hook's 10 s timeout
+# One deadline per phase for every git call together (ENG-6.4), well inside the hook's 10 s timeout:
+# a hook killed at its timeout does not report, so the adapter must give up first and say so.
+PHASE_SECONDS = 7.0
 TOKEN = re.compile(r"[A-Za-z0-9_-]{1,128}")
 SHA = re.compile(r"[0-9a-f]{40}([0-9a-f]{24})?")
-# The same steering variables and pins as trimtab.planscope._git, which this module cannot import at
-# snapshot time without its git edge. test_bash_writes pins the two lists equal.
+# The same steering variables and pins as trimtab.planscope._git, which this module does not import for
+# its git edge (it would load PyYAML). test_bash_writes pins the two lists equal.
 GIT_STEERING = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
                 "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES",
                 "GIT_GRAFT_FILE", "GIT_NAMESPACE", "GIT_REPLACE_REF_BASE", "GIT_CONFIG_PARAMETERS")
@@ -70,37 +79,65 @@ class BashWritesError(Exception):
 
 # ---- pure ------------------------------------------------------------------
 
-def parse_status(out: bytes) -> list[str]:
-    """The paths `git status --porcelain=v1 -z --no-renames --untracked-files=all` lists.
+def parse_status(out: bytes) -> dict[str, str]:
+    """Each path `git status --porcelain=v1 -z --no-renames --untracked-files=all` lists, with its XY
+    status. A path listed twice (a staged deletion and the same path untracked) keeps both.
 
     With renames off every entry is `XY <path>` and NUL; anything else is git answering in a form this
     version does not read, never a clean tree."""
-    paths = []
+    found: dict[str, str] = {}
     for entry in out.split(b"\0"):
         if not entry:
             continue
         if len(entry) < 4 or entry[2:3] != b" ":
             raise BashWritesError("git status gave an entry that could not be parsed")
-        paths.append(os.fsdecode(entry[3:]))
-    if len(paths) > MAX_PATHS:
-        raise BashWritesError(f"more than {MAX_PATHS} changed paths; too many to judge")
-    return paths
+        path = os.fsdecode(entry[3:])
+        found[path] = found.get(path, "") + entry[:2].decode("ascii", errors="replace")
+        if len(found) > MAX_PATHS:
+            raise BashWritesError(f"more than {MAX_PATHS} changed paths; too many to judge")
+    return found
 
 
-def fingerprint(st: os.stat_result | None) -> str:
-    """What a changed path is known by: type, size, inode and both clocks. ctime catches a write that
-    reset the mtime; `absent` is a path git lists that is gone (a deletion)."""
+def parse_flagged(out: bytes) -> dict[str, str]:
+    """Tracked paths `git ls-files -v -z` marks skip-worktree (`S`) or assume-unchanged (a lower-case
+    tag), which `git status` never lists however they change, with their tag."""
+    found: dict[str, str] = {}
+    for entry in out.split(b"\0"):
+        if not entry:
+            continue
+        if len(entry) < 3 or entry[1:2] != b" ":
+            raise BashWritesError("git ls-files gave an entry that could not be parsed")
+        tag = entry[:1].decode("ascii", errors="replace")
+        if tag == "S" or tag.islower():
+            found[os.fsdecode(entry[2:])] = tag
+            if len(found) > MAX_PATHS:
+                raise BashWritesError(f"more than {MAX_PATHS} flagged paths; too many to judge")
+    return found
+
+
+def fingerprint(status: str, st: os.stat_result | None) -> str:
+    """What a path is known by: git's status for it, then type, size, inode and both clocks. ctime
+    catches a write that reset the mtime; the status catches a change to the index alone."""
     if st is None:
-        return "absent"
-    return f"{stat.S_IFMT(st.st_mode):o}:{st.st_size}:{st.st_ino}:{st.st_mtime_ns}:{st.st_ctime_ns}"
+        return f"{status}|absent"
+    return f"{status}|{stat.S_IFMT(st.st_mode):o}:{st.st_size}:{st.st_ino}:{st.st_mtime_ns}:{st.st_ctime_ns}"
 
 
 def moved(before: dict[str, str], after: dict[str, str]) -> list[str]:
-    """Paths changed after the call that were clean before it or whose fingerprint differs.
+    """Paths listed after the call that were not listed before it or whose fingerprint differs.
 
     A path changed before and clean after is not judged: its content is HEAD's again (a `git restore`),
-    or a commit took it, which `committed` covers."""
+    or a commit took it, which the commit check covers."""
     return sorted(p for p, fp in after.items() if before.get(p) != fp)
+
+
+def judged_mode(pre_mode: str, post_mode: str, pre_branch: str, root_branch: str) -> bool:
+    """Whether the call is judged as an autonomous run: the mode only tightens (ADR 0041), so either
+    phase's classification, or a plan branch in the judged repository at either phase, makes it one."""
+    for mode in (pre_mode, post_mode):
+        if mode not in MODES:
+            raise BashWritesError(f"the session mode {mode!r} is not one the classifier gives")
+    return "autonomous" in (pre_mode, post_mode) or any(b.startswith("plan/") for b in (pre_branch, root_branch))
 
 
 @dataclass(frozen=True)
@@ -111,8 +148,18 @@ class Scope:
     autonomous: bool
     plan_list: str | None  # in a run: the plan's hook scope in the list syntax, or None when unscopable
     plan_problem: str  # in a run, why no write can be scoped, or ""
-    in_base: frozenset[str]  # of the changed paths, those the merge-base tree holds
+    in_base: frozenset[str]  # of the create-only paths, those the merge-base tree holds
     base_known: bool  # whether the merge-base could be read at all
+
+
+def create_only_paths(paths: list[str], allowlist: str | None, plan_list: str | None) -> list[str]:
+    """The paths a create-only entry on either list covers: the only ones whose presence on the default
+    branch needs reading."""
+    from trimtab import planscope  # its pure rules only; no git
+
+    allow = planscope.parse_list(allowlist) if allowlist is not None else ()
+    plan = planscope.parse_list(plan_list) if plan_list is not None else ()
+    return [p for p in paths if planscope.create_only(allow, plan, p)]
 
 
 def problems(paths: list[str], scope: Scope) -> list[str]:
@@ -173,143 +220,229 @@ def snapshot_name(session_id: object, tool_use_id: object) -> str:
     return hashlib.sha256(f"{session_id}\n{tool_use_id}".encode("ascii")).hexdigest() + ".json"
 
 
+def report(found: list[str], autonomous: bool) -> str:
+    lines = ["BLOCKED by bash-writes: this Bash call changed paths an Edit or Write would have been refused:"]
+    lines += [f"  {p}" for p in found[:50]]
+    if len(found) > 50:
+        lines.append(f"  ... and {len(found) - 50} more")
+    lines.append("The command has already run. A guard denial is final for that route (CFG-2): do not write "
+                 "these paths another way. Undo the change if it was yours by mistake, or stop and ask the "
+                 "operator, naming the files.")
+    if autonomous:
+        lines.append("This is an autonomous plan run: treat it as a blocker and stop (AGW-4).")
+    return "\n".join(lines)
+
+
 # ---- git -------------------------------------------------------------------
 
-def _git(repo: str, *args: str) -> bytes:
-    env = {k: v for k, v in os.environ.items()
-           if k not in GIT_STEERING and not k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
-           and k != "GIT_CONFIG_COUNT"}
-    # GIT_OPTIONAL_LOCKS=0: status must not take the index lock a concurrent command may want.
-    env.update(GIT_NO_REPLACE_OBJECTS="1", GIT_LITERAL_PATHSPECS="1", GIT_OPTIONAL_LOCKS="0")
-    pins = [arg for key, value in GIT_PINNED for arg in ("-c", f"{key}={value}")]
-    try:
-        done = subprocess.run(["git", "-C", repo, *pins, *args], capture_output=True, env=env,
-                              timeout=GIT_TIMEOUT_SECONDS)
-    except (OSError, subprocess.TimeoutExpired) as err:
-        raise BashWritesError(f"git {args[0]}: {type(err).__name__}") from err
-    if done.returncode != 0:
-        raise BashWritesError(f"git {args[0]} exited {done.returncode}")
-    return done.stdout
+class Deadline:
+    """One time budget for every git call in a phase."""
+
+    def __init__(self, seconds: float, clock=time.monotonic):
+        self.clock = clock
+        self.end = clock() + seconds
+
+    def remaining(self) -> float:
+        left = self.end - self.clock()
+        if left <= 0:
+            raise BashWritesError("the phase ran out of time before git answered")
+        return left
 
 
-def repo_root(cwd: str) -> str | None:
-    """The repository the call ran in, or None outside one."""
-    try:
-        out = _git(cwd, "rev-parse", "--show-toplevel")
-    except BashWritesError:
-        return None  # not a repository (or no git): nothing there to judge
-    root = os.fsdecode(out.rstrip(b"\n"))
-    return root or None
+class Repo:
+    """A repository named by its root, read with git told the root outright: `--git-dir` and
+    `--work-tree` outrank `core.bare`, `core.worktree` and any steering variable the command set."""
 
+    def __init__(self, root: str, deadline: Deadline):
+        self.root = root
+        self.deadline = deadline
 
-def head(root: str) -> str | None:
-    """HEAD's commit, or None on an unborn branch."""
-    try:
-        sha = _git(root, "rev-parse", "--verify", "-q", "HEAD^{commit}").decode("ascii").strip()
-    except BashWritesError:
-        return None
-    return sha if SHA.fullmatch(sha) else None
-
-
-def changed_paths(root: str) -> dict[str, str]:
-    out = _git(root, "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all",
-               "--ignore-submodules=none")
-    found = {}
-    for path in parse_status(out):
+    def run(self, *args: str, ok: tuple[int, ...] = (0,), stdin: bytes | None = None) -> tuple[int, bytes]:
+        env = {k: v for k, v in os.environ.items()
+               if k not in GIT_STEERING and not k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
+               and k != "GIT_CONFIG_COUNT"}
+        # GIT_OPTIONAL_LOCKS=0: status must not take the index lock a concurrent command may want.
+        env.update(GIT_NO_REPLACE_OBJECTS="1", GIT_LITERAL_PATHSPECS="1", GIT_OPTIONAL_LOCKS="0")
+        pins = [arg for key, value in GIT_PINNED for arg in ("-c", f"{key}={value}")]
+        argv = ["git", f"--git-dir={os.path.join(self.root, '.git')}", f"--work-tree={self.root}",
+                "-C", self.root, *pins, *args]
         try:
-            st = os.lstat(os.path.join(root, path))
-        except FileNotFoundError:
-            st = None
-        except OSError as err:
-            raise BashWritesError(f"cannot read a changed path ({type(err).__name__})") from err
-        found[path] = fingerprint(st)
-    return found
+            done = subprocess.run(argv, capture_output=True, env=env, input=stdin,
+                                  timeout=self.deadline.remaining())
+        except (OSError, subprocess.TimeoutExpired) as err:
+            raise BashWritesError(f"git {args[0]}: {type(err).__name__}") from err
+        if done.returncode not in ok:
+            raise BashWritesError(f"git {args[0]} exited {done.returncode}")
+        return done.returncode, done.stdout
+
+    def out(self, *args: str, stdin: bytes | None = None) -> bytes:
+        return self.run(*args, stdin=stdin)[1]
+
+    def head(self) -> str | None:
+        """HEAD's commit, or None on an unborn branch; any other failure raises."""
+        rc, out = self.run("rev-parse", "--verify", "-q", "HEAD^{commit}", ok=(0, 1))
+        if rc == 0:
+            sha = out.decode("ascii", errors="replace").strip()
+            if SHA.fullmatch(sha):
+                return sha
+            raise BashWritesError("git rev-parse named HEAD in a form this version does not read")
+        # Unborn only when HEAD is a symbolic ref to a branch that has no commit yet.
+        rc, ref = self.run("symbolic-ref", "-q", "HEAD", ok=(0, 1))
+        if rc == 0 and ref.startswith(b"refs/heads/"):
+            rc, _ = self.run("show-ref", "--verify", "-q", ref.decode("utf-8", errors="replace").strip(),
+                             ok=(0, 1))
+            if rc == 1:
+                return None
+        raise BashWritesError("HEAD names no commit")
+
+    def branch(self) -> str:
+        """The checked-out branch, or "" when HEAD is detached; read as hooks/session-mode.sh's sm_branch."""
+        rc, ref = self.run("symbolic-ref", "-q", "HEAD", ok=(0, 1))
+        text = ref.decode("utf-8", errors="replace").strip()
+        return text.removeprefix("refs/heads/") if rc == 0 and text.startswith("refs/heads/") else ""
+
+    def listed(self) -> dict[str, str]:
+        """Every path git status lists, and every index-flagged path, with its fingerprint."""
+        status = parse_status(self.out("status", "--porcelain=v1", "-z", "--no-renames",
+                                       "--untracked-files=all", "--ignore-submodules=none"))
+        for path, tag in parse_flagged(self.out("ls-files", "-v", "-z")).items():
+            status[path] = status.get(path, "") + f"[{tag}]"
+        if len(status) > MAX_PATHS:
+            raise BashWritesError(f"more than {MAX_PATHS} paths to fingerprint; too many to judge")
+        found = {}
+        for path, xy in status.items():
+            try:
+                st = os.lstat(os.path.join(self.root, path))
+            except FileNotFoundError:
+                st = None
+            except OSError as err:
+                raise BashWritesError(f"cannot read a changed path ({type(err).__name__})") from err
+            found[path] = fingerprint(xy, st)
+        return found
+
+    def tips(self) -> list[str]:
+        """Every local branch and remote-tracking tip, and HEAD's commit."""
+        out = self.out("for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes")
+        shas = {s for s in out.decode("ascii", errors="replace").split() if SHA.fullmatch(s)}
+        head = self.head()
+        if head:
+            shas.add(head)
+        if len(shas) > MAX_REFS:
+            raise BashWritesError(f"more than {MAX_REFS} branch tips; too many to judge")
+        return sorted(shas)
+
+    def default_tip(self) -> str | None:
+        """The commit origin's default branch names now, or None when there is no origin/HEAD."""
+        rc, ref = self.run("symbolic-ref", "-q", "refs/remotes/origin/HEAD", ok=(0, 1))
+        if rc != 0:
+            return None
+        rc, out = self.run("rev-parse", "--verify", "-q", ref.decode("utf-8", errors="replace").strip() + "^{commit}",
+                           ok=(0, 1))
+        sha = out.decode("ascii", errors="replace").strip()
+        return sha if rc == 0 and SHA.fullmatch(sha) else None
+
+    def committed(self, before: list[str]) -> list[str]:
+        """Paths changed by commits the call made on any branch: reachable from a tip now that was not a
+        tip before, and from no tip before nor origin's default branch now (so a pull of merged work is
+        not judged as the call's writing). A merge counts only the paths that differ from every parent."""
+        new = sorted(set(self.tips()) - set(before))
+        if not new:
+            return []
+        exclude = sorted(set(before) | {t for t in (self.default_tip(),) if t})
+        out = self.out("rev-list", f"--max-count={MAX_COMMITS + 1}", *new, "--not", *exclude, "--")
+        commits = [c for c in out.decode("ascii", errors="replace").split() if c]
+        if len(commits) > MAX_COMMITS:
+            raise BashWritesError(f"the call made more than {MAX_COMMITS} commits; too many to judge")
+        if not commits:
+            return []
+        out = self.out("diff-tree", "--stdin", "-r", "-z", "--no-commit-id", "--name-only", "--no-renames",
+                       "--root", "-c", stdin="".join(f"{c}\n" for c in commits).encode("ascii"))
+        return sorted({os.fsdecode(p) for p in out.split(b"\0") if p})
+
+    def merge_base(self) -> str | None:
+        rc, ref = self.run("symbolic-ref", "-q", "refs/remotes/origin/HEAD", ok=(0, 1))
+        if rc != 0:
+            return None
+        rc, out = self.run("merge-base", "HEAD", ref.decode("utf-8", errors="replace").strip(), ok=(0, 1))
+        sha = out.decode("ascii", errors="replace").strip()
+        return sha if rc == 0 and SHA.fullmatch(sha) else None
+
+    def present(self, sha: str, paths: list[str]) -> frozenset[str]:
+        """Which of paths the commit's tree holds, in one call."""
+        if not paths:
+            return frozenset()
+        out = self.out("ls-tree", "-z", "--name-only", "--full-tree", sha, "--", *paths)
+        return frozenset(os.fsdecode(p) for p in out.split(b"\0") if p)
+
+    def show(self, sha: str, path: str) -> str | None:
+        """A regular file's text in the commit, or None where the commit has none there."""
+        out = self.out("ls-tree", "-z", "--full-tree", sha, "--", path)
+        meta = out.split(b"\t", 1)[0].decode("ascii", errors="replace").split(" ")
+        if len(meta) != 3 or meta[0] not in ("100644", "100755") or meta[1] != "blob":
+            return None
+        try:
+            return self.out("cat-file", "blob", meta[2]).decode("utf-8")
+        except UnicodeDecodeError:
+            return None
 
 
-def default_ref(root: str) -> str | None:
-    try:
-        ref = _git(root, "symbolic-ref", "-q", "refs/remotes/origin/HEAD").decode("utf-8").strip()
-    except (BashWritesError, UnicodeDecodeError):
-        return None
-    return ref or None
-
-
-def committed(root: str, before: str | None, after: str | None) -> list[str]:
-    """Paths changed by commits the call made: reachable from the new HEAD but not from the old one, nor
-    from origin's default branch (so a pull of merged work is not judged as the call's own writing)."""
-    if after is None or after == before:
-        return []
-    exclude = [x for x in (before, default_ref(root)) if x]
-    out = _git(root, "rev-list", f"--max-count={MAX_COMMITS + 1}", after, "--not", *exclude, "--")
-    commits = [c for c in out.decode("ascii").split() if c]
-    if len(commits) > MAX_COMMITS:
-        raise BashWritesError(f"the call made more than {MAX_COMMITS} commits; too many to judge")
-    paths: set[str] = set()
-    for c in commits:
-        # -c: for a merge, only the paths that differ from every parent (a conflict resolution or an edit
-        # made in the merge), never the merged branch's own changes, which were judged where they were made.
-        out = _git(root, "diff-tree", "-r", "-z", "--no-commit-id", "--name-only", "--no-renames", "--root",
-                   "-c", c, "--")
-        paths.update(os.fsdecode(p) for p in out.split(b"\0") if p)
-    return sorted(paths)
-
-
-def present(root: str, sha: str, paths: list[str]) -> frozenset[str]:
-    """Which of paths the commit's tree holds, in one call (as planscope.present, whose git edge needs
-    PyYAML, which this hook does not load)."""
-    if not paths:
-        return frozenset()
-    out = _git(root, "ls-tree", "-z", "--name-only", "--full-tree", sha, "--", *paths)
-    return frozenset(os.fsdecode(p) for p in out.split(b"\0") if p)
-
-
-def show(root: str, sha: str, path: str) -> str | None:
-    """A regular file's text in the commit, or None where the commit has none there."""
-    out = _git(root, "ls-tree", "-z", "--full-tree", sha, "--", path)
-    meta = out.split(b"\t", 1)[0].decode("ascii", errors="replace").split(" ")
-    if len(meta) != 3 or meta[0] not in ("100644", "100755") or meta[1] != "blob":
-        return None
-    try:
-        return _git(root, "cat-file", "blob", meta[2]).decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-
-
-def merge_base(root: str) -> str | None:
-    ref = default_ref(root)
-    if ref is None:
-        return None
-    try:
-        sha = _git(root, "merge-base", "HEAD", ref).decode("ascii").strip()
-    except BashWritesError:
-        return None
-    return sha if SHA.fullmatch(sha) else None
+def find_root(cwd: object) -> str | None:
+    """The repository the call ran in: the nearest ancestor holding a `.git` entry, as guard-paths'
+    hl_find_root finds it (a worktree is its own repository), or None outside one. A cwd that is not
+    an absolute, existing directory cannot be placed, so it raises."""
+    if not isinstance(cwd, str) or not os.path.isabs(cwd) or not os.path.isdir(cwd):
+        raise BashWritesError("the hook payload names no working directory that exists")
+    d = os.path.normpath(cwd)
+    while True:
+        if os.path.lexists(os.path.join(d, ".git")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
 
 
 def read_allowlist(root: str) -> tuple[str | None, str]:
     """The allowlist's text and why it cannot be trusted (""), read as guard-paths' hl_allowed reads it:
-    a link at `.claude` or at the list, or a list that cannot be read, fails closed."""
+    a link at `.claude` or at the list, a list that cannot be read, or one larger than any written by
+    hand, fails closed."""
     claude = os.path.join(root, ".claude")
     path = os.path.join(root, ALLOWLIST)
-    if os.path.islink(claude):
-        return None, "the repository's .claude is a symlink; its allowlist cannot be trusted"
-    if not os.path.lexists(path):
+    try:
+        if stat.S_ISLNK(os.lstat(claude).st_mode):
+            return None, "the repository's .claude is a symlink; its allowlist cannot be trusted"
+    except FileNotFoundError:
         return None, ""
-    if os.path.islink(path):
+    except OSError:
+        return None, "the repository's .claude cannot be read; its allowlist cannot be trusted"
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None, ""
+    except OSError:
+        return None, "the write allowlist exists but cannot be read"
+    if stat.S_ISLNK(st.st_mode):
         return None, "the write allowlist is a symlink"
     try:
         fd = os.open(path, READ_FLAGS)
         with os.fdopen(fd, "rb") as fh:
             if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
                 return None, "the write allowlist is not a regular file"
-            return fh.read(1 << 20).decode("utf-8"), ""
-    except (OSError, UnicodeDecodeError):
+            raw = fh.read(MAX_LIST_BYTES + 1)
+    except OSError:
         return None, "the write allowlist exists but cannot be read"
+    if len(raw) > MAX_LIST_BYTES:
+        return None, "the write allowlist is larger than any this version reads"
+    try:
+        return raw.decode("utf-8"), ""
+    except UnicodeDecodeError:
+        return None, "the write allowlist is not UTF-8"
 
 
 # ---- snapshots -------------------------------------------------------------
 
 def _write_snapshot(directory: Path, name: str, data: dict) -> None:
+    """Replace the snapshot atomically, as pr_monitor._write_list replaces a list."""
     fd, temp = tempfile.mkstemp(prefix=".tmp-", dir=directory)  # 0600, O_EXCL
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -353,8 +486,8 @@ def _take_snapshot(directory: Path, name: str) -> dict | None:
 
 
 def _prune(directory: Path, own: str, now: float) -> None:
-    """Remove snapshots older than the TTL (a cancelled call never reaches PostToolUse). Best effort:
-    an entry that cannot be removed is left, and the bound keeps the scan short."""
+    """Remove snapshots older than the TTL (a cancelled call reaches no post event). Best effort: an
+    entry that cannot be removed now is left for the next snapshot, and the bound keeps the scan short."""
     with os.scandir(directory) as it:
         for i, item in enumerate(it):
             if i >= MAX_PRUNE_FILES:
@@ -368,74 +501,83 @@ def _prune(directory: Path, own: str, now: float) -> None:
                 continue  # gone, or not removable now; the next snapshot tries again
 
 
-def snapshot(payload: object, config: Path, now: float) -> tuple[int, str]:
+def _valid_snapshot(data: dict) -> dict:
+    """The snapshot's fields, or BashWritesError when any is missing or of another shape."""
+    root = data.get("root")
+    if root is None:
+        return data
+    paths, tips = data.get("paths"), data.get("tips")
+    if (not isinstance(root, str) or not isinstance(paths, dict) or not isinstance(tips, list)
+            or not all(isinstance(k, str) and isinstance(v, str) for k, v in paths.items())
+            or not all(isinstance(t, str) and SHA.fullmatch(t) for t in tips)
+            or not isinstance(data.get("allowlist"), (str, type(None)))
+            or not isinstance(data.get("list_bad"), str)
+            or data.get("mode") not in MODES or not isinstance(data.get("branch"), str)):
+        raise BashWritesError("the snapshot is malformed")
+    return data
+
+
+def snapshot(payload: object, config: Path, now: float, mode: str, branch: str,
+             deadline: Deadline) -> tuple[int, str]:
     """PreToolUse: record the repository as it is before the call. Returns (exit code, stderr)."""
-    if not isinstance(payload, dict):
-        return 2, "bash-writes: the hook payload cannot be read, so this call could not be judged; blocked"
-    cwd = payload.get("cwd")
     try:
+        if not isinstance(payload, dict):
+            raise BashWritesError("the hook payload cannot be read")
+        if mode not in MODES:
+            raise BashWritesError(f"the session mode {mode!r} is not one the classifier gives")
         name = snapshot_name(payload.get("session_id"), payload.get("tool_use_id"))
-        root = repo_root(cwd) if isinstance(cwd, str) and cwd else None
+        root = find_root(payload.get("cwd"))
         data: dict = {"version": SNAPSHOT_VERSION, "root": root}
         if root is not None:
+            repo = Repo(root, deadline)
             allowlist, bad = read_allowlist(root)
-            data.update(head=head(root), paths=changed_paths(root), allowlist=allowlist, list_bad=bad)
+            data.update(paths=repo.listed(), tips=repo.tips(), allowlist=allowlist, list_bad=bad,
+                        mode=mode, branch=repo.branch() or branch)
         directory = state_dir(config, create=True, parts=STATE_PARTS)
         _write_snapshot(directory, name, data)
         _prune(directory, name, now)
     except (BashWritesError, PrMonitorError, OSError) as err:
-        return 2, f"bash-writes: no snapshot could be recorded ({err if isinstance(err, BashWritesError) else type(err).__name__}), so this call's writes could not be judged; blocked"
+        reason = err if isinstance(err, BashWritesError) else type(err).__name__
+        return 2, f"bash-writes: no snapshot could be recorded ({reason}), so this call's writes could not be judged; blocked"
     return 0, ""
 
 
-def judge(payload: object, config: Path, mode: str, branch: str) -> tuple[int, str]:
+def judge(payload: object, config: Path, mode: str, branch: str, deadline: Deadline) -> tuple[int, str]:
     """PostToolUse / PostToolUseFailure: judge what the call changed. Returns (exit code, stderr)."""
-    if not isinstance(payload, dict):
-        return 2, "bash-writes: the hook payload cannot be read; this call's writes were not judged"
     try:
+        if not isinstance(payload, dict):
+            raise BashWritesError("the hook payload cannot be read")
         name = snapshot_name(payload.get("session_id"), payload.get("tool_use_id"))
         data = _take_snapshot(state_dir(config, create=False, parts=STATE_PARTS), name)
         if data is None:
             raise BashWritesError("no snapshot was recorded for this call")
-        root = data.get("root")
+        data = _valid_snapshot(data)
+        root = data["root"]
         if root is None:
-            return 0, ""  # the call ran outside a repository
-        if not isinstance(root, str) or not isinstance(data.get("paths"), dict):
-            raise BashWritesError("the snapshot is malformed")
-        before_paths = {str(k): str(v) for k, v in data["paths"].items()}
-        paths = sorted(set(moved(before_paths, changed_paths(root)))
-                       | set(committed(root, data.get("head"), head(root))))
+            return 0, ""  # the call started outside any repository
+        repo = Repo(root, deadline)
+        paths = sorted(set(moved(data["paths"], repo.listed())) | set(repo.committed(data["tips"])))
         if not paths:
             return 0, ""
-        autonomous = mode == "autonomous"
+        root_branch = repo.branch()
+        autonomous = judged_mode(data["mode"], mode, data["branch"], root_branch)
         plan_list, plan_problem = None, ""
-        base = merge_base(root)
+        base = repo.merge_base()
         if autonomous:
-            plan_list, plan_problem = _plan_scope(root, branch, base)
-        in_base = present(root, base, paths) if base else frozenset()
-        scope = Scope(allowlist=data.get("allowlist"), list_bad=str(data.get("list_bad") or ""),
-                      autonomous=autonomous, plan_list=plan_list, plan_problem=plan_problem,
-                      in_base=in_base, base_known=base is not None)
-        found = problems(paths, scope)
+            plan_list, plan_problem = _plan_scope(repo, root_branch or data["branch"] or branch, base)
+        need = create_only_paths(paths, data["allowlist"], plan_list)
+        in_base = repo.present(base, need) if base else frozenset()
+        found = problems(paths, Scope(allowlist=data["allowlist"], list_bad=data["list_bad"], autonomous=autonomous,
+                                      plan_list=plan_list, plan_problem=plan_problem, in_base=in_base,
+                                      base_known=base is not None))
     except (BashWritesError, PrMonitorError, OSError) as err:
         reason = err if isinstance(err, BashWritesError) else type(err).__name__
         return 2, (f"bash-writes: this call's writes could not be judged ({reason}). Check `git status` for "
                    f"changes outside the write allowlist before going on (CFG-2).")
-    if not found:
-        return 0, ""
-    lines = ["BLOCKED by bash-writes: this Bash call changed paths an Edit or Write would have been refused:"]
-    lines += [f"  {p}" for p in found[:50]]
-    if len(found) > 50:
-        lines.append(f"  ... and {len(found) - 50} more")
-    lines.append("The command has already run. A guard denial is final for that route (CFG-2): do not write "
-                 "these paths another way. Undo the change if it was yours by mistake, or stop and ask the "
-                 "operator, naming the files.")
-    if autonomous:
-        lines.append("This is an autonomous plan run: treat it as a blocker and stop (AGW-4).")
-    return 2, "\n".join(lines)
+    return (2, report(found, autonomous)) if found else (0, "")
 
 
-def _plan_scope(root: str, branch: str, base: str | None) -> tuple[str | None, str]:
+def _plan_scope(repo: Repo, branch: str, base: str | None) -> tuple[str | None, str]:
     """A run's scope as guard-paths' hl_plan_allowed reads it: the branch names the plan, and the plan
     and its declaration come from the merge-base tree."""
     from trimtab import planscope
@@ -446,19 +588,20 @@ def _plan_scope(root: str, branch: str, base: str | None) -> tuple[str | None, s
     if base is None:
         return None, "an autonomous plan run whose merge-base with origin's default branch cannot be read"
     md, writes = f"{planscope.AUTHORISED}/{b.plan}.md", f"{planscope.AUTHORISED}/{b.plan}.writes"
-    writes_text = show(root, base, writes)
-    if show(root, base, md) is None or writes_text is None:
+    writes_text = repo.show(base, writes)
+    if repo.show(base, md) is None or writes_text is None:
         return None, "the authorised plan or its .writes declaration cannot be read at the merge-base"
     return hook_plan_list(writes_text, b.plan), ""
 
 
 def main(argv: list[str] | None = None) -> int:
+    deadline = Deadline(PHASE_SECONDS)
     args = sys.argv[1:] if argv is None else argv
     if sys.version_info < (3, 11):  # the hook starts no probe of its own (ADR 0065)
         print("bash-writes: python3 3.11 or later is required; this call was not judged", file=sys.stderr)
         return 2
-    if not (args == ["snapshot"] or (len(args) == 3 and args[0] == "judge")):
-        print("usage: trimtab.adapters.bash_writes snapshot | judge <mode> <branch>", file=sys.stderr)
+    if len(args) != 3 or args[0] not in ("snapshot", "judge"):
+        print("usage: trimtab.adapters.bash_writes snapshot|judge <mode> <branch>", file=sys.stderr)
         return 2
     try:
         payload = json.loads(sys.stdin.read())
@@ -466,9 +609,9 @@ def main(argv: list[str] | None = None) -> int:
         payload = None  # refused below like any payload that is not an object
     try:
         if args[0] == "snapshot":
-            code, message = snapshot(payload, config_dir(), time.time())
+            code, message = snapshot(payload, config_dir(), time.time(), args[1], args[2], deadline)
         else:
-            code, message = judge(payload, config_dir(), args[1], args[2])
+            code, message = judge(payload, config_dir(), args[1], args[2], deadline)
     except Exception as err:  # fail closed: an error is loud, never a silent pass
         code, message = 2, f"bash-writes: internal error ({type(err).__name__}); this call was not judged"
     if message:

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Bash write detector: PreToolUse (`pre`), PostToolUse and PostToolUseFailure
 # (`post`), matcher: Bash. Registered in settings.base.json; changing that
 # registration is a security-control change (SEC-7).
@@ -36,18 +36,10 @@ fi
 here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 [[ -r "$here/run_module.py" ]] || { echo "bash-writes: hooks/run_module.py is missing; this call was not judged" >&2; exit 2; }
 
-if [[ "$phase" == pre ]]; then
-  # -I -S -B as in pr-monitor-record.sh (ADR 0035): no working directory, no
-  # site-packages, no PYTHON* variables, no bytecode beside the package.
-  python3 -I -S -B "$here/run_module.py" "$here/.." trimtab.adapters.bash_writes snapshot <<<"$payload"
-  rc=$?
-  (( rc == 0 )) && exit 0
-  (( rc == 2 )) || echo "bash-writes: the snapshot adapter failed (exit $rc); this call was not judged" >&2
-  exit 2
-fi
-
-# The mode comes from the classifier guard-paths uses, so the two cannot
-# disagree (ADR 0041). Without it no write can be judged.
+# Both phases classify the session with the function guard-paths uses, so the
+# two cannot disagree (ADR 0041); the adapter judges the call autonomous when
+# either phase, or the judged repository's own branch, says so. Without the
+# classifier no write can be judged.
 # shellcheck source=hooks/session-mode.sh
 if ! . "$here/session-mode.sh" 2>/dev/null || ! declare -F sm_classify >/dev/null; then
   echo "bash-writes: the session-mode classifier (hooks/session-mode.sh) is missing; this call's writes were not judged" >&2
@@ -55,11 +47,17 @@ if ! . "$here/session-mode.sh" 2>/dev/null || ! declare -F sm_classify >/dev/nul
 fi
 sm_payload <<<"$payload"
 cwd="$sm_cwd"
+# Only the classifier falls back to the hook's own directory; the adapter
+# refuses a payload whose cwd it cannot place.
 [[ -n "$cwd" && -d "$cwd" ]] || cwd="$PWD"
 sm_classify "$cwd" "$sm_sid"
-python3 -I -S -B "$here/run_module.py" "$here/.." trimtab.adapters.bash_writes judge \
-  "$sm_mode" "${sm_branch_name:-}" <<<"$payload"
+[[ "$phase" == pre ]] && verb=snapshot || verb=judge
+
+# -I -S -B as in pr-monitor-record.sh (ADR 0035): no working directory, no
+# site-packages, no PYTHON* variables, no bytecode beside the package.
+python3 -I -S -B "$here/run_module.py" "$here/.." trimtab.adapters.bash_writes "$verb" \
+  "${sm_mode:-}" "${sm_branch_name:-}" <<<"$payload"
 rc=$?
 (( rc == 0 )) && exit 0
-(( rc == 2 )) || echo "bash-writes: the judging adapter failed (exit $rc); this call's writes were not judged" >&2
+(( rc == 2 )) || echo "bash-writes: the $verb step failed (exit $rc); this call was not judged" >&2
 exit 2

@@ -31,10 +31,13 @@ def scope(**kw):
 
 
 class Status(unittest.TestCase):
-    def test_paths_are_read_from_porcelain_entries(self):
+    def test_paths_are_read_from_porcelain_entries_with_their_status(self):
         out = b" M src/a.py\0?? new file.txt\0D  gone.md\0"
 
-        self.assertEqual(bw.parse_status(out), ["src/a.py", "new file.txt", "gone.md"])
+        self.assertEqual(bw.parse_status(out), {"src/a.py": " M", "new file.txt": "??", "gone.md": "D "})
+
+    def test_a_path_listed_twice_keeps_both_statuses(self):
+        self.assertEqual(bw.parse_status(b"D  f\0?? f\0"), {"f": "D ??"})
 
     def test_an_entry_in_another_form_is_refused_not_read_as_clean(self):
         with self.assertRaises(bw.BashWritesError):
@@ -45,6 +48,11 @@ class Status(unittest.TestCase):
 
         with self.assertRaises(bw.BashWritesError):
             bw.parse_status(out)
+
+    def test_skip_worktree_and_assume_unchanged_paths_are_flagged(self):
+        out = b"H src/a.py\0S hidden.json\0h quiet.md\0"
+
+        self.assertEqual(bw.parse_flagged(out), {"hidden.json": "S", "quiet.md": "h"})
 
 
 class Moved(unittest.TestCase):
@@ -59,6 +67,35 @@ class Moved(unittest.TestCase):
 
     def test_a_path_restored_to_head_is_not_judged(self):
         self.assertEqual(bw.moved({"src/a.py": "f1"}, {}), [])
+
+    def test_a_change_to_the_index_alone_changes_the_fingerprint(self):
+        st = os.stat(__file__)
+
+        self.assertNotEqual(bw.fingerprint(" M", st), bw.fingerprint("D ??", st))
+
+
+class Mode(unittest.TestCase):
+    def test_either_phase_saying_autonomous_makes_the_call_autonomous(self):
+        self.assertTrue(bw.judged_mode("autonomous", "interactive", "", ""))
+
+    def test_a_plan_branch_in_the_judged_repository_makes_the_call_autonomous(self):
+        self.assertTrue(bw.judged_mode("interactive", "interactive", "", PLAN_BRANCH))
+
+    def test_interactive_everywhere_is_interactive(self):
+        self.assertFalse(bw.judged_mode("interactive", "interactive", "main", "main"))
+
+    def test_a_mode_the_classifier_never_gives_is_refused(self):
+        with self.assertRaises(bw.BashWritesError):
+            bw.judged_mode("", "interactive", "", "")
+
+
+class Deadlines(unittest.TestCase):
+    def test_a_spent_deadline_refuses_the_next_git_call(self):
+        ticks = iter([0.0, 10.0])
+        deadline = bw.Deadline(7.0, clock=lambda: next(ticks))
+
+        with self.assertRaises(bw.BashWritesError):
+            deadline.remaining()
 
 
 class Problems(unittest.TestCase):
@@ -183,21 +220,24 @@ class Hook(unittest.TestCase):
         self.env["CLAUDE_CONFIG_DIR"] = str(self.config)
         self.calls = 0
 
-    def hook(self, phase, call, env=None):
-        payload = {"hook_event_name": "PreToolUse" if phase == "pre" else "PostToolUse", "session_id": SESSION,
-                   "tool_use_id": call, "cwd": str(self.repo), "tool_name": "Bash",
-                   "tool_input": {"command": "a command"}}
+    def hook(self, phase, call, env=None, event=None, **fields):
+        payload = {"hook_event_name": event or ("PreToolUse" if phase == "pre" else "PostToolUse"),
+                   "session_id": SESSION, "tool_use_id": call, "cwd": str(self.repo), "tool_name": "Bash",
+                   "tool_input": {"command": "a command"}, **fields}
         return subprocess.run([str(HOOK), phase], input=json.dumps(payload), capture_output=True, text=True,
                               env=env or self.env, timeout=60)
 
-    def around(self, command, env=None):
+    def around(self, command, env=None, event=None):
         """Run `command` in the repository between the two phases; return the post result."""
         self.calls += 1
         call = f"toolu_{self.calls:04d}"
         pre = self.hook("pre", call, env)
         self.assertEqual(pre.returncode, 0, pre.stderr)
         subprocess.run(["bash", "-c", command], cwd=self.repo, check=False, capture_output=True, env=env or self.env)
-        return self.hook("post", call, env)
+        return self.hook("post", call, env, event=event)
+
+    def snapshot_file(self, call):
+        return self.config / "guard-state" / "bash-writes" / bw.snapshot_name(SESSION, call)
 
     def test_a_write_inside_the_allowlist_passes(self):
         done = self.around("sed -i s/one/two/ src/a.py")
@@ -220,12 +260,15 @@ class Hook(unittest.TestCase):
 
         self.assertIn("notes.txt", done.stderr)
 
-    def test_cp_and_mv_targets_outside_the_allowlist_are_reported(self):
-        done = self.around("cp src/a.py copied.py && mv Makefile Makefile.old")
+    def test_a_cp_target_outside_the_allowlist_is_reported(self):
+        done = self.around("cp src/a.py copied.py")
 
-        self.assertEqual(done.returncode, 2)
-        for name in ("copied.py", "Makefile.old", "Makefile:"):
-            self.assertIn(name, done.stderr)
+        self.assertIn("copied.py", done.stderr)
+
+    def test_an_mv_out_of_place_reports_the_removed_source(self):
+        done = self.around("mv Makefile Makefile.old")
+
+        self.assertIn("Makefile:", done.stderr)
 
     def test_a_python_open_for_writing_is_reported(self):
         done = self.around("python3 -c \"open('made.txt','w').write('x')\"")
@@ -236,6 +279,63 @@ class Hook(unittest.TestCase):
         done = self.around("echo x > stray.txt; false")
 
         self.assertIn("stray.txt", done.stderr)
+
+    def test_a_failed_call_judged_on_post_tool_use_failure_is_reported(self):
+        done = self.around("echo x > stray.txt; exit 1", event="PostToolUseFailure")
+
+        self.assertIn("stray.txt", done.stderr)
+
+    def test_a_commit_moved_off_head_onto_another_branch_is_reported(self):
+        done = self.around("echo two > Makefile && git -c user.email=t@t -c user.name=t commit -qam x "
+                           "&& git branch kept && git reset -q --hard HEAD~1")
+
+        self.assertIn("Makefile", done.stderr)
+
+    def test_switching_to_an_existing_branch_does_not_report_its_history(self):
+        git(self.repo, "switch", "-qc", "other")
+        (self.repo / "Makefile").write_text("other\n")
+        git(self.repo, "commit", "-qam", "other")
+        git(self.repo, "switch", "-q", "main")
+
+        done = self.around("git switch -q other")
+
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
+
+    def test_merging_an_existing_branch_does_not_report_its_changes(self):
+        git(self.repo, "switch", "-qc", "feature")
+        (self.repo / "Makefile").write_text("feature\n")
+        git(self.repo, "commit", "-qam", "feature")
+        git(self.repo, "switch", "-q", "main")
+        (self.repo / "src" / "a.py").write_text("main\n")
+        git(self.repo, "commit", "-qam", "main side")
+
+        done = self.around("git -c user.email=t@t -c user.name=t merge -q --no-edit feature")
+
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
+
+    def test_an_edit_to_a_skip_worktree_file_is_reported(self):
+        done = self.around("git update-index --skip-worktree Makefile && echo two > Makefile")
+
+        self.assertIn("Makefile", done.stderr)
+
+    def test_core_worktree_pointing_elsewhere_does_not_hide_a_write(self):
+        done = self.around(f"git config core.worktree {self.config} && echo x > stray.txt")
+
+        self.assertIn("stray.txt", done.stderr)
+
+    def test_core_bare_does_not_hide_a_write(self):
+        done = self.around("echo x > stray.txt && git config core.bare true")
+
+        self.assertIn("stray.txt", done.stderr)
+
+    def test_a_harness_write_in_a_repository_with_no_commit_yet_is_reported(self):
+        self.repo = self.config / "fresh"
+        self.repo.mkdir()
+        git(self.repo, "init", "-q")
+
+        done = self.around("mkdir .claude && echo x > .claude/notes.txt")
+
+        self.assertIn("harness or control", done.stderr)
 
     def test_a_write_committed_in_the_same_call_is_reported(self):
         done = self.around("echo two > Makefile && git -c user.email=t@t -c user.name=t commit -qam x")
@@ -280,6 +380,63 @@ class Hook(unittest.TestCase):
 
         self.assertIn("symlink", done.stderr)
 
+    def test_a_payload_without_a_working_directory_blocks_the_call(self):
+        done = self.hook("pre", "toolu_nocwd", cwd=None)
+
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("blocked", done.stderr)
+
+    def test_git_missing_inside_a_repository_blocks_the_call(self):
+        tools = self.config / "bin"
+        tools.mkdir()
+        for name in ("python3", "cat", "dirname", "readlink", "bash"):
+            found = subprocess.run(["bash", "-c", f"command -v {name}"], capture_output=True, text=True).stdout.strip()
+            (tools / name).symlink_to(found)
+        env = {**self.env, "PATH": str(tools)}
+
+        done = self.hook("pre", "toolu_nogit", env)
+
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("blocked", done.stderr)
+
+    def test_a_snapshot_that_cannot_be_written_blocks_the_call(self):
+        env = {**self.env, "CLAUDE_CONFIG_DIR": str(self.config / "missing")}
+
+        done = self.hook("pre", "toolu_nostate", env)
+
+        self.assertEqual(done.returncode, 2)
+
+    def test_a_snapshot_that_is_not_private_is_refused(self):
+        self.assertEqual(self.hook("pre", "toolu_open").returncode, 0)
+        self.snapshot_file("toolu_open").chmod(0o644)
+
+        done = self.hook("post", "toolu_open")
+
+        self.assertIn("not a private regular file", done.stderr)
+
+    def test_a_snapshot_another_version_wrote_is_refused(self):
+        self.assertEqual(self.hook("pre", "toolu_old").returncode, 0)
+        self.snapshot_file("toolu_old").write_text(json.dumps({"version": 1, "root": None}))
+
+        done = self.hook("post", "toolu_old")
+
+        self.assertIn("not written by this version", done.stderr)
+
+    def test_a_malformed_snapshot_is_refused(self):
+        self.assertEqual(self.hook("pre", "toolu_bad").returncode, 0)
+        self.snapshot_file("toolu_bad").write_text(json.dumps({"version": bw.SNAPSHOT_VERSION, "root": "/x"}))
+
+        done = self.hook("post", "toolu_bad")
+
+        self.assertIn("malformed", done.stderr)
+
+    def test_a_run_on_a_branch_that_names_no_plan_is_refused(self):
+        env = {**self.env, "TRIMTAB_PLAN_RUN": "1"}
+
+        done = self.around("echo x > src/feature.py", env)
+
+        self.assertIn("no write can be scoped", done.stderr)
+
     def test_a_post_with_no_snapshot_is_reported_unjudged(self):
         done = self.hook("post", "toolu_never_snapshotted")
 
@@ -292,10 +449,10 @@ class Hook(unittest.TestCase):
 
         self.assertEqual((done.returncode, done.stderr), (0, ""))
 
-    def test_the_operator_export_lifts_it(self):
+    def test_the_operator_export_lifts_both_phases(self):
         env = {**self.env, "HOOK_ALLOW_HARNESS": "1"}
 
-        done = self.hook("post", "toolu_lifted", env)
+        done = self.around("echo x > stray.txt", env)
 
         self.assertEqual((done.returncode, done.stderr), (0, ""))
 
@@ -307,8 +464,71 @@ class Hook(unittest.TestCase):
     def test_the_snapshot_is_removed_once_judged(self):
         self.around("true")
 
-        self.assertEqual([p for p in (self.config / "guard-state" / "bash-writes").iterdir()
-                          if not p.name.startswith(".")], [])
+        self.assertEqual(list((self.config / "guard-state" / "bash-writes").iterdir()), [])
+
+
+class Pruning(unittest.TestCase):
+    NOW = 1_800_000_000
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def make(self, name, age):
+        path = self.dir / name
+        path.write_text("{}")
+        os.utime(path, (self.NOW - age, self.NOW - age))
+        return path
+
+    def test_a_snapshot_older_than_the_ttl_is_removed(self):
+        old = self.make("old.json", bw.TTL_SECONDS + 1)
+
+        bw._prune(self.dir, "own.json", self.NOW)
+
+        self.assertFalse(old.exists())
+
+    def test_a_fresh_snapshot_of_another_call_is_kept(self):
+        fresh = self.make("fresh.json", 60)
+
+        bw._prune(self.dir, "own.json", self.NOW)
+
+        self.assertTrue(fresh.exists())
+
+    def test_the_calls_own_snapshot_is_kept_however_old(self):
+        own = self.make("own.json", bw.TTL_SECONDS + 1)
+
+        bw._prune(self.dir, "own.json", self.NOW)
+
+        self.assertTrue(own.exists())
+
+
+class Allowlists(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        (self.root / ".claude").mkdir()
+
+    def test_a_list_larger_than_any_written_by_hand_is_not_trusted(self):
+        (self.root / ".claude" / "write-allowlist").write_text("x\n" * bw.MAX_LIST_BYTES)
+
+        self.assertEqual(bw.read_allowlist(str(self.root))[0], None)
+
+    def test_a_linked_claude_directory_is_not_trusted(self):
+        target = self.root / "elsewhere"
+        target.mkdir()
+        (self.root / ".claude").rmdir()
+        (self.root / ".claude").symlink_to(target)
+
+        self.assertIn("symlink", bw.read_allowlist(str(self.root))[1])
+
+    def test_a_repository_without_a_list_has_none(self):
+        self.assertEqual(bw.read_allowlist(str(self.root)), (None, ""))
+
+    def test_only_create_only_paths_need_the_default_branch(self):
+        self.assertEqual(bw.create_only_paths(["src/a.py", "docs/notes/a.md"], ALLOWLIST_TEXT, None),
+                         ["docs/notes/a.md"])
 
 
 if __name__ == "__main__":

@@ -7,6 +7,13 @@ unchanged). This is a change to a security control; the operator authorised
 it in chat as step 4a of the autonomous-plan-runs plan. It lands in a pull
 request of its own.
 
+Superseded in part by ADR 0065 (2026-11-12): the option row "Confine Bash
+writes too, by spotting write verbs", as far as it rejects any in-session
+check of shell writes, and the residual "Shell writes outside an allowlist are
+not stopped in the session". A detector now judges what a Bash call changed,
+after it ran; see
+`docs/adr/0065-a-detector-judges-bash-writes-against-the-write-allowlist.md`.
+
 ## Context
 
 An instance can now let an autonomous session run an operator-merged plan
