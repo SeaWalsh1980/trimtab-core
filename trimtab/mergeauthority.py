@@ -61,6 +61,7 @@ job records, for a token that can't read check runs (ADR 0058).
 
 from __future__ import annotations
 
+import posixpath
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -444,13 +445,16 @@ def freshness_problems(main: MainRead, plan: str, changes: list[planscope.Change
     if not main.clean:
         problems.append("the head conflicts with the default branch; merge the default branch into the head")
     held = verdict_inputs(plan, workflows)
-    added = {c.path for c in changes if c.status == "A"}
+    # Folded throughout, as guard-paths' layer 1 compares: a case-insensitive checkout makes two spellings one
+    # file, and folding can only hold more.
+    added = {c.path.casefold() for c in changes if c.status == "A"}
     stale = sorted(p for p in main.touched
-                   if p.casefold() in held or p in added or judged_by(p, main.rules_dir))
+                   if p.casefold() in held or p.casefold() in added or judged_by(p, main.rules_dir))
     if stale:
         problems.append(f"the default branch changed {_listed(stale)} since the merge-base, which plan-scope's "
                         "pass did not judge; merge the default branch into the head")
-    gone = sorted(main.deleted & {c.path for c in changes})
+    changed = {c.path.casefold() for c in changes}
+    gone = sorted(p for p in main.deleted if p.casefold() in changed)
     if gone:
         problems.append(f"the default branch deleted or renamed away {_listed(gone)}, which the head changes; "
                         "merge the default branch into the head")
@@ -916,9 +920,10 @@ def read_main(repo: str, base: str, head: str) -> MainRead:
         if len(bases) != 1:
             return MainRead(bases)
         lock = planscope.read_files(repo, base, [config.PATH])[config.PATH]
-        return MainRead(bases, planscope.merges_cleanly(repo, base, head),
-                        planscope.main_changes(repo, bases[0], base),
-                        planscope.main_changes(repo, bases[0], base, deleted=True), _rules_dir(lock))
+        if lock is None and planscope.present(repo, base, [config.PATH]):
+            raise MergeAuthorityError(f"{config.PATH} at the base commit is not a regular file")
+        touched, deleted = planscope.main_changes(repo, bases[0], base)
+        return MainRead(bases, planscope.merges_cleanly(repo, base, head), touched, deleted, _rules_dir(lock))
     except planscope.PlanScopeError as err:
         raise MergeAuthorityError(str(err)) from err
 
@@ -930,8 +935,9 @@ def _rules_dir(lock: str | None) -> str:
         return config.ProjectConfig.rules_dir
     found, problems = config.parse(lock)
     rules = found.rules_dir if found and not problems else None
-    rules = rules.strip().removeprefix("./").strip("/") if isinstance(rules, str) else ""
-    if not rules:
+    rules = posixpath.normpath(rules.strip()) if isinstance(rules, str) and rules.strip() else ""
+    # A directory in the tree, named as git names paths: no root, no climb out, not the tree itself.
+    if not rules or rules in (".", "..") or rules.startswith(("/", "../")):
         raise MergeAuthorityError(f"{config.PATH} at the base commit names no readable rules_dir")
     return rules
 
@@ -1108,11 +1114,25 @@ def check(repo: str, pr: Pr, number: int, base: str, who: Accounts, run: Run | N
     return decide(pr, who, paths, checker_in_tree, reviews, runs, route)
 
 
-def fresh(facts: RouteFacts, repo: str, base: str, pr: Pr, found: list[planscope.Change]) -> RouteFacts:
-    """The route's facts with the head's freshness against base read in (ADR 0065)."""
+def fresh(facts: RouteFacts, repo: str, base: str, pr: Pr, found: list[planscope.Change],
+          tip: str | None = None) -> RouteFacts:
+    """The route's facts with the head's freshness against base read in (ADR 0065). `tip`, where given, is the
+    default branch's tip the server reports now: a base that isn't it answers for an older main."""
+    stale_base = [f"the base {base[:12]} is not the default branch's tip {tip[:12]}; judge against the tip"] \
+        if tip is not None and tip != base else []
     main = read_main(repo, base, pr.head)
     plan = planscope.plan_of(pr.head_ref).plan
-    return replace(facts, freshness=tuple(freshness_problems(main, plan, found, facts.workflows)))
+    return replace(facts, freshness=(*stale_base, *freshness_problems(main, plan, found, facts.workflows)))
+
+
+def read_tip(api: GhApi, repository: str, branch: str) -> str:
+    """The commit a branch points at, as the server reports it now."""
+    what = "gh api branches"
+    data = _json(api, f"repos/{repository}/branches/{branch}", what)
+    sha = (data.get("commit") or {}).get("sha") if isinstance(data, dict) else None
+    if not isinstance(sha, str) or not SHA.fullmatch(sha):
+        raise MergeAuthorityError(f"{what} returned unexpected JSON")
+    return sha
 
 
 def check_action(repo: str, repository: str, number: int, base: str, head: str, action: str, who: Accounts,
@@ -1152,8 +1172,10 @@ def check_action(repo: str, repository: str, number: int, base: str, head: str, 
     runs = read_check_runs(api, repository, head)
 
     def route() -> RouteFacts:
-        return fresh(read_route_facts(api, pull.pr, number, workflows, own=action != APPROVE, gates=tuple(gates),
-                                      author=pull.author), repo, base, pull.pr, found)
+        facts = read_route_facts(api, pull.pr, number, workflows, own=action != APPROVE, gates=tuple(gates),
+                                 author=pull.author)
+        # Read last, so the tip compared is as close to the write as this check can get (SEC-2.3 "Fresh").
+        return fresh(facts, repo, base, pull.pr, found, read_tip(api, repository, pull.pr.default_branch))
 
     def comments() -> list[str]:
         return (thread_problems(who.agent, read_inline_comments(api, repository, number))

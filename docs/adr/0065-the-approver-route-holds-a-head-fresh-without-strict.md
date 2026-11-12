@@ -60,6 +60,13 @@ when:
    directory) or the rules directory the base commit's lock names (by default
    `.claude/rules/`). Strict kept the verdict of a merge judged against those current too.
 
+Freshness is only as current as the base it is given. So `check-approver-route` also reads
+the default branch's tip from the server, last among its route reads, and refuses when
+`--base` is not that commit. Strict was a server-side control, and this keeps the base a
+server fact rather than whatever the caller's checkout held. `check-merge-authority` judges
+against the base branch's tip as its job starts. Its pass can go stale as `main` moves, but
+the approver App never writes on that pass alone: it runs `check-approver-route` first.
+
 The merge-base is never newer than the base plan-scope judged. The event's base was
 `main`'s tip at the push, and the head merged nothing from `main` after it. So reading
 from the merge-base can hold too much, never too little.
@@ -96,6 +103,10 @@ unread, and unread closes the route.
 - Strict also kept every other required check, `lint-test` among them, judged against the
   current base. That is lost for the approver route too, and is part of the same accepted
   risk.
+- `main` can still move between `check-approver-route`'s tip read and the App's merge call:
+  GitHub's merge API pins the head, not the base. Strict closed that window on GitHub's
+  side. SEC-2.3 leaves an unpinned write to the merge's own pin, and the window is part of
+  the owner's accepted risk.
 - A conflict, or any hold here, sends the plan run to merge `main`, and that push counts
   as a CI fix round.
 - The strict comment in `.github/workflows/plan-scope.yml` now describes only rulesets

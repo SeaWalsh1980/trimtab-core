@@ -386,28 +386,45 @@ def merges_cleanly(repo: str, base: str, head: str) -> bool:
     """Whether git merges head into base with no conflict. merge-tree writes the merge's objects, so they go to a
     scratch object directory that is deleted at once (SEC-2.3), with the repository's own read through it."""
     objects = os.fsdecode(_git(repo, "rev-parse", "--path-format=absolute", "--git-path", "objects").strip())
-    with tempfile.TemporaryDirectory(prefix="trimtab-merge-tree-") as scratch:
-        code, out = _git_answer(repo, "merge-tree", "--write-tree", "--end-of-options", base, head, answers=(0, 1),
-                                objects={"GIT_OBJECT_DIRECTORY": scratch, "GIT_ALTERNATE_OBJECT_DIRECTORIES": objects})
+    if os.pathsep in objects or objects.startswith('"'):
+        # git splits the alternates variable on the separator and C-unquotes an entry opening with a quote.
+        raise PlanScopeError(f"the repository's object directory {shown(objects)} can't be named as an alternate")
+    try:
+        with tempfile.TemporaryDirectory(prefix="trimtab-merge-tree-") as scratch:
+            code, out = _git_answer(repo, "merge-tree", "--write-tree", "--end-of-options", base, head,
+                                    answers=(0, 1), objects={"GIT_OBJECT_DIRECTORY": scratch,
+                                                             "GIT_ALTERNATE_OBJECT_DIRECTORIES": objects})
+    except OSError as err:
+        raise PlanScopeError(f"the scratch object directory for git merge-tree failed: {type(err).__name__}") from err
     # Clean or conflicted, the first line is the tree written; anything else is git failing to answer.
     if not SHA.fullmatch(out.split(b"\n", 1)[0].decode("ascii", errors="replace")):
         raise PlanScopeError("git merge-tree gave no tree id, so the merge cannot be read")
     return code == 0
 
 
-def main_changes(repo: str, since: str, tip: str, deleted: bool = False) -> frozenset[str]:
-    """Each path main's first-parent history changed from `since` to `tip`, merges read against their first parent
-    so a revert still shows; with `deleted`, only the paths deleted. Renames are off, so a rename deletes its old
-    path. `--first-parent` already implies `--diff-merges=first-parent` in the git versions this runs on; it is
-    pinned as well, so a merge's changes never depend on that default."""
-    out = _git(repo, "log", "-z", "--format=", "--name-only", "--no-renames", "--first-parent",
+def main_changes(repo: str, since: str, tip: str) -> tuple[frozenset[str], frozenset[str]]:
+    """Each path main's first-parent history changed from `since` to `tip`, and of those the ones it deleted, in one
+    walk. Merges are read against their first parent, so a revert still shows, and renames are off, so a rename
+    deletes its old path. `--first-parent` already implies `--diff-merges=first-parent` in the git versions this
+    runs on; it is pinned as well, so a merge's changes never depend on that default."""
+    out = _git(repo, "log", "-z", "--format=", "--name-status", "--no-renames", "--first-parent",
                "--diff-merges=first-parent", "--no-relative", "--ignore-submodules=none", "--no-ext-diff",
-               "--no-textconv", *(("--diff-filter=D",) if deleted else ()), "--end-of-options", f"{since}..{tip}")
-    paths = [p for p in out.split(b"\0") if p]
-    if len(paths) > MAX_MAIN_CHANGES:
+               "--no-textconv", "--end-of-options", f"{since}..{tip}")
+    fields = [f for f in out.split(b"\0") if f]
+    if len(fields) % 2:
+        raise PlanScopeError("git log --name-status returned an entry that could not be parsed")
+    if len(fields) // 2 > MAX_MAIN_CHANGES:
         raise PlanScopeError(f"main changed more than {MAX_MAIN_CHANGES} paths since the merge-base; merge main "
                              "into the head")
-    return frozenset(os.fsdecode(p) for p in paths)
+    touched, deleted = set(), set()
+    for status, path in zip(fields[0::2], fields[1::2]):
+        # With renames and copies off, git writes one letter per path; anything else is not an answer to judge.
+        if status not in (b"A", b"D", b"M", b"T"):
+            raise PlanScopeError("git log --name-status returned an entry that could not be parsed")
+        touched.add(os.fsdecode(path))
+        if status == b"D":
+            deleted.add(os.fsdecode(path))
+    return frozenset(touched), frozenset(deleted)
 
 
 def check(repo: str, *, base: str, head: str, head_ref: str, base_ref: str, default_branch: str) -> Result:

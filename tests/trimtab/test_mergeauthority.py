@@ -435,6 +435,7 @@ RUNS_PATH = f"repos/{REPOSITORY}/commits/{HEAD}/check-runs"
 PULL_PATH = f"repos/{REPOSITORY}/pulls/{NUMBER}"
 ACTIVITY_PATH = f"repos/{REPOSITORY}/activity"
 RULES_PATH = f"repos/{REPOSITORY}/rules/branches/{DEFAULT}"
+BRANCH_PATH = f"repos/{REPOSITORY}/branches/{DEFAULT}"
 
 
 def activity_row(id, kind, before, after, actor=AGENT, ref=PLAN_REF):
@@ -1277,6 +1278,10 @@ class ApproverRoute(GitRepository):
         self.assertEqual(self.judged(), mergeauthority.Result(ADMIN, ()))
 
 
+def tip_row(sha):
+    return json.dumps({"commit": {"sha": sha}})
+
+
 def pull_row(head, head_ref=PLAN_REF, head_repo=REPOSITORY, base_ref=DEFAULT, state="open", draft=False, merged=False,
              labels=(), author=AGENT):
     return {"user": {"login": author}, "state": state, "draft": draft, "merged": merged,
@@ -1318,7 +1323,7 @@ class ApproverAction(GitRepository):
         self.head = self.commit("item")
         self.answers = {**route_answers(self.head), PULL_PATH: json.dumps(pull_row(self.head)),
                         REVIEWS_PATH: json.dumps([review_row(1, APPROVER, commit=self.head)]),
-                        INLINE_PATH: "[]", CONVERSATION_PATH: "[]"}
+                        INLINE_PATH: "[]", CONVERSATION_PATH: "[]", BRANCH_PATH: tip_row(self.base)}
 
     def set(self, path, *rows):
         self.answers[path] = json.dumps(list(rows))
@@ -2743,7 +2748,12 @@ class Freshness(ApproverAction):
     def setUp(self):
         super().setUp()
         self.start = self.base
+        self.server_tip = None  # None: the server reports the base judged as the tip
         self.answers[RULES_PATH] = json.dumps(rule_rows(strict=False))
+
+    def acted(self, *args, **kwargs):
+        self.answers[BRANCH_PATH] = tip_row(self.server_tip or self.base)
+        return super().acted(*args, **kwargs)
 
     def rehead(self):
         """The plan branch's tip as the head, with the server's answers for it."""
@@ -2900,6 +2910,100 @@ class Freshness(ApproverAction):
         with mock.patch.object(planscope, "git_answer", no_tree), \
                 self.assertRaisesRegex(MergeAuthorityError, "no tree id"):
             self.acted()
+
+    def test_a_base_that_is_not_the_servers_tip_refuses(self):
+        self.server_tip = self.on_main((planscope.ALLOWLIST, "src/**\n"))
+        self.base = self.start
+
+        self.assert_refused("not the default branch's tip")
+
+    def test_an_unreadable_tip_is_an_error(self):
+        self.server_tip = "not-a-sha"
+
+        with self.assertRaisesRegex(MergeAuthorityError, "branches"):
+            self.acted()
+
+    def test_a_case_variant_of_a_path_the_head_adds_refuses(self):
+        self.write("src/New.py", "n\n")
+        self.commit("add")
+        self.rehead()
+        self.on_main(("src/new.py", "n\n"))
+
+        self.assert_refused("src/new.py")
+
+    def test_main_deleting_a_case_variant_of_a_path_the_head_changes_refuses(self):
+        judged = mergeauthority.freshness_problems(
+            mergeauthority.MainRead((self.start,), clean=True, touched=frozenset({"src/app.py"}),
+                                    deleted=frozenset({"src/app.py"})),
+            self.PLAN, [planscope.Change("M", "Src/App.py", "100644")], WORKFLOWS)
+
+        self.assertEqual(len(judged), 1)
+        self.assertIn("renamed away src/app.py", judged[0])
+
+    def test_a_rules_dir_that_names_no_directory_in_the_tree_is_an_error(self):
+        for rules in (".", "./", "/", "..", "../rules", "/abs/rules", "a/../.."):
+            with self.subTest(rules_dir=rules):
+                with self.assertRaisesRegex(MergeAuthorityError, "rules_dir"):
+                    mergeauthority._rules_dir(LOCK_TEXT.replace("}", f', "rules_dir": "{rules}"}}'))
+
+    def test_a_rules_dir_is_read_as_git_names_it(self):
+        lock = LOCK_TEXT.replace("}", ', "rules_dir": " ./docs/./rules/ "}')
+
+        self.assertEqual(mergeauthority._rules_dir(lock), "docs/rules")
+
+    def test_a_sibling_of_the_rules_dir_is_not_held(self):
+        self.assertFalse(mergeauthority.judged_by("docs/rules-extra/x.md", "docs/rules"))
+
+    def test_a_lock_that_is_not_a_regular_file_is_an_error(self):
+        git(self.repo, "switch", "-q", DEFAULT)
+        (self.repo / ".claude").mkdir(exist_ok=True)
+        os.symlink("elsewhere.json", self.repo / ".claude" / "trimtab.json")
+        self.base = self.commit("link the lock")
+        git(self.repo, "switch", "-q", PLAN_REF)
+        self.take_main()
+
+        with self.assertRaisesRegex(MergeAuthorityError, "not a regular file"):
+            self.acted()
+
+    def test_exactly_the_cap_of_changes_on_main_is_judged(self):
+        self.on_main(("src/a.py", "1\n"), ("src/b.py", "2\n"))
+
+        with mock.patch.object(planscope, "MAX_MAIN_CHANGES", 2):
+            self.assert_acts()
+
+    def test_unrelated_histories_have_no_merge_base(self):
+        git(self.repo, "switch", "-q", "--orphan", "elsewhere")
+        self.write("other.txt", "o\n")
+        unrelated = self.commit("unrelated")
+        git(self.repo, "switch", "-q", PLAN_REF)
+
+        self.assertEqual(planscope.merge_bases(str(self.repo), unrelated, self.head), ())
+
+    def test_an_unreadable_merge_base_answer_is_an_error(self):
+        real = planscope.git_answer
+        for answer in ((0, b""), (1, b"a" * 40 + b"\n"), (0, b"not-a-sha\n")):
+            with self.subTest(answer=answer):
+                def stub(repo, *args, answer=answer, **kwargs):
+                    return answer if "merge-base" in args else real(repo, *args, **kwargs)
+
+                with mock.patch.object(planscope, "git_answer", stub), \
+                        self.assertRaisesRegex(planscope.PlanScopeError, "merge-base"):
+                    planscope.merge_bases(str(self.repo), self.base, self.head)
+
+    def test_an_object_directory_git_cannot_name_as_an_alternate_is_an_error(self):
+        real = planscope._git
+
+        def colon(repo, *args, **kwargs):
+            return b"/srv/ws:1/repo/.git/objects\n" if "--git-path" in args else real(repo, *args, **kwargs)
+
+        with mock.patch.object(planscope, "_git", colon), \
+                self.assertRaisesRegex(planscope.PlanScopeError, "alternate"):
+            planscope.merges_cleanly(str(self.repo), self.base, self.head)
+
+    def test_a_failed_scratch_directory_is_an_error(self):
+        with mock.patch.object(planscope.tempfile, "TemporaryDirectory", side_effect=OSError("full")), \
+                self.assertRaisesRegex(planscope.PlanScopeError, "scratch"):
+            planscope.merges_cleanly(str(self.repo), self.base, self.head)
 
     def test_judging_a_conflict_writes_no_object_into_the_repository(self):
         self.on_main(("src/app.py", "x = 3\n"))
