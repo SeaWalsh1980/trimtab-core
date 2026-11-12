@@ -8,15 +8,9 @@ description: Run an authorised plan across merges — confirm the merge, run the
 Paths such as `plan-run/references/stops.md` are relative to the skills directory, the parent of
 this skill's own directory.
 
-**If you cannot read a file this skill links to, stop.** Make no file write unless this session
-passed check 0 (plan-run/SKILL.md section 2), and never edit a merged record. If it passed and you
-are working on an open item PR, set that PR's record's `## Status` to say whether this part finished
-(`stopped unfinished` if not) and `## Next` to `blocked: <reason>`; a push to a PR marked ready
-returns it to draft first, as plan-pr/SKILL.md says. Whether or not check 0 passed, label
-`plan:blocked` and remove any `plan:continue` on the open item PR you are working on or, with none
-open, on the merged PR that started the session; a valid restart with no open item PR labels
-nothing. Report the blocker with one to three ways forward. Where a link below says more about an
-unreadable file, that adds to this rule.
+**If you cannot read a file this skill links to, stop.** Make no file write and change no label.
+Report the blocker, naming the file, with one to three ways forward. Where a link below says more
+about an unreadable file, that adds to this rule.
 
 When a plan PR merges, its history belongs in durable records and the next session should carry only
 what comes next. Leftover review rounds, dead ends and command output cost context and let stale
@@ -104,7 +98,7 @@ Everything comes from the default branch and open PRs, never from memory:
   plan-run/references/record-authority.md.
 - **That record's PR must carry the code gate and be merged by the admin, or by the approver with
   every condition met.** Read plan-run/references/record-authority.md to check it. If you cannot
-  read it, the record authorises nothing: stop and label that PR `plan:blocked`.
+  read it, the record authorises nothing: stop.
 - **Done:** the `## Status` lines of the merged records.
 - **Open issues:** the entry files in `<plans>/unauthorised/<plan>/` whose `status` is `open`.
 - **The merged PR carries no record** → stop, unless it is the PR that added the authorised plan

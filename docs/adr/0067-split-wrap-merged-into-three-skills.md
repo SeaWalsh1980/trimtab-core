@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Replaces `skills/wrap-merged/` with `skills/plan-run/`, `skills/plan-item/` and
+Accepted on merge. Replaces `skills/wrap-merged/` with `skills/plan-run/`, `skills/plan-item/` and
 `skills/plan-pr/`, each with on-demand `references/` files. Every moved procedure keeps its text
 and behaviour. One behaviour is added, and only because the text is now split across files: what a
 run does when it cannot read a file a skill links to (see Decision).
@@ -45,13 +45,11 @@ No measurement drove this beyond the line count; the finding was readability.
   - frontmatter, headings, one-line cross-links, and the connective sentences a moved block needs
     (for example, that section numbers in `plan-item` are `plan-run`'s);
   - a line at the top of every file saying what its paths are relative to;
-  - **the added behaviour:** one shared rule at the top of each SKILL.md for a linked file the run
-    cannot read. It stops; makes no file write unless the session passed check 0, and never edits
-    a merged record; otherwise sets the open item PR's record to `stopped unfinished` /
-    `blocked:`; labels `plan:blocked` and removes `plan:continue` on the open item PR, or on the
-    merged PR that started the session, or on nothing in a valid restart; and reports with one to
-    three ways forward. Each clause restates a moved rule (check 0, section 5, `stops.md`, the
-    ready rule); the trigger, an unreadable linked file, is the new part;
+  - **the added behaviour:** one shared rule at the top of each SKILL.md, quoted here:
+    "**If you cannot read a file this skill links to, stop.** Make no file write and change no
+    label. Report the blocker, naming the file, with one to three ways forward. Where a link below
+    says more about an unreadable file, that adds to this rule." A session that cannot read its
+    rules changes nothing; the operator learns of the stop from the report;
   - for a link whose file decides something, its own meaning when unreadable: the authorisation
     check fails, the record authorises nothing, the gate fails, no session is a restart.
 - `wrap-merged` is deleted, with no alias.
@@ -66,6 +64,7 @@ No measurement drove this beyond the line count; the finding was readability.
 | Keep `wrap-merged` as the entry's name | Same misleading name; consumers would still need to learn the two new ones, so it saves no migration |
 | Rewrite the text while splitting | Mixes a move with behaviour changes, so neither can be reviewed on its own; the sync PR does the rewrite |
 | No fallback for an unreadable link (rely on the reader) | A link the run fails to follow silently loses that part's rules, and the run carries on; reviews of this PR found it for checks 1–4, the gate, the record check, restarts and the stop protocol |
+| A shared rule that also writes the record and labels the PR (tried in review rounds 4–6, then cut down) | To write and label safely it needed facts the unreadable file was meant to supply: whether check 0 passed and still holds after a clear, which PR started the session, whether this is a valid restart. Each round found another case where it labelled the wrong PR, labelled in a session that is not a plan run, or wrote without check 0. Changing nothing has no such case; the cost is that the stop leaves no `plan:blocked` label, only a report |
 | A fallback copied next to each link (tried in review rounds 1–4, then replaced) | Each copy restated part of the stop protocol and drifted: the copies dropped `## Status` and the ways forward, could read as a write after the merge or before check 0, and named a PR a restart doesn't have. Every new link needed another copy, and each review round found one missing |
 
 ## Consequences

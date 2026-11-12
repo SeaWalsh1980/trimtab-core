@@ -22,15 +22,9 @@ BARE_LINK = re.compile(r"(?<![\w./-])([a-z][a-z0-9-]*/(?:SKILL|references/[\w-]*
 MD_MENTION = re.compile(r"(?<![\w./<>{}*-])([\w./<>{}*-]*\.md)\b")
 
 SHARED_RULE = " ".join("""
-**If you cannot read a file this skill links to, stop.** Make no file write unless this session
-passed check 0 (plan-run/SKILL.md section 2), and never edit a merged record. If it passed and you
-are working on an open item PR, set that PR's record's `## Status` to say whether this part finished
-(`stopped unfinished` if not) and `## Next` to `blocked: <reason>`; a push to a PR marked ready
-returns it to draft first, as plan-pr/SKILL.md says. Whether or not check 0 passed, label
-`plan:blocked` and remove any `plan:continue` on the open item PR you are working on or, with none
-open, on the merged PR that started the session; a valid restart with no open item PR labels
-nothing. Report the blocker with one to three ways forward. Where a link below says more about an
-unreadable file, that adds to this rule.
+**If you cannot read a file this skill links to, stop.** Make no file write and change no label.
+Report the blocker, naming the file, with one to three ways forward. Where a link below says more
+about an unreadable file, that adds to this rule.
 """.split())
 
 # A link to one of these files must say, in its own paragraph, what an unreadable copy means.
