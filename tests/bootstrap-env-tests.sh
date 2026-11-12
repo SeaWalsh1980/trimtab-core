@@ -1014,7 +1014,7 @@ check_skills_drop_a_stale_link_and_keep_the_operators() {
 }
 
 check_skills_drop_the_removed_wrap_merged_link() {
-  # ADR 0067: an install from an older core checkout linked its skills/wrap-merged, which this base
+  # ADR 0068: an install from an older core checkout linked its skills/wrap-merged, which this base
   # no longer ships. (The snapshot route is check_skills_drop_a_stale_link_and_keep_the_operators.)
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
