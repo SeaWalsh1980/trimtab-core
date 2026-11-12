@@ -165,20 +165,50 @@ for k in ("cwd", "session_id"):
   sm_cwd="$cwd" sm_sid="$sid"
 }
 
-# sm_record_enforcement <project dir>: in a run session, start E20's recorder in
-# the background, the only writer of the pass cache the guards read (ADR 0063
-# §2-§3). It reads the network, which a SessionStart hook's timeout cannot
-# wait for, so it is detached and bounded; until it writes a pass, guards
-# refuse. Best effort: a recorder that cannot start leaves no pass.
+# sm_trusted <name>: the absolute path of a system binary that only root can
+# change (the file, where it resolves, and both directories), or nothing. A
+# program the session put on PATH (~/.local/bin) is never run.
+sm_trusted() {
+  local d p real x
+  for d in /usr/bin /bin; do
+    p="$d/$1"
+    [[ -f "$p" && -x "$p" ]] || continue
+    real=$(readlink -f -- "$p") || return 1
+    for x in "$p" "$d" "$real" "${real%/*}"; do
+      [[ -n $(find "$x" -maxdepth 0 -user 0 ! -perm /022 2>/dev/null) ]] || return 1
+    done
+    printf '%s\n' "$p"
+    return 0
+  done
+  return 1
+}
+
+# sm_clear_passes: remove every cached E20 pass, without python. The fallback
+# when the recorder's own clear cannot run.
+sm_clear_passes() {
+  local cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  rm -f -- "$cfg/guard-state/enforcement/"*.json 2>/dev/null
+  return 0
+}
+
+# sm_record_enforcement <project dir>: in a run session, first remove the
+# project's cached E20 pass (synchronously, so no pass from an earlier session
+# survives into this one), then start the recorder in the background: the only
+# writer of the pass the guards read (ADR 0063 §2-§3). It reads the network,
+# which a SessionStart hook's timeout cannot wait for, so it is detached and
+# bounded; until it writes a pass, guards refuse. Whatever fails here, no pass
+# is left.
 sm_record_enforcement() {
-  local here py
+  local here py setsid_bin timeout_bin
+  here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+  py=$(sm_trusted python3) && setsid_bin=$(sm_trusted setsid) && timeout_bin=$(sm_trusted timeout) \
+    && [[ -r "$here/run_module.py" ]] || { sm_clear_passes; return 0; }
+  ( cd / && PATH=/usr/bin:/bin "$timeout_bin" -k 2 10 "$py" -I -B "$here/run_module.py" "$here/.." \
+      trimtab.adapters.enforcement_record clear "$1" </dev/null >/dev/null 2>&1 ) || sm_clear_passes
   # Off only, never on: with no recorder no pass is written, and guards refuse. Tests set it.
   [[ "${TRIMTAB_ENFORCEMENT_RECORDER:-1}" == 0 ]] && return 0
-  here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
-  py=$(command -v python3) || return 0
-  [[ -r "$here/run_module.py" ]] || return 0
-  ( cd / && setsid timeout -k 5 300 "$py" -I -B "$here/run_module.py" "$here/.." \
-      trimtab.adapters.enforcement_record "$1" </dev/null >/dev/null 2>&1 & ) 2>/dev/null
+  ( cd / && PATH=/usr/bin:/bin "$setsid_bin" "$timeout_bin" -k 5 300 "$py" -I -B "$here/run_module.py" "$here/.." \
+      trimtab.adapters.enforcement_record record "$1" </dev/null >/dev/null 2>&1 & ) 2>/dev/null
   return 0
 }
 

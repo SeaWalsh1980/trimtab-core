@@ -105,13 +105,14 @@ class TheShippedManifest(unittest.TestCase):
         self.assertEqual(missing, [])
 
     def test_names_only_tests_lint_test_runs(self):
-        loader = unittest.TestLoader()
         missing = []
         for entry in self.entries.values():
             for test_id in entry.tests:
+                loader = unittest.TestLoader()  # a fresh one, so its errors are this id's alone
                 module = test_id.split(".")[0]
                 suite = loader.loadTestsFromName(test_id) if (TESTS / f"{module}.py").is_file() else None
-                if suite is None or not suite.countTestCases():
+                # A misspelt name loads as one _FailedTest and records an error; it names no real test.
+                if suite is None or not suite.countTestCases() or loader.errors:
                     missing.append(test_id)
 
         self.assertEqual(missing, [])

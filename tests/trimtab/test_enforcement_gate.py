@@ -207,7 +207,8 @@ class World(unittest.TestCase):
         git(self.proj, "update-ref", "refs/remotes/origin/main", head)
         return head
 
-    def register(self, command='"$HOME/.claude/hooks/{}"', extra=None):
+    def register(self, command=None, extra=None):
+        command = command or f'"{self.config}/hooks/{{}}"'
         hooks = [{"matcher": "Bash", "hooks": [{"type": "command", "command": command.format("guard-github.sh")}]},
                  {"matcher": "Edit", "hooks": [{"type": "command", "command": command.format("guard-paths.sh")}]}]
         (self.config / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": hooks}, **(extra or {})}))
@@ -382,7 +383,26 @@ class JudgesTheCheckout(World):
     def test_refuses_a_symlink(self):
         (self.code / "hooks" / "extra.sh").symlink_to("/bin/true")
 
-        self.assertCheckoutRefused()
+        self.assertIn("symlink", self.found()["E20"])
+
+    def test_refuses_a_directory_it_cannot_list(self):
+        pycache = self.code / "trimtab" / "__pycache__"
+        pycache.mkdir()
+        (pycache / "cli.cpython-313.pyc").write_bytes(b"forged")
+        pycache.chmod(0o111)
+        self.addCleanup(pycache.chmod, 0o755)
+
+        self.assertIn("cannot be listed", self.found()["E20"])
+
+    def test_refuses_a_substituted_tree_object_for_the_base(self):
+        tree = git(self.code, "rev-parse", f"{self.base_sha}:hooks")
+        objects = Path(git(self.code, "rev-parse", "--path-format=absolute", "--git-path", "objects"))
+        loose = objects / tree[:2] / tree[2:]
+        loose.chmod(0o644)
+        loose.write_bytes(b"not the tree")
+
+        with self.assertRaises(GateError):
+            self.gather()
 
     def test_refuses_a_hook_whose_mode_changed(self):
         (self.code / "hooks" / "guard-github.sh").chmod(0o644)
@@ -409,25 +429,38 @@ class JudgesLiveness(World):
         self.assertEqual(by_number(self.found()), HOOKED_ROWS)
 
     def test_refuses_a_hook_registered_for_another_matcher(self):
-        hooks = [{"matcher": "Write", "hooks": [{"type": "command", "command": '"$HOME/.claude/hooks/guard-github.sh"'}]},
-                 {"matcher": "Edit", "hooks": [{"type": "command", "command": '"$HOME/.claude/hooks/guard-paths.sh"'}]}]
+        command = f'"{self.config}/hooks/{{}}"'
+        hooks = [{"matcher": "Write", "hooks": [{"type": "command", "command": command.format("guard-github.sh")}]},
+                 {"matcher": "Edit", "hooks": [{"type": "command", "command": command.format("guard-paths.sh")}]}]
         (self.config / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": hooks}}))
 
         self.assertEqual(by_number(self.found()), GITHUB_ROWS)
 
-    def test_accepts_the_config_dirs_absolute_command_form(self):
-        self.register(command=f'"{self.config}/hooks/{{}}"')
+    def test_refuses_the_home_command_form_for_a_config_dir_elsewhere(self):
+        self.register(command='"$HOME/.claude/hooks/{}"')
 
-        self.assertEqual(self.found(), {})
+        self.assertEqual(by_number(self.found()), HOOKED_ROWS)
+
+    def test_accepts_the_home_command_form_when_the_config_dir_is_home(self):
+        self.register(command='"$HOME/.claude/hooks/{}"')
+
+        with mock.patch.object(gate, "_home_config", lambda: self.config):
+            self.assertEqual(self.found(), {})
 
     def test_refuses_an_installed_hook_that_is_another_file(self):
         (self.config / "hooks" / "guard-github.sh").unlink()
         (self.config / "hooks" / "guard-github.sh").write_text("#!/bin/sh\n")
+        (self.config / "hooks" / "guard-github.sh").chmod(0o755)  # executable, so only the link check refuses it
 
         self.assertEqual(by_number(self.found()), GITHUB_ROWS)
 
     def test_refuses_an_unreadable_settings_file(self):
         (self.config / "settings.json").write_text("{")
+
+        self.assertEqual(by_number(self.found()), HOOKED_ROWS)
+
+    def test_refuses_an_unreadable_optional_settings_file(self):
+        (self.proj / ".claude" / "settings.local.json").write_text("{")
 
         self.assertEqual(by_number(self.found()), HOOKED_ROWS)
 
@@ -455,6 +488,59 @@ class DigestsTheInstall(World):
         (self.config / "hooks" / "guard-github.sh").symlink_to(self.tmp / "elsewhere.sh")
 
         self.assertNotEqual(self.gather().pinned[3], before)
+
+    def digest(self, code=None, instance_root=None):
+        hooks = [manifest.Hook(**GITHUB_HOOK)]
+        return gate.install_digest(code or self.code, self.config, self.proj, instance_root or self.inst, hooks)
+
+    def test_an_edited_file_changes_the_digest(self):
+        before = self.digest()
+        (self.code / "hooks" / "guard-github.sh").write_text("#!/bin/sh\nexit 0\n")
+
+        self.assertNotEqual(self.digest(), before)
+
+    def test_a_changed_mode_changes_the_digest(self):
+        before = self.digest()
+        (self.code / "hooks" / "guard-github.sh").chmod(0o644)
+
+        self.assertNotEqual(self.digest(), before)
+
+    def test_another_head_changes_the_digest(self):
+        before = self.digest()
+        (self.code / "README").write_text("x\n")
+        commit_all(self.code, "later")
+
+        self.assertNotEqual(self.digest(), before)
+
+    def test_another_instance_root_changes_the_digest(self):
+        self.assertNotEqual(self.digest(instance_root=self.tmp), self.digest())
+
+    def test_the_projects_settings_change_the_digest(self):
+        before = self.digest()
+        (self.proj / ".claude" / "settings.json").write_text("{}")
+
+        self.assertNotEqual(self.digest(), before)
+
+
+class ReadsOnlyWhatItJudges(World):
+    def test_refuses_an_instance_that_names_no_jobs_for_this_project(self):
+        self.head = self.commit_lock(self.commit_instance(projects={"other/repo": self.jobs}))
+
+        with self.assertRaises(GateError):
+            self.gather()
+
+    def test_reads_no_job_for_a_row_this_base_owns(self):
+        jobs = {**self.jobs, "E5": {"workflow": ".github/workflows/unread.yml", "job": "unread"}}
+        self.head = self.commit_lock(self.commit_instance(projects={PROJECT: jobs}))
+
+        self.assertEqual(self.found(), {})  # no answer is faked for E5's job: reading it would fail the gate
+
+    def test_shows_no_base_row_whose_ci_ran_on_another_branch(self):
+        fake = self.gh()
+        fake.answers[f"repos/{BASE_REPO}/actions/runs"] = json.dumps(
+            {"workflow_runs": [run(self.base_sha, gate.BASE_WORKFLOW, 1, branch="feature")]})
+
+        self.assertEqual(by_number(self.found(fake)), BASE_ROWS)
 
 
 class CachesAPass(unittest.TestCase):

@@ -126,11 +126,19 @@ enforcement: a part too big for its session costs a stop, never a weaker gate.
   cannot be forged, so the git objects are a stronger fact than the API would give. The admin's
   identity rests on the project's lock PR, not on Trimtab's merge.
 
-  A SHA names one object only while nothing redirects git. So git is the system's (root-owned,
-  in a root-only directory), run with an environment built from an allowlist (no steering or
-  config variables, no global or system config), replace objects off, planscope's pinned
-  settings and no hooks. A repository with a grafts file or a shallow history is refused, because
-  grafts still apply with replace objects off. gh is the system's too, keeping only its auth.
+  A SHA names one object only while nothing redirects git, and git does not re-hash an object
+  file it reads. So:
+  - **Verified reads.** Every commit, tree and blob a decision rests on is read through
+    `git cat-file --batch`, and its SHA-1 is recomputed here. History is walked here, from
+    verified commits, never by `git log`. So a substituted object file, a replace ref or a graft
+    changes nothing a SHA reads as.
+  - **Refused repositories.** A repository with alternates, a shared common dir, grafts or (but
+    for the clean fetch) a shallow history is refused.
+  - **git itself** is the system's (root-owned, in a root-only directory), run with an
+    environment built from an allowlist (no steering or config variables, no global or system
+    config), replace objects off, planscope's pinned settings and no hooks.
+  - **gh** is the system's too, keeping only its auth. Its own config is refused when it sets
+    `http_unix_socket` or names a host other than github.com.
 - **Owners decide the source.** "Guard", "Guard (plan-run layer)", "guard-github" and
   "trimtab-core" rows are this base's. "Consuming project" rows are the project's. E22 is both.
 - **The pinned base** is the instance file's `base.sha` at `trimtab_sha`. The lock's derived
@@ -155,11 +163,15 @@ enforcement: a part too big for its session costs a stop, never a weaker gate.
     - no other file is there, ignored ones (a `__pycache__`) included;
     - no symlink is there.
 
-    Hashing every file means no index flag (skip-worktree, assume-unchanged), stat trick or
-    ignore rule can hide an edit;
+    Hashing every file against a verified tree means no index flag (skip-worktree,
+    assume-unchanged), stat trick, ignore rule or substituted object can hide an edit. A
+    directory that cannot be listed is refused, since it could hold a `.pyc` Python still
+    loads;
   - outside `--server`, the hook is live:
     - the config dir's `hooks/<file>` resolves to this checkout's file and is executable;
-    - the config dir's `settings.json` registers it for the manifest's event and matcher;
+    - the config dir's `settings.json` registers it for the manifest's event and matcher. The
+      command must name the config dir's own path. The `$HOME/.claude/hooks/…` form counts only
+      when the config dir is `~/.claude`, since otherwise it runs a file no check looked at;
     - no settings file, the config dir's or the project's, sets `disableAllHooks`, and none is
       unreadable.
 - **A project row is shown** when the instance file at `trimtab_sha` names, under
@@ -174,17 +186,37 @@ enforcement: a part too big for its session costs a stop, never a weaker gate.
 - **Output** is one line per row (`E7 shown` or `E7 not shown: <reason>`), never a value read
   from a file. The command only reports; it never writes the pass the guards read.
 - **The pass cache** is `guard-state/enforcement/<sha256 of owner/name>.json`. Its key is the
-  lock SHA, the pinned base SHA, the default-branch head and an **install digest**: the
-  settings files, where each hook link points, and the code and instance roots. A guard can
-  re-read the digest cheaply, so a hook unlinked or unregistered after a pass voids it at once.
-  **Only the recorder writes it**: `trimtab.adapters.enforcement_record`, which
-  hooks/session-mode.sh starts in the background in a run session, with the operator's launch
-  environment. The recorder takes the repository from the project's `origin`, and that must be
-  a project the instance file names. It first fetches the default branch with the user's git
-  config, so the user's credentials work. That fetch decides nothing: a redirected remote yields
-  a head that is not the server's, which fails the gate. On anything but a pass, including an unexpected error, it
-  removes the cached pass. It writes a one-line status beside the cache, naming the rows not
-  shown.
+  lock SHA, the pinned base SHA, the default-branch head and an **install digest**. The digest
+  covers:
+  - the settings files;
+  - where each hook link points;
+  - the code and instance roots;
+  - this checkout's HEAD;
+  - the path, mode and bytes of every file under `hooks/` and `trimtab/`.
+
+  A guard re-reads the digest locally (some 70 small files), so an edit, a checkout of another
+  commit, or a hook unlinked or unregistered after a pass voids it at the next guarded call.
+- **Only the recorder writes the pass**: `trimtab.adapters.enforcement_record`.
+  - **Startup.** In a run session, hooks/session-mode.sh first runs its `clear` synchronously,
+    removing the project's pass. Where that cannot run, a bash fallback removes every pass. So no
+    pass from an earlier session survives into this one. The hook then starts `record` in the
+    background with the operator's launch environment. `python3`, `setsid` and `timeout` are
+    found by absolute path, each root-owned in a root-only directory, so nothing on the
+    session's PATH is run.
+  - **The record run.** `record` holds one lock for its whole run. It removes the project's pass
+    before any read, so a SIGKILL leaves none. It then fetches and runs the gate, and writes a
+    pass only when every row is shown.
+  - **Every other way out** leaves no pass: an error, SIGTERM (raised as an exit, so the cleanup
+    runs), or a repository it cannot name (then every pass is removed). Each way out writes a
+    one-line status naming why.
+  - **The repository** comes from the project's `origin` as configured (not as `insteadOf`
+    rewrites it), and the instance file must name it.
+  - **The fetch.** It goes to an explicit `https://github.com/<owner>/<name>.git`, built from
+    that name, into a fresh bare repository in a private temporary directory, depth 1. Only
+    pinned config applies: no global, system or repository config; only the https protocol; no
+    `core.sshCommand`; gh as the only credential helper; `fetch.fsckObjects`. The lock is read
+    from there, as verified objects. Nothing a session wrote to any git config takes part, and
+    the fetched tip must still be the server's head.
 
 The manifest maps each row to its refusal tests. A mutation test replaces each row's decision
 function with one that allows, runs that row's refusal tests, and fails unless they fail. So
@@ -201,9 +233,11 @@ In a run session (hooks/session-mode.sh), unless the cache holds a pass for the 
   the recorder fetches the default branch itself;
 - guard-github refuses every GitHub write and every `git push`.
 
-The current key takes four reads, on every guarded call:
+The current key takes three reads, on every guarded call:
 
-- the default-branch head, by `git ls-remote` under a 3 s timeout;
+- the default-branch head, by `git ls-remote https://github.com/<owner>/<name>.git` with the
+  clean fetch's pinned config (so no `insteadOf` can answer with a stale head), under a 3 s
+  timeout;
 - the lock and the instance's base, as objects;
 - the install digest, from local reads.
 
@@ -284,7 +318,8 @@ goes through `trimtab plan-rerequest-check`. A `plan/*` push or ref write goes t
     - H was answered: some later push's `before` is H, in the branch-activity events (E13's
       read);
     - H has either a job record that concluded `failure`, `timed_out` or `cancelled`, or an E3
-      facts run.
+      facts run, or H **conflicted with the default branch** (§5a): the PR's `mergeable` was
+      `false` for H when the answering push was made, read and recorded by `plan-push-check`.
   - **Counting.** Each such H counts once, however many jobs or attempts it has and whichever
     it answers.
   - **Excluded.**
@@ -318,7 +353,10 @@ goes through `trimtab plan-rerequest-check`. A `plan/*` push or ref write goes t
   in any spelling, including `gh pr merge --delete-branch`.
 - **E17.** A `plan/*` push refuses when the branch's open PR is not a draft. The exception is a
   push whose diff has the E7 register-commit shape.
-- **E18.** A `plan/*` push refuses when its diff from the remote head does any of these:
+- **E18.** A `plan/*` push refuses when its own change does any of the things below. Its own
+  change is its diff from the remote head, except for a merge of the default branch (§5a): there
+  it is the merge commit's diff from the default-branch parent, so main's own changes are never
+  judged as the run's.
   - adds a line holding a marker from the project's list (the instance's `fix_limits.markers`,
     a file of literal strings, with defaults for the common Python and Actions skip and
     suppression markers);
@@ -340,6 +378,34 @@ goes through `trimtab plan-rerequest-check`. A `plan/*` push or ref write goes t
 - **E23.** Opening a PR from `plan/*` refuses unless the ledger holds at least one complete
   round on the exact head and at most five pre-draft rounds. A sixth pre-draft round refuses at
   its first pass's PreToolUse.
+
+### 5a. Conflicts with the default branch (owner's decision, 2026-11-12)
+
+The project's `main` no longer requires branches to be up to date. The approver refuses only a
+head that conflicts with `main`. Resolving that conflict is the run's job during the watch to
+merge. The owner chose, in their words: "it counts as a CI fix round (at most 3), with one
+in-session review round". So:
+
+- **What the run does.** When the PR's `mergeable` is `false`, the run returns the PR to draft,
+  merges the default branch into the `plan/*` branch, resolves the conflict and pushes.
+- **It counts as a round.** That push is a CI-fix round under E12, counted against the same cap
+  of three. Before the next re-request it needs one complete in-session round on the merged
+  head (E10).
+- **Rows that already apply:**
+  - the push is a fast-forward of the branch (a merge commit on top), so E15 allows it;
+  - E14, E17 and E19 apply as to any push;
+  - E18 judges only the run's resolution, not main's changes;
+  - E13 counts main's commits as on the default branch, not as run work.
+- **Scope after the merge.** Scope (E8, `planscope`) is judged from the new merge-base, so
+  main's changes are not the item's.
+- **When it stops.** A conflict the run cannot resolve within the item's scope is a stop. So is a
+  conflict after the third round.
+- **Trimtab rule text.** This only tightens AGW-4: it counts more pushes as rounds, under the
+  same cap. AGW-4 needs no edit. AGW-4's definition of a CI fix round ("answers a CI review or a
+  failing check") could name a conflict explicitly; that would be a Trimtab rule edit for the
+  owner.
+
+`wrap-merged`'s watch step names this flow (its own PR).
 
 ### 6. K+1 — the part number
 
@@ -382,6 +448,10 @@ a run's PR, as the doctrine record says.
 | Key the pass on the lock, base and head only | A hook unlinked or unregistered after a pass would leave the pass standing until the next merge |
 | Detect a changed checkout with `git status` | Index flags, stat tricks and ignore rules hide edits from it; hashing every file does not |
 | Read git and gh from PATH with the inherited environment | A session's PATH, `GIT_*`, `GH_HOST` and repo config would decide what the gate reads |
+| Fetch into the project with the user's git config, as round 1 of this record's review had it | Verified: a session-written `insteadOf` with `ext::`, a `core.sshCommand` or a `credential.helper` runs code inside the recorder |
+| Trust git's object files once replace refs and grafts are off | Verified: git does not re-hash a loose object it reads, so a substituted tree passes for modified code |
+| Clear every project's pass whenever any recorder starts | Two concurrent runs on one machine would clear each other's pass forever; each recorder clears its own, and all only when it cannot name its repository |
+| Count a conflict-resolving merge outside the CI-fix cap | The owner chose to count it (at most three), with one in-session round |
 | Read the doctrine record and its merge through Trimtab's API | A project's agent token gets 403 on a private instance, and every run would stop; the git objects behind the admin-merged lock are a stronger fact |
 | Read the lock and manifest from the working tree | The agent's shell can edit both; objects named by an admin-set SHA it cannot |
 | Read E3 facts from the review job's own log | The model step writes to the same log and could print a facts line |
@@ -421,12 +491,24 @@ a run's PR, as the doctrine record says.
   - The gate runs in the same account as the session. A session can run its own copy of the
     recorder, or any code, with a forged environment, or write the cache through a path that
     guard-paths cannot read from the command text.
-  - It can also edit this checkout after a pass. The checkout is hashed only when the gate runs,
-    and the install digest covers the links, not the files they point at.
-  - Hardening (system binaries, a built environment, no replace objects or grafts, file
-    hashes, the recorder as the only writer) closes the ordinary routes: a shimmed PATH, a
-    `git replace`, an index flag, a planted `.pyc`, a command that happens to write the cache.
-    It cannot close these.
+  - Hardening closes the ordinary routes:
+    - a shimmed PATH, at the gate and at the launcher;
+    - git and gh config, global or the repository's;
+    - a `git replace`, a graft or a substituted object file;
+    - an index flag or an unlistable directory;
+    - a planted `.pyc`;
+    - an edit or a checkout after a pass, which the digest catches at the next guarded call;
+    - a command that happens to write the cache;
+    - a recorder that dies.
+
+    It cannot close the routes above: code the session runs itself, and a write through a
+    hidden path.
+  - **Named routes left by design:**
+    - gh's own config is checked for a socket and foreign hosts, not pinned, because the
+      operator's auth lives there;
+    - between a guarded call's digest read and the hook running the code it read, a session
+      could swap a file (a time-of-check race of milliseconds, the same class as the residual
+      above).
   - What makes forgery gain nothing is E22. The server-side job and the approver re-check every
     row that rests on a server fact, and only they let a run's PR merge. A forged local pass
     buys local writes and pushes to a `plan/*` branch, never a merge.

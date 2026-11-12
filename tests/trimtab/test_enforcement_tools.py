@@ -119,16 +119,94 @@ class FindsTrustedBinaries(unittest.TestCase):
 
 class RunsOnlyGh(unittest.TestCase):
     def test_refuses_another_program(self):
-        run = tools.gh_runner(binary="/bin/true")
+        run = tools.gh_runner(binary="/bin/true", environ={"HOME": "/nonexistent"})
 
         with self.assertRaises(ToolError):
             run(["sh", "-c", "true"], None)
 
 
+class ReadsGhsConfig(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.dir)])
+        self.env = {"GH_CONFIG_DIR": str(self.dir)}
+
+    def test_passes_a_config_for_github_only(self):
+        (self.dir / "hosts.yml").write_text("github.com:\n    user: someone\n    git_protocol: https\n")
+
+        self.assertIsNone(tools.gh_config_problem(self.env))
+
+    def test_refuses_a_unix_socket(self):
+        (self.dir / "config.yml").write_text("git_protocol: https\nhttp_unix_socket: /tmp/socket\n")
+
+        self.assertIn("http_unix_socket", tools.gh_config_problem(self.env))
+
+    def test_refuses_another_host(self):
+        (self.dir / "hosts.yml").write_text("github.com:\n    user: a\nevil.example:\n    user: b\n")
+
+        self.assertIn("other than github.com", tools.gh_config_problem(self.env))
+
+    def test_the_runner_refuses_a_redirecting_config(self):
+        (self.dir / "config.yml").write_text("http_unix_socket: /tmp/socket\n")
+
+        with self.assertRaises(ToolError):
+            tools.gh_runner(binary="/bin/true", environ=self.env)
+
+
+class VerifiesObjects(Repo):
+    def objects_dir(self, repo):
+        return Path(git(repo, "rev-parse", "--path-format=absolute", "--git-path", "objects"))
+
+    def test_reads_a_file_at_a_commit(self):
+        self.assertEqual(self.git.objects(self.repo).file(self.genuine, "f"), b"genuine\n")
+
+    def test_refuses_an_object_whose_file_was_substituted(self):
+        blob = git(self.repo, "rev-parse", f"{self.genuine}:f")
+        other = self.tmp / "other"
+        other.mkdir()
+        git(other, "init", "-q")
+        (other / "x").write_text("forged\n")
+        forged = git(other, "hash-object", "-w", "x")
+        source = self.objects_dir(other) / forged[:2] / forged[2:]
+        target = self.objects_dir(self.repo) / blob[:2] / blob[2:]
+        target.chmod(0o644)
+        target.write_bytes(source.read_bytes())  # the forged content under the genuine name
+
+        with self.assertRaises(ToolError):
+            self.git.objects(self.repo).file(self.genuine, "f")
+
+    def test_refuses_a_repository_with_alternates(self):
+        alternates = self.objects_dir(self.repo) / "info" / "alternates"
+        alternates.parent.mkdir(parents=True, exist_ok=True)
+        alternates.write_text(str(self.tmp) + "\n")
+
+        with self.assertRaises(ToolError):
+            self.git.objects(self.repo)
+
+    def test_finds_the_commit_that_last_added_a_file(self):
+        git(self.repo, "rm", "-q", "f")
+        git(self.repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "rm")
+        again = commit(self.repo, "f", "again\n")
+        commit(self.repo, "g", "later\n")
+
+        self.assertEqual(self.git.objects(self.repo).last_added(git(self.repo, "rev-parse", "HEAD"), "f"), again)
+
+    def test_lists_every_file_under_a_directory(self):
+        (self.repo / "d" / "e").mkdir(parents=True)
+        commit(self.repo, "d/e/h", "h\n")
+        top = commit(self.repo, "d/top", "t\n")
+
+        self.assertEqual(sorted(self.git.objects(self.repo).files(top, "d")), ["d/e/h", "d/top"])
+
+
 class Fetches(Repo):
     def test_refuses_a_branch_name_that_could_be_an_option(self):
         with self.assertRaises(ToolError):
-            self.git.fetch(self.repo, "--upload-pack=x")
+            self.git.fetch_clean("owner/repo", "--upload-pack=x", self.tmp / "into.git")
+
+    def test_refuses_a_repository_that_is_not_owner_name(self):
+        with self.assertRaises(ToolError):
+            self.git.fetch_clean("ext::sh -c x", "main", self.tmp / "into.git")
 
 
 if __name__ == "__main__":
