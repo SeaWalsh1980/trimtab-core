@@ -3405,6 +3405,8 @@ tg 2 'git push $REMOTE feature/x'                        'a remote word that can
 tg 2 $'git pu\\\nsh origin '"$PB"                       'a backslash and newline inside the word push'
 tg 2 $'gh pr cl\\\nose '"$PB"                           'the same inside a gh subcommand'
 tg 2 "git pu{s..s}h origin $PB"                          'a brace sequence that spells push'
+tg 2 "g{i,}t pu{s,}h origin $PB"                         'a brace list that spells git and push, with neither word whole'
+tg 2 "{g,}it {p,}ush origin $PB"                         'a brace list with an empty alternative'
 tg 2 'A=gi B=t C=pu D=sh E=pla F=n/x; $A$B $C$D origin $E$F' 'a command assembled from variables it assigns'
 tg 2 "git subtree push --prefix=d origin $PB"            'git subtree push'
 tg 0 'git add src/*.py tests/*.py'                       'ordinary git with globs'

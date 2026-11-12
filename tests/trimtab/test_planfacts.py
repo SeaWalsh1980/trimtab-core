@@ -211,6 +211,25 @@ class Pushes(unittest.TestCase):
         f = facts({PULLS: [pr_row()], self.ACTIVITY: rows})
         self.assertEqual(f.pushes(BRANCH), [planrows.Push(H1, H2)])
 
+    def test_times_compare_whatever_offset_they_are_written_in(self):
+        # the PR opened at 10:00Z: 12:30+02:00 is 10:30Z (after), 11:30+02:00 is 09:30Z (before)
+        rows = [self.event(H1, H2, stamp="2026-11-12T12:30:00+02:00"),
+                self.event("3" * 40, H1, stamp="2026-11-12T11:30:00+02:00")]
+        f = facts({PULLS: [pr_row()], self.ACTIVITY: rows})
+        self.assertEqual(f.pushes(BRANCH), [planrows.Push(H1, H2)])
+
+    def test_a_time_that_cannot_be_read_refuses(self):
+        for stamp in ("yesterday", "2026-11-12T11:30:00", ""):
+            with self.subTest(stamp):
+                f = facts({PULLS: [pr_row()], self.ACTIVITY: [self.event(H1, H2, stamp=stamp)]})
+                with self.assertRaises(FactsError):
+                    f.pushes(BRANCH)
+
+    def test_a_pr_time_that_cannot_be_read_refuses(self):
+        f = facts({PULLS: [pr_row(created="not a time")], self.ACTIVITY: []})
+        with self.assertRaises(FactsError):
+            f.pushes(BRANCH)
+
     def test_a_branch_creation_with_a_zero_before_is_not_a_push(self):
         f = facts({PULLS: [pr_row()], self.ACTIVITY: [self.event("0" * 40, H1)]})
         self.assertEqual(f.pushes(BRANCH), [])

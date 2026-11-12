@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -40,6 +41,17 @@ EVENT_LIMIT = 100  # branch-activity events one count reads (REST's largest page
 RUN_LIMIT = 500  # workflow runs on one branch, every page
 FILE_LIMIT = 2000  # changed paths one diff reads
 MERGEABLE_WAITS = 3  # GitHub computes `mergeable` lazily: a null is asked again
+
+
+def _when(text: str) -> datetime:
+    """An RFC 3339 time with its offset, so two times compare whatever form each is written in."""
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError as err:
+        raise FactsError("a timestamp could not be read") from err
+    if moment.tzinfo is None:
+        raise FactsError("a timestamp has no offset")
+    return moment
 
 
 def scan_state(runs_found: bool, jobs: Sequence[Job]) -> str:
@@ -182,6 +194,7 @@ class GitHubFacts(Facts):
         if pr is None:
             return ()
         out: list[Push] = []
+        opened = _when(pr.created)
         # The endpoint pages by a cursor in the Link header (`after=`), which `gh api` does not hand us, and it
         # ignores `page=`. So one page is read, and a full one is refused rather than guessed past.
         rows = self._json(f"repos/{self.repo}/activity", "gh api activity",
@@ -196,7 +209,7 @@ class GitHubFacts(Facts):
             if not all(isinstance(v, str) for v in (before, after, stamp)):
                 raise FactsError("gh api activity returned unexpected JSON")
             real = SHA.fullmatch(before) and SHA.fullmatch(after) and ZERO not in (before, after)
-            if real and stamp >= pr.created:  # not a creation or a deletion
+            if real and _when(stamp) >= opened:  # not a creation or a deletion
                 out.append(Push(before, after))
         return out
 

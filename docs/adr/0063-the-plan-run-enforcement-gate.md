@@ -791,3 +791,15 @@ beyond the guard suite's long-command cases; `cancelled` runs count as E12 round
 `http://…` refuse rather than parse; the unmeasured 6 s budget; a push from a repository reached by
 `cd` is judged without that repository's configuration; a gh alias, a legacy `.git/remotes` push
 line, and a command assembled wholly from variables that the command does not itself assign.
+
+**claude-review on the ready PR (comment on PR 166).**
+- **Prefilter, brace groups.** `g{i,}t pu{s,}h origin HEAD:plan/x` names neither `git` nor `push` whole and
+  none of the earlier brace patterns matched it. Any brace group with a comma, or a `..` sequence, now
+  reaches the adapter, which reads a brace group as a word the shell builds. The braces of the payload's
+  own JSON have other braces or no comma between them, so they do not match.
+- **E19 allows a push while the scan is `pending`.** This is the row's own text ("pending allows writes but
+  refuses ready"), so a push made before the scan finishes can introduce a secret that the scan then
+  fails; the next guarded write is refused, and ready is refused. The server-side E22 job and the
+  operator's own scanner merge gate bound it. It is a residual, not a gap in the row.
+- **Times are parsed, not compared as text.** Branch-activity times and the PR's opening are RFC 3339
+  with their offset; a time that cannot be parsed, or has no offset, refuses.
