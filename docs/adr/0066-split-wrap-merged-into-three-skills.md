@@ -63,11 +63,13 @@ No measurement drove this beyond the line count; the finding was readability.
   linked with no installer change, and a machine re-bootstrapped onto this base loses the
   `wrap-merged` link.
 - A plan run now reads more than one file. A link it fails to follow loses that part's rules. So
-  each skill says what its paths are relative to, and every link to a file that holds an
-  authorisation check, the stop protocol or the restart conditions says what an unreadable file
-  means: a failed check, a stop that still labels `plan:blocked`, or no restart.
-  `tests/trimtab/test_skills.py` fails when a link names no file or no skill, when a reference
-  can't be reached from a SKILL.md, or when one of those links loses its fail-closed sentence.
+  each skill says what its paths are relative to, and each SKILL.md opens with one shared rule for
+  any linked file it cannot read: stop, write only the open item PR's record (never a merged one,
+  and nothing if check 0 failed), label `plan:blocked`, remove `plan:continue`, and report with ways
+  forward. Links whose file decides something add their own meaning: the authorisation check or the
+  gate fails, the record authorises nothing, no session is a restart. `tests/trimtab/test_skills.py`
+  fails when a link names no file or no skill, a reference can't be reached from a SKILL.md, a
+  SKILL.md loses the shared rule, or one of those links loses its own sentence.
 - `plan-run/SKILL.md` is about 170 lines, above the ~150 aimed for; moving more of it out would
   leave the entry without the steps every run takes.
 - Tests that read the skill's text now read the file that holds each passage.

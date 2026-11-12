@@ -8,6 +8,14 @@ description: Run an authorised plan across merges — confirm the merge, run the
 Paths such as `plan-run/references/stops.md` are relative to the skills directory, the parent of
 this skill's own directory.
 
+**If you cannot read a file this skill links to, stop.** Make no file write if check 0 failed, and
+never edit a merged record. Otherwise, in the open item PR you are working on, set its record's
+`## Status` to say whether this part finished (`stopped unfinished` if not) and `## Next` to
+`blocked: <reason>`. Label that PR `plan:blocked` and remove any `plan:continue`; before an item PR
+exists, label the merged PR that started the session instead, and a valid restart, which has no such
+PR, labels nothing. Report the blocker with one to three ways forward. Where a link below says more
+about an unreadable file, that adds to this rule.
+
 When a plan PR merges, its history belongs in durable records and the next session should carry only
 what comes next. Leftover review rounds, dead ends and command output cost context and let stale
 facts steer new work.
@@ -43,9 +51,7 @@ find exactly what it says comes next, and then continue, hand over, or stop and 
 widen it: a hand-over cannot create work, nothing found along the way gets done without a new plan,
 and you never edit an authorised plan or an earlier progress record.
 
-Every stop follows plan-run/references/stops.md. If you cannot read it, stop anyway: label the item
-PR (or, before one exists, the merged PR that started the session) `plan:blocked`, remove any
-`plan:continue`, in an item PR set its record's `## Next` to `blocked: <reason>`, and report.
+Every stop follows plan-run/references/stops.md.
 
 ### 1. Confirm the merge
 
@@ -119,8 +125,7 @@ the gate fails.
 If the gate fails: say "needs approval: <reason>", list the open issues with their PR links, propose
 ways forward, and stop. If `## Next` is `plan complete`, say so and stop.
 
-A stop before any item PR exists: see plan-run/references/stops.md. If you cannot read it, label the
-merged PR that started the session `plan:blocked`.
+A stop before any item PR exists: see plan-run/references/stops.md.
 
 ### 5. Record
 

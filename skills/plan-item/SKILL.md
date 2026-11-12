@@ -8,6 +8,14 @@ description: Work one item, or one part of an item, of an authorised plan in one
 Paths such as `plan-run/references/stops.md` are relative to the skills directory, the parent of
 this skill's own directory.
 
+**If you cannot read a file this skill links to, stop.** Make no file write if check 0 failed, and
+never edit a merged record. Otherwise, in the open item PR you are working on, set its record's
+`## Status` to say whether this part finished (`stopped unfinished` if not) and `## Next` to
+`blocked: <reason>`. Label that PR `plan:blocked` and remove any `plan:continue`; before an item PR
+exists, label the merged PR that started the session instead, and a valid restart, which has no such
+PR, labels nothing. Report the blocker with one to three ways forward. Where a link below says more
+about an unreadable file, that adds to this rule.
+
 `<plans>` and `<plan>` are as plan-run/SKILL.md defines them. Section numbers below are
 plan-run/SKILL.md's.
 
@@ -38,9 +46,7 @@ One item, or one part of an item, per session, ending in one PR:
    refuses, needs the authorised plan changed, ends its third review round with a CRITICAL or HIGH
    finding, finds a CRITICAL or HIGH outside its scope in any round, exhausts the CI fix-round
    limit, or you can already see the next work would fail the gate in section 4. Then stop as
-   plan-run/references/stops.md says. If you cannot read it, stop anyway: label the item PR (or,
-   before one exists, the merged PR that started the session) `plan:blocked`, remove any
-   `plan:continue`, in an item PR set its record's `## Next` to `blocked: <reason>`, and report.
+   plan-run/references/stops.md says.
 
 The session ends once the PR is marked ready and any CI fix rounds it can act on are done, or it has
 stopped. The PR's merge starts the session after.

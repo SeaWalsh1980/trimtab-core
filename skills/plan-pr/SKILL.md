@@ -8,11 +8,16 @@ description: Review and ready a plan item's PR — the one to three in-session r
 Paths such as `plan-run/references/stops.md` are relative to the skills directory, the parent of
 this skill's own directory.
 
+**If you cannot read a file this skill links to, stop.** Make no file write if check 0 failed, and
+never edit a merged record. Otherwise, in the open item PR you are working on, set its record's
+`## Status` to say whether this part finished (`stopped unfinished` if not) and `## Next` to
+`blocked: <reason>`. Label that PR `plan:blocked` and remove any `plan:continue`; before an item PR
+exists, label the merged PR that started the session instead, and a valid restart, which has no such
+PR, labels nothing. Report the blocker with one to three ways forward. Where a link below says more
+about an unreadable file, that adds to this rule.
+
 This is step 4 of plan-item/SKILL.md. Section numbers below are plan-run/SKILL.md's; other step
-numbers are plan-item/SKILL.md's. Every stop follows plan-run/references/stops.md. If you cannot
-read it, stop anyway: label the item PR (or, before one exists, the merged PR that started the
-session) `plan:blocked`, remove any `plan:continue`, in an item PR set its record's `## Next` to
-`blocked: <reason>`, and report.
+numbers are plan-item/SKILL.md's. Every stop follows plan-run/references/stops.md.
 
 ## In-session review rounds
 
