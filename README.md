@@ -96,7 +96,8 @@ Linux is the only tested platform. Known gaps, not yet handled:
 - A host with no `/bin/bash` cannot start any hook, and the exit code it
   gets back (127) also means "allow": every guard is off (ADR 0064).
 - The hooks set `PATH=/usr/bin:/bin` before any command (ADR 0065), so
-  `python3`, `jq`, `git` and `gh` must be there. On a Mac `/usr/bin` has
+  `python3` (3.11 or newer, with PyYAML), `jq` and `git` must be there;
+  bootstrap checks that `python3`. On a Mac `/usr/bin` has
   no `jq` and only Apple's Python 3.9 stub, and Homebrew's tools are not
   seen.
 - macOS: `readlink -f` (bootstrap and two hooks) needs macOS 12.3 or later,

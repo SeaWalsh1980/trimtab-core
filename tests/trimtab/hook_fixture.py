@@ -8,25 +8,42 @@ package beside hooks/, is linked. tests/guard-tests.sh has the same helper in
 bash (`path_hooks`).
 """
 
+import shlex
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 PATH_RESET = "export PATH=/usr/bin:/bin"
 
 
-def hooks_with_path(dest, path):
-    """A copy of hooks/ under <dest> whose reset sets PATH to <path>; returns its hooks directory."""
+class NoCanonicalReset(AssertionError):
+    """A hook without exactly one canonical reset line: the copy would run an unknown hook."""
+
+
+def swap_reset(text, path):
+    """<text> with its one canonical reset replaced by one that sets PATH to <path>, quoted."""
+    lines = text.split("\n")
+    count = lines.count(PATH_RESET)
+    if count != 1:
+        raise NoCanonicalReset(f"{count} canonical PATH resets, not 1")
+    return "\n".join(f"export PATH={shlex.quote(path)}" if line == PATH_RESET else line for line in lines)
+
+
+def hooks_with_path(dest, path, hooks=REPO / "hooks"):
+    """A copy of <hooks> under <dest> whose reset sets PATH to <path>; returns its hooks directory."""
     out = Path(dest) / "hooks"
     out.mkdir(parents=True)
-    (Path(dest) / "trimtab").symlink_to(REPO / "trimtab")
-    for src in (REPO / "hooks").iterdir():
+    package = hooks.parent / "trimtab"
+    if not package.is_dir():
+        raise FileNotFoundError(f"no trimtab/ beside {hooks}: every adapter in the copy would fail to load")
+    (Path(dest) / "trimtab").symlink_to(package)
+    for src in hooks.iterdir():
         if src.suffix != ".sh":
             (out / src.name).symlink_to(src)
             continue
-        lines = src.read_text(encoding="utf-8").split("\n")
-        if lines.count(PATH_RESET) != 1:
-            raise AssertionError(f"{src.name} has {lines.count(PATH_RESET)} PATH resets, not 1")
-        swapped = [f"export PATH={path}" if line == PATH_RESET else line for line in lines]
-        (out / src.name).write_text("\n".join(swapped), encoding="utf-8")
+        try:
+            swapped = swap_reset(src.read_text(encoding="utf-8"), path)
+        except NoCanonicalReset as fault:
+            raise NoCanonicalReset(f"{src.name}: {fault}") from None
+        (out / src.name).write_text(swapped, encoding="utf-8")
         (out / src.name).chmod(0o755)
     return out

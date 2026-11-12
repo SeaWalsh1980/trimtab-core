@@ -98,7 +98,16 @@ path_hooks() { # path_hooks <hooks dir> <PATH>  — print a copy whose reset set
   out="$CPTMP/path-hooks/$(printf '%s\n%s' "$src" "$want" | cksum | cut -d' ' -f1)"
   if [[ ! -d "$out/hooks" ]]; then
     mkdir -p "$out/hooks" || return 1
-    [[ -e "$src/../trimtab" ]] && ln -s "$(readlink -f "$src/../trimtab")" "$out/trimtab"
+    # A full hooks directory (it has the loader) needs the package beside it,
+    # or every adapter in the copy fails to load and a fail-open hook passes.
+    # A single-hook copy (no loader) has none and needs none.
+    if [[ -e "$src/../trimtab" ]]; then
+      ln -s "$(readlink -f "$src/../trimtab")" "$out/trimtab" || { rm -rf "$out"; return 1; }
+    elif [[ -e "$src/run_module.py" ]]; then
+      echo "path_hooks: $src has a loader but no trimtab/ beside it" >&2
+      rm -rf "$out"
+      return 1
+    fi
     for f in "$src"/*; do
       if [[ "$f" == *.sh ]]; then
         n=$(grep -cxF -- "$PATH_RESET" "$f")
@@ -119,6 +128,26 @@ path_hooks() { # path_hooks <hooks dir> <PATH>  — print a copy whose reset set
   fi
   printf '%s\n' "$out/hooks"
 }
+ph_case() { # ph_case <want: copy|refuse> <label> <hooks dir>  — path_hooks itself
+  local got=refuse
+  path_hooks "$3" /stub >/dev/null 2>&1 && got=copy
+  if [[ "$got" == "$1" ]]; then printf 'PASS  %-14s %-6s  %s\n' path_hooks "$1" "$2"
+  else printf 'FAIL  %-14s %-6s  %s (got %s)\n' path_hooks "$1" "$2" "$got"; fails=$((fails+1)); fi
+}
+PH_FIX="$CPTMP/ph-fixtures"
+mkdir -p "$PH_FIX/none/hooks" "$PH_FIX/two/hooks" "$PH_FIX/noroot/hooks" "$PH_FIX/noroot/hooks/sub"
+printf '#!/bin/bash\nset -u\n' > "$PH_FIX/none/hooks/h.sh"
+printf '#!/bin/bash\n%s\n%s\n' "$PATH_RESET" "$PATH_RESET" > "$PH_FIX/two/hooks/h.sh"
+printf '#!/bin/bash\n%s\n' "$PATH_RESET" > "$PH_FIX/noroot/hooks/h.sh"
+: > "$PH_FIX/noroot/hooks/run_module.py"
+ph_case copy   "the real hooks directory is copied"                "$HOOKS"
+ph_case refuse "a hook without the canonical reset is not copied"  "$PH_FIX/none/hooks"
+ph_case refuse "a hook with two resets is not copied"              "$PH_FIX/two/hooks"
+ph_case refuse "a loader with no trimtab/ beside it is not copied" "$PH_FIX/noroot/hooks"
+ph_copy=$(path_hooks "$HOOKS" "/a b/stub") && ph_diff=$(diff "$HOOKS/guard-github.sh" "$ph_copy/guard-github.sh")
+[[ "$ph_diff" == *"> export PATH=/a\\ b/stub"* && $(grep -c '^[<>]' <<<"$ph_diff") -eq 2 ]] \
+  && printf 'PASS  %-14s %-6s  %s\n' path_hooks diff "a copy differs from its hook in the reset line only, quoted" \
+  || { printf 'FAIL  %-14s %-6s  %s\n' path_hooks diff "a copy must differ in the reset line only"; fails=$((fails+1)); }
 J_LOG="$CPTMP/j-payloads"
 CP_REPO="$CPTMP/config-repo"
 CP_HOME="$CPTMP/home/.claude"
@@ -2735,10 +2764,17 @@ if python3 -m venv --without-pip "$SC_VENV" >/dev/null 2>&1; then
   rm -f "$SC_MARK"
   # The hook resets PATH (ADR 0065), so the venv's interpreter is put first in
   # the reset itself: this case is about an interpreter that carries a package.
-  sc_vhooks=$(path_hooks "$SC_ROOT/hooks" "$SC_VENV/bin:/usr/bin:/bin") || fails=$((fails+1))
-  printf '%s' "$pl" | env SC_MARK="$SC_MARK" CLAUDE_CONFIG_DIR="$SC_CFG" \
-    bash "$sc_vhooks/pr-body-check.sh" >/dev/null 2>&1
-  [[ ! -e "$SC_MARK" ]]; sc_report $? pr-body-check.sh "a trimtab package in site-packages does not stand in for the checkout's"
+  # The pass also needs evidence the hook reached the venv's python3: a block
+  # (rc 2), or its could-not-check notice (the venv has no PyYAML). A hook
+  # that never ran, or never started python3, shows neither.
+  if sc_vhooks=$(path_hooks "$SC_ROOT/hooks" "$SC_VENV/bin:/usr/bin:/bin"); then
+    sc_err=$(printf '%s' "$pl" | env SC_MARK="$SC_MARK" CLAUDE_CONFIG_DIR="$SC_CFG" \
+      bash "$sc_vhooks/pr-body-check.sh" 2>&1 >/dev/null); sc_rc=$?
+    [[ ! -e "$SC_MARK" && ( $sc_rc -eq 2 || "$sc_err" == *"the check exited"* ) ]]
+    sc_report $? pr-body-check.sh "a trimtab package in site-packages does not stand in for the checkout's"
+  else
+    sc_report 1 pr-body-check.sh "a trimtab package in site-packages: no hooks copy with the venv first"
+  fi
   rm -f "$SC_MARK"
   SC_MARK="$SC_MARK" "$SC_VENV/bin/python3" -I -c 'import trimtab.adapters.pr_body_check' >/dev/null 2>&1
   [[ -e "$SC_MARK" ]]; sc_report $? fixture "the planted trimtab in site-packages is importable"

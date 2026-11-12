@@ -28,10 +28,24 @@ and before `set` or any command. The line is exact, so a test can find it.
   sets the caller's PATH again, to the value the caller has already set.
 - Exported, so `python3`, `git` and any child the hook starts inherit the same PATH.
 
+"Before any command" means any command in the hook. Bash itself reads `BASH_ENV` and imports
+exported functions (`BASH_FUNC_name%%`, which also take precedence over PATH) from the hook's
+environment before line 1. That environment is Claude Code's, not the session's: an inline prefix
+on a Bash call never reaches a hook, and `settings.json` `env` is a control (SEC-7). So those stay
+outside what this record addresses.
+
 `tests/trimtab/test_hooks.py` (`HookPathReset`) fails if any shell hook's first statement is not
-the reset. It also runs every hook with PATH holding only recording stubs for each tool the hooks
-use, and fails if any stub ran. A control runs a copy of `doctrine-drift.sh` with the reset
-removed and shows the planted `cat` does run, so the scan cannot pass by observing nothing.
+the reset. It also runs each hook with recording stubs in `~/.local/bin`, first on PATH as on
+Debian, one stub for every word in the hooks that names an executable in `/usr/bin` or `/bin`.
+Each hook gets a payload for its own event that takes it past its fast path, and the test fails,
+naming the hook, if any stub ran. A control runs, for every hook, a copy whose reset puts
+`~/.local/bin` first again, and requires a stub to run, so no hook's empty record can come from a
+payload that stops before any tool.
+
+pr-body-check fails open by design (ADR 0005), and the reset narrows which `python3` it can use.
+Each of its fail-open exits now says on stderr that the body went unchecked, and why. Bootstrap
+holds the `python3` in `/usr/bin:/bin` to the 3.11 floor and requires PyYAML there, beside its
+existing checks of the `python3` first on the operator's PATH.
 
 Cases that hide or replace a tool by narrowing PATH can no longer do it from outside the hook.
 They run a copy of `hooks/` whose reset names the stub directory instead: `path_hooks` in
@@ -48,7 +62,7 @@ in that one line. A hook without exactly one canonical reset is not copied, and 
 | Remove user-writable directories from the inherited PATH at runtime | Rejected: needs a `stat` per entry before PATH is safe, which itself runs from PATH. It also drops Homebrew, which is user-owned on Apple silicon, so it fails macOS anyway |
 | Name every tool by absolute path (`/usr/bin/python3`) | Rejected: every call site in every hook changes, and a single missed one reopens the hole with no line a test can check |
 | A test-only environment variable that overrides the reset | Rejected: any variable that changes the hook's PATH is one more way to plant a tool, and an agent session can reach some of the places that set environment |
-| Leave stub cases calling the real hooks under a narrowed PATH | Rejected: the hook would find the real tool in `/usr/bin`, so a case meant to show a guard failing closed without `grep` would pass, or fail, for the wrong reason. 21 cases went red at once, and the rest passed vacuously |
+| Leave stub cases calling the real hooks under a narrowed PATH | Rejected: the hook would find the real tool in `/usr/bin`, so a case meant to show a guard failing closed without `grep` would pass, or fail, for the wrong reason. Run unchanged against the new hooks, 21 cases went red; others stayed green without exercising the missing tool they name |
 
 ## Consequences
 
@@ -57,7 +71,13 @@ in that one line. A hook without exactly one canonical reset is not copied, and 
   PATH, and the hooks now ignore it and use the runner's `/usr/bin/python3`, whose version and
   PyYAML the image decides. pr-body-check imports PyYAML. Restoring the floor for the hooks
   means changing `ci.yml` (SEC-7), for example pointing `/usr/bin/python3` at 3.11. That is a
-  separate change for the operator to authorise, not part of this one.
+  separate change for the operator to authorise, not part of this one. If the image's
+  `/usr/bin/python3` lacks PyYAML, bootstrap now dies in CI and pr-body-check reports every body
+  unchecked, so the gap is loud rather than silent.
+- **Bootstrap checks two interpreters.** The `python3` first on PATH (bin/trimtab, the registry
+  check) and the one in `/usr/bin:/bin` (the hooks) can now differ, and an install needs both at
+  3.11 or newer with PyYAML. The die path for the second cannot be driven by a test without
+  replacing `/usr/bin/python3`.
 - **The base-expectations step in CI goes red on this PR.** It runs main's `tests/guard-tests.sh`
   against this PR's hooks. Main's stub cases narrow PATH from outside, which these hooks ignore.
   The workflow expects this when a base expectation legitimately changes: a human merges over it.

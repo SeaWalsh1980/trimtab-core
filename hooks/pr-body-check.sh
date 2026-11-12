@@ -28,15 +28,23 @@ write='(-X|--method|-f|-F|--raw-field|--field|--input)'
 if ! [[ "$payload" =~ $porcelain ]]; then
   [[ "$payload" =~ $rest && "$payload" =~ $write ]] || exit 0
 fi
-command -v python3 >/dev/null 2>&1 || exit 0
+# Failing open is by design, never silent: each such exit says on stderr that
+# the body went unchecked and why. Since the reset above, python3 is always
+# /usr/bin/python3, whatever newer one the session's PATH holds (ADR 0065).
+unchecked() { # unchecked <why>
+  echo "pr-body-check: the PR body was not checked: $1. CI is the gate." >&2
+  exit 0
+}
+command -v python3 >/dev/null 2>&1 || unchecked "no python3 in /usr/bin or /bin"
 # -P exists only from 3.11: an older interpreter, or one that rejects -I, fails
 # this probe, and the check fails open (CI is the gate).
-python3 -P -I -c '' >/dev/null 2>&1 || exit 0
+python3 -P -I -c '' >/dev/null 2>&1 \
+  || unchecked "$(command -v python3) is older than 3.11 or rejects -P -I"
 
 here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # python3 exits 2 when it cannot open its script, which would read as a block
 # below: a missing loader fails open like every other fault here.
-[[ -r "$here/run_module.py" ]] || exit 0
+[[ -r "$here/run_module.py" ]] || unchecked "its loader run_module.py is missing"
 # -I: no working directory (a trimtab/ there cannot shadow this checkout's
 # package), no user site-packages (so no .pth the session wrote), no PYTHON*
 # variables. No -S: the check needs PyYAML from system site-packages.
@@ -47,4 +55,6 @@ here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 python3 -I -B "$here/run_module.py" "$here/.." trimtab.adapters.pr_body_check <<<"$payload"
 rc=$?
 [[ $rc -eq 2 ]] && exit 2
+# Any other non-zero is the check failing, a missing PyYAML among them.
+[[ $rc -eq 0 ]] || unchecked "the check exited $rc (PyYAML missing from $(command -v python3)?)"
 exit 0

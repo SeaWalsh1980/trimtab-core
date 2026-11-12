@@ -76,11 +76,14 @@ class Launchers(unittest.TestCase):
     def test_the_pr_body_hook_allows_when_the_interpreter_rejects_p(self):
         # An interpreter older than 3.11 exits 2 on the unknown -P option, the
         # code the adapter uses for BLOCK. The hook fails open, so it must exit 0.
-        fakebin = self.cwd / "fakebin"
+        # The fake records each run, so a pass cannot come from a hook that
+        # never reached it.
+        fakebin, marker = self.cwd / "fakebin", self.cwd / "fake-ran"
         fakebin.mkdir()
         fake = fakebin / "python3"
         fake.write_text(
-            '#!/bin/sh\nfor a in "$@"; do\n'
+            f"#!/bin/sh\necho ran >> '{marker}'\n"
+            'for a in "$@"; do\n'
             '  [ "$a" = "-P" ] && { echo "Unknown option: -P" >&2; exit 2; }\n'
             "done\nexit 0\n"
         )
@@ -88,9 +91,39 @@ class Launchers(unittest.TestCase):
         # The hook resets PATH (ADR 0065): the fake goes first in a copy's reset.
         hooks = hooks_with_path(self.cwd / "fake-hooks", f"{fakebin}:/usr/bin:/bin")
         payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr create --draft"}, "cwd": str(self.cwd)})
+
         out = subprocess.run([str(hooks / "pr-body-check.sh")], cwd=self.cwd, input=payload,
                              env=dict(os.environ), capture_output=True, text=True, timeout=60)
-        self.assertEqual(out.returncode, 0, out.stderr)
+
+        self.assertEqual((out.returncode, marker.exists()), (0, True), out.stderr)
+
+    def test_the_pr_body_hook_says_it_did_not_check_when_the_interpreter_rejects_p(self):
+        fakebin = self.cwd / "fakebin"
+        fakebin.mkdir()
+        (fakebin / "python3").write_text('#!/bin/sh\necho "Unknown option: -P" >&2\nexit 2\n')
+        (fakebin / "python3").chmod(0o755)
+        hooks = hooks_with_path(self.cwd / "fake-hooks", f"{fakebin}:/usr/bin:/bin")
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr create --draft"}, "cwd": str(self.cwd)})
+
+        out = subprocess.run([str(hooks / "pr-body-check.sh")], cwd=self.cwd, input=payload,
+                             env=dict(os.environ), capture_output=True, text=True, timeout=60)
+
+        self.assertIn("the PR body was not checked", out.stderr)
+
+    def test_the_pr_body_hook_says_it_did_not_check_when_the_check_fails(self):
+        # Passes the -P probe, then fails as an import of a missing PyYAML would.
+        fakebin = self.cwd / "fakebin"
+        fakebin.mkdir()
+        (fakebin / "python3").write_text(
+            '#!/bin/sh\ncase "$*" in *run_module.py*) echo "No module named yaml" >&2; exit 1 ;; esac\nexit 0\n')
+        (fakebin / "python3").chmod(0o755)
+        hooks = hooks_with_path(self.cwd / "fake-hooks", f"{fakebin}:/usr/bin:/bin")
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr create --draft"}, "cwd": str(self.cwd)})
+
+        out = subprocess.run([str(hooks / "pr-body-check.sh")], cwd=self.cwd, input=payload,
+                             env=dict(os.environ), capture_output=True, text=True, timeout=60)
+
+        self.assertEqual((out.returncode, "the check exited 1" in out.stderr), (0, True), out.stderr)
 
 
 class NoBytecode(unittest.TestCase):

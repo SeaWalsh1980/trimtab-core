@@ -7,12 +7,14 @@ hooks/ for its shebang (ADR 0064).
 
 import json
 import os
+import re
+import shlex
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path, PurePosixPath
 
-from hook_fixture import PATH_RESET, hooks_with_path
+from hook_fixture import PATH_RESET, NoCanonicalReset, hooks_with_path, swap_reset
 from instance_fixture import INSTANCE_JSON, env_for, git, make_instance
 
 REPO = Path(__file__).resolve().parents[2]
@@ -684,10 +686,20 @@ class HookShebangs(unittest.TestCase):
 # and the rest bare, and the inherited PATH puts the user-writable
 # ~/.local/bin first. So the first statement of every shell hook is the reset.
 
-# Every command a hook runs by name, and more: each is planted as a recorder.
-PLANTED = ("awk basename cat chmod cksum cut date dirname env find gh git grep head id jq "
-           "ln ls mkdir mktemp mv python3 readlink realpath rm rmdir sed sort stat tail "
-           "tee touch tr uname wc xargs").split()
+SHELL_HOOKS = sorted((REPO / "hooks").glob("*.sh"))
+
+
+def planted_names():
+    """Every word in a shell hook that names an executable in /usr/bin or /bin: each is planted.
+
+    Derived from the hooks rather than listed, so a tool a hook starts using is
+    planted without anyone remembering to add it.
+    """
+    words = set()
+    for hook in SHELL_HOOKS:
+        words |= set(re.findall(r"[A-Za-z0-9][A-Za-z0-9_.+-]*", hook.read_text(encoding="utf-8")))
+    return sorted(w for w in words if any((Path(d) / w).is_file() and os.access(Path(d) / w, os.X_OK)
+                                          for d in ("/usr/bin", "/bin")))
 
 
 def first_statement(path):
@@ -698,62 +710,131 @@ def first_statement(path):
     return None
 
 
-def plant(directory, marker):
-    """Recording stubs for every name in PLANTED; returns the directory."""
-    directory.mkdir()
-    for name in PLANTED:
-        (directory / name).write_text(f"#!/bin/sh\necho {name} >> '{marker}'\nexit 1\n")
+def plant(directory, marker, names):
+    """Recording stubs for <names> in <directory>; returns the directory."""
+    directory.mkdir(parents=True)
+    for name in names:
+        (directory / name).write_text(f"#!/bin/sh\necho {shlex.quote(name)} >> {shlex.quote(str(marker))}\nexit 1\n")
         (directory / name).chmod(0o755)
     return directory
 
 
+def event(name, cwd, **fields):
+    return json.dumps({"hook_event_name": name, "session_id": "path-reset", "cwd": str(cwd), **fields})
+
+
+def hook_input(hook, cwd):
+    """(payload, args) that take <hook> past its fast path, to where it runs tools."""
+    def tool(name, tool_input, event_name="PreToolUse", **extra):
+        return event(event_name, cwd, tool_name=name, tool_input=tool_input, **extra)
+    start = event("SessionStart", cwd, source="startup")
+    return {
+        "guard-paths.sh": (tool("Read", {"file_path": "/p/app/main.py"}), []),
+        "guard-bash.sh": (tool("Bash", {"command": "git push origin main"}), []),
+        "guard-secrets.sh": (tool("Write", {"file_path": "/p/app/x.py", "content": "print(42)"}), []),
+        "guard-security.sh": (tool("Edit", {"file_path": "/p/.github/workflows/ci.yml"}), []),
+        "guard-mcp.sh": (tool("mcp__srv__create_item", {"name": "x"}), []),
+        "guard-github.sh": (tool("Bash", {"command": "gh pr create --draft"}), []),
+        "pr-body-check.sh": (tool("Bash", {"command": "gh pr create --draft"}), []),
+        "pr-monitor-record.sh": (tool("Bash", {"command": "gh pr create --draft"}, "PostToolUse",
+                                      tool_response={"stdout": "", "stderr": "", "interrupted": False}), []),
+        "rule-usage.sh": (tool("Skill", {"skill": "trimtab-plan"}), []),
+        "session-scratch.sh": (start, ["start"]),
+    }.get(hook.name, (start, []))
+
+
 class HookPathReset(unittest.TestCase):
+    """Each hook runs with planted recorders in ~/.local/bin, first on PATH as on Debian."""
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
-        self.marker = self.root / "planted-ran"
-        self.planted = plant(self.root / "planted", self.marker)
         home = self.root / "home"
-        home.mkdir()
-        self.env = {"PATH": str(self.planted), "HOME": str(home), "TMPDIR": str(self.root),
+        self.local_bin = home / ".local" / "bin"
+        self.names = planted_names()
+        self.env = {"PATH": f"{self.local_bin}:/usr/bin:/bin", "HOME": str(home), "TMPDIR": str(self.root),
                     "CLAUDE_CONFIG_DIR": str(home / ".claude")}
-        self.hooks = sorted((REPO / "hooks").glob("*.sh"))
 
     def tearDown(self):
         self._tmp.cleanup()
 
-    def run_hook(self, hook):
-        payload = json.dumps({"hook_event_name": "PreToolUse", "session_id": "path-reset",
-                              "tool_name": "Bash", "cwd": str(self.root),
-                              "tool_input": {"command": "gh pr create --draft"}})
-        subprocess.run([str(hook)], input=payload, capture_output=True, text=True,
+    def ran_planted(self, hook, marker):
+        """The planted tools <hook> ran, in order, with recorders written to <marker>."""
+        if marker.exists():
+            marker.unlink()
+        if self.local_bin.exists():
+            for stub in self.local_bin.iterdir():
+                stub.unlink()
+            self.local_bin.rmdir()
+        plant(self.local_bin, marker, self.names)
+        payload, args = hook_input(hook, self.root)
+        subprocess.run([str(hook), *args], input=payload, capture_output=True, text=True,
                        cwd=self.root, env=self.env, timeout=30)
+        return marker.read_text().split() if marker.exists() else []
 
     def test_every_shell_hook_resets_path_before_its_first_command(self):
-        faults = {p.name: first_statement(p) for p in self.hooks}
+        faults = {p.name: first_statement(p) for p in SHELL_HOOKS}
 
         self.assertEqual({name: line for name, line in faults.items() if line != PATH_RESET}, {})
 
     def test_no_hook_runs_a_tool_from_the_inherited_path(self):
-        for hook in self.hooks:
-            self.run_hook(hook)
+        for hook in SHELL_HOOKS:
+            with self.subTest(hook=hook.name):
+                self.assertEqual(self.ran_planted(hook, self.root / f"{hook.name}.ran"), [])
 
-        ran = self.marker.read_text() if self.marker.exists() else ""
-        self.assertEqual(ran, "")
+    def test_each_hook_does_run_a_planted_tool_when_its_reset_keeps_the_inherited_path(self):
+        # The control for the case above, per hook: a copy whose reset puts
+        # ~/.local/bin first again, as the inherited PATH does. Each must run a
+        # planted tool, so an empty record above is the reset's doing and not a
+        # payload that stops before any tool.
+        copies = hooks_with_path(self.root / "control", f"{self.local_bin}:/usr/bin:/bin")
+        for hook in SHELL_HOOKS:
+            with self.subTest(hook=hook.name):
+                self.assertNotEqual(self.ran_planted(copies / hook.name, self.root / f"{hook.name}.ctl"), [])
 
-    def test_without_the_reset_a_planted_tool_does_run(self):
-        copy = self.root / "no-reset.sh"
-        copy.write_text(DRIFT.read_text(encoding="utf-8").replace(PATH_RESET + "\n", ""), encoding="utf-8")
-        copy.chmod(0o755)
-
-        self.run_hook(copy)
-
-        self.assertTrue(self.marker.exists())
+    def test_the_planted_tools_include_what_the_guards_start(self):
+        self.assertLessEqual({"python3", "jq", "git", "cat", "timeout", "sha256sum"}, set(self.names))
 
     def test_the_scan_sees_every_shell_hook(self):
-        names = {p.name for p in self.hooks}
+        names = {p.name for p in SHELL_HOOKS}
 
         self.assertLessEqual({"guard-github.sh", "guard-mcp.sh", "pr-body-check.sh", "session-path.sh"}, names)
+
+
+class HooksWithPath(unittest.TestCase):
+    """The copy helper itself, so a stub case cannot run a copy that differs from its hook."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_a_copy_differs_from_its_hook_only_in_the_reset(self):
+        copies = hooks_with_path(self.root / "c", "/stub")
+        for hook in SHELL_HOOKS:
+            with self.subTest(hook=hook.name):
+                self.assertEqual((copies / hook.name).read_text(encoding="utf-8"),
+                                 hook.read_text(encoding="utf-8").replace(PATH_RESET, "export PATH=/stub"))
+
+    def test_a_path_with_a_space_is_quoted(self):
+        self.assertIn("export PATH='/a b:/usr/bin'", swap_reset(f"#!/bin/bash\n{PATH_RESET}\n", "/a b:/usr/bin"))
+
+    def test_a_hook_without_the_reset_is_refused(self):
+        with self.assertRaises(NoCanonicalReset):
+            swap_reset("#!/bin/bash\nset -u\n", "/stub")
+
+    def test_a_hook_with_two_resets_is_refused(self):
+        with self.assertRaises(NoCanonicalReset):
+            swap_reset(f"#!/bin/bash\n{PATH_RESET}\n{PATH_RESET}\n", "/stub")
+
+    def test_a_hooks_directory_without_the_package_beside_it_is_refused(self):
+        lone = self.root / "lone" / "hooks"
+        lone.mkdir(parents=True)
+
+        with self.assertRaises(FileNotFoundError):
+            hooks_with_path(self.root / "c", "/stub", hooks=lone)
 
 
 if __name__ == "__main__":

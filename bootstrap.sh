@@ -147,6 +147,13 @@ py_found=$(python3 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3]); sys
   || die "python3 did not report a version; the launchers need 3.11 or newer (python3 -P)"
 [[ $py_rc -eq 0 ]] \
   || die "python3 $py_found is older than 3.11, which the launchers need (python3 -P)"
+# The hooks set PATH=/usr/bin:/bin first (ADR 0065), so they run the python3
+# found there, which need not be the one above (pyenv, a venv, setup-python).
+# Hold it to the same floor: on an older one pr-body-check skips its check.
+hook_py=$(PATH=/usr/bin:/bin command -v python3) \
+  || die "no python3 in /usr/bin or /bin, where the hooks look for it (ADR 0065); install the system python3 (e.g. apt install python3)"
+"$hook_py" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null \
+  || die "$hook_py, the python3 the hooks run (ADR 0065), is older than 3.11 or cannot run"
 
 BASE="$REPO"   # the mechanism: this checkout, or a snapshot under the store
 # CDPATH is cleared for the cd: with it set, a relative argument makes cd print
@@ -229,9 +236,11 @@ TRIMTAB_BIN="$BASE/bin/trimtab"
 # for PyYAML (3.11 is already required, so -P is always there).
 python3 -P -c 'import yaml' 2>/dev/null \
   || die "PyYAML is required (the registry check imports it) and python3 cannot import it; nothing was changed"
-# And as pr-body-check imports it, with -I: that hook cannot see user
-# site-packages (ADR 0035), so a PyYAML installed only there would leave the
-# hook failing open with no sign.
+# And as pr-body-check imports it, with -I and the hooks' python3 (ADR 0065):
+# that hook cannot see user site-packages (ADR 0035), so a PyYAML installed
+# only there, or only in another interpreter, would leave it skipping its check.
+"$hook_py" -I -c 'import yaml' 2>/dev/null \
+  || die "PyYAML is missing from $hook_py, the python3 the hooks run (ADR 0065), so pr-body-check could not import it; install it system-wide (e.g. apt install python3-yaml); nothing was changed"
 python3 -I -c 'import yaml' 2>/dev/null \
   || die "PyYAML is reachable only where python3 -I cannot see it (user site-packages, or a PYTHONPATH or other PYTHON* variable), so pr-body-check could not import it; install it system-wide (e.g. apt install python3-yaml); nothing was changed"
 against=()
