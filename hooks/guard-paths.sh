@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # PreToolUse hook, matcher: Read|Edit|Write|MultiEdit|NotebookEdit|Bash
 #
 # Path policy: refuses to touch protected files by location or filename.

@@ -525,5 +525,79 @@ class SessionPath(unittest.TestCase):
         self.assertIn('"$HOME/.claude/hooks/session-path.sh"', commands)
 
 
+# ---- shebangs (ADR 0064) ---------------------------------------------------
+# settings.base.json runs each hook by its path, so the kernel reads the
+# shebang. `#!/usr/bin/env bash` takes bash from Claude Code's inherited PATH,
+# which on Debian puts the user-writable ~/.local/bin first: a planted
+# ~/.local/bin/bash would replace every guard before any line of it ran.
+
+HOOKS = REPO / "hooks"
+TRUSTED_DIRS = ("/bin", "/usr/bin")
+
+
+def shebang_fault(first_line):
+    """Why a file's first line is an unsafe shebang, or None when it is safe or absent."""
+    if not first_line.startswith(b"#!"):
+        return None
+    words = first_line[2:].decode("utf-8", "replace").split()
+    if not words:
+        return "empty shebang"
+    interpreter = words[0]
+    if interpreter.rsplit("/", 1)[-1] == "env":
+        return f"{interpreter} resolves the interpreter from PATH"
+    if interpreter.rsplit("/", 1)[0] not in TRUSTED_DIRS:
+        return f"{interpreter} is outside {' and '.join(TRUSTED_DIRS)}"
+    return None
+
+
+def first_line(path):
+    with path.open("rb") as handle:
+        return handle.readline().rstrip(b"\r\n")
+
+
+class ShebangFault(unittest.TestCase):
+    """The checker itself, so the repository scan below cannot pass vacuously."""
+
+    def test_an_absolute_interpreter_in_bin_is_safe(self):
+        self.assertIsNone(shebang_fault(b"#!/bin/bash"))
+
+    def test_an_absolute_interpreter_in_usr_bin_is_safe(self):
+        self.assertIsNone(shebang_fault(b"#!/usr/bin/python3"))
+
+    def test_a_file_without_a_shebang_is_not_judged(self):
+        self.assertIsNone(shebang_fault(b'"""A module."""'))
+
+    def test_env_is_refused(self):
+        self.assertIsNotNone(shebang_fault(b"#!/usr/bin/env bash"))
+
+    def test_env_with_a_space_after_the_bang_is_refused(self):
+        self.assertIsNotNone(shebang_fault(b"#! /usr/bin/env bash"))
+
+    def test_env_in_bin_is_refused(self):
+        self.assertIsNotNone(shebang_fault(b"#!/bin/env bash"))
+
+    def test_an_interpreter_in_a_user_writable_directory_is_refused(self):
+        self.assertIsNotNone(shebang_fault(b"#!/home/user/.local/bin/bash"))
+
+    def test_an_interpreter_in_usr_local_bin_is_refused(self):
+        self.assertIsNotNone(shebang_fault(b"#!/usr/local/bin/bash"))
+
+    def test_a_relative_interpreter_is_refused(self):
+        self.assertIsNotNone(shebang_fault(b"#!bash"))
+
+    def test_a_bare_bang_is_refused(self):
+        self.assertIsNotNone(shebang_fault(b"#!"))
+
+
+class HookShebangs(unittest.TestCase):
+    def test_every_hook_names_an_interpreter_in_bin_or_usr_bin(self):
+        files = sorted(p for p in HOOKS.rglob("*") if p.is_file())
+
+        faults = {str(p.relative_to(REPO)): shebang_fault(first_line(p)) for p in files}
+
+        self.assertTrue(files, "no files found under hooks/")
+        self.assertEqual({path: why for path, why in faults.items() if why}, {})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # PreToolUse hook, matcher: Bash. Registered in settings.base.json; changing
 # that registration is a security-control change (ADR 0004).
 #

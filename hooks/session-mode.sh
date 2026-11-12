@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Session mode: is this session interactive, or an autonomous plan run?
 #
 # Two kinds of session exist. In an interactive one a person is in the loop.

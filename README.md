@@ -91,8 +91,10 @@ Linux is the only tested platform. Known gaps, not yet handled:
 
 - **macOS ships bash 3.2.** One guard uses a bash 4 expansion; on bash 3.2
   that line errors, and Claude Code treats any hook exit code other than 2
-  as "allow". **On a stock Mac a guard can fail open, silently.** Use a
-  bash 4 or later.
+  as "allow". **On a Mac a guard can fail open, silently.** The hooks
+  name `/bin/bash` (ADR 0064), so a newer bash on PATH does not help.
+- A host with no `/bin/bash` cannot start any hook, and the exit code it
+  gets back (127) also means "allow": every guard is off (ADR 0064).
 - macOS: `readlink -f` (bootstrap and two hooks) needs macOS 12.3 or later,
   and the weekly usage report's timer uses systemd, which macOS lacks.
 - Native Windows: creating symlinks needs Developer Mode or administrator
