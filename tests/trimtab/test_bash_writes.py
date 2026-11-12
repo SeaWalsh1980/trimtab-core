@@ -133,6 +133,24 @@ class Mode(unittest.TestCase):
             bw.judged_mode("", "interactive", "", "")
 
 
+class HarnessWalk(unittest.TestCase):
+    def test_a_spent_deadline_stops_the_walk_loudly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / ".claude" / "sub").mkdir(parents=True)
+            ticks = iter([0.0, 1.0, 10.0, 10.0, 10.0])
+            deadline = bw.Deadline(7.0, clock=lambda: next(ticks))
+
+            with self.assertRaises(bw.BashWritesError):
+                bw.harness_paths(tmp, deadline)
+
+    def test_the_walk_without_a_deadline_lists_nested_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / ".claude" / "sub").mkdir(parents=True)
+            (Path(tmp) / ".claude" / "sub" / "f").write_text("x")
+
+            self.assertIn(".claude/sub/f", bw.harness_paths(tmp))
+
+
 class Deadlines(unittest.TestCase):
     def test_a_spent_deadline_refuses_the_next_git_call(self):
         ticks = iter([0.0, 10.0])

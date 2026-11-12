@@ -300,9 +300,11 @@ HARNESS_DIR = ".claude"
 HARNESS_SKIP = ".claude/worktrees"
 
 
-def harness_paths(root: str) -> dict[str, os.stat_result]:
+def harness_paths(root: str, deadline: "Deadline | None" = None) -> dict[str, os.stat_result]:
     """Every entry under the root's `.claude/` (but `worktrees/`), and the root's instruction files, by
-    lstat: links are recorded, never followed. Bounded by MAX_PATHS."""
+    lstat: links are recorded, never followed. Bounded by MAX_PATHS, and by the phase deadline when one
+    is given: it is checked once per directory, so a slow filesystem runs out of time here, loudly,
+    before the hook's own timeout kills the hook silently."""
     found: dict[str, os.stat_result] = {}
     for name in HARNESS_FILES:
         try:
@@ -319,6 +321,8 @@ def harness_paths(root: str) -> dict[str, os.stat_result]:
         return found
     pending = [HARNESS_DIR]
     while pending:
+        if deadline is not None:
+            deadline.remaining()
         rel = pending.pop()
         with os.scandir(os.path.join(root, rel)) as it:
             for entry in it:
@@ -397,11 +401,12 @@ class Repo:
         if len(status) > MAX_PATHS:
             raise BashWritesError(f"more than {MAX_PATHS} paths to fingerprint; too many to judge")
         try:
-            harness = harness_paths(self.root)
+            harness = harness_paths(self.root, self.deadline)
         except OSError as err:
             raise BashWritesError(f"cannot read the repository's harness files ({type(err).__name__})") from err
         found = {path: fingerprint("[fs]", st) for path, st in harness.items() if path not in status}
         for path, xy in status.items():
+            self.deadline.remaining()  # one clock read per path: the lstat loop is under the deadline too
             try:
                 st = os.lstat(os.path.join(self.root, path))
             except FileNotFoundError:

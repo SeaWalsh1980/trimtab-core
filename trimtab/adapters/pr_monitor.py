@@ -478,7 +478,7 @@ _private = guardstate.private
 def state_dir(config: Path, create: bool, parts: tuple[str, ...] = STATE_PARTS) -> Path:
     """`<config>/guard-state/pr-monitor` (or another `parts` below the config directory), each
     level a real directory private to this user. The Bash write detector keeps its snapshots
-    under its own `parts` (ADR 0065).
+    under its own `parts` (ADR 0066).
 
     With `create`, missing levels are made 0700. Raises StateDirError otherwise, or OSError
     when a level cannot be made.

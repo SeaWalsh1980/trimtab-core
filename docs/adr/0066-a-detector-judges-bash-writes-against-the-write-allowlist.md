@@ -221,9 +221,9 @@ the guards are whole without it.
 - a `.claude` that is a symlink is recorded as one entry and not followed, so
   writes inside its target are not seen. It is also refused as an allowlist
   source, so a run in such a repository writes nothing anyway;
-- the harness walk is bounded by entry count, not by the phase deadline; on a
-  very slow filesystem the hook could reach its own timeout, and a `post`
-  killed there reports nothing;
+- the harness walk and the per-path lstat loop are under the phase deadline
+  (checked once per directory and once per path), so a slow filesystem runs
+  out of time loudly before the hook's own timeout kills a `post` silently;
 - a lift (`HOOK_ALLOW_HARNESS` or `HOOK_ALLOW_BASH_WRITES`) leaves no trace in
   the session, as guard-paths' lift does not;
 - a cancelled call raises neither post event (Claude Code's hooks reference),

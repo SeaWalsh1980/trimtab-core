@@ -25,10 +25,14 @@
 
 phase="${1:-}"
 [[ "$phase" == pre || "$phase" == post ]] || { echo "bash-writes: usage: bash-writes.sh pre|post" >&2; exit 2; }
-[[ "${HOOK_ALLOW_HARNESS:-0}" == "1" ]] && exit 0
+# A lift reads the payload first, so Claude Code's write to the hook's stdin
+# is never left to a closed pipe.
 # The detector alone, for a repository too large or slow for its bounds,
 # without lifting guard-paths' harness layers as HOOK_ALLOW_HARNESS does.
-[[ "${HOOK_ALLOW_BASH_WRITES:-0}" == "1" ]] && exit 0
+if [[ "${HOOK_ALLOW_HARNESS:-0}" == "1" || "${HOOK_ALLOW_BASH_WRITES:-0}" == "1" ]]; then
+  cat >/dev/null
+  exit 0
+fi
 
 payload=$(cat) || { echo "bash-writes: the hook payload could not be read; this call was not judged" >&2; exit 2; }
 # The adapter checks the version itself (3.11 or later): a separate probe
