@@ -6,16 +6,18 @@ import json
 import os
 import py_compile
 import re
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from test_enforcement_gate import PINNED, PROJECT, World, git
+from test_enforcement_gate import PINNED, PROJECT, World, git, pass_file, plant_pass
 from trimtab import guardstate
 from trimtab.adapters import enforcement_record
 from trimtab.enforcement import gate, tools
@@ -131,7 +133,7 @@ class Records(World):
         self.assertFalse(gate.cached_pass(self.config, PROJECT, key))
 
     def test_removes_every_pass_when_the_repository_cannot_be_named(self):
-        gate.record_pass(self.config, "other/repo", PINNED)
+        plant_pass(self.config, "other/repo", PINNED)
         git(self.proj, "remote", "set-url", "origin", "https://example.invalid/owner/project.git")
 
         self.record(self.gh())
@@ -156,11 +158,12 @@ class Records(World):
         self.assertFalse(gate.cached_pass(self.config, PROJECT, key))
 
     def test_leaves_another_projects_pass_alone(self):
-        gate.record_pass(self.config, "other/repo", PINNED)
+        plant_pass(self.config, "other/repo", PINNED)
 
         self.record(self.gh(failing="E3"))
 
-        self.assertTrue(gate.cached_pass(self.config, "other/repo", PINNED))
+        # A recorder removes only its own project's pass; the new epoch, not a deletion, retires the other.
+        self.assertTrue(pass_file(self.config, "other/repo").exists())
 
     def test_writes_no_pass_when_a_later_session_started_a_new_epoch(self):
         fetch = self.git.fetch_clean
@@ -178,7 +181,7 @@ class Records(World):
         stale = self.new_epoch()
         self.new_epoch()  # a later session started after the hook handed this recorder `stale`
 
-        self.assertFalse(self.record(self.gh(), epoch=stale) == enforcement_record.PASSED)
+        self.assertIn("new epoch", self.record(self.gh(), epoch=stale))
 
     def test_removes_its_pass_when_the_epoch_moves_during_the_write(self):
         real = gate.record_pass
@@ -205,7 +208,7 @@ class Records(World):
         self.assertIn("no epoch", self.record(self.gh(), epoch=None))
 
     def test_has_no_pass_when_it_starts_reading(self):
-        gate.record_pass(self.config, PROJECT, PINNED)
+        plant_pass(self.config, PROJECT, PINNED)
         seen = []
         real = gate.gather
 
@@ -254,7 +257,7 @@ class Clears(World):
             enforcement_record.clear(self.proj)
 
     def test_clears_every_pass_whatever_origin_names(self):
-        gate.record_pass(self.config, PROJECT, PINNED)
+        plant_pass(self.config, PROJECT, PINNED)
         git(self.proj, "remote", "set-url", "origin", "https://github.com/other/repo.git")  # pointed elsewhere
 
         self.clear()
@@ -262,7 +265,7 @@ class Clears(World):
         self.assertFalse(gate.cached_pass(self.config, PROJECT, PINNED))
 
     def test_refuses_to_leave_passes_in_a_directory_others_can_write(self):
-        gate.record_pass(self.config, PROJECT, PINNED)
+        plant_pass(self.config, PROJECT, PINNED)
         os.chmod(self.config / guardstate.ROOT / gate.CACHE_PARTS[0], 0o777)
 
         with self.assertRaises(guardstate.GuardStateError):
@@ -279,7 +282,7 @@ class TheHookClearsFirst(unittest.TestCase):
         self.addCleanup(subprocess.run, ["rm", "-rf", str(self.tmp)])
         self.config = self.tmp / "config"
         self.config.mkdir()
-        gate.record_pass(self.config, "other/repo", PINNED)
+        plant_pass(self.config, "other/repo", PINNED)
         (self.tmp / "project").mkdir()
 
     def run_hook(self, path="/usr/bin:/bin", **env):
@@ -311,6 +314,7 @@ class TheHookClearsFirst(unittest.TestCase):
     def test_the_epoch_replaces_a_planted_link_rather_than_following_it(self):
         target = self.tmp / "planted"
         target.write_text("x")
+        (self.enforcement() / enforcement_record.EPOCH).unlink()
         os.symlink(target, self.enforcement() / enforcement_record.EPOCH)
 
         self.run_hook(TRIMTAB_PLAN_RUN="1")
@@ -344,9 +348,9 @@ class TheHookClearsFirst(unittest.TestCase):
 
     def test_every_interpreter_the_hook_starts_skips_bytecode_beside_the_code(self):
         text = self.HOOK.read_text()
-        starts = [line for line in text.splitlines() if re.search(r'(python3|"\$py") -I', line)]
+        starts = [line for line in text.splitlines() if re.search(r'(python3|\$py\b\"?)(\s+-[A-Za-z]+)*\s+-I\b', line)]
 
-        self.assertEqual([line for line in starts if "pycache_prefix" not in line], [])
+        self.assertEqual((len(starts) >= 3, [line for line in starts if "pycache_prefix" not in line]), (True, []))
 
     def test_the_pycache_prefix_stops_a_planted_pyc_loading(self):
         pkg = self.tmp / "pkg"
@@ -357,7 +361,7 @@ class TheHookClearsFirst(unittest.TestCase):
         py_compile.compile(str(planted), cfile=str(pkg / "__pycache__" / f"m.{sys.implementation.cache_tag}.pyc"),
                            invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
         probe = f"import sys; sys.path.insert(0, {str(pkg)!r}); import m; print(m.WHO)"
-        run = lambda *flags: subprocess.run(["/usr/bin/python3", "-I", "-B", *flags, "-c", probe],
+        run = lambda *flags: subprocess.run([sys.executable, "-I", "-B", *flags, "-c", probe],
                                             capture_output=True, text=True).stdout.strip()
 
         self.assertEqual((run(), run("-X", "pycache_prefix=/dev/null/no-pycache")), ("planted", "source"))
@@ -384,6 +388,84 @@ class TheHookClearsFirst(unittest.TestCase):
 
         self.assertEqual((out.returncode, out.stdout), (1, ""))
 
+    def source_and_call(self, call, path):
+        return subprocess.run(["bash", "-c", f'source "{self.HOOK}"; {call}'], capture_output=True, text=True,
+                              env={"PATH": path, "HOME": str(self.tmp), "CLAUDE_CONFIG_DIR": str(self.config)})
+
+    def test_its_functions_run_no_tool_from_the_path_when_sourced(self):
+        # guard-paths sources this file with its own PATH: the function-local PATH is what protects these calls.
+        shims = self.tmp / "shims"
+        shims.mkdir()
+        marker = self.tmp / "shim-ran"
+        for name in ("rm", "od", "tr", "mktemp", "mv", "mkdir", "readlink", "find"):
+            (shims / name).write_text(f"#!/bin/sh\ntouch {marker}\nexit 1\n")
+            (shims / name).chmod(0o755)
+
+        out = self.source_and_call("sm_new_epoch && sm_clear_passes && sm_trusted python3", f"{shims}:/usr/bin:/bin")
+
+        self.assertEqual((out.returncode, marker.exists()), (0, False))
+
+    def test_a_link_to_a_directory_at_the_epoch_is_replaced_not_followed(self):
+        (self.enforcement() / enforcement_record.EPOCH).unlink()
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir()
+        os.symlink(elsewhere, self.enforcement() / enforcement_record.EPOCH)
+
+        out = self.source_and_call("sm_new_epoch", "/usr/bin:/bin")
+
+        self.assertEqual((out.returncode, list(elsewhere.iterdir()),
+                          (self.enforcement() / enforcement_record.EPOCH).is_symlink()), (0, [], False))
+
+    def test_a_directory_at_the_epoch_fails_the_new_epoch(self):
+        (self.enforcement() / enforcement_record.EPOCH).unlink()
+        (self.enforcement() / enforcement_record.EPOCH).mkdir()
+
+        self.assertEqual(self.source_and_call("sm_new_epoch", "/usr/bin:/bin").returncode, 1)
+
+    def test_with_no_new_epoch_the_old_one_is_dropped(self):
+        (self.enforcement() / enforcement_record.EPOCH).unlink()
+        (self.enforcement() / enforcement_record.EPOCH).mkdir()  # sm_new_epoch fails on it
+        (self.enforcement() / enforcement_record.EPOCH / "inside").write_text("x")
+
+        self.run_hook(TRIMTAB_PLAN_RUN="1")
+
+        self.assertFalse(os.path.lexists(self.enforcement() / enforcement_record.EPOCH))
+
+    def stub_root(self, log):
+        """A copy of the hook and its loader beside a stub recorder that logs its argv and the epoch it saw."""
+        root = self.tmp / "root"
+        (root / "hooks").mkdir(parents=True)
+        for name in ("session-mode.sh", "run_module.py"):
+            shutil.copy2(self.HOOK.parent / name, root / "hooks" / name)
+        (root / "trimtab" / "adapters").mkdir(parents=True)
+        (root / "trimtab" / "__init__.py").write_text("")
+        (root / "trimtab" / "adapters" / "__init__.py").write_text("")
+        (root / "trimtab" / "adapters" / "enforcement_record.py").write_text(
+            "import json, os, sys\n"
+            f"epoch = os.path.join({str(self.enforcement())!r}, '.epoch')\n"
+            "seen = open(epoch).read() if os.path.exists(epoch) else None\n"
+            f"with open({str(log)!r}, 'a') as f:\n"
+            "    f.write(json.dumps({'argv': sys.argv[1:], 'epoch': seen}) + '\\n')\n")
+        return root / "hooks" / "session-mode.sh"
+
+    def test_the_epoch_is_new_before_the_clear_and_handed_to_the_recorder(self):
+        old = "a" * 32
+        (self.enforcement() / enforcement_record.EPOCH).write_text(old)
+        log = self.tmp / "stub.log"
+        hook = self.stub_root(log)
+        payload = json.dumps({"cwd": str(self.tmp / "project"), "session_id": "s1"})
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.tmp), "CLAUDE_CONFIG_DIR": str(self.config),
+               "TRIMTAB_PLAN_RUN": "1"}
+
+        subprocess.run([str(hook)], input=payload, text=True, capture_output=True, env=env, check=True, timeout=30)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and (not log.exists() or len(log.read_text().splitlines()) < 2):
+            time.sleep(0.1)  # the recorder runs in the background
+        calls = {c["argv"][0]: c for c in map(json.loads, log.read_text().splitlines())}
+
+        self.assertEqual((calls["clear"]["epoch"] != old, calls["record"]["argv"][2] == calls["clear"]["epoch"]),
+                         (True, True))
+
 
 class Main(unittest.TestCase):
     def test_raises_sigterm_as_an_exit_so_the_cleanup_runs(self):
@@ -400,6 +482,16 @@ class Main(unittest.TestCase):
     def test_a_failed_record_exits_0(self):
         with mock.patch.object(enforcement_record, "record", side_effect=RuntimeError("boom")):
             self.assertEqual(enforcement_record.main(["record", "/nonexistent"]), 0)
+
+    def test_a_clear_of_the_wrong_shape_exits_1(self):
+        self.assertEqual(enforcement_record.main(["clear"]), 1)
+
+    def test_a_record_with_a_malformed_epoch_writes_no_pass(self):
+        with mock.patch.object(enforcement_record.guardstate, "config_dir", lambda: Path(tempfile.mkdtemp())), \
+                mock.patch.object(enforcement_record.tools, "Git", side_effect=AssertionError("must not read")):
+            line = enforcement_record.record(Path("/nonexistent"), "not-an-epoch")
+
+        self.assertIn("not passed", line)
 
     def test_a_failed_clear_exits_1_so_the_hook_removes_every_pass(self):
         with mock.patch.object(enforcement_record, "clear", side_effect=RuntimeError("boom")):

@@ -44,10 +44,10 @@ REMOTE = re.compile(r"^(?:https://github\.com/|git@github\.com:|ssh://git@github
 STATUS_SUFFIX = ".status"
 UNKNOWN = "unknown-repository"
 LOCK = ".lock"
-EPOCH = ".epoch"
+EPOCH = gate.EPOCH
 PASSED = "passed"
 CLEAR_LOCK_SECONDS = 1.0
-EPOCH_SHAPE = re.compile(r"[0-9a-f]{32}")
+EPOCH_SHAPE = gate.EPOCH_SHAPE
 
 
 def repository_of(project: Path, git: tools.Git) -> str:
@@ -84,15 +84,7 @@ def _locked(config: Path, wait: float | None = None):
         os.close(fd)
 
 
-def _epoch(config: Path) -> str | None:
-    """The current epoch, or None when there is none or it cannot be read as a private file (a planted link,
-    another owner): never a value a recorder could match, since a recorder with no epoch writes no pass."""
-    try:
-        directory = guardstate.directory(config, *gate.CACHE_PARTS, create=False)
-        text = guardstate.read(directory / EPOCH)
-    except guardstate.GuardStateError:
-        return None
-    return text if text and EPOCH_SHAPE.fullmatch(text) else None
+_epoch = gate.current_epoch
 
 
 def _status(config: Path, repository: str | None, line: str) -> None:
@@ -108,6 +100,9 @@ def clear(project: Path) -> None:
     config = guardstate.config_dir()
     with _locked(config, wait=CLEAR_LOCK_SECONDS):
         gate.clear_pass(config, None)
+        # The status lines go too: one left saying "passed" would contradict an empty cache.
+        for status in guardstate.directory(config, *gate.CACHE_PARTS, create=False).glob("*" + STATUS_SUFFIX):
+            os.unlink(status)
 
 
 def record(project: Path, epoch: str | None = None) -> str:
@@ -117,10 +112,20 @@ def record(project: Path, epoch: str | None = None) -> str:
     repository = None
     line = "not passed: the recorder did not finish"
     expected = epoch if epoch is None or EPOCH_SHAPE.fullmatch(epoch) else ""
+    if expected is None:
+        # A recorder a guard starts mid-session (E21) takes the epoch current when it starts, before it waits
+        # on the lock: a later session that moves the epoch meanwhile then stops it from writing.
+        expected = _epoch(config) or ""
+    if not expected:
+        # No epoch to write under: nothing it read could become a pass, so it reads nothing.
+        line = "not passed: there is no epoch to write a pass under"
+        try:
+            _status(config, None, line)
+        except (guardstate.GuardStateError, OSError):
+            pass  # the status is the operator's note; no pass was or will be written
+        return line
     try:
         with _locked(config):
-            if expected is None:
-                expected = _epoch(config)  # a recorder a guard starts mid-session (E21) takes the current one
             scratch = None
             try:
                 git = tools.Git()
@@ -137,7 +142,8 @@ def record(project: Path, epoch: str | None = None) -> str:
                 elif _epoch(config) != expected:
                     line = "not passed: a later session started a new epoch while this ran"
                 else:
-                    gate.record_pass(config, repository, facts.pinned)
+                    # The pass carries its epoch, so a guard refuses it the moment the epoch moves.
+                    gate.record_pass(config, repository, facts.pinned, expected)
                     # Checked again after the write: an epoch that moved during it voids the pass.
                     line = PASSED if _epoch(config) == expected else "not passed: the epoch moved as the pass was written"
             except (gate.GateError, tools.ToolError, roots.InstanceError, instance.InstanceFileError) as err:
@@ -162,7 +168,8 @@ def _terminate(signum, frame):
 def main(argv: list[str]) -> int:
     shapes = {"clear": (2,), "record": (2, 3)}
     if not argv or argv[0] not in shapes or len(argv) not in shapes[argv[0]]:
-        return 0
+        # A clear that did not run must not read as one that did: the hook then removes every pass itself.
+        return 1 if argv and argv[0] == "clear" else 0
     signal.signal(signal.SIGTERM, _terminate)
     try:
         if argv[0] == "clear":

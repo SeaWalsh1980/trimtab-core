@@ -46,7 +46,9 @@ BASE_JOB = "lint-test"
 BASE_BRANCH = "main"
 CHECKED_DIRS = ("hooks", "trimtab")
 CACHE_PARTS = ("enforcement",)
-CACHE_SCHEMA = 3
+CACHE_SCHEMA = 4
+EPOCH = ".epoch"
+EPOCH_SHAPE = re.compile(r"[0-9a-f]{32}")
 SETTINGS_FILES = ("settings.json", "settings.local.json")
 CLEAN_HINT = "remove anything not in the pinned base (`git clean -xdf hooks trimtab`, `git checkout -- .`)"
 MAX_SETTINGS_BYTES = 1 << 20
@@ -518,15 +520,29 @@ def cache_name(repository: str) -> str:
     return hashlib.sha256(repository.casefold().encode("utf-8")).hexdigest() + ".json"
 
 
-def _body(repository: str, key: tuple[str, str, str, str]) -> dict:
+def current_epoch(config: Path) -> str | None:
+    """The cache's current epoch, or None when there is none or it cannot be read as a private file of the
+    right shape (a planted link, another owner): never a value a pass or a recorder could match."""
+    try:
+        directory = guardstate.directory(config, *CACHE_PARTS, create=False)
+        text = guardstate.read(directory / EPOCH)
+    except guardstate.GuardStateError:
+        return None
+    return text if text and EPOCH_SHAPE.fullmatch(text) else None
+
+
+def _body(repository: str, key: tuple[str, str, str, str], epoch: str) -> dict:
     return {"schema_version": CACHE_SCHEMA, "repository": repository.casefold(), "trimtab_sha": key[0],
-            "base_sha": key[1], "default_head": key[2], "install_digest": key[3]}
+            "base_sha": key[1], "default_head": key[2], "install_digest": key[3], "epoch": epoch}
 
 
-def record_pass(config: Path, repository: str, key: tuple[str, str, str, str]) -> None:
-    """Cache a pass. Called only by the session-mode hook's recorder, and only on a pass."""
+def record_pass(config: Path, repository: str, key: tuple[str, str, str, str], epoch: str) -> None:
+    """Cache a pass under `epoch`. Called only by the session-mode hook's recorder, and only on a pass."""
+    if not EPOCH_SHAPE.fullmatch(epoch):
+        raise GateError("a pass is written only under an epoch")
     directory = guardstate.directory(config, *CACHE_PARTS, create=True)
-    guardstate.write(directory / cache_name(repository), json.dumps(_body(repository, key), sort_keys=True) + "\n")
+    guardstate.write(directory / cache_name(repository),
+                     json.dumps(_body(repository, key, epoch), sort_keys=True) + "\n")
 
 
 def clear_pass(config: Path, repository: str | None = None) -> None:
@@ -547,11 +563,15 @@ def clear_pass(config: Path, repository: str | None = None) -> None:
 
 
 def cached_pass(config: Path, repository: str, key: tuple[str, str, str, str]) -> bool:
-    """Whether a pass is cached for exactly this key. A missing, planted or malformed cache is no pass."""
+    """Whether a pass is cached for exactly this key under the current epoch. A missing, planted or malformed
+    cache, a pass from an earlier epoch, or no epoch at all is no pass."""
+    epoch = current_epoch(config)
+    if epoch is None:
+        return False
     try:
         directory = guardstate.directory(config, *CACHE_PARTS, create=False)
         text = guardstate.read(directory / cache_name(repository))
         body = json.loads(text) if text is not None else None
     except (guardstate.GuardStateError, ValueError):
         return False
-    return body == _body(repository, key)
+    return body == _body(repository, key, epoch)

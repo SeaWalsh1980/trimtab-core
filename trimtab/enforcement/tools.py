@@ -106,7 +106,11 @@ def _root_only_tree(path: str) -> bool:
 
 def _network(environ: Mapping[str, str]) -> dict[str, str]:
     env = {k: environ[k] for k in PROXY_KEEP if k in environ}
-    env.update({k: environ[k] for k in CA_KEEP if k in environ and _root_only_tree(environ[k])})
+    for key in CA_KEEP:
+        # The resolved path is what is judged, so it is what is kept: a session-owned link to a root-owned CA
+        # could be re-pointed after the check, but the resolved path cannot be.
+        if key in environ and _root_only_tree(environ[key]):
+            env[key] = os.path.realpath(environ[key])
     return env
 
 
@@ -168,8 +172,9 @@ class Git:
         self._checked: set[tuple[str, bool]] = set()
 
     def _pins(self) -> list[str]:
-        # No hooks, and no transport a read could start: a lazy fetch is off by environment, and these
-        # pins close it again for a git too old to know GIT_NO_LAZY_FETCH.
+        # No hooks, and as little transport as a command line can pin. GIT_NO_LAZY_FETCH and check()'s
+        # partial-clone refusal are what stop a lazy fetch; these pins are a further layer, not a stop on
+        # their own, since a repository's `protocol.<name>.allow` outranks `protocol.allow`.
         extra = (("core.hooksPath", os.devnull), ("protocol.allow", "never"), ("core.sshCommand", ""))
         return [a for key, value in (*GIT_PINNED, *extra) for a in ("-c", f"{key}={value}")]
 
@@ -260,7 +265,8 @@ class Objects:
         self._repo = repo
         self._deadline = deadline
         self._cache: dict[str, tuple[str, bytes]] = {}
-        self._buffer = b""
+        self._buffer = bytearray()
+        self._broken: str | None = None  # once a read fails, the stream's framing is lost: every later read refuses
         try:
             self._proc = subprocess.Popen(git.argv(repo, "cat-file", "--batch"), stdin=subprocess.PIPE,
                                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=git.env, bufsize=0)
@@ -292,16 +298,17 @@ class Objects:
         left = until - time.monotonic()
         if left <= 0 or not select.select([fd], [], [], left)[0]:
             raise ToolError(f"git cat-file in {self._repo.name} did not answer within {self._deadline} s")
-        chunk = os.read(fd, max(65536, want))
+        chunk = os.read(fd, min(max(65536, want), 1 << 20))
         if not chunk:
             raise ToolError(f"git cat-file in {self._repo.name} ended early")
-        self._buffer += chunk
+        self._buffer += chunk  # a bytearray grows in place: linear in the object's size
 
     def _take(self, n: int, until: float) -> bytes:
         """Exactly `n` bytes from the batch process."""
         while len(self._buffer) < n:
             self._fill(until, n - len(self._buffer))
-        out, self._buffer = self._buffer[:n], self._buffer[n:]
+        out = bytes(self._buffer[:n])
+        del self._buffer[:n]
         return out
 
     def _line(self, until: float) -> bytes:
@@ -309,10 +316,21 @@ class Objects:
             if len(self._buffer) > 4096:
                 raise ToolError(f"git cat-file in {self._repo.name} sent a header past 4096 bytes")
             self._fill(until)
-        line, _, self._buffer = self._buffer.partition(b"\n")
+        end = self._buffer.index(b"\n")
+        line = bytes(self._buffer[:end])
+        del self._buffer[:end + 1]
         return line
 
     def _read_one(self, sha: str) -> tuple[str, bytes]:
+        if self._broken:
+            raise ToolError(f"{self._repo.name}'s object reads stopped after an earlier failure: {self._broken}")
+        try:
+            return self._read_framed(sha)
+        except ToolError as err:
+            self._broken = str(err)
+            raise
+
+    def _read_framed(self, sha: str) -> tuple[str, bytes]:
         until = time.monotonic() + self._deadline
         try:
             self._proc.stdin.write(sha.encode("ascii") + b"\n")

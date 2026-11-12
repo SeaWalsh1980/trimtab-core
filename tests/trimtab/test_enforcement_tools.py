@@ -255,21 +255,50 @@ class RunsNoFetchOnARead(Repo):
             git(self.repo, "config", key, value)
         return marker
 
-    def test_refuses_a_repository_configured_as_a_partial_clone(self):
-        self.plant()
+    def test_refuses_a_repository_naming_a_partial_clone_extension(self):
+        git(self.repo, "config", "extensions.partialClone", "evil")
 
         with self.assertRaises(ToolError):
             self.git.objects(self.repo)
 
-    def test_a_missing_object_runs_no_command_even_unchecked(self):
-        marker = self.plant()
-        objects = tools.Objects(self.git, self.repo)  # past check(): the environment alone must stop it
-        self.addCleanup(objects.close)
+    def test_refuses_a_repository_naming_a_promisor_remote(self):
+        git(self.repo, "config", "remote.evil.promisor", "true")
 
+        with self.assertRaises(ToolError):
+            self.git.objects(self.repo)
+
+    def read_missing(self, git_tool):
+        objects = tools.Objects(git_tool, self.repo)  # past check(): only the layer under test stops the fetch
+        self.addCleanup(objects.close)
         with self.assertRaises(ToolError):
             objects.get("1" * 40, "blob")
 
+    def test_the_environment_alone_stops_a_lazy_fetch(self):
+        marker = self.plant()
+        with mock.patch.object(tools.Git, "_pins", lambda s: ["-c", f"core.hooksPath={os.devnull}"]):
+            self.read_missing(tools.Git(environ={"HOME": str(self.tmp)}))
+
         self.assertFalse(marker.exists())
+
+    def test_the_pins_alone_stop_a_lazy_fetch(self):
+        marker = self.plant()
+        real = tools.git_env
+        with mock.patch.object(tools, "git_env",
+                               lambda e=os.environ: {k: v for k, v in real(e).items() if k != "GIT_NO_LAZY_FETCH"}):
+            self.read_missing(tools.Git(environ={"HOME": str(self.tmp)}))
+
+        self.assertFalse(marker.exists())
+
+    def test_with_both_layers_gone_the_fetch_runs(self):
+        """The control: shows the planted config really fetches, so the two tests above test something."""
+        marker = self.plant()
+        real = tools.git_env
+        with mock.patch.object(tools.Git, "_pins", lambda s: []), \
+                mock.patch.object(tools, "git_env",
+                                  lambda e=os.environ: {k: v for k, v in real(e).items() if k != "GIT_NO_LAZY_FETCH"}):
+            self.read_missing(tools.Git(environ={"HOME": str(self.tmp)}))
+
+        self.assertTrue(marker.exists())
 
 
 class BoundsEachRead(Repo):
@@ -290,6 +319,7 @@ class BoundsEachRead(Repo):
         loose.unlink()
         os.mkfifo(loose)  # git's open of it blocks forever
         objects = tools.Objects(self.git, self.repo, deadline=1)
+        self.addCleanup(objects.close)
         self.addCleanup(objects._proc.kill)
 
         started = time.monotonic()

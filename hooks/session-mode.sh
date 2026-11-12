@@ -207,7 +207,17 @@ sm_enforcement_dir() {
 sm_clear_passes() {
   local PATH="$SM_SYSTEM_PATH" dir
   dir=$(sm_enforcement_dir) || return 0
-  [[ -n "$dir" ]] && rm -f -- "$dir/"*.json 2>/dev/null
+  # The status lines go too: one left saying "passed" would contradict an empty cache.
+  [[ -n "$dir" ]] && rm -f -- "$dir/"*.json "$dir/"*.status 2>/dev/null
+  return 0
+}
+
+# sm_drop_epoch: remove the current epoch, so no recorder holding it, from an
+# earlier session, can match it any more. Used whenever no new epoch is written.
+sm_drop_epoch() {
+  local PATH="$SM_SYSTEM_PATH" dir
+  dir=$(sm_enforcement_dir) || return 0
+  [[ -n "$dir" ]] && rm -rf -- "$dir/.epoch" 2>/dev/null
   return 0
 }
 
@@ -225,7 +235,8 @@ sm_new_epoch() {
   [[ -d "$dir" && ! -L "$dir" ]] || return 1
   epoch=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n') && [[ ${#epoch} -eq 32 ]] || return 1
   tmp=$( umask 077 && mktemp -- "$dir/.epoch.XXXXXX" ) 2>/dev/null || return 1
-  if ! { printf '%s' "$epoch" > "$tmp" && mv -f -- "$tmp" "$dir/.epoch"; } 2>/dev/null; then
+  # -T: a planted directory (or a link to one) at .epoch fails the move instead of receiving the file.
+  if ! { printf '%s' "$epoch" > "$tmp" && mv -fT -- "$tmp" "$dir/.epoch"; } 2>/dev/null; then
     rm -f -- "$tmp" 2>/dev/null
     return 1
   fi
@@ -244,11 +255,13 @@ sm_record_enforcement() {
   here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
   if ! { py=$(sm_trusted python3) && setsid_bin=$(sm_trusted setsid) && timeout_bin=$(sm_trusted timeout) \
          && [[ -r "$here/run_module.py" ]]; }; then
+    sm_drop_epoch
     sm_clear_passes
     return 0
   fi
-  # The epoch first: any recorder that checks it after this point sees it is not its own.
-  epoch=$(sm_new_epoch) || epoch=""
+  # The epoch first: any recorder that checks it after this point sees it is not its own. With no new
+  # epoch, the old one is dropped, so a recorder still holding it cannot match it either.
+  epoch=$(sm_new_epoch) || { epoch=""; sm_drop_epoch; }
   ( cd / && "$timeout_bin" -k 1 4 "$py" -I -B -X pycache_prefix="$SM_NO_PYCACHE" "$here/run_module.py" "$here/.." \
       trimtab.adapters.enforcement_record clear "$1" </dev/null >/dev/null 2>&1 ) || sm_clear_passes
   [[ -n "$epoch" ]] || return 0  # no epoch, no recorder: it could not write a pass anyway

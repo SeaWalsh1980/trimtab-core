@@ -82,6 +82,20 @@ def facts(**overrides):
     return Facts(**base)
 
 
+def plant_pass(config, repository, key, epoch=None):
+    """A pass as the recorder writes it, under the current epoch (made if there is none)."""
+    epoch = epoch or gate.current_epoch(config)
+    if epoch is None:
+        epoch = os.urandom(16).hex()
+        guardstate.write(guardstate.directory(config, *gate.CACHE_PARTS, create=True) / gate.EPOCH, epoch)
+    gate.record_pass(config, repository, key, epoch)
+    return epoch
+
+
+def pass_file(config, repository):
+    return config / guardstate.ROOT / gate.CACHE_PARTS[0] / gate.cache_name(repository)
+
+
 def problems(results):
     return {r.id: r.problem for r in results if r.problem}
 
@@ -428,8 +442,18 @@ class JudgesTheCheckout(World):
         head.unlink()
         os.mkfifo(head)  # snapshot reads it directly, so git (which would block on it) never runs here
 
-        with self.assertRaises(GateError):
+        with self.assertRaisesRegex(GateError, "not a regular file"):
             gate.snapshot(self.code, self.config, self.proj, self.inst, [])
+
+    def test_reads_a_linked_worktrees_branch_from_the_common_dir(self):
+        linked = self.tmp / "linked"
+        git(self.code, "worktree", "add", "-q", "-b", "wt", str(linked))
+        own = Path(git(linked, "rev-parse", "--path-format=absolute", "--git-dir"))
+        planted = own / "refs" / "heads" / "wt"  # git never reads a branch from here
+        planted.parent.mkdir(parents=True)
+        planted.write_text("0" * 40 + "\n")
+
+        self.assertEqual(gate.head_of(linked), self.base_sha)
 
     def test_refuses_a_file_name_that_is_not_utf8(self):
         os.close(os.open(os.fsencode(self.code / "hooks") + b"/\xff.sh", os.O_CREAT | os.O_WRONLY, 0o644))
@@ -606,21 +630,38 @@ class CachesAPass(unittest.TestCase):
         self.addCleanup(subprocess.run, ["rm", "-rf", str(self.config)])
 
     def test_reads_back_the_pass_it_wrote(self):
-        gate.record_pass(self.config, PROJECT, PINNED)
+        plant_pass(self.config, PROJECT, PINNED)
 
         self.assertTrue(gate.cached_pass(self.config, PROJECT, PINNED))
 
     def test_a_pass_for_any_other_key_part_is_no_pass(self):
-        gate.record_pass(self.config, PROJECT, PINNED)
+        plant_pass(self.config, PROJECT, PINNED)
         others = [tuple("e" * len(v) if i == n else v for i, v in enumerate(PINNED)) for n in range(4)]
 
         self.assertEqual([gate.cached_pass(self.config, PROJECT, k) for k in others], [False] * 4)
 
     def test_clearing_removes_the_pass(self):
-        gate.record_pass(self.config, PROJECT, PINNED)
+        plant_pass(self.config, PROJECT, PINNED)
         gate.clear_pass(self.config, PROJECT)
 
         self.assertFalse(gate.cached_pass(self.config, PROJECT, PINNED))
+
+    def test_a_pass_from_an_earlier_epoch_is_no_pass(self):
+        plant_pass(self.config, PROJECT, PINNED)
+        guardstate.write(guardstate.directory(self.config, *gate.CACHE_PARTS, create=False) / gate.EPOCH,
+                         os.urandom(16).hex())  # a later session started
+
+        self.assertFalse(gate.cached_pass(self.config, PROJECT, PINNED))
+
+    def test_no_epoch_is_no_pass(self):
+        plant_pass(self.config, PROJECT, PINNED)
+        os.unlink(guardstate.directory(self.config, *gate.CACHE_PARTS, create=False) / gate.EPOCH)
+
+        self.assertFalse(gate.cached_pass(self.config, PROJECT, PINNED))
+
+    def test_writes_no_pass_without_an_epoch(self):
+        with self.assertRaises(GateError):
+            gate.record_pass(self.config, PROJECT, PINNED, "")
 
     def test_clearing_with_nothing_cached_is_harmless(self):
         gate.clear_pass(self.config, PROJECT)
@@ -631,22 +672,23 @@ class CachesAPass(unittest.TestCase):
         self.assertFalse(gate.cached_pass(self.config, PROJECT, PINNED))
 
     def test_a_malformed_cache_is_no_pass(self):
-        gate.record_pass(self.config, PROJECT, PINNED)
+        plant_pass(self.config, PROJECT, PINNED)
         path = self.config / guardstate.ROOT / gate.CACHE_PARTS[0] / gate.cache_name(PROJECT)
         path.write_text("{")
 
         self.assertFalse(gate.cached_pass(self.config, PROJECT, PINNED))
 
     def test_a_planted_symlink_is_no_pass(self):
+        epoch = plant_pass(self.config, "other/repo", PINNED)
         directory = guardstate.directory(self.config, *gate.CACHE_PARTS, create=True)
         real = self.config / "elsewhere.json"
-        real.write_text(json.dumps(gate._body(PROJECT, PINNED)))
+        real.write_text(json.dumps(gate._body(PROJECT, PINNED, epoch)))
         (directory / gate.cache_name(PROJECT)).symlink_to(real)
 
         self.assertFalse(gate.cached_pass(self.config, PROJECT, PINNED))
 
     def test_a_directory_others_can_write_is_no_pass(self):
-        gate.record_pass(self.config, PROJECT, PINNED)
+        plant_pass(self.config, PROJECT, PINNED)
         os.chmod(self.config / guardstate.ROOT, 0o777)
 
         self.assertFalse(gate.cached_pass(self.config, PROJECT, PINNED))

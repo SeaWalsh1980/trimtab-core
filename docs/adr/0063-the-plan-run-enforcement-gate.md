@@ -144,11 +144,17 @@ enforcement: a part too big for its session costs a stop, never a weaker gate.
       global or system config.
     - Replace objects are off, and lazy fetch is off (`GIT_NO_LAZY_FETCH`).
     - planscope's pinned settings apply, plus `protocol.allow=never`, an empty
-      `core.sshCommand` and no hooks.
+      `core.sshCommand` and no hooks. These pins are a further layer only:
+      `GIT_NO_LAZY_FETCH` and the partial-clone refusal are what stop a lazy fetch, because a
+      repository's `protocol.<name>.allow` outranks `protocol.allow`. Tests show each of the
+      env setting and the pins stopping the planted fetch alone, and the fetch running with
+      both removed.
     - Proxy variables are kept, so a proxied host still reaches GitHub. Alone, a proxy can only
       make a read fail, since TLS is verified.
     - A CA variable is kept only when the file or directory it names, and every directory above
-      it, is root-only. A CA the session could write would let a proxy forge the API.
+      it, is root-only. It is kept as the resolved path, the one judged, so a session-owned link
+      to it cannot be re-pointed afterwards. A CA the session could write would let a proxy
+      forge the API.
     - Each object read has a 10 s deadline and a 64 MiB cap, so a FIFO or a forged size fails
       the read rather than hanging it.
   - **gh never reads its own config.** The token is taken once, from `GH_TOKEN` or
@@ -221,12 +227,16 @@ enforcement: a part too big for its session costs a stop, never a weaker gate.
   repository layout it does not know (a reftable HEAD), makes no snapshot, so there is no pass.
 - **Only the recorder writes the pass**: `trimtab.adapters.enforcement_record`.
   - **Startup.** In a run session, hooks/session-mode.sh does three things, in order:
-    1. It starts a new **epoch**: a random value written to a private temporary file and renamed
-       over `.epoch`, which replaces a planted link rather than following it.
-    2. It runs `clear` synchronously, bounded at 4 s inside the hook's own 10 s. The clear
-       removes **every** pass, never choosing by the project's `origin`, which the session could
-       aim elsewhere to spare its own project's pass. It reads no git, and takes the cache lock
-       (waiting at most 1 s for it). If it fails or times out, a bash fallback removes every pass.
+    1. It starts a new **epoch**: a random value written to a private temporary file and moved
+       over `.epoch` with `mv -fT`. That replaces a planted link, even one to a directory, rather
+       than following it, and fails on a planted directory. If no new epoch can be written (or
+       the trusted binaries are missing), it removes `.epoch` instead, so no recorder holding the
+       old one can match it.
+    2. It runs `clear` synchronously, bounded at 4 s inside the hook's own 10 s.
+       - The clear removes **every** pass and status line, never choosing by the project's
+         `origin`, which the session could aim elsewhere to spare its own project's pass.
+       - It reads no git, and takes the cache lock (waiting at most 1 s for it).
+       - If it fails or times out, a bash fallback removes every pass and status line.
     3. It starts `record` in the background with the operator's launch environment and that
        epoch on its argv. If no epoch could be written, it starts no recorder.
   - **No session-written program runs:**
@@ -238,13 +248,20 @@ enforcement: a part too big for its session costs a stop, never a weaker gate.
       directories;
     - every interpreter the hook starts gets `-X pycache_prefix=/dev/null/…`, a path no `.pyc`
       can be under, so a planted `__pycache__` is never loaded (`-B` only stops writes).
-  - **The record run.** `record` holds one lock for its whole run. It removes the project's pass
-    before any read, so a SIGKILL leaves none. It then fetches and runs the gate. It writes a pass
-    only when every row is shown **and** the epoch it was handed is the current one, checked
-    before the write and again after it (a pass written while the epoch moved is removed). With
-    no epoch, or one it cannot read as a private file, it writes no pass. So a recorder an
-    earlier session left running, or one still waiting on the lock, cannot write after a later
-    session's clear.
+  - **The record run.**
+    - **The epoch first.** With no epoch, or a malformed one, it reads nothing and writes no
+      pass. A recorder started without one on argv (E21's guards) takes the current epoch before
+      it waits on the lock.
+    - **The lock.** It holds one lock for its whole run.
+    - **The order.** It removes the project's pass before any read, so a SIGKILL leaves none,
+      then fetches and runs the gate.
+    - **The write.** It writes a pass only when every row is shown **and** its epoch is the
+      current one, checked before the write and again after it (a pass written while the epoch
+      moved is removed).
+    - **The pass carries its epoch.** A guard accepts a pass only when that epoch is the current
+      one, so a pass from an earlier epoch is refused at once, with no window.
+    - **So** a recorder an earlier session left running, or one still waiting on the lock,
+      cannot write a pass a later session would accept.
   - **Every other way out** leaves no pass: an error, SIGTERM (raised as an exit, so the cleanup
     runs), or a repository it cannot name (then every pass is removed). Each way out tries to
     write a one-line status naming why. A status that cannot be written is lost; the pass is
