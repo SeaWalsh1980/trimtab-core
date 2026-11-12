@@ -72,13 +72,14 @@ RUNNER = 1000000560
 OPEN_ROUTE = RouteFacts(
     author=AGENT,
     activities=(Activity(1, "branch_creation", AGENT, NO_COMMIT, HEAD),),
-    containment=Containment(frozenset(SETTINGS), 1, True,
+    containment=Containment(frozenset(SETTINGS), 1,
                             tuple(RequiredCheck(c, a) for c, a in REQUIRED.items()), frozenset({LOCKED})),
     runs=tuple(CheckRun(i, c, "", "completed", "success", "", a) for i, (c, a) in enumerate(REQUIRED.items(), 1)),
     statuses=(),
     jobs=tuple(JobRecord(i, c, "completed", "success", RUNNER, "a runner", 3, HEAD, HEAD, WORKFLOWS[c], "pull_request")
                for i, (c, a) in enumerate(REQUIRED.items(), 1) if a == ACTIONS_ID and c != "merge-authority"),
-    workflows=WORKFLOWS)
+    workflows=WORKFLOWS,
+    freshness=())
 
 
 def decided(*reviews, head_ref=PLAN_REF, runs=PASSED, paths=SOURCE, checker_in_tree=False, who=WHO, **kwargs):
@@ -475,14 +476,15 @@ def workflow_run_row(head, path=CI_WORKFLOW, event="pull_request", run_id=RUN_ID
     return {"id": run_id, "path": path, "event": event, "head_sha": head, "status": status}
 
 
-def job_answers(runs, head):
+def job_answers(runs, head, workflows=WORKFLOWS):
     """A real job and workflow run behind each Actions-bound check run, one workflow run per expected workflow."""
     answers = {}
+    paths = list(dict.fromkeys(workflows.values()))
     for r in runs:
-        if (r["app"] or {}).get("id") == ACTIONS_ID and r["name"] in WORKFLOWS:
-            run_id = RUN_ID + list(WORKFLOWS.values()).index(WORKFLOWS[r["name"]])
+        if (r["app"] or {}).get("id") == ACTIONS_ID and r["name"] in workflows:
+            run_id = RUN_ID + paths.index(workflows[r["name"]])
             answers[job_path(r["id"])] = json.dumps(job_row(r["id"], r["name"], head, run_id=run_id))
-            answers[run_path(run_id)] = json.dumps(workflow_run_row(head, WORKFLOWS[r["name"]], run_id=run_id))
+            answers[run_path(run_id)] = json.dumps(workflow_run_row(head, workflows[r["name"]], run_id=run_id))
     return answers
 
 
@@ -1037,10 +1039,18 @@ class ApproverRoute(GitRepository):
 
         self.assert_closed("required_approving_review_count")
 
-    def test_a_loose_strict_policy_closes_the_route(self):
+    def test_a_loose_strict_policy_leaves_a_fresh_head_open(self):
         self.answers[RULES_PATH] = json.dumps(rule_rows(strict=False))
 
-        self.assert_closed("strict")
+        self.assertEqual(self.judged(), mergeauthority.Result(APPROVER, ()))
+
+    def test_a_stale_head_closes_the_route_through_the_merge_authority_job(self):
+        git(self.repo, "switch", "-q", DEFAULT)
+        self.write(planscope.ALLOWLIST, "src/**\n")
+        self.base = self.commit("narrow the allowlist")
+        self.answers[RULES_PATH] = json.dumps(rule_rows(strict=False))
+
+        self.assert_closed(planscope.ALLOWLIST)
 
     def test_an_unbound_required_check_closes_the_route(self):
         self.answers[RULES_PATH] = json.dumps(rule_rows(checks={**REQUIRED, "lint-test": None}))
@@ -1073,18 +1083,6 @@ class ApproverRoute(GitRepository):
 
     def test_a_rule_with_no_parameters_is_ignored(self):
         self.answers[RULES_PATH] = json.dumps([{"type": "deletion"}, *rule_rows()])
-
-        self.assertEqual(self.judged().approved_by, APPROVER)
-
-    def test_a_strict_rule_without_plan_scope_does_not_make_it_strict(self):
-        rows = rule_rows(strict=False) + rule_rows(checks={"lint-test": ACTIONS_ID}, strict=True)
-        self.answers[RULES_PATH] = json.dumps(rows)
-
-        self.assert_closed("strict")
-
-    def test_a_later_loose_rule_does_not_undo_a_strict_one(self):
-        rows = rule_rows(strict=True) + rule_rows(checks={"lint-test": ACTIONS_ID}, strict=False)
-        self.answers[RULES_PATH] = json.dumps(rows)
 
         self.assertEqual(self.judged().approved_by, APPROVER)
 
@@ -2714,6 +2712,202 @@ class PlanScopeJobCli(unittest.TestCase):
         done = self.cli("--head", HEAD)
 
         self.assertEqual((done.returncode, "--repository" in done.stderr), (2, True), done.stderr)
+
+
+class FreshnessJudged(unittest.TestCase):
+    """freshness_problems alone, where git can't set the case up through check_action."""
+
+    def test_no_merge_base_refuses(self):
+        problems = mergeauthority.freshness_problems(mergeauthority.MainRead(()), "0019-y", [], WORKFLOWS)
+
+        self.assertEqual(len(problems), 1)
+        self.assertIn("0 merge-bases", problems[0])
+
+    def test_route_facts_without_freshness_close_the_route(self):
+        result = mergeauthority.decide(pr(PLAN_REF), WHO, list(SOURCE), False, [review(APPROVER)], PASSED,
+                                       lambda: replace(OPEN_ROUTE, freshness=None))
+
+        self.assertEqual(result.approved_by, "")
+        self.assertTrue(any("freshness" in p for p in result.problems), result.problems)
+
+
+LOCK_TEXT = '{"trimtab_sha": "' + "d" * 40 + '", "id_prefix": "X", "schema_version": 2}\n'
+
+
+class Freshness(ApproverAction):
+    """ADR 0065 through check-approver-route: with strict off, the route holds only a head plan-scope's pass may
+    still vouch for against the default branch's tip. Each test moves main from a head the App may act on."""
+
+    PLAN = planscope.plan_of(PLAN_REF).plan
+
+    def setUp(self):
+        super().setUp()
+        self.start = self.base
+        self.answers[RULES_PATH] = json.dumps(rule_rows(strict=False))
+
+    def rehead(self):
+        """The plan branch's tip as the head, with the server's answers for it."""
+        self.head = git(self.repo, "rev-parse", PLAN_REF)
+        rules = self.answers[RULES_PATH]
+        self.answers = {**route_answers(self.head), PULL_PATH: json.dumps(pull_row(self.head)),
+                        REVIEWS_PATH: json.dumps([review_row(1, APPROVER, commit=self.head)]),
+                        INLINE_PATH: "[]", CONVERSATION_PATH: "[]", RULES_PATH: rules}
+
+    def on_main(self, *files, message="main moves"):
+        """Commit on main: each (path, text) written, or removed where text is None; main's tip becomes the base."""
+        git(self.repo, "switch", "-q", DEFAULT)
+        for rel, text in files:
+            if text is None:
+                git(self.repo, "rm", "-q", rel)
+            else:
+                self.write(rel, text)
+        self.base = self.commit(message)
+        git(self.repo, "switch", "-q", PLAN_REF)
+        return self.base
+
+    def take_main(self):
+        git(self.repo, "merge", "-q", "--no-edit", DEFAULT)
+        self.rehead()
+
+    def restart_main(self):
+        git(self.repo, "branch", "-f", DEFAULT, self.start)
+
+    # Passing: what strict asked for still passes, and so does what strict alone stopped.
+    def test_an_up_to_date_head_acts_with_strict_on(self):
+        self.answers[RULES_PATH] = json.dumps(rule_rows(strict=True))
+        self.on_main(("src/other.py", "y = 1\n"))
+        self.take_main()
+
+        self.assert_acts()
+
+    def test_main_moving_elsewhere_leaves_the_head_fresh(self):
+        self.on_main(("src/other.py", "y = 1\n"), ("docs/notes.md", "n\n"))
+
+        self.assert_acts()
+
+    # Refusals: one per guard.
+    def test_a_conflict_with_main_refuses(self):
+        self.on_main(("src/app.py", "x = 3\n"))
+
+        self.assert_refused("conflicts with the default branch")
+
+    def test_more_than_one_merge_base_refuses(self):
+        side = self.on_main(("src/main.py", "m\n"))
+        git(self.repo, "switch", "-q", DEFAULT)
+        git(self.repo, "merge", "-q", "--no-ff", "--no-edit", self.head)
+        self.base = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "switch", "-q", PLAN_REF)
+        git(self.repo, "merge", "-q", "--no-ff", "--no-edit", side)
+        self.rehead()
+
+        self.assert_refused("2 merge-bases")
+
+    def test_main_changing_what_plan_scope_reads_refuses(self):
+        plan_md, writes = planscope.plan_files(self.PLAN)
+        for path in (planscope.ALLOWLIST, plan_md, writes, *mergeauthority.PIN_FILES,
+                     mergeauthority.PLAN_SCOPE_WORKFLOW):
+            with self.subTest(path=path):
+                self.restart_main()
+                self.on_main((path, LOCK_TEXT if path == ".claude/trimtab.json" else "changed\n"))
+
+                self.assert_refused(path)
+
+    def test_main_changing_the_configured_plan_scope_workflow_refuses(self):
+        own = mergeauthority.PLAN_SCOPE_WORKFLOW.replace("plan-scope", "scope")
+        workflows = {**WORKFLOWS, "plan-scope": own}
+        self.on_main((own, "on: pull_request\n"))
+        runs = json.loads(self.answers[self.runs_path()])["check_runs"]
+        self.answers.update(job_answers(runs, self.head, workflows))
+
+        self.assert_refused(own, workflows=["=".join(pair) for pair in workflows.items()])
+
+    def test_main_adding_a_path_the_head_adds_refuses(self):
+        record = f"{planscope.PLANS_DIR}/progress/{self.PLAN}/item-01-part1.md"
+        self.write(record, "same\n")
+        self.commit("record")
+        self.rehead()
+        self.on_main((record, "same\n"))
+
+        self.assert_refused(record)
+
+    def test_main_renaming_away_a_path_the_head_changes_refuses(self):
+        git(self.repo, "switch", "-q", DEFAULT)
+        git(self.repo, "mv", "src/app.py", "src/renamed.py")
+        self.base = self.commit("rename")
+        git(self.repo, "switch", "-q", PLAN_REF)
+
+        self.assert_refused("renamed away src/app.py")
+
+    def test_main_deleting_a_path_the_head_changes_refuses(self):
+        self.on_main(("src/app.py", None))
+
+        self.assert_refused("renamed away src/app.py", alone=False)
+
+    def test_a_reverted_change_on_main_still_refuses(self):
+        self.on_main((planscope.ALLOWLIST, "src/**\n"))
+        self.on_main((planscope.ALLOWLIST, None), message="revert")
+
+        self.assert_refused(planscope.ALLOWLIST)
+
+    def test_a_change_main_merged_in_refuses(self):
+        git(self.repo, "switch", "-q", "-c", "side", DEFAULT)
+        self.write(planscope.ALLOWLIST, "src/**\n")
+        self.commit("side")
+        git(self.repo, "switch", "-q", DEFAULT)
+        git(self.repo, "merge", "-q", "--no-ff", "--no-edit", "side")
+        self.base = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "switch", "-q", PLAN_REF)
+
+        self.assert_refused(planscope.ALLOWLIST)
+
+    def test_main_changing_an_instruction_file_or_rule_refuses(self):
+        for path in ("CLAUDE.md", "src/CLAUDE.local.md", ".claude/rules/Testing.md"):
+            with self.subTest(path=path):
+                self.restart_main()
+                self.on_main((path, "changed\n"))
+
+                self.assert_refused(path)
+
+    def test_the_rules_dir_comes_from_the_base_commits_lock(self):
+        self.on_main((".claude/trimtab.json", LOCK_TEXT.replace("}", ', "rules_dir": "./docs/rules/"}')))
+        self.take_main()
+        self.on_main(("docs/rules/Own.md", "changed\n"))
+
+        self.assert_refused("docs/rules/Own.md")
+
+    def test_an_unreadable_lock_at_the_base_is_an_error(self):
+        self.on_main((".claude/trimtab.json", "not json"))
+        self.take_main()
+
+        with self.assertRaisesRegex(MergeAuthorityError, "rules_dir"):
+            self.acted()
+
+    def test_too_many_changes_on_main_are_an_error(self):
+        self.on_main(("src/a.py", "1\n"), ("src/b.py", "2\n"))
+
+        with mock.patch.object(planscope, "MAX_MAIN_CHANGES", 1), \
+                self.assertRaisesRegex(MergeAuthorityError, "more than 1 paths"):
+            self.acted()
+
+    def test_a_merge_tree_answer_with_no_tree_is_an_error(self):
+        real = planscope.git_answer
+
+        def no_tree(repo, *args, **kwargs):
+            if "merge-tree" in args:
+                return 1, b"CONFLICT, but no tree\n"
+            return real(repo, *args, **kwargs)
+
+        with mock.patch.object(planscope, "git_answer", no_tree), \
+                self.assertRaisesRegex(MergeAuthorityError, "no tree id"):
+            self.acted()
+
+    def test_judging_a_conflict_writes_no_object_into_the_repository(self):
+        self.on_main(("src/app.py", "x = 3\n"))
+        before = git(self.repo, "count-objects", "-v")
+
+        self.assert_refused("conflicts")
+
+        self.assertEqual(git(self.repo, "count-objects", "-v"), before)
 
 
 if __name__ == "__main__":

@@ -24,7 +24,8 @@ check but this one has a latest run that passed from the App the ruleset binds
 it to, and where that App is GitHub Actions, the run is a real passing job from
 the workflow and event expected for it, since a forged run carries the same id;
 no commit status sits in a required check's name; the ruleset's containment is
-on; and the admin's last review is not a dismissal. All of it comes from the
+on; the head is fresh against the default branch (ADR 0065); and the admin's last
+review is not a dismissal. All of it comes from the
 server, never a commit's author. None of it touches the admin's own approval:
 nothing is read for it, so a failed read can only stop the approver.
 
@@ -46,6 +47,13 @@ caller, never from the PR: the job passes them from configuration the PR cannot 
 from git (`base...head`, renames off, as plan-scope reads them); reviews and
 check runs from GitHub's REST API through `gh api`.
 
+Fresh replaces the ruleset's "require branches to be up to date" (ADR 0065), which
+kept plan-scope's pass judged against the current base: from git over the base and
+head given, the two have exactly one merge-base and merge with no conflict, and
+main's first-parent history since that merge-base changes nothing plan-scope's
+verdict, or the instruction files the merge is judged by, depends on, deletes no
+path the head changes, and touches no path the head adds.
+
 `plan_admin_problems` is for sessions, not the job: it reads the repository's
 `TRIMTAB_ADMIN` itself, to compare with the instance's admin (ADR 0056). So is `plan_scope_job_result`: it reads
 job records, for a token that can't read check runs (ADR 0058).
@@ -55,9 +63,9 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
-from trimtab import planscope
+from trimtab import config, planscope
 from trimtab.capture.sources import PER_PAGE, GhApi, Run, SourceError
 
 CHECK_NAME = "plan-scope"
@@ -93,6 +101,7 @@ ACTIONS = (APPROVE, RESOLVE, MERGE)
 BLOCKING_LABELS = ("plan:blocked", "review-cap-failed")
 COUNTED = ("APPROVED", "CHANGES_REQUESTED", "DISMISSED")
 NO_COMMIT = "0" * 40
+INSTRUCTION_FILES = ("claude.md", "claude.local.md")  # any directory, as guard-paths' layer 1 has them
 CONTAINMENT = ("require_code_owner_review", "require_last_push_approval", "dismiss_stale_reviews_on_push",
                "require_extra_approval_for_unattributed_changes", "required_review_thread_resolution")
 
@@ -146,7 +155,6 @@ class Containment:
 
     settings: frozenset[str]
     approvals: int
-    strict: bool
     checks: tuple[RequiredCheck, ...]
     locked_paths: frozenset[str] = frozenset()
 
@@ -181,6 +189,7 @@ class RouteFacts:
     jobs: tuple[JobRecord, ...] = ()
     workflows: Mapping[str, str] = field(default_factory=dict)  # each Actions-bound check's expected workflow
     gates: tuple[str, ...] = ()  # checks the ruleset must require; only the App's own step names them
+    freshness: tuple[str, ...] | None = None  # from git (freshness_problems); None, not read, closes the route
 
 
 @dataclass(frozen=True)
@@ -327,8 +336,7 @@ def containment_problems(held: Containment) -> list[str]:
     problems = [f"the ruleset has {name} off" for name in CONTAINMENT if name not in held.settings]
     if held.approvals < 1:
         problems.append("the ruleset's required_approving_review_count is below 1")
-    if not held.strict:
-        problems.append(f"the ruleset does not hold {CHECK_NAME} to a strict policy")
+    # Strict is not asked for: freshness_problems holds the head to the current base instead (ADR 0065).
     bound = {c.context for c in held.checks if c.app_id == ACTIONS_APP_ID}
     problems += [f"the ruleset does not require {name} bound to GitHub Actions" for name in (CHECK_NAME, OWN_CHECK)
                  if name not in bound]
@@ -397,6 +405,63 @@ def _real_job(job: JobRecord | None, name: str, head: str, workflow: str) -> boo
             and job.head_sha == head and job.run_head_sha == head and job.path == workflow and job.event == JOB_EVENT)
 
 
+@dataclass(frozen=True)
+class MainRead:
+    """What git says of the default branch's tip against the head (ADR 0065). Past a merge-base count other than
+    one, nothing else is read."""
+
+    merge_bases: tuple[str, ...]
+    clean: bool = False
+    touched: frozenset[str] = frozenset()  # every path main's first-parent history changed since the merge-base
+    deleted: frozenset[str] = frozenset()  # of those, the ones it deleted, a rename's old path among them
+    rules_dir: str = config.ProjectConfig.rules_dir
+
+
+def verdict_inputs(plan: str, workflows: Mapping[str, str]) -> frozenset[str]:
+    """The files plan-scope's verdict on a plan's PR reads from the base, or that pick its checker or its job: the
+    write allowlist, the plan and its declaration, the pin files and the plan-scope workflow."""
+    named = {planscope.ALLOWLIST, *planscope.plan_files(plan), *PIN_FILES, PLAN_SCOPE_WORKFLOW}
+    if workflows.get(CHECK_NAME):
+        named.add(workflows[CHECK_NAME])
+    return frozenset(path.casefold() for path in named)
+
+
+def judged_by(path: str, rules_dir: str) -> bool:
+    """An instruction file or a rule the merge is judged against: strict kept those current too."""
+    rel = path.casefold()
+    return rel.rsplit("/", 1)[-1] in INSTRUCTION_FILES or rel.startswith(rules_dir.casefold() + "/")
+
+
+def freshness_problems(main: MainRead, plan: str, changes: list[planscope.Change],
+                       workflows: Mapping[str, str]) -> list[str]:
+    """Why plan-scope's pass on the head may not hold against the default branch's tip; empty when main has
+    changed nothing the pass, or the merge, depends on. Read against the merge-base, which is never newer than the
+    base plan-scope judged, so it can only hold too much."""
+    if len(main.merge_bases) != 1:
+        return [f"the head and the default branch have {len(main.merge_bases)} merge-bases, not one, so what main "
+                "changed since the head left it cannot be read"]
+    problems = []
+    if not main.clean:
+        problems.append("the head conflicts with the default branch; merge the default branch into the head")
+    held = verdict_inputs(plan, workflows)
+    added = {c.path for c in changes if c.status == "A"}
+    stale = sorted(p for p in main.touched
+                   if p.casefold() in held or p in added or judged_by(p, main.rules_dir))
+    if stale:
+        problems.append(f"the default branch changed {_listed(stale)} since the merge-base, which plan-scope's "
+                        "pass did not judge; merge the default branch into the head")
+    gone = sorted(main.deleted & {c.path for c in changes})
+    if gone:
+        problems.append(f"the default branch deleted or renamed away {_listed(gone)}, which the head changes; "
+                        "merge the default branch into the head")
+    return problems
+
+
+def _listed(paths: list[str]) -> str:
+    shown = ", ".join(planscope.shown(p) for p in paths[:SHOWN_PATHS])
+    return shown + (f" and {len(paths) - SHOWN_PATHS} more" if len(paths) > SHOWN_PATHS else "")
+
+
 def route_problems(who: Accounts, pr: Pr, last: dict[str, Review], checker_in_tree: bool, read: RouteRead,
                    own: bool = False) -> list[str]:
     """Why the approver's approval cannot carry this PR; empty when the approver route is open."""
@@ -421,6 +486,10 @@ def route_problems(who: Accounts, pr: Pr, last: dict[str, Review], checker_in_tr
     problems += [f"a commit status is named for required check {name}"
                  for name in sorted(required & set(facts.statuses))]
     problems += containment_problems(facts.containment)
+    if facts.freshness is None:
+        problems.append("the head's freshness against the default branch was not read")
+    else:
+        problems += facts.freshness
     admin = last.get(who.admin.casefold())
     if admin and admin.state == "DISMISSED":
         problems.append(f"{who.admin}'s last review was dismissed")
@@ -740,7 +809,6 @@ def read_containment(api: GhApi, repository: str, branch: str) -> Containment:
         raise MergeAuthorityError(str(err)) from err
     settings: set[str] = set()
     approvals = 0
-    strict = False
     checks: list[RequiredCheck] = []
     locked: set[str] = set()
     try:
@@ -752,9 +820,6 @@ def read_containment(api: GhApi, repository: str, branch: str) -> Containment:
             elif rule["type"] == "required_status_checks":
                 held = [RequiredCheck(c["context"], c.get("integration_id")) for c in params["required_status_checks"]]
                 checks += held
-                # Strict is per rule, so only the rule holding plan-scope makes a plan PR take the new base.
-                strict = strict or (params.get("strict_required_status_checks_policy") is True
-                                    and any(c.context == CHECK_NAME for c in held))
             elif rule["type"] == "file_path_restriction":
                 paths = params["restricted_file_paths"]
                 if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
@@ -764,7 +829,7 @@ def read_containment(api: GhApi, repository: str, branch: str) -> Containment:
         raise MergeAuthorityError(f"{what} returned unexpected JSON") from err
     if not all(isinstance(c.context, str) and (c.app_id is None or _app_id(c.app_id)) for c in checks):
         raise MergeAuthorityError(f"{what} returned unexpected JSON")
-    return Containment(frozenset(settings), approvals, strict, tuple(checks), frozenset(locked))
+    return Containment(frozenset(settings), approvals, tuple(checks), frozenset(locked))
 
 
 def read_status_contexts(api: GhApi, repository: str, head: str) -> tuple[str, ...]:
@@ -842,6 +907,33 @@ def read_route_facts(api: GhApi, pr: Pr, number: int, workflows: list[str] | Non
                       jobs=read_jobs(api, pr.repository, containment.checks, runs, expected, own),
                       workflows=expected,
                       gates=gates)
+
+
+def read_main(repo: str, base: str, head: str) -> MainRead:
+    """Git's answers for freshness_problems, over the base and head commits in repo."""
+    try:
+        bases = planscope.merge_bases(repo, base, head)
+        if len(bases) != 1:
+            return MainRead(bases)
+        lock = planscope.read_files(repo, base, [config.PATH])[config.PATH]
+        return MainRead(bases, planscope.merges_cleanly(repo, base, head),
+                        planscope.main_changes(repo, bases[0], base),
+                        planscope.main_changes(repo, bases[0], base, deleted=True), _rules_dir(lock))
+    except planscope.PlanScopeError as err:
+        raise MergeAuthorityError(str(err)) from err
+
+
+def _rules_dir(lock: str | None) -> str:
+    """The rules directory the base commit's lock names; the default where there is no lock. A lock that can't be
+    read is an error: the rules it would name can't be held."""
+    if lock is None:
+        return config.ProjectConfig.rules_dir
+    found, problems = config.parse(lock)
+    rules = found.rules_dir if found and not problems else None
+    rules = rules.strip().removeprefix("./").strip("/") if isinstance(rules, str) else ""
+    if not rules:
+        raise MergeAuthorityError(f"{config.PATH} at the base commit names no readable rules_dir")
+    return rules
 
 
 def _json(api: GhApi, path: str, what: str, query: dict | None = None):
@@ -997,18 +1089,30 @@ def check(repo: str, pr: Pr, number: int, base: str, who: Accounts, run: Run | N
     # Paths and plan-scope matter only on a plan head: a non-plan PR needs the admin whatever it changes, so
     # a diff git cannot read, or one past planscope.MAX_CHANGES, must not stop the admin's approval counting.
     is_plan = planscope.plan_of(pr.head_ref).ref is not planscope.Ref.NOT_PLAN
-    paths: list[str] = []
+    found: list[planscope.Change] = []
     checker_in_tree = False
     if is_plan:
         try:
-            paths = sorted({c.path for c in planscope.changes(repo, base, pr.head)})
+            found = planscope.changes(repo, base, pr.head)
             checker_in_tree = bool(planscope.present(repo, base, [CHECKER_MARK]))
         except planscope.PlanScopeError as err:
             raise MergeAuthorityError(str(err)) from err
+    paths = sorted({c.path for c in found})
     api = GhApi(run)
     reviews = read_reviews(api, pr.repository, number)
     runs = read_check_runs(api, pr.repository, pr.head) if is_plan else []
-    return decide(pr, who, paths, checker_in_tree, reviews, runs, lambda: read_route_facts(api, pr, number, workflows))
+
+    def route() -> RouteFacts:
+        return fresh(read_route_facts(api, pr, number, workflows), repo, base, pr, found)
+
+    return decide(pr, who, paths, checker_in_tree, reviews, runs, route)
+
+
+def fresh(facts: RouteFacts, repo: str, base: str, pr: Pr, found: list[planscope.Change]) -> RouteFacts:
+    """The route's facts with the head's freshness against base read in (ADR 0065)."""
+    main = read_main(repo, base, pr.head)
+    plan = planscope.plan_of(pr.head_ref).plan
+    return replace(facts, freshness=tuple(freshness_problems(main, plan, found, facts.workflows)))
 
 
 def check_action(repo: str, repository: str, number: int, base: str, head: str, action: str, who: Accounts,
@@ -1038,17 +1142,18 @@ def check_action(repo: str, repository: str, number: int, base: str, head: str, 
     if early:
         return ActionResult(REFUSE, tuple(early))
     try:
-        paths = sorted({c.path for c in planscope.changes(repo, base, head)})
+        found = planscope.changes(repo, base, head)
         checker_in_tree = bool(planscope.present(repo, base, [CHECKER_MARK]))
     except planscope.PlanScopeError as err:
         raise MergeAuthorityError(str(err)) from err
+    paths = sorted({c.path for c in found})
     rows = _review_rows(api, repository, number)
     reviews = _reviews(rows)
     runs = read_check_runs(api, repository, head)
 
     def route() -> RouteFacts:
-        return read_route_facts(api, pull.pr, number, workflows, own=action != APPROVE, gates=tuple(gates),
-                                author=pull.author)
+        return fresh(read_route_facts(api, pull.pr, number, workflows, own=action != APPROVE, gates=tuple(gates),
+                                      author=pull.author), repo, base, pull.pr, found)
 
     def comments() -> list[str]:
         return (thread_problems(who.agent, read_inline_comments(api, repository, number))
