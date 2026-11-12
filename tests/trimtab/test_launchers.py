@@ -25,7 +25,7 @@ def plant_decoy(root: Path) -> None:
     (pkg / "__init__.py").write_text("")
     (pkg / "__main__.py").write_text(say)
     (pkg / "adapters" / "__init__.py").write_text("")
-    for name in ("doctrine_drift", "pr_body_check", "pr_monitor"):
+    for name in ("doctrine_drift", "pr_body_check", "pr_monitor", "bash_writes"):
         (pkg / "adapters" / f"{name}.py").write_text(say)
 
 
@@ -67,6 +67,18 @@ class Launchers(unittest.TestCase):
                               "cwd": str(self.cwd)})
         env = {**os.environ, "CLAUDE_CONFIG_DIR": str(self.cwd / "config")}
         out = subprocess.run([str(CHECKOUT / "hooks" / "pr-monitor-record.sh")], cwd=self.cwd, input=payload,
+                             env=env, capture_output=True, text=True, timeout=60)
+        self.assertNotIn(DECOY, out.stdout + out.stderr)
+        self.assertEqual(out.returncode, 0, out.stderr)
+
+    def test_the_bash_write_detector_runs_the_base_adapter_from_a_directory_with_a_decoy(self):
+        # Outside a repository the real adapter records an empty snapshot and exits 0; the decoy exits 3.
+        payload = json.dumps({"tool_name": "Bash", "session_id": "s1", "tool_use_id": "toolu_1",
+                              "tool_input": {"command": "true"}, "cwd": str(self.cwd)})
+        env = {k: v for k, v in os.environ.items() if k != "HOOK_ALLOW_HARNESS"}
+        (self.cwd / "config").mkdir(mode=0o700)  # Claude Code's config directory always exists
+        env["CLAUDE_CONFIG_DIR"] = str(self.cwd / "config")
+        out = subprocess.run([str(CHECKOUT / "hooks" / "bash-writes.sh"), "pre"], cwd=self.cwd, input=payload,
                              env=env, capture_output=True, text=True, timeout=60)
         self.assertNotIn(DECOY, out.stdout + out.stderr)
         self.assertEqual(out.returncode, 0, out.stderr)

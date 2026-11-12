@@ -39,8 +39,6 @@ from dataclasses import dataclass
 from enum import Enum
 from fnmatch import fnmatchcase
 
-from trimtab.capture.sources import SourceError, git_bytes
-
 MAX_CHANGES = 5000  # bounded: a diff longer than this is refused, not judged in part (ENG-6.2)
 ALLOWLIST = ".claude/write-allowlist"
 # Spelt in two pieces so the base's citation test, which refuses any plans
@@ -241,6 +239,9 @@ def _git(repo: str, *args: str, stdin: bytes | None = None) -> bytes:
            and k != "GIT_CONFIG_COUNT"}
     env.update(GIT_NO_REPLACE_OBJECTS="1", GIT_LITERAL_PATHSPECS="1")
     pins = [arg for key, value in GIT_PINNED for arg in ("-c", f"{key}={value}")]
+    # Imported here, not at the top: capture.sources pulls in PyYAML, and the Bash write detector
+    # (trimtab.adapters.bash_writes, ADR 0065) imports this module's pure rules under `python3 -S`.
+    from trimtab.capture.sources import SourceError, git_bytes
     try:
         return git_bytes(repo, *pins, *args, env=env, stdin=stdin, name=args[0])
     except SourceError as err:

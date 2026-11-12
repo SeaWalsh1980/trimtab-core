@@ -1235,8 +1235,10 @@ t guard-paths.sh 2 "allowlist: a symlinked .claude directory fails closed (Edit)
 DL4="$CPTMP/dl-linked-noallow"; mkdir -p "$DL4/.git" "$DL4/src" "$CPTMP/elsewhere-empty"
 ln -s "$CPTMP/elsewhere-empty" "$DL4/.claude"
 t guard-paths.sh 2 "allowlist: a symlinked .claude with no allowlist also fails closed" "$(e Edit "$DL4/src/a.py")"
-# The allowlist never confines Bash (ADR 0039); CODEOWNERS covers shell
-# writes. Pinned so a change to that is seen.
+# guard-paths never judges Bash against the allowlist (ADR 0039); the
+# bash-writes detector judges what a shell call changed, after it ran
+# (ADR 0065), and CODEOWNERS and plan-scope gate the merge. Pinned so a
+# change to guard-paths' part is seen.
 t guard-paths.sh 0 "allowlist: a shell write is not judged against it" "$(bsh 'sed -i s/a/b/ src/a.py')" "$DL2"
 # Accepted residual: a shell command reaching a protected file through a hard
 # link is judged at its spelt path; the link-count check runs for Edit and
@@ -3564,6 +3566,35 @@ PY
 fails=$((fails + $?))
 [[ -x "$REPO/hooks/pr-monitor-record.sh" ]]
 pm_report $? state "the registered recorder ships executable"
+
+echo "== bash-writes registration (settings.base.json) =="
+# The Bash write detector (ADR 0065) needs three registrations on Bash alone:
+# `pre` on PreToolUse to snapshot, and `post` on PostToolUse and on
+# PostToolUseFailure, since a command that exits non-zero raises the second
+# and would otherwise go unjudged. Checked as the file ships.
+python3 - "$REPO/settings.base.json" <<'PY'
+import json, re, sys
+events = json.load(open(sys.argv[1]))["hooks"]
+base = '"$HOME/.claude/hooks/bash-writes.sh"'
+found = [(event, g.get("matcher"), h) for event, groups in events.items() for g in groups
+         for h in g["hooks"] if str(h.get("command", "")).startswith(base)]
+def case(ok, label):
+    print("%s  %-14s %s" % ("PASS" if ok else "FAIL", "registration", label))
+    return 0 if ok else 1
+want = {("PreToolUse", base + " pre"), ("PostToolUse", base + " post"), ("PostToolUseFailure", base + " post")}
+got = {(event, h.get("command")) for event, _, h in found}
+fails = case(len(found) == 3 and got == want,
+             "the detector is registered pre on PreToolUse and post on both post events")
+for event, matcher, hook in found:
+    fails += case(hook.get("timeout") == 10, "%s: the 10 s timeout" % event)
+    m = re.compile(matcher or "")
+    fails += case(bool(m.fullmatch("Bash")) and not any(m.fullmatch(t) for t in ("Edit", "Write", "Read", "BashX")),
+                  "%s: its matcher catches Bash and nothing else" % event)
+sys.exit(fails)
+PY
+fails=$((fails + $?))
+[[ -x "$REPO/hooks/bash-writes.sh" ]]
+pm_report $? state "the registered detector ships executable"
 
 echo "== guard-paths registration (settings.base.json) =="
 # The guard enforces on every tool but Read, but only on the tools its matcher

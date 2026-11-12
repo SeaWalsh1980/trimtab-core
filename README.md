@@ -30,6 +30,10 @@ The same pull-request writes guard-github refuses in a shell are denied as
 MCP calls, on any server, before any pass can answer: a merge, a PR opened
 without `draft` set to true, an approving review, and resolving a review
 thread, by name or by a review tool's method (ADR 0038).
+A Bash write detector (`hooks/bash-writes.sh`) snapshots the repository before
+each Bash call and, after it, judges every path the call changed against the
+write allowlist and an autonomous run's plan scope, as the guard judges an
+Edit or a Write; it reports, since the command has already run (ADR 0065).
 And it runs a **loop** over a body of engineering rules: every rule is a
 *harness item* with a stable ID, pull requests cite the items they applied
 and report friction against them, and a retrospective tallies that evidence
