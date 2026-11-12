@@ -883,9 +883,17 @@ class HookPathReset(unittest.TestCase):
             self.local_bin.rmdir()
         plant(self.local_bin, marker, self.names if names is None else names)
         payload, args = hook_input(hook, self.root)
-        subprocess.run([str(hook), *args], input=payload, capture_output=True, text=True,
-                       cwd=self.root, env=self.env, timeout=30)
+        self.last_run = subprocess.run([str(hook), *args], input=payload, capture_output=True, text=True,
+                                       cwd=self.root, env=self.env, timeout=30)
         return marker.read_text().split() if marker.exists() else []
+
+    def what_happened(self, hook):
+        """Why a hook ran no planted tool, for a failure message: its exit, output, and the stubs it could have run."""
+        done = self.last_run
+        planted = sorted(p.name for p in self.local_bin.iterdir()) if self.local_bin.exists() else []
+        return (f"{hook.name}: exit {done.returncode}, stdout {done.stdout[:300]!r}, stderr {done.stderr[:300]!r}; "
+                f"PATH {self.env['PATH']}; {len(planted)} stubs planted, "
+                f"env/jq/git/python3 among them: {[n for n in ('env', 'jq', 'git', 'python3') if n in planted]}")
 
     def test_every_shell_hook_resets_path_before_its_first_command(self):
         faults = {p.name: first_statement(p) for p in SHELL_HOOKS}
@@ -908,7 +916,8 @@ class HookPathReset(unittest.TestCase):
         past_cat = [n for n in self.names if n != "cat"]
         for hook in SHELL_HOOKS:
             with self.subTest(hook=hook.name):
-                self.assertNotEqual(self.ran_planted(copies / hook.name, self.root / f"{hook.name}.ctl", past_cat), [])
+                ran = self.ran_planted(copies / hook.name, self.root / f"{hook.name}.ctl", past_cat)
+                self.assertNotEqual(ran, [], self.what_happened(hook))
 
     def test_the_planted_tools_include_what_the_guards_start(self):
         self.assertLessEqual({"python3", "jq", "git", "cat", "timeout", "sha256sum"}, set(self.names))

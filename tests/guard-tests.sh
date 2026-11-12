@@ -2673,7 +2673,10 @@ SC_ROOT=$(mktemp -d "$CPTMP/pkgroot.XXXXXX")
 cp -RL "$HOOKS" "$SC_ROOT/hooks"
 cp -RL "$HOOKS/../trimtab" "$SC_ROOT/trimtab"
 SC_BASE=$(mktemp -d "$CPTMP/usersite.XXXXXX")
-SC_SITE=$(PYTHONUSERBASE="$SC_BASE" python3 -c 'import site; print(site.getusersitepackages())')
+# The hooks run the python3 in /usr/bin:/bin (ADR 0065), which need not be the
+# ambient one (CI puts setup-python's first on PATH). User site is named by the
+# interpreter's version, so the plant goes where the hooks' interpreter looks.
+SC_SITE=$(PATH=/usr/bin:/bin PYTHONUSERBASE="$SC_BASE" python3 -c 'import site; print(site.getusersitepackages())')
 mkdir -p "$SC_SITE"
 SC_MARK="$SC_BASE/ran"
 # Each plant leaves the mark when it is loaded. With SC_FORGE set it also
