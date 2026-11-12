@@ -675,9 +675,11 @@ check_path "$file" "file access"
 #    progress or issue-register folder. The plan is named by the branch,
 #    `plan/<plan>/item-NN-partK`; any other branch, a plan or declaration
 #    that cannot be read, or a repository with no allowlist refuses every
-#    write. A run is always narrower than an interactive session. Bash is not confined
-#    by it: any program can write anywhere, so shell writes outside the list
-#    are left to CODEOWNERS at merge.
+#    write. A run is always narrower than an interactive session. This guard
+#    does not confine Bash: any program can write anywhere, so it does not
+#    judge a shell write against the list. hooks/bash-writes.sh reports a
+#    shell write after it ran (ADR 0066); CODEOWNERS, the admin merge and the
+#    plan-scope check gate the merge.
 #
 # The operator lifts both layers for a session that develops the harness by
 # exporting HOOK_ALLOW_HARNESS=1 before launching claude. The other checks in
