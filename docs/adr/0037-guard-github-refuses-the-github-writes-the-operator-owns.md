@@ -229,3 +229,4 @@ Each is a reason the server stays the boundary.
 ## Amendments
 
 - [ADR 0055](0055-guard-github-refuses-deleting-runs-and-dispatching-workflows.md) adds deleting a workflow run or its logs, and dispatching a workflow, to what this guard refuses.
+- [ADR 0063](0063-the-plan-run-enforcement-gate.md) adds, for plan runs, the writes to a `plan/*` ref and the closing of a plan PR (E12, E14–E17, E19), and reads the push command. It also changes "Not refused here: merging a pull request": a merge (`gh pr merge`, `PUT …/pulls/<n>/merge`) now has its base read, because a merge into a `plan/*` base writes that ref, and one whose base cannot be read refuses. Whether a merge is allowed stays the merge gate's.

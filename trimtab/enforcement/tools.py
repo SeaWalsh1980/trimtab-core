@@ -220,6 +220,14 @@ class Git:
                 raise ToolError(f"{repo.name} is configured as a partial clone, which fetches what it lacks")
         self._checked.add(key)
 
+    def is_repository(self, repo: Path) -> bool:
+        """Whether `repo` is inside a git repository at all, asked without the safety checks `check` adds."""
+        try:
+            self._raw(repo, "rev-parse", "--git-dir")
+        except ToolError:
+            return False
+        return True
+
     def config_get(self, repo: Path, key: str) -> str:
         """One config value, read without the object checks: it names nothing the gate then trusts."""
         return self._raw(repo, "config", "--get", key).decode("utf-8", "replace").strip()

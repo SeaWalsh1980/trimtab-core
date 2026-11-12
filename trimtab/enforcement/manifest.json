@@ -49,7 +49,8 @@
         "test_guard_github_plan_bypasses.MergeIntoAPlanBase.test_gh_pr_merge_by_number",
         "test_guard_github_plan_bypasses.MergeIntoAPlanBase.test_rest_merge",
         "test_guard_github_plan_bypasses.RouteOrder.test_a_contents_path_that_looks_like_a_ref_route_is_still_contents",
-        "test_guard_github_plan_round2.GraphqlLookingRoute.test_a_rest_route_ending_in_graphql_is_still_rest"
+        "test_guard_github_plan_round2.GraphqlLookingRoute.test_a_rest_route_ending_in_graphql_is_still_rest",
+        "test_guard_github_plan_round3.NormalisedBranchFields.test_a_prefixed_or_padded_branch_in_a_body_is_still_a_plan_branch"
       ],
       "decision": {
         "function": "trimtab.planrows:check_e14",
@@ -72,7 +73,8 @@
         "test_guard_github_plan.GitPush.test_e15_force_refuses_in_a_run",
         "test_guard_github_plan.Rest.test_a_ref_update_forces",
         "test_guard_github_plan_bypasses.AllWithForce.test_force_and_delete_carry_into_each_branch",
-        "test_guard_github_plan_bypasses.GitConfigSteering.test_a_mirror_remote_refuses_any_push"
+        "test_guard_github_plan_bypasses.GitConfigSteering.test_a_mirror_remote_refuses_any_push",
+        "test_guard_github_plan_round3.GitBooleans.test_a_mirror_set_to_two_refuses"
       ],
       "decision": {
         "function": "trimtab.planrows:check_e15",
@@ -108,7 +110,11 @@
         "test_guard_github_plan_round2.GraphqlLookingRoute.test_a_bare_graphql_path_is_still_graphql",
         "test_guard_github_plan_round2.GraphqlLookingRoute.test_a_rest_route_ending_in_graphql_is_still_rest",
         "test_guard_github_plan_round2.GraphqlMerges.test_merging_a_pull_request_by_id_refuses",
-        "test_guard_github_plan_round2.TrackedBranchSelector.test_gh_without_a_selector_follows_the_branch_upstream"
+        "test_guard_github_plan_round2.TrackedBranchSelector.test_gh_without_a_selector_follows_the_branch_upstream",
+        "test_guard_github_plan_round3.GhSelectors.test_a_url_carries_its_repository_so_a_directory_change_does_not_matter",
+        "test_guard_github_plan_round3.GhSelectors.test_the_host_of_a_url_is_matched_without_case",
+        "test_guard_github_plan_round3.GraphqlState.test_a_state_argument_refuses",
+        "test_guard_github_plan_round3.GraphqlState.test_a_variable_named_state_refuses"
       ],
       "decision": {
         "function": "trimtab.planrows:check_e16",
@@ -148,7 +154,8 @@
         "test_planrows.SecretScan.test_a_failed_scan_refuses_a_push_touching_the_record_and_more",
         "test_planrows.SecretScan.test_a_failed_scan_with_no_change_refuses",
         "test_planrows.SecretScan.test_fail_and_unreadable_refuse_an_ordinary_push",
-        "test_guard_github_plan.GitPush.test_e19_a_failed_scan_refuses_a_push"
+        "test_guard_github_plan.GitPush.test_e19_a_failed_scan_refuses_a_push",
+        "test_guard_github_plan_round3.SecretScanThatNeverRuns.test_a_branch_with_runs_but_none_of_the_scan_workflow_is_unreadable"
       ],
       "decision": {
         "function": "trimtab.planrows:check_e19",

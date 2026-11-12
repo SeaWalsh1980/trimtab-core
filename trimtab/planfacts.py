@@ -36,7 +36,7 @@ ZERO = "0" * 40
 ORIGIN = re.compile(r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
                     r"(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?")
 FAILED = {"failure", "timed_out", "cancelled"}
-EVENT_LIMIT = 500  # branch-activity events one count reads, every page; past it, an error
+EVENT_LIMIT = 100  # branch-activity events one count reads (REST's largest page); a full page is an error
 RUN_LIMIT = 500  # workflow runs on one branch, every page
 FILE_LIMIT = 2000  # changed paths one diff reads
 MERGEABLE_WAITS = 3  # GitHub computes `mergeable` lazily: a null is asked again
@@ -88,7 +88,7 @@ class GitHubFacts(Facts):
                 raise
             raise FactsError(f"{what}: not found") from err
         except SourceError as err:
-            raise FactsError(str(err)) from err
+            raise FactsError(f"{what} could not be read") from err
 
     def open_pr(self, branch: str) -> PrState | None:
         if branch not in self._pr:
@@ -133,7 +133,7 @@ class GitHubFacts(Facts):
             raise FactsError("gh api ref returned unexpected JSON")
         return sha
 
-    def secret_scan(self, head: str) -> str:
+    def secret_scan(self, head: str, branch: str) -> str:
         scan = self._instance.secret_scan if self._instance else None
         if scan is None:
             raise FactsError("the instance names no secret_scan job, so E19 cannot be shown")
@@ -143,8 +143,13 @@ class GitHubFacts(Facts):
             jobs = [j for r in runs for j in self._reader.jobs(self.repo, r.id)
                     if j.name == scan.job and j.head_sha == head]
         except (ActionsError, SourceError) as err:
-            raise FactsError(str(err)) from err
-        return scan_state(bool(runs), jobs)
+            raise FactsError("the secret-scan job records could not be read") from err
+        state = scan_state(bool(runs), jobs)
+        if state == "pending" and not runs:
+            seen = self._rows(branch)  # runs of other workflows but none of the scan: it never triggers here
+            if seen and not any(r["path"] == scan.workflow for r in seen):
+                return "unreadable"
+        return state
 
     def _rows(self, branch: str) -> list[dict]:
         if branch not in self._run_rows:
@@ -154,7 +159,7 @@ class GitHubFacts(Facts):
                 rows = actions.rows(read, f"repos/{self.repo}/actions/runs", "workflow_runs",
                                     "gh api actions runs", RUN_LIMIT, {"branch": branch})
             except (ActionsError, FactsError) as err:
-                raise FactsError(str(err)) from err
+                raise FactsError("the branch's workflow runs could not be read") from err
             for row in rows:
                 if (not isinstance(row, dict) or not isinstance(row.get("head_sha"), str)
                         or not isinstance(row.get("path"), str)
@@ -177,26 +182,23 @@ class GitHubFacts(Facts):
         if pr is None:
             return ()
         out: list[Push] = []
-        page, seen = 1, 0
-        while True:
-            rows = self._json(f"repos/{self.repo}/activity", "gh api activity",
-                              {"ref": f"refs/heads/{branch}", "per_page": 100, "page": page})
-            if not isinstance(rows, list):
+        # The endpoint pages by a cursor in the Link header (`after=`), which `gh api` does not hand us, and it
+        # ignores `page=`. So one page is read, and a full one is refused rather than guessed past.
+        rows = self._json(f"repos/{self.repo}/activity", "gh api activity",
+                          {"ref": f"refs/heads/{branch}", "per_page": EVENT_LIMIT})
+        if not isinstance(rows, list):
+            raise FactsError("gh api activity returned unexpected JSON")
+        if len(rows) >= EVENT_LIMIT:
+            raise FactsError(f"the branch's activity holds {EVENT_LIMIT} events or more")
+        for row in rows:
+            before, after, stamp = (row.get(k) if isinstance(row, dict) else None
+                                    for k in ("before", "after", "timestamp"))
+            if not all(isinstance(v, str) for v in (before, after, stamp)):
                 raise FactsError("gh api activity returned unexpected JSON")
-            seen += len(rows)
-            if seen > EVENT_LIMIT:
-                raise FactsError(f"the branch's activity holds more than {EVENT_LIMIT} events")
-            for row in rows:
-                before, after, stamp = (row.get(k) if isinstance(row, dict) else None
-                                        for k in ("before", "after", "timestamp"))
-                if not all(isinstance(v, str) for v in (before, after, stamp)):
-                    raise FactsError("gh api activity returned unexpected JSON")
-                real = SHA.fullmatch(before) and SHA.fullmatch(after) and ZERO not in (before, after)
-                if real and stamp >= pr.created:  # not a creation or a deletion
-                    out.append(Push(before, after))
-            if len(rows) < 100:
-                return out
-            page += 1
+            real = SHA.fullmatch(before) and SHA.fullmatch(after) and ZERO not in (before, after)
+            if real and stamp >= pr.created:  # not a creation or a deletion
+                out.append(Push(before, after))
+        return out
 
     def conflicted(self, number: int) -> bool:
         for attempt in range(MERGEABLE_WAITS):
@@ -220,7 +222,7 @@ class GitHubFacts(Facts):
         except ToolError as err:
             raise FactsError(str(err)) from err
         if not SHA.fullmatch(sha):
-            raise FactsError(f"{name} is not a commit")
+            raise FactsError("a push source is not a commit")
         return sha
 
     def _diff(self, old: str, new: str) -> tuple[Change, ...]:
@@ -300,6 +302,7 @@ def _changes(status: bytes, patch: bytes) -> tuple[Change, ...]:
         states[name] = "M" if letter == "T" else letter
         if len(states) > FILE_LIMIT:
             raise FactsError(f"the push changes more than {FILE_LIMIT} paths")
+    binary: set[str] = set()
     added: dict[str, list[str]] = {n: [] for n in states}
     removed: dict[str, int] = dict.fromkeys(states, 0)
     current: str | None = None
@@ -313,9 +316,11 @@ def _changes(status: bytes, patch: bytes) -> tuple[Change, ...]:
         elif current is None:
             continue
         elif header:
+            if raw.startswith(("Binary files", "GIT binary patch")):
+                binary.add(current)
             header = not raw.startswith("@@")
         elif raw.startswith("+"):
             added[current].append(raw[1:])
         elif raw.startswith("-"):
             removed[current] += 1
-    return tuple(Change(n, states[n], tuple(added[n]), removed[n]) for n in sorted(states))
+    return tuple(Change(n, states[n], tuple(added[n]), removed[n], n in binary) for n in sorted(states))

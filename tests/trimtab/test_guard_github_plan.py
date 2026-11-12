@@ -84,7 +84,7 @@ class GitPush(Cases):
                     f"git push --force-if-includes origin {BRANCH}", f"git push origin +{BRANCH}",
                     f"git push origin +HEAD:{BRANCH}", "git push --mirror origin", "git push -f"):
             with self.subTest(cmd):
-                self.refused(cmd, "E15" if "mirror" not in cmd else "E15")
+                self.refused(cmd, "E15")
 
     def test_e16_delete_refuses_in_any_mode(self):
         for run in (True, False):

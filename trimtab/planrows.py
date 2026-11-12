@@ -89,6 +89,7 @@ class Change:
     status: str  # "A", "M" or "D"
     added: tuple[str, ...] = ()
     removed: int = 0
+    binary: bool = False  # git shows no lines for it, so its content cannot be judged
 
 
 class Facts:
@@ -96,7 +97,7 @@ class Facts:
 
     def open_pr(self, branch: str) -> PrState | None: raise NotImplementedError
     def branch_head(self, branch: str) -> str | None: raise NotImplementedError
-    def secret_scan(self, head: str) -> str: raise NotImplementedError  # pass, pending, fail or unreadable
+    def secret_scan(self, head: str, branch: str) -> str: raise NotImplementedError  # pass/pending/fail/unreadable
     def changes(self, branch: str, source: str | None, head: str) -> Sequence[Change]: raise NotImplementedError
     def pushes(self, branch: str) -> Sequence[Push]: raise NotImplementedError
     def failing_heads(self, branch: str) -> set[str]: raise NotImplementedError
@@ -125,9 +126,20 @@ _LONG = {
 _SHORT_FLAGS = set("nvqu46")
 
 
+def normalise(value) -> str | None:
+    """A branch name from an API field: trimmed, without a leading `refs/heads/` or `heads/`; None if not text."""
+    if not isinstance(value, str):
+        return None
+    name = value.strip()
+    for prefix in ("refs/heads/", "heads/"):
+        if name.casefold().startswith(prefix):
+            return name[len(prefix):]
+    return name
+
+
 def plan_branch(name: str) -> bool:
     """A branch under `plan/`. Case-folded: a case-insensitive filesystem or remote must not be a way round."""
-    return name.casefold().startswith(PLAN_PREFIX)
+    return (normalise(name) or "").casefold().startswith(PLAN_PREFIX)
 
 
 def _long_name(name: str) -> str | None:
@@ -166,7 +178,7 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
             name, eq, value = text[2:].partition("=")
             key = _long_name(name)
             if key is None:
-                return PushRead(unreadable=f"an option this guard does not read ({text.split('=')[0]})")
+                return PushRead(unreadable="an option this guard does not read")
             kind = _LONG[key]
             if kind in ("valued", "repo") and not eq:
                 if i >= len(args):
@@ -203,7 +215,7 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
                     i += 1
                 break
             else:
-                return PushRead(unreadable=f"an option this guard does not read (-{ch})")
+                return PushRead(unreadable="a short option this guard does not read")
     refspecs = positional if has_repo else positional[1:]
     remote = repo_value if has_repo else (positional[0][0] if positional else None)
     # A first word the shell builds may be an option (`$F origin plan/x`), which would hide a force flag.
@@ -279,7 +291,7 @@ def progress_only(changes: Sequence[Change], branch: str) -> bool:
     if m is None or not changes:
         return False
     record = _record_path(m)
-    return all(c.path == record and c.status in ("A", "M") for c in changes)
+    return all(c.path == record and c.status in ("A", "M") and not c.binary for c in changes)
 
 
 def register_shape(changes: Sequence[Change], branch: str) -> bool:
@@ -292,7 +304,7 @@ def register_shape(changes: Sequence[Change], branch: str) -> bool:
     added_files = {c.path for c in changes if c.status == "A" and c.path.startswith(folder)}
     for c in changes:
         if c.path == record:
-            if c.status not in ("A", "M") or c.removed:
+            if c.status not in ("A", "M") or c.removed or c.binary:
                 return False
             for line in c.added:
                 link = LINK_LINE.fullmatch(line.strip())
@@ -409,7 +421,7 @@ def _judge_run_write(write: Write, facts: Facts) -> None:
         return register_shape(changes(), branch)
 
     check_e17(pr, register)
-    check_e19(facts.secret_scan(head), lambda: progress_only(changes(), branch))
+    check_e19(facts.secret_scan(head, branch), lambda: progress_only(changes(), branch))
     check_e12(branch, head, facts, pr, register)
 
 

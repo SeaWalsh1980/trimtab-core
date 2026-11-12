@@ -17,7 +17,12 @@ Refused, in every spelling read below:
   and `gh repo sync --force`;
 - deleting a workflow run or its logs, and dispatching a workflow, by `gh run delete`, `gh workflow run`
   or the API (ADR 0055);
-- a write to a github.com host through `curl` or `wget`, which this guard cannot read.
+- a write to a github.com host through `curl` or `wget`, which this guard cannot read;
+- for plan runs (docs/adr/0063-the-plan-run-enforcement-gate.md §5): a write to a `plan/*` ref
+  outside a plan run, a forced one, a delete, a push to a ready PR, a push while the secret scan
+  fails, and a fourth CI-fix round, in the spellings of `git push`, the REST ref, contents, merge
+  and rename routes, `gh pr close|merge|update-branch` and GraphQL. The rows are in
+  trimtab/planrows.py, the facts in trimtab/planfacts.py, the wiring in trimtab/planguard.py.
 
 How it reads the command. Two passes, and either may refuse:
 
@@ -799,7 +804,7 @@ def check_graphql(req: Request, ctx: Ctx) -> None:
     variables = variables if variables is not None else {}
     unknown = _has_unknown(variables)
     text = "\n".join([query, *_strings(variables)]) if not unknown else query
-    check_plan_graphql(query, text, unknown, ctx)
+    check_plan_graphql(query, text, unknown, ctx, variables)
     if _RESOLVE.search(query):
         raise Refused("resolving a review thread is the code owner's, never the session's")
     if _REVIEW_MUTATION.search(query):
@@ -902,14 +907,15 @@ PR_MERGE_BOOL = {"-d", "--delete-branch", "-m", "--merge", "-r", "--rebase", "-s
                  "--auto", "--disable-auto"}
 PR_UPDATE_VALUED, PR_UPDATE_BOOL = {"-R", "--repo"}, {"--rebase"}
 ISSUE_CLOSE_VALUED = {"-c", "--comment", "-r", "--reason", "-R", "--repo"}
-_PR_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([0-9]+)(?:[/?#].*)?")
+_PR_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([0-9]+)(?:[/?#].*)?", re.I)
+GH_ENV_REPO = re.compile(r"(?<![A-Za-z0-9_])GH_(?:REPO|HOST)=")
 _REPO_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _BRANCH_WRITE_MUTATION = re.compile(r"(?<![A-Za-z0-9_])(?:createRef|createCommitOnBranch|mergeBranch)(?![A-Za-z0-9_])",
                                     re.I)
 # A mutation that writes a plan branch's head or closes its PR by an ID this guard cannot read.
 _PR_ID_MUTATION = re.compile(r"(?<![A-Za-z0-9_])(?:closePullRequest|updatePullRequestBranch|mergePullRequest|enablePullRequestAutoMerge)(?![A-Za-z0-9_])", re.I)
 _UPDATE_PR_MUTATION = re.compile(r"(?<![A-Za-z0-9_])updatePullRequest(?![A-Za-z0-9_])", re.I)
-_STATE_ARG = re.compile(r"(?<![A-Za-z0-9_])state(?![A-Za-z0-9_])", re.I)
+_STATE_ARG = re.compile(r"(?<![A-Za-z0-9_])state\s*:|\$state(?![A-Za-z0-9_])", re.I)
 # The routes check_plan_api reads: a ref, contents, a merge, a rename, a PR's branch update or merge, a PR close.
 _PLAN_ROUTE = re.compile(r"(?:contents(?:/|$)|git/refs|merges$|branches/.+/rename$|pulls/[^/]+/(?:update-branch|merge)$"
                          r"|(?:pulls|issues)/[^/]+$)", re.I)
@@ -992,6 +998,11 @@ def _selected(group: list[Word], tail: list[Word], valued: set[str], boolean: se
     repo = None
     pairs = [(group[k].text, group[k + 1]) for k in range(len(group) - 1) if group[k].text in GH_GLOBAL_VALUED]
     pairs += [(o.name, o.value) for o in opts if o.name in GH_GLOBAL_VALUED and o.value is not None]
+    pairs += [("-R", Word(w.text.partition("=")[2] if w.text.startswith("--repo=") else w.text[2:], w.dynamic))
+              for w in group if w.text.startswith("--repo=") or (w.text.startswith("-R") and len(w.text) > 2)]
+    if GH_ENV_REPO.search(ctx.command):
+        ctx.unknown("the repository is chosen by GH_REPO or GH_HOST")
+        return None, opts, None
     for _, value in pairs:
         if value.dynamic or not _REPO_NAME.fullmatch(value.text):
             ctx.unknown("the repository option is a shell expansion or not owner/name")
@@ -1007,6 +1018,13 @@ def _selected(group: list[Word], tail: list[Word], valued: set[str], boolean: se
         ctx.unknown("the PR is selected by a shell expansion")
         return None, opts, None
     text = sel.text
+    if repo is None and not ctx.cwd_known and not _PR_URL.fullmatch(text):
+        ctx.unknown("the repository is the one in a directory the guard cannot tell")
+        return None, opts, None
+    if "://" in text and not _PR_URL.fullmatch(text) or "/pull/" in text and not _PR_URL.fullmatch(text) \
+            or "/issues/" in text:
+        ctx.unknown("a PR selector that looks like a URL this guard cannot read")
+        return None, opts, None
     if (m := _PR_URL.fullmatch(text)):
         return (_plan_head(plan, int(m.group(2)), m.group(1)) if want_head else None), opts, \
             (int(m.group(2)), m.group(1))
@@ -1065,8 +1083,8 @@ def _ref_write(plan: planguard.PlanSupport, branch: str, source=None, force=Fals
     if repo is not None:
         ours = _plan_ref(plan.facts.repository)
         if ours.casefold() != repo.casefold():
-            raise planrows.Refusal(f"a plan/* write to {repo}, while the facts are read for {ours}, cannot be "
-                                   "judged and is refused (ADR 0063 §5)")
+            raise planrows.Refusal(f"a plan/* write to another repository than {ours}, which the facts are read "
+                                   "for, cannot be judged and is refused (ADR 0063 §5)")
     planrows.judge_write(write, plan_run=plan.plan_run, facts=plan.facts)
 
 
@@ -1104,8 +1122,8 @@ def check_plan_api(req: Request, ctx: Ctx) -> None:
         ctx.unknown("a write to a ref, contents, merge or PR route with a query string, which may carry its fields")
         return
     if re.fullmatch(r"contents(?:/.*)?", rest, re.I):
-        branch = _get(body_of(req, ctx), "branch", ctx, "the contents write's branch is unreadable")
-        if isinstance(branch, str) and planrows.plan_branch(branch):
+        branch = planrows.normalise(_get(body_of(req, ctx), "branch", ctx, "the contents write's branch is unreadable"))
+        if branch and planrows.plan_branch(branch):
             _ref_write(plan, branch, repo=repo)
     elif (m := re.fullmatch(r"git/refs/heads/(.+)", rest, re.I)):
         branch = m.group(1)
@@ -1120,18 +1138,17 @@ def check_plan_api(req: Request, ctx: Ctx) -> None:
         _ref_write(plan, branch, sha, _forces(force) and not isinstance(force, Unknown), repo=repo)
     elif rest.lower() == "git/refs":
         body = body_of(req, ctx)
-        ref = _get(body, "ref", ctx, "the new ref's name is unreadable")
-        if isinstance(ref, str) and planrows.plan_branch(ref.removeprefix("refs/heads/")):
-            _ref_write(plan, ref.removeprefix("refs/heads/"), _get(body, "sha", ctx, "the sha is unreadable"),
-                       repo=repo)
+        ref = planrows.normalise(_get(body, "ref", ctx, "the new ref's name is unreadable"))
+        if ref and planrows.plan_branch(ref):
+            _ref_write(plan, ref, _get(body, "sha", ctx, "the sha is unreadable"), repo=repo)
     elif rest.lower() == "merges":
-        base = _get(body_of(req, ctx), "base", ctx, "the merge's base is unreadable")
-        if isinstance(base, str) and planrows.plan_branch(base):
+        base = planrows.normalise(_get(body_of(req, ctx), "base", ctx, "the merge's base is unreadable"))
+        if base and planrows.plan_branch(base):
             _ref_write(plan, base, repo=repo)
     elif (m := re.fullmatch(r"branches/(.+)/rename", rest, re.I)):
         planrows.check_e16(m.group(1))  # a rename deletes the old name
-        name = _get(body_of(req, ctx), "new_name", ctx, "the new branch name is unreadable")
-        if isinstance(name, str) and planrows.plan_branch(name):
+        name = planrows.normalise(_get(body_of(req, ctx), "new_name", ctx, "the new branch name is unreadable"))
+        if name and planrows.plan_branch(name):
             _ref_write(plan, name, repo=repo)
     elif (m := re.fullmatch(r"pulls/([0-9]+)/update-branch", rest, re.I)):
         head = _plan_head(plan, int(m.group(1)), repo)
@@ -1147,13 +1164,21 @@ def check_plan_api(req: Request, ctx: Ctx) -> None:
             planrows.judge_close(_plan_head(plan, int(m.group(1)), repo))
 
 
-def check_plan_graphql(query: str, text: str, unknown: bool, ctx: Ctx) -> None:
+def _has_key(value, key: str) -> bool:
+    if isinstance(value, dict):
+        return key in value or any(_has_key(v, key) for v in value.values())
+    return isinstance(value, list) and any(_has_key(v, key) for v in value)
+
+
+def check_plan_graphql(query: str, text: str, unknown: bool, ctx: Ctx, variables=None) -> None:
     if ctx.plan is None:
         return
     if _PR_ID_MUTATION.search(query):  # the PR is named by an ID this guard cannot read
         planrows.check_e16(planrows.PLAN_PREFIX)
-    if _UPDATE_PR_MUTATION.search(query) and (unknown or _STATE_ARG.search(text)):
-        planrows.check_e16(planrows.PLAN_PREFIX)  # a state argument can close the PR
+    if _UPDATE_PR_MUTATION.search(query):
+        skeleton = _skeleton(query)  # strings and comments removed: a word in a PR body is not an argument
+        if unknown or _STATE_ARG.search(skeleton) or _has_key(variables, "state"):
+            planrows.check_e16(planrows.PLAN_PREFIX)  # a state argument can close the PR
     if _BRANCH_WRITE_MUTATION.search(query):
         if unknown:
             ctx.unknown("the ref or commit mutation's variables are unreadable")

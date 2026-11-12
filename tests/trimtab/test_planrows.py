@@ -31,6 +31,7 @@ class FakeFacts(Facts):
         self.register_answers, self.local = set(register_answers), tuple(local)
         self.heads, self.bases, self.repo = dict(heads or {}), dict(bases or {}), repo
         self.reads = []
+        self.looked_up = []
 
     def _read(self, name):
         self.reads.append(name)
@@ -45,7 +46,7 @@ class FakeFacts(Facts):
         self._read("branch_head")
         return self.head
 
-    def secret_scan(self, head):
+    def secret_scan(self, head, branch):
         self._read("secret_scan")
         return self.scan
 
@@ -79,6 +80,7 @@ class FakeFacts(Facts):
 
     def pr_head(self, number, repo):
         self._read("pr_head")
+        self.looked_up.append((number, repo))
         return self.heads.get(number)
 
     def pr_base(self, number, repo):

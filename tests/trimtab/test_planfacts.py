@@ -174,24 +174,29 @@ class SecretScan(unittest.TestCase):
                 f"{RUNS}/5/jobs": {"jobs": [job_row] if jobs else []}}
 
     def test_pass_and_fail(self):
-        self.assertEqual(facts(self.answers()).secret_scan(H1), "pass")
-        self.assertEqual(facts(self.answers("failure")).secret_scan(H1), "fail")
+        self.assertEqual(facts(self.answers()).secret_scan(H1, BRANCH), "pass")
+        self.assertEqual(facts(self.answers("failure")).secret_scan(H1, BRANCH), "fail")
 
     def test_a_run_of_another_workflow_is_not_the_scan(self):
-        self.assertEqual(facts(self.answers(path=FLOWS + "other.yml")).secret_scan(H1), "pending")
+        # the branch has runs, but none of the scan workflow: it never triggers here, so E19 cannot be shown
+        self.assertEqual(facts(self.answers(path=FLOWS + "other.yml")).secret_scan(H1, BRANCH), "unreadable")
+
+    def test_a_branch_with_no_runs_yet_is_pending(self):
+        answers = {**self.answers(), RUNS: {"workflow_runs": []}}
+        self.assertEqual(facts(answers).secret_scan(H1, BRANCH), "pending")
 
     def test_a_run_with_no_such_job_is_unreadable(self):
-        self.assertEqual(facts(self.answers(jobs=False)).secret_scan(H1), "unreadable")
+        self.assertEqual(facts(self.answers(jobs=False)).secret_scan(H1, BRANCH), "unreadable")
 
     def test_no_key_refuses(self):
         with self.assertRaises(FactsError):
-            facts(self.answers(), inst=instance.parse(BASE)).secret_scan(H1)
+            facts(self.answers(), inst=instance.parse(BASE)).secret_scan(H1, BRANCH)
 
     def test_a_failed_read_refuses(self):
         f = planfacts.GitHubFacts(REPO, GhApi(FakeGh(returncode=1, stderr="HTTP 500")), tools.Git(), Path("."),
                                   INSTANCE)
         with self.assertRaises(FactsError):
-            f.secret_scan(H1)
+            f.secret_scan(H1, BRANCH)
 
 
 class Pushes(unittest.TestCase):
@@ -213,16 +218,22 @@ class Pushes(unittest.TestCase):
     def test_no_open_pr_means_no_pushes_to_count(self):
         self.assertEqual(facts({PULLS: []}).pushes(BRANCH), ())
 
-    def test_pages_are_read_to_the_end(self):
-        full = [self.event(H1, H2)] * 100
-        f = facts({PULLS: [pr_row()], self.ACTIVITY: Pages([json.dumps(full), json.dumps([self.event(H2, H1)])])})
-        self.assertEqual(len(f.pushes(BRANCH)), 101)
+    def test_a_page_below_the_limit_is_read_whole(self):
+        rows = [self.event(H1, H2)] * 99
+        f = facts({PULLS: [pr_row()], self.ACTIVITY: rows})
+        self.assertEqual(len(f.pushes(BRANCH)), 99)
 
-    def test_past_the_limit_refuses(self):
-        full = json.dumps([self.event(H1, H2)] * 100)
-        f = facts({PULLS: [pr_row()], self.ACTIVITY: Pages([full] * 6)})
-        with self.assertRaisesRegex(FactsError, "more than"):
+    def test_a_full_page_refuses_because_the_rest_is_behind_a_cursor(self):
+        f = facts({PULLS: [pr_row()], self.ACTIVITY: [self.event(H1, H2)] * 100})
+        with self.assertRaisesRegex(FactsError, "or more"):
             f.pushes(BRANCH)
+
+    def test_the_read_asks_for_one_page_without_a_page_number(self):
+        f = facts({PULLS: [pr_row()], self.ACTIVITY: []})
+        f.pushes(BRANCH)
+        query = [a[4] for a in f.fake.argvs() if "activity" in a[4]][0]
+        self.assertIn("per_page=100", query)
+        self.assertNotIn("page=", query.replace("per_page=", ""))
 
     def test_a_bad_event_refuses(self):
         with self.assertRaises(FactsError):

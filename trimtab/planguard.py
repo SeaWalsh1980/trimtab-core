@@ -15,6 +15,7 @@ or where it goes (`pushurl`, `url.<base>.insteadOf`).
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -55,7 +56,7 @@ class LazyFacts(Facts):
 
     def open_pr(self, branch: str) -> PrState | None: return self._facts().open_pr(branch)
     def branch_head(self, branch: str) -> str | None: return self._facts().branch_head(branch)
-    def secret_scan(self, head: str) -> str: return self._facts().secret_scan(head)
+    def secret_scan(self, head: str, branch: str) -> str: return self._facts().secret_scan(head, branch)
 
     def changes(self, branch: str, source: str | None, head: str) -> Sequence[Change]:
         return self._facts().changes(branch, source, head)
@@ -85,8 +86,16 @@ def parse_config(raw: str) -> dict[str, list[str]]:
     return out
 
 
+_INTEGER = re.compile(r"[+-]?[0-9]+[kmg]?", re.I)
+
+
 def _true(values: Sequence[str]) -> bool:
-    return any(v.strip().lower() in ("", "true", "yes", "on", "1") for v in values)  # a bare key means true
+    """git's boolean: a bare key, true/yes/on, or any non-zero integer (with a k, m or g suffix)."""
+    for v in values:
+        word = v.strip().lower()
+        if word in ("", "true", "yes", "on") or (_INTEGER.fullmatch(word) and int(word.rstrip("kmg")) != 0):
+            return True
+    return False
 
 
 class PlanSupport:
@@ -132,6 +141,15 @@ class PlanSupport:
         """The checked-out branch, which a `HEAD` refspec writes under the same name."""
         return self._run(cwd or self.cwd, "symbolic-ref", "--short", "-q", "HEAD")
 
+    def _is_repository(self, cwd: Path) -> bool:
+        if self._git is not None:  # an injected git answers for itself
+            try:
+                self._git(cwd, "rev-parse", "--git-dir")
+            except (tools.ToolError, OSError):
+                return False
+            return True
+        return tools.Git(environ=self._environ).is_repository(cwd)
+
     def pr_branch(self, cwd: Path) -> str | None:
         """The branch `gh` takes the current PR from: the checked-out branch's upstream if it has one, else it."""
         head = self.head_branch(cwd)
@@ -169,9 +187,10 @@ class PlanSupport:
         try:
             return parse_config(self._config_text(cwd))
         except (tools.ToolError, OSError) as err:
-            if self._run(cwd, "rev-parse", "--git-dir") is None:
+            if not self._is_repository(cwd):
                 return {}  # not a repository: a push there fails by itself
-            raise FactsError(f"the repository's configuration cannot be read ({type(err).__name__})") from err
+            # A repository the gate's git refuses (shallow, alternates, partial) is not "no repository".
+            raise FactsError("the repository's configuration cannot be read") from err
 
 
 def _destination(remote: str | None, config: Mapping[str, list[str]], support: PlanSupport, cwd: Path) -> str:
