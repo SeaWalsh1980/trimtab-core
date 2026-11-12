@@ -50,6 +50,17 @@ class Status(unittest.TestCase):
         with self.assertRaises(bw.BashWritesError):
             bw.parse_status(out)
 
+    def test_flagged_paths_that_are_not_on_the_disk_are_skipped(self):
+        out = b"".join(b"S sparse%d\0" % i for i in range(bw.MAX_PATHS + 1)) + b"S here.json\0"
+
+        self.assertEqual(bw.parse_flagged(out, lambda path: path == "here.json"), {"here.json": "S"})
+
+    def test_more_flagged_paths_on_the_disk_than_the_bound_are_refused(self):
+        out = b"".join(b"S f%d\0" % i for i in range(bw.MAX_PATHS + 1))
+
+        with self.assertRaises(bw.BashWritesError):
+            bw.parse_flagged(out)
+
     def test_skip_worktree_and_assume_unchanged_paths_are_flagged(self):
         out = b"H src/a.py\0S hidden.json\0h quiet.md\0"
 
@@ -76,6 +87,18 @@ class Moved(unittest.TestCase):
 
     def test_a_path_restored_to_head_is_not_judged(self):
         self.assertEqual(bw.moved({"src/a.py": "f1"}, {}, GONE), [])
+
+    def test_staging_a_path_that_was_already_modified_has_not_moved(self):
+        self.assertEqual(bw.moved({"Makefile": " M|f1"}, {"Makefile": "M |f1"}, STILL_THERE), [])
+
+    def test_staging_an_untracked_path_that_was_already_there_has_not_moved(self):
+        self.assertEqual(bw.moved({"notes.txt": "??|f1"}, {"notes.txt": "A |f1"}, STILL_THERE), [])
+
+    def test_staging_with_a_changed_file_has_moved(self):
+        self.assertEqual(bw.moved({"Makefile": " M|f1"}, {"Makefile": "M |f2"}, STILL_THERE), ["Makefile"])
+
+    def test_removing_a_modified_path_from_the_index_has_moved(self):
+        self.assertEqual(bw.moved({"Makefile": " M|f1"}, {"Makefile": "D ??|f1"}, STILL_THERE), ["Makefile"])
 
     def test_a_harness_entry_that_is_gone_has_moved(self):
         self.assertEqual(bw.moved({"CLAUDE.local.md": "[fs]|f1"}, {}, GONE), ["CLAUDE.local.md"])
@@ -402,6 +425,38 @@ class Hook(unittest.TestCase):
         done = self.around("rm CLAUDE.local.md")
 
         self.assertIn("CLAUDE.local.md", done.stderr)
+
+    def test_a_sparse_checkout_with_many_excluded_files_is_judged(self):
+        for i in range(30):
+            (self.repo / "src" / f"s{i}.py").write_text("x\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-qm", "many")
+        git(self.repo, "sparse-checkout", "set", "--no-cone", "/Makefile", "/.claude/")
+
+        done = self.around("echo x > stray.txt")
+
+        self.assertIn("stray.txt", done.stderr)
+
+    def test_staging_a_file_that_was_already_modified_is_not_reported(self):
+        (self.repo / "Makefile").write_text("operator edit\n")
+
+        done = self.around("git add Makefile")
+
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
+
+    def test_taking_a_modified_file_out_of_the_index_is_reported(self):
+        (self.repo / "Makefile").write_text("operator edit\n")
+
+        done = self.around("git rm -q --cached Makefile")
+
+        self.assertIn("Makefile", done.stderr)
+
+    def test_a_post_with_a_different_tool_use_id_says_what_to_do(self):
+        self.assertEqual(self.hook("pre", "toolu_pre").returncode, 0)
+
+        done = self.hook("post", "toolu_other")
+
+        self.assertIn("share a tool_use_id", done.stderr)
 
     def test_restoring_a_tracked_harness_file_is_not_reported(self):
         (self.repo / "CLAUDE.md").write_text("tracked\n")

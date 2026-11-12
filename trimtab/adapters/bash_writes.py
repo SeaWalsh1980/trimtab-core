@@ -102,9 +102,13 @@ def parse_status(out: bytes) -> dict[str, str]:
     return found
 
 
-def parse_flagged(out: bytes) -> dict[str, str]:
+def parse_flagged(out: bytes, on_disk=lambda path: True) -> dict[str, str]:
     """Tracked paths `git ls-files -v -z` marks skip-worktree (`S`) or assume-unchanged (a lower-case
-    tag), which `git status` never lists however they change, with their tag."""
+    tag), which `git status` never lists however they change, with their tag.
+
+    Only a flagged path that is on the disk can have been edited behind git's back. A sparse checkout
+    flags every file it leaves out, and those are not on the disk, so they are skipped: the count of
+    flagged paths then follows what is checked out, not the size of the repository."""
     found: dict[str, str] = {}
     for entry in out.split(b"\0"):
         if not entry:
@@ -113,9 +117,12 @@ def parse_flagged(out: bytes) -> dict[str, str]:
             raise BashWritesError("git ls-files gave an entry that could not be parsed")
         tag = entry[:1].decode("ascii", errors="replace")
         if tag == "S" or tag.islower():
-            found[os.fsdecode(entry[2:])] = tag
+            path = os.fsdecode(entry[2:])
+            if not on_disk(path):
+                continue
+            found[path] = tag
             if len(found) > MAX_PATHS:
-                raise BashWritesError(f"more than {MAX_PATHS} flagged paths; too many to judge")
+                raise BashWritesError(f"more than {MAX_PATHS} flagged paths on the disk; too many to judge")
     return found
 
 
@@ -137,6 +144,20 @@ def _restored(before: str | None, after: str) -> bool:
     return bool(status) and not status.startswith("[fs]") and "??" not in status
 
 
+# Index-only moves of a path the call did not touch: `git add` of a path that was already modified,
+# untracked or deleted. The same lstat part with one of these status moves is staging, not writing.
+# Anything else that moves the status alone (`git rm --cached` leaves `D` and `??`) is still reported.
+STAGED = frozenset({(" M", "M "), ("??", "A "), (" D", "D "), (" T", "T ")})
+
+
+def _staged_only(before: str | None, after: str) -> bool:
+    if before is None:
+        return False
+    old, _, old_stat = before.partition("|")
+    new, _, new_stat = after.partition("|")
+    return old_stat == new_stat and (old, new) in STAGED
+
+
 def moved(before: dict[str, str], after: dict[str, str], on_disk) -> list[str]:
     """Paths listed after the call that were not listed before it or whose fingerprint differs, and
     harness paths listed before and gone after, from git's listing and from the disk.
@@ -148,7 +169,8 @@ def moved(before: dict[str, str], after: dict[str, str], on_disk) -> list[str]:
     is still there."""
     from trimtab import planscope  # its pure rules only; no git
 
-    changed = {p for p, fp in after.items() if before.get(p) != fp and not _restored(before.get(p), fp)}
+    changed = {p for p, fp in after.items() if before.get(p) != fp
+               and not _restored(before.get(p), fp) and not _staged_only(before.get(p), fp)}
     gone = {p for p in before if p not in after and planscope.refused(p) and not on_disk(p)}
     return sorted(changed | gone)
 
@@ -367,7 +389,10 @@ class Repo:
         """Every path git status lists, and every index-flagged path, with its fingerprint."""
         status = parse_status(self.out("status", "--porcelain=v1", "-z", "--no-renames",
                                        "--untracked-files=all", "--ignore-submodules=none"))
-        for path, tag in parse_flagged(self.out("ls-files", "-v", "-z")).items():
+        def on_disk(path: str) -> bool:
+            return os.path.lexists(os.path.join(self.root, path))
+
+        for path, tag in parse_flagged(self.out("ls-files", "-v", "-z"), on_disk).items():
             status[path] = status.get(path, "") + f"[{tag}]"
         if len(status) > MAX_PATHS:
             raise BashWritesError(f"more than {MAX_PATHS} paths to fingerprint; too many to judge")
@@ -609,7 +634,9 @@ def judge(payload: object, config: Path, mode: str, branch: str, deadline: Deadl
         name = snapshot_name(payload.get("session_id"), payload.get("tool_use_id"))
         data = _take_snapshot(state_dir(config, create=False, parts=STATE_PARTS), name)
         if data is None:
-            raise BashWritesError("no snapshot was recorded for this call")
+            raise BashWritesError("no snapshot was recorded for this call. If this follows every Bash call, "
+                                  "the pre and post events do not share a tool_use_id: export "
+                                  "HOOK_ALLOW_BASH_WRITES=1 and report it (ADR 0066)")
         data = _valid_snapshot(data)
         root = data["root"]
         if root is None:

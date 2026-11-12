@@ -46,8 +46,9 @@ holding `.git`). The snapshot holds:
 
 - every path `git status --porcelain=v1 -z --no-renames --untracked-files=all`
   lists, and every tracked path `git ls-files -v` marks skip-worktree or
-  assume-unchanged, each with a fingerprint of git's status and its lstat
-  (type, size, inode, mtime and ctime in ns);
+  assume-unchanged that is on the disk (a sparse checkout flags every file it
+  leaves out, and those cannot have been edited), each with a fingerprint of
+  git's status and its lstat (type, size, inode, mtime and ctime in ns);
 - every entry under the root's `.claude/` (except `worktrees/`) and the root's
   `CLAUDE.md` and `CLAUDE.local.md`, by lstat from the filesystem, not from
   git: `.claude/*` is commonly gitignored, as it is here, and its settings,
@@ -69,7 +70,10 @@ git failing inside a repository, and the state directory failing.
 it) and judge two sets of paths:
 
 - every path listed now that was not listed before or has a new fingerprint,
-  but for a tracked harness file the call restored to HEAD's content; and
+  but for a tracked harness file the call restored to HEAD's content, and a
+  path only staged (`git add` of one already modified, untracked or deleted:
+  the same lstat, and the status moving ` M` to `M `, `??` to `A `, ` D` to
+  `D ` or ` T` to `T `; `git rm --cached` is not that, and is reported); and
   every harness path listed before and now gone from the disk (an untracked
   harness file has no HEAD content to return to, so its deletion is a write);
 - every path changed by a commit the call made on any branch. That is a commit
@@ -230,9 +234,15 @@ the guards are whole without it.
 **Dependencies.**
 
 - The hooks reference names `tool_use_id` on PreToolUse, PostToolUse and
-  PostToolUseFailure but does not say the pre and post values match. The
-  design depends on it. If they ever differ, `post` finds no snapshot and
-  reports every call unjudged: loud, not silent.
+  PostToolUseFailure but does not say the pre and post values match, and no
+  session has yet shown it with the hook installed. The design depends on it.
+  If they differ, `post` finds no snapshot and reports every call unjudged:
+  loud, not silent. The message then says the pairing may be the cause and
+  names `HOOK_ALLOW_BASH_WRITES=1`. Whoever installs the hook checks one Bash
+  call after a new session starts: no "no snapshot" message means the
+  pairing holds. Keying on the command's text instead was rejected: it needs
+  the same unverified assumption (that `tool_input` is identical in both
+  events), and identical commands in parallel would collide.
 - guard-tests' matrix rows "a shell write is not judged against it" stay: they
   pin guard-paths, which still does not judge Bash. Their comment now points
   here. guard-paths' own header comment still says shell writes are left to
