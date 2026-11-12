@@ -18,7 +18,8 @@ reviewed PR). Then, by where the part is; take the first row that applies:
 | Work began on a `plan/…` branch, and its draft has not opened | Commit the progress record on the branch, with `## Status` saying whether this part finished (`stopped unfinished` if not) and `## Next` reading `blocked: <reason>`, and push it, unless the stop is one of the "Stops that forbid a write". | The same merged PR as the row above: `plan:blocked` on, `plan:continue` off. |
 | The item's PR is open | As the row above, pushed to the PR's branch (returning the PR to draft first if it is ready). | `plan:blocked` on the PR; remove any `plan:continue` from it. The labels always follow the final `## Next`. |
 
-A restart counts as the first row too: its record PR is the latest authorised record's. So every
+A restart with nothing in flight takes the second row: its record PR is the latest authorised
+record's. A restart that resumed a branch or an open PR takes that branch's or PR's row. So every
 stop but the unconfirmed merge leaves a label the admin can remove to allow a restart.
 
 ## Stops that forbid a write

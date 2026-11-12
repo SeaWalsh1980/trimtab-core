@@ -56,10 +56,14 @@ entry's path. Scope is decided only as plan-item/references/scope.md says.
 
 When a verdict or thread needs a fix within scope:
 
-1. Fix every in-scope finding, within the fix limits (plan-item/references/scope.md), and push.
+1. Fix every in-scope finding, within the fix limits (plan-item/references/scope.md), write the CI
+   fix round into the progress record in the same commit, and push.
 2. Run the one in-session round on the new head and act on it as plan-item/references/rounds.md
-   says for the round after a CI fix.
-3. Record both in the progress record, and reply to the threads (step 2).
+   says for the round after a CI fix. Its outcome goes into the record in the same push as its
+   fixes; when it finds nothing to fix, that record line is the one push after the round's head.
+   No other push follows the round's head before the re-request: the guard allows exactly one
+   (E10).
+3. Reply to the threads (step 2).
 4. Request a re-review of the new head, only through the mechanism the project's instruction file
    names and the guards permit, never one that marks the PR ready or toggles it. Re-request only a
    new head (the one fail-closed re-request apart). Where none is named, or the guard refuses it,

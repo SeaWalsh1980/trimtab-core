@@ -110,17 +110,24 @@ def broken(text, reader=None):
 
 def heading_anchors(text):
     """The anchors GitHub gives a file's headings: lower case, punctuation dropped, spaces as hyphens,
-    and a repeated heading numbered from -1. A `#` line inside a fenced code block is not a heading."""
-    out, fenced = [], False
+    and a repeated heading numbered from -1 past any slug already taken. A `#` line inside a fenced
+    code block (backticks or tildes, indented or not) is not a heading."""
+    out, repeats, fence = [], {}, None
     for line in text.splitlines():
-        if line.startswith("```"):
-            fenced = not fenced
+        opener = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if opener:
+            mark = opener.group(1)[0] * 3
+            fence = None if fence == mark else (fence or mark)
             continue
-        m = None if fenced else re.match(r"^#{1,6}\s+(.+?)\s*$", line)
+        m = None if fence else re.match(r"^#{1,6}\s+(.+?)\s*$", line)
         if m:
             slug = re.sub(r"[^\w\- ]", "", m.group(1).lower()).replace(" ", "-")
-            seen = out.count(slug) + sum(1 for s in out if re.fullmatch(re.escape(slug) + r"-\d+", s))
-            out.append(slug if not seen else f"{slug}-{seen}")
+            result = slug
+            while result in repeats:  # github-slugger: number the repeat, skipping slugs already taken
+                repeats[slug] += 1
+                result = f"{slug}-{repeats[slug]}"
+            repeats[result] = 0
+            out.append(result)
     return out
 
 
@@ -277,6 +284,12 @@ class Helpers(unittest.TestCase):
     def test_a_hash_line_in_a_code_block_is_not_a_heading(self):
         self.assertEqual(heading_anchors("# Real\n```bash\n# a comment\n```\n"), ["real"])
 
+    def test_a_hash_line_in_a_tilde_or_indented_fence_is_not_a_heading(self):
+        self.assertEqual(heading_anchors("# Real\n~~~\n# one\n~~~\n- item\n  ```\n  # two\n  ```\n"), ["real"])
+
+    def test_a_repeat_skips_a_slug_another_heading_already_took(self):
+        self.assertEqual(heading_anchors("## Round\n## Round 1\n## Round"), ["round", "round-1", "round-2"])
+
     def test_a_table_row_is_its_own_paragraph(self):
         self.assertEqual(paragraphs("| a | b |\n|---|---|\n| c | d |"), ["| a | b |", "|---|---|", "| c | d |"])
 
@@ -316,8 +329,11 @@ class Helpers(unittest.TestCase):
     def test_the_reference_wording_is_not_the_entry_wording(self):
         self.assertIsNone(ROOT_LINE_FOR["entry"].search(REFERENCE_LINE))
 
-    def test_each_wording_matches_its_own_type(self):
-        self.assertTrue(ROOT_LINE_FOR["entry"].search(ENTRY_LINE) and ROOT_LINE_FOR["reference"].search(REFERENCE_LINE))
+    def test_the_entry_wording_matches_the_entry_type(self):
+        self.assertIsNotNone(ROOT_LINE_FOR["entry"].search(ENTRY_LINE))
+
+    def test_the_reference_wording_matches_the_reference_type(self):
+        self.assertIsNotNone(ROOT_LINE_FOR["reference"].search(REFERENCE_LINE))
 
     def test_a_skill_md_is_an_entry_and_anything_else_a_reference(self):
         self.assertEqual([file_type("plan-pr/SKILL.md"), file_type("plan-pr/references/watch.md")],
