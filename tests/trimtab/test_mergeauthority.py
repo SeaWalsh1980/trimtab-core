@@ -353,9 +353,13 @@ class AgreesWithTheSkill(unittest.TestCase):
 
     def test_the_skills_record_check_states_its_own_pr_lookup(self):
         """Check 2's lookup moved into check-plan-authorised (ADR 0059), so section 3 can't point back at it."""
-        skill = (ROOT / "skills" / "plan-run" / "references" / "record-authority.md").read_text(encoding="utf-8")
-        start = skill.index("## Its PR: the code gate and the merger")
-        section = " ".join(skill[start:skill.index("First, whoever merged, the code gate", start)].split())
+        # Section 3 now spans plan-run's SKILL.md and the top of record-authority.md (ADR 0063).
+        entry = (ROOT / "skills" / "plan-run" / "SKILL.md").read_text(encoding="utf-8")
+        start = entry.index("### 3. Work out the state")
+        state = entry[start:entry.index("### 4. Gate the next work", start)]
+        record = (ROOT / "skills" / "plan-run" / "references" / "record-authority.md").read_text(encoding="utf-8")
+        record = record[:record.index("First, whoever merged, the code gate")]
+        section = " ".join((state + "\n" + record).split())
 
         self.assertIn("repos/{owner}/{repo}/commits/<sha>/pulls", section)
         self.assertIn("Exactly one must remain", section)

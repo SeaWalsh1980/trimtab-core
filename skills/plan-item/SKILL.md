@@ -5,10 +5,13 @@ description: Work one item, or one part of an item, of an authorised plan in one
 
 # Work a plan item
 
+Paths such as `plan-run/references/stops.md` are relative to the skills directory, the parent of
+this skill's own directory.
+
 `<plans>` and `<plan>` are as plan-run/SKILL.md defines them. Section numbers below are
 plan-run/SKILL.md's.
 
-### Working a plan item
+## Working a plan item
 
 One item, or one part of an item, per session, ending in one PR:
 
@@ -24,7 +27,8 @@ One item, or one part of an item, per session, ending in one PR:
    directory: the one the session-scratch hook named at session start, or the harness's scratchpad;
    the hook removes both when the session ends (trimtab-core ADR 0049). Where neither exists, make
    one directory under the system temp directory named after the session and remove it before the
-   session ends. Name in `## Done` anything you leave that the hook does not remove.
+   session ends. Name in `## Done` anything you leave that the hook does not remove. Section 4's
+   scope bullet is in plan-run/references/gate.md.
 3. **Label** the PR `plan:continue` unless `## Next` is `plan complete` or `blocked: <reason>`.
    (When you author a PR that adds an authorised plan, label it `plan:continue` too: its merge
    starts item 01 part 1. Put it on a branch outside `plan/`: `plan/*` branches are for item PRs

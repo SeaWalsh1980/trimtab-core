@@ -1,6 +1,6 @@
 # The gate on the next work
 
-The conditions of plan-run/SKILL.md section 4. Every one must hold.
+The conditions of plan-run/SKILL.md section 4. Every one must hold. In each, "it" is the next work.
 
 - It names an item that exists in the authorised plan (as `check-plan-authorised --print-plan`
   printed it) and is not already complete. Anything else is a blocker — a hand-over cannot create

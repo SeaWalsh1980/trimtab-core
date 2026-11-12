@@ -5,6 +5,9 @@ description: Run an authorised plan across merges — confirm the merge, run the
 
 # Run an authorised plan
 
+Paths such as `plan-run/references/stops.md` are relative to the skills directory, the parent of
+this skill's own directory.
+
 When a plan PR merges, its history belongs in durable records and the next session should carry only
 what comes next. Leftover review rounds, dead ends and command output cost context and let stale
 facts steer new work.
@@ -70,7 +73,8 @@ and start nothing.
    `plan:continue`, and report. A clear loses the session's autonomous record; only the variable
    survives it.
 
-Then checks 1–4, and why they are this strict: see plan-run/references/authorisation.md.
+Then read plan-run/references/authorisation.md and run checks 1–4 from it before going on. If you
+cannot read it, the check fails: stop.
 
 ### 3. Work out the state
 
@@ -89,7 +93,8 @@ Everything comes from the default branch and open PRs, never from memory:
   (`<plans>/progress/<plan>/item-NN-partK.md`). Which record that is: see
   plan-run/references/record-authority.md.
 - **That record's PR must carry the code gate and be merged by the admin, or by the approver with
-  every condition met.** How to check it: see plan-run/references/record-authority.md.
+  every condition met.** Read plan-run/references/record-authority.md to check it. If you cannot
+  read it, the record authorises nothing: stop.
 - **Done:** the `## Status` lines of the merged records.
 - **Open issues:** the entry files in `<plans>/unauthorised/<plan>/` whose `status` is `open`.
 - **The merged PR carries no record** → stop, unless it is the PR that added the authorised plan
@@ -106,7 +111,7 @@ Everything comes from the default branch and open PRs, never from memory:
 The next work — `## Next`, or the item an in-flight PR works on — may start only if all of these
 hold:
 
-- See plan-run/references/gate.md.
+- Read them in plan-run/references/gate.md. If you cannot read it, the gate fails.
 
 If the gate fails: say "needs approval: <reason>", list the open issues with their PR links, propose
 ways forward, and stop. If `## Next` is `plan complete`, say so and stop.

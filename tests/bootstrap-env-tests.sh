@@ -1013,6 +1013,21 @@ check_skills_drop_a_stale_link_and_keep_the_operators() {
   fi
 }
 
+check_skills_drop_the_removed_wrap_merged_link() {
+  # ADR 0063: an install from before the split linked skills/wrap-merged; the base no longer ships it.
+  local h inst
+  h=$(new_home); inst=$(inst_of "$h")
+  mkdir -p "$h/.claude/skills"
+  ln -s "$(old_snap "$h")/skills/wrap-merged" "$h/.claude/skills/wrap-merged"
+  boot "$h" "$live" --instance "$inst"
+  if [[ $rc -eq 0 && ! -L "$h/.claude/skills/wrap-merged" && ! -e "$h/.claude/skills/wrap-merged" ]] \
+     && skill_linked "$h"; then
+    pass "skills: an earlier install's wrap-merged link goes, and the three plan skills are linked"
+  else
+    fail "skills: an earlier install's wrap-merged link goes, and the three plan skills are linked" "rc=$rc"
+  fi
+}
+
 check_skills_check_reports_and_changes_nothing() {
   local h inst snap
   h=$(new_home); inst=$(inst_of "$h")
@@ -1585,6 +1600,7 @@ check_skills_replace_an_installs_whole_directory_link
 check_skills_clash_is_refused_before_anything_is_written
 check_skills_refuse_a_whole_directory_link_no_install_made
 check_skills_drop_a_stale_link_and_keep_the_operators
+check_skills_drop_the_removed_wrap_merged_link
 check_skills_check_reports_and_changes_nothing
 check_skills_replace_a_dangling_link_into_a_deleted_snapshot
 check_skills_relink_from_another_core_checkout

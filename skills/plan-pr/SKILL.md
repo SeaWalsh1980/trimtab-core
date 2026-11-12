@@ -5,8 +5,11 @@ description: Review and ready a plan item's PR — the one to three in-session r
 
 # Review and ready a plan item's PR
 
+Paths such as `plan-run/references/stops.md` are relative to the skills directory, the parent of
+this skill's own directory.
+
 This is step 4 of plan-item/SKILL.md. Section numbers below are plan-run/SKILL.md's; other step
-numbers are plan-item/SKILL.md's.
+numbers are plan-item/SKILL.md's. Every stop follows plan-run/references/stops.md.
 
 ## In-session review rounds
 

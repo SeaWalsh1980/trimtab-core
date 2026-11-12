@@ -23,7 +23,8 @@ plan-run/SKILL.md's.
    `git fetch origin` again, then the command once more. One re-run in all. Exit 1, or a second
    non-zero exit, fails the check. Check 1: `<plan>.md` and `<plan>.writes` are both regular files
    on the fetched default branch, which must be where the server says it is. A plan without a
-   `.writes` file fails; an empty one is valid and means bookkeeping only.
+   `.writes` file fails; an empty one is valid and means bookkeeping only. The scope gate is in
+   plan-run/references/gate.md.
 2. **Both were added by one PR the admin account merged.** For each file, the commit that last added
    it in first-parent (merge) order belongs to exactly one PR merged into the default branch, whose
    `merged_by.login` matches, without case, the admin login: `accounts.admin` in the Trimtab
@@ -40,6 +41,7 @@ plan-run/SKILL.md's.
    installed (its announcement is in your context); and `CODEOWNERS` gives every always-refused file
    path in section 4 to the admin. If you cannot confirm all of these, the check fails. In
    particular, until the base ships that guard and classifier, this check fails and no plan can run.
+   Section 4's always-refused paths are listed in plan-run/references/gate.md.
 
 Why this strict: the merge is the only authorisation an autonomous run has. A plan edited after
 approval, merged by the agent's own account, or run without the guards that keep it inside its

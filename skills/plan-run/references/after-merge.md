@@ -4,13 +4,14 @@ Part of plan-run/SKILL.md sections 6 and 7.
 
 ## Scratch files (section 6)
 
-A run keeps them only in its session scratch directory: the one the session-scratch hook named at
-session start, or the harness's scratchpad (trimtab-core ADR 0049), or, where neither exists, one
-directory under the system temp directory named after its session. The hook removes the first two
-when the session ends; tidying now keeps the next item's session clear of them. Remove only this
-session's own files there, nothing wider (caches, another session's scratch). A session that did not
-do the merged work leaves the other session's directory alone: cloud containers are discarded, and a
-directory the merged record names as left behind is the operator's to remove, so report it.
+These are the temporary files this session made for the merged work. A run keeps them only in its
+session scratch directory: the one the session-scratch hook named at session start, or the harness's
+scratchpad (trimtab-core ADR 0049), or, where neither exists, one directory under the system temp
+directory named after its session. The hook removes the first two when the session ends; tidying now
+keeps the next item's session clear of them. Remove only this session's own files there, nothing
+wider (caches, another session's scratch). A session that did not do the merged work leaves the
+other session's directory alone: cloud containers are discarded, and a directory the merged record
+names as left behind is the operator's to remove, so report it.
 
 ## Handing over (section 7)
 

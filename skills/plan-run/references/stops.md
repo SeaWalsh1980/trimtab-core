@@ -14,7 +14,8 @@ reviewed PR).
 **A stop before any item PR exists** — the authorisation check (section 2) or this gate failing at
 the start of a session — labels the merged PR that started the session `plan:blocked` (through
 `gh api` if `gh pr` is blocked), so every stop leaves a label the admin can remove to allow a
-restart. A valid restart session has no such PR and labels nothing.
+restart. A valid restart session has no such PR and labels nothing. This gate is the one in
+plan-run/SKILL.md section 4.
 
 ## A stop in an item PR
 
