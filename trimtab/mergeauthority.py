@@ -52,7 +52,8 @@ kept plan-scope's pass judged against the current base: from git over the base a
 head given, the two have exactly one merge-base and merge with no conflict, and
 main's first-parent history since that merge-base changes nothing plan-scope's
 verdict, or the instruction files the merge is judged by, depends on, deletes no
-path the head changes, and touches no path the head adds.
+path the head changes, and touches no path the head adds. `check_action` also reads
+the default branch's tip from the server and refuses a base that is not it.
 
 `plan_admin_problems` is for sessions, not the job: it reads the repository's
 `TRIMTAB_ADMIN` itself, to compare with the instance's admin (ADR 0056). So is `plan_scope_job_result`: it reads
@@ -65,6 +66,7 @@ import posixpath
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
+from urllib.parse import quote
 
 from trimtab import actions, config, planscope
 from trimtab.capture.sources import PER_PAGE, GhApi, Run, SourceError
@@ -1098,15 +1100,17 @@ def check(repo: str, pr: Pr, number: int, base: str, who: Accounts, run: Run | N
     runs = read_check_runs(api, pr.repository, pr.head) if is_plan else []
 
     def route() -> RouteFacts:
-        return fresh(read_route_facts(api, pr, number, workflows), repo, base, pr, found)
+        # The job judges the tip as it started (ADR 0065); the App's own step compares the server's tip.
+        return fresh(read_route_facts(api, pr, number, workflows), repo, base, pr, found, tip=None)
 
     return decide(pr, who, paths, checker_in_tree, reviews, runs, route)
 
 
-def fresh(facts: RouteFacts, repo: str, base: str, pr: Pr, found: list[planscope.Change],
-          tip: str | None = None) -> RouteFacts:
-    """The route's facts with the head's freshness against base read in (ADR 0065). `tip`, where given, is the
-    default branch's tip the server reports now: a base that isn't it answers for an older main."""
+def fresh(facts: RouteFacts, repo: str, base: str, pr: Pr, found: list[planscope.Change], *,
+          tip: str | None) -> RouteFacts:
+    """The route's facts with the head's freshness against base read in (ADR 0065). `tip` is the default branch's
+    tip the server reports now, and a base that isn't it answers for an older main. Every caller names it: None is
+    the merge-authority job's deliberate opt-out, which ADR 0065 records."""
     stale_base = [f"the base {base[:12]} is not the default branch's tip {tip[:12]}; judge against the tip"] \
         if tip is not None and tip != base else []
     main = read_main(repo, base, pr.head)
@@ -1117,8 +1121,10 @@ def fresh(facts: RouteFacts, repo: str, base: str, pr: Pr, found: list[planscope
 def read_tip(api: GhApi, repository: str, branch: str) -> str:
     """The commit a branch points at, as the server reports it now."""
     what = "gh api branches"
-    data = _json(api, f"repos/{repository}/branches/{branch}", what)
-    sha = (data.get("commit") or {}).get("sha") if isinstance(data, dict) else None
+    # Quoted whole, as the enforcement gate reads it: a `/` in the name must not become a path segment.
+    data = _json(api, f"repos/{repository}/branches/{quote(branch, safe='')}", what)
+    commit = data.get("commit") if isinstance(data, dict) else None
+    sha = commit.get("sha") if isinstance(commit, dict) else None
     if not isinstance(sha, str) or not SHA.fullmatch(sha):
         raise MergeAuthorityError(f"{what} returned unexpected JSON")
     return sha
@@ -1163,8 +1169,8 @@ def check_action(repo: str, repository: str, number: int, base: str, head: str, 
     def route() -> RouteFacts:
         facts = read_route_facts(api, pull.pr, number, workflows, own=action != APPROVE, gates=tuple(gates),
                                  author=pull.author)
-        # Read last, so the tip compared is as close to the write as this check can get (SEC-2.3 "Fresh").
-        return fresh(facts, repo, base, pull.pr, found, read_tip(api, repository, pull.pr.default_branch))
+        # Read last among the route's reads (SEC-2.3 "Fresh"); only a merge's comment reads come after it.
+        return fresh(facts, repo, base, pull.pr, found, tip=read_tip(api, repository, pull.pr.default_branch))
 
     def comments() -> list[str]:
         return (thread_problems(who.agent, read_inline_comments(api, repository, number))

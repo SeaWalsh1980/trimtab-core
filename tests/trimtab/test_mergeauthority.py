@@ -2923,6 +2923,36 @@ class Freshness(ApproverAction):
         with self.assertRaisesRegex(MergeAuthorityError, "branches"):
             self.acted()
 
+    def test_a_malformed_tip_answer_is_an_error(self):
+        for body in ([], {}, {"commit": None}, {"commit": "a" * 40}, {"commit": {"sha": 7}}, {"commit": {}}):
+            with self.subTest(body=body):
+                gh = FakeGh({BRANCH_PATH: json.dumps(body)})
+
+                with self.assertRaisesRegex(MergeAuthorityError, "branches"):
+                    mergeauthority.read_tip(GhApi(gh), REPOSITORY, DEFAULT)
+
+    def test_an_unparseable_log_of_main_is_an_error(self):
+        real = planscope._git
+        for out in (b"M\0src/a.py\0D\0", b"R100\0src/a.py\0", b"X\0src/a.py\0"):
+            with self.subTest(out=out):
+                def log(repo, *args, out=out, **kwargs):
+                    return out if args[0] == "log" else real(repo, *args, **kwargs)
+
+                with mock.patch.object(planscope, "_git", log), \
+                        self.assertRaisesRegex(planscope.PlanScopeError, "could not be parsed"):
+                    planscope.main_changes(str(self.repo), self.start, self.base)
+
+    def test_one_walk_of_main_gives_every_path_and_the_deleted_ones(self):
+        self.on_main(("src/new.py", "n\n"), ("src/app.py", None))
+
+        self.assertEqual(planscope.main_changes(str(self.repo), self.start, self.base),
+                         (frozenset({"src/new.py", "src/app.py"}), frozenset({"src/app.py"})))
+
+    def test_a_branch_name_with_a_slash_is_read_as_one_name(self):
+        gh = FakeGh({f"repos/{REPOSITORY}/branches/release%2F2": tip_row(self.base)})
+
+        self.assertEqual(mergeauthority.read_tip(GhApi(gh), REPOSITORY, "release/2"), self.base)
+
     def test_a_case_variant_of_a_path_the_head_adds_refuses(self):
         self.write("src/New.py", "n\n")
         self.commit("add")
