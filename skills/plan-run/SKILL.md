@@ -8,13 +8,15 @@ description: Run an authorised plan across merges — confirm the merge, run the
 Paths such as `plan-run/references/stops.md` are relative to the skills directory, the parent of
 this skill's own directory.
 
-**If you cannot read a file this skill links to, stop.** Make no file write if check 0 failed, and
-never edit a merged record. Otherwise, in the open item PR you are working on, set its record's
-`## Status` to say whether this part finished (`stopped unfinished` if not) and `## Next` to
-`blocked: <reason>`. Label that PR `plan:blocked` and remove any `plan:continue`; before an item PR
-exists, label the merged PR that started the session instead, and a valid restart, which has no such
-PR, labels nothing. Report the blocker with one to three ways forward. Where a link below says more
-about an unreadable file, that adds to this rule.
+**If you cannot read a file this skill links to, stop.** Make no file write unless this session
+passed check 0 (plan-run/SKILL.md section 2), and never edit a merged record. If it passed and you
+are working on an open item PR, set that PR's record's `## Status` to say whether this part finished
+(`stopped unfinished` if not) and `## Next` to `blocked: <reason>`; a push to a PR marked ready
+returns it to draft first, as plan-pr/SKILL.md says. Whether or not check 0 passed, label
+`plan:blocked` and remove any `plan:continue` on the open item PR you are working on or, with none
+open, on the merged PR that started the session; a valid restart with no open item PR labels
+nothing. Report the blocker with one to three ways forward. Where a link below says more about an
+unreadable file, that adds to this rule.
 
 When a plan PR merges, its history belongs in durable records and the next session should carry only
 what comes next. Leftover review rounds, dead ends and command output cost context and let stale
