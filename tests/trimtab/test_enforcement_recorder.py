@@ -159,11 +159,12 @@ class Records(World):
 
     def test_leaves_another_projects_pass_alone(self):
         plant_pass(self.config, "other/repo", PINNED)
+        before = pass_file(self.config, "other/repo").read_bytes()
 
         self.record(self.gh(failing="E3"))
 
         # A recorder removes only its own project's pass; the new epoch, not a deletion, retires the other.
-        self.assertTrue(pass_file(self.config, "other/repo").exists())
+        self.assertEqual(pass_file(self.config, "other/repo").read_bytes(), before)
 
     def test_writes_no_pass_when_a_later_session_started_a_new_epoch(self):
         fetch = self.git.fetch_clean
@@ -283,6 +284,14 @@ class Clears(World):
 
         self.assertFalse(gate.cached_pass(self.config, PROJECT, PINNED))
 
+    def test_clears_the_status_lines_with_the_passes(self):
+        plant_pass(self.config, PROJECT, PINNED)
+        enforcement_record._status(self.config, PROJECT, "passed")
+
+        self.clear()
+
+        self.assertEqual(list((self.config / guardstate.ROOT / gate.CACHE_PARTS[0]).glob("*.status")), [])
+
     def test_refuses_to_leave_passes_in_a_directory_others_can_write(self):
         plant_pass(self.config, PROJECT, PINNED)
         os.chmod(self.config / guardstate.ROOT / gate.CACHE_PARTS[0], 0o777)
@@ -346,9 +355,11 @@ class TheHookClearsFirst(unittest.TestCase):
         os.chmod(self.enforcement(), 0o777)
         self.addCleanup(os.chmod, self.enforcement(), 0o700)
 
+        (self.enforcement() / ("x" + enforcement_record.STATUS_SUFFIX)).write_text("passed\n")
+
         self.run_hook(TRIMTAB_PLAN_RUN="1")
 
-        self.assertEqual(list(self.enforcement().glob("*.json")), [])
+        self.assertEqual((list(self.enforcement().glob("*.json")), list(self.enforcement().glob("*.status"))), ([], []))
 
     def test_runs_no_tool_from_a_directory_on_the_inherited_path(self):
         shims = self.tmp / "shims"
@@ -420,7 +431,8 @@ class TheHookClearsFirst(unittest.TestCase):
             (shims / name).write_text(f"#!/bin/sh\ntouch {marker}\nexit 1\n")
             (shims / name).chmod(0o755)
 
-        out = self.source_and_call("sm_new_epoch && sm_clear_passes && sm_trusted python3", f"{shims}:/usr/bin:/bin")
+        out = self.source_and_call("sm_new_epoch && sm_drop_epoch && sm_clear_passes && sm_trusted python3",
+                                   f"{shims}:/usr/bin:/bin")
 
         self.assertEqual((out.returncode, marker.exists()), (0, False))
 
@@ -506,7 +518,9 @@ class Main(unittest.TestCase):
         self.assertEqual(enforcement_record.main(["clear"]), 1)
 
     def test_a_record_with_a_malformed_epoch_writes_no_pass(self):
-        with mock.patch.object(enforcement_record.guardstate, "config_dir", lambda: Path(tempfile.mkdtemp())), \
+        config = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(config)])
+        with mock.patch.object(enforcement_record.guardstate, "config_dir", lambda: config), \
                 mock.patch.object(enforcement_record.tools, "Git", side_effect=AssertionError("must not read")):
             line = enforcement_record.record(Path("/nonexistent"), "not-an-epoch")
 

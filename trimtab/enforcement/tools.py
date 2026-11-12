@@ -107,10 +107,12 @@ def _root_only_tree(path: str) -> bool:
 def _network(environ: Mapping[str, str]) -> dict[str, str]:
     env = {k: environ[k] for k in PROXY_KEEP if k in environ}
     for key in CA_KEEP:
-        # The resolved path is what is judged, so it is what is kept: a session-owned link to a root-owned CA
-        # could be re-pointed after the check, but the resolved path cannot be.
-        if key in environ and _root_only_tree(environ[key]):
-            env[key] = os.path.realpath(environ[key])
+        # Resolved once, and that one path is both judged and kept: a session-owned link to a root-owned CA
+        # could be re-pointed after the check, or between two resolutions, but the resolved path cannot be.
+        if key in environ:
+            real = os.path.realpath(environ[key])
+            if _root_only_tree(real):
+                env[key] = real
     return env
 
 

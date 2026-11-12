@@ -207,8 +207,9 @@ sm_enforcement_dir() {
 sm_clear_passes() {
   local PATH="$SM_SYSTEM_PATH" dir
   dir=$(sm_enforcement_dir) || return 0
-  # The status lines go too: one left saying "passed" would contradict an empty cache.
-  [[ -n "$dir" ]] && rm -f -- "$dir/"*.json "$dir/"*.status 2>/dev/null
+  # The status lines go too: one left saying "passed" would contradict an empty cache. Only inside a real
+  # directory: through a planted link, rm would reach somewhere else.
+  [[ -n "$dir" && -d "$dir" && ! -L "$dir" ]] && rm -f -- "$dir/"*.json "$dir/"*.status 2>/dev/null
   return 0
 }
 
@@ -217,7 +218,8 @@ sm_clear_passes() {
 sm_drop_epoch() {
   local PATH="$SM_SYSTEM_PATH" dir
   dir=$(sm_enforcement_dir) || return 0
-  [[ -n "$dir" ]] && rm -rf -- "$dir/.epoch" 2>/dev/null
+  # Only inside a real directory: through a planted link, rm would reach somewhere else.
+  [[ -n "$dir" && -d "$dir" && ! -L "$dir" ]] && rm -rf -- "$dir/.epoch" 2>/dev/null
   return 0
 }
 

@@ -97,8 +97,8 @@ Linux is the only tested platform. Known gaps, not yet handled:
   and the weekly usage report's timer uses systemd, which macOS lacks.
 - macOS: an autonomous plan run never gets an E20 pass. The session-mode
   hook's recorder needs GNU `mv -T`, `setsid` and `timeout` under
-  `/usr/bin:/bin`, which macOS does not ship. This fails closed, so guards
-  refuse every write in the run
+  `/usr/bin:/bin`, which macOS does not ship. This fails closed: once the
+  E21 guards land they refuse every write in such a run
   (docs/adr/0063-the-plan-run-enforcement-gate.md, Consequences).
   Interactive sessions are unaffected.
 - Native Windows: creating symlinks needs Developer Mode or administrator

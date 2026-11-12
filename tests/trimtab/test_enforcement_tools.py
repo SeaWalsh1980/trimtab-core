@@ -280,14 +280,46 @@ class RunsNoFetchOnARead(Repo):
 
         self.assertFalse(marker.exists())
 
-    def test_the_pins_alone_stop_a_lazy_fetch(self):
-        marker = self.plant()
+    def lazy(self, pins):
+        """The read with lazy fetch on in the environment and only `pins` (plus no hooks) on the command line."""
         real = tools.git_env
         with mock.patch.object(tools, "git_env",
-                               lambda e=os.environ: {k: v for k, v in real(e).items() if k != "GIT_NO_LAZY_FETCH"}):
+                               lambda e=os.environ: {k: v for k, v in real(e).items() if k != "GIT_NO_LAZY_FETCH"}), \
+                mock.patch.object(tools.Git, "_pins",
+                                  lambda s: ["-c", f"core.hooksPath={os.devnull}",
+                                             *[a for kv in pins for a in ("-c", kv)]]):
             self.read_missing(tools.Git(environ={"HOME": str(self.tmp)}))
 
+    def plant_file_transport(self):
+        """A promisor on a local path whose upload-pack command the session chose: no ssh, no sshCommand."""
+        marker = self.tmp / "uploaded"
+        for key, value in (("core.repositoryformatversion", "1"), ("extensions.partialClone", "evil"),
+                           ("remote.evil.promisor", "true"), ("remote.evil.url", f"file://{self.repo}"),
+                           ("remote.evil.uploadpack", f"touch {marker}; git-upload-pack")):
+            git(self.repo, "config", key, value)
+        return marker
+
+    def test_the_ssh_command_pin_alone_stops_the_planted_ssh_fetch(self):
+        marker = self.plant()
+
+        self.lazy(["core.sshCommand="])
+
         self.assertFalse(marker.exists())
+
+    def test_the_protocol_pin_alone_stops_a_local_transport_fetch(self):
+        marker = self.plant_file_transport()
+
+        self.lazy(["protocol.allow=never"])
+
+        self.assertFalse(marker.exists())
+
+    def test_with_no_layer_the_local_transport_fetch_runs(self):
+        """The control for the test above: the planted upload-pack command really runs."""
+        marker = self.plant_file_transport()
+
+        self.lazy([])
+
+        self.assertTrue(marker.exists())
 
     def test_with_both_layers_gone_the_fetch_runs(self):
         """The control: shows the planted config really fetches, so the two tests above test something."""
@@ -313,6 +345,18 @@ class BoundsEachRead(Repo):
         with mock.patch.object(tools, "OBJECT_LIMIT", 3), self.assertRaises(ToolError):
             objects.get(blob, "blob")
 
+    def test_reads_nothing_more_once_a_read_has_failed(self):
+        # The refused object's body is still in the pipe: a later read would take it for a header.
+        blob = git(self.repo, "rev-parse", f"{self.genuine}:f")
+        tree = git(self.repo, "rev-parse", f"{self.genuine}^{{tree}}")
+        objects = self.git.objects(self.repo)
+        self.addCleanup(objects.close)
+        with mock.patch.object(tools, "OBJECT_LIMIT", 3), self.assertRaises(ToolError):
+            objects.get(blob, "blob")
+
+        with self.assertRaisesRegex(ToolError, "stopped after an earlier failure"):
+            objects.get(tree, "tree")
+
     def test_gives_up_on_an_object_that_never_comes(self):
         blob = git(self.repo, "rev-parse", f"{self.genuine}:f")
         loose = self.objects_dir() / blob[:2] / blob[2:]
@@ -334,6 +378,16 @@ class KeepsOnlyTrustedCaSettings(unittest.TestCase):
     def test_keeps_a_ca_file_only_root_can_change(self):
         self.assertEqual(tools.git_env({"SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"}).get("SSL_CERT_FILE"),
                          "/etc/ssl/certs/ca-certificates.crt")
+
+    @unittest.skipUnless(os.path.isfile("/etc/ssl/certs/ca-certificates.crt"), "no system CA bundle here")
+    def test_keeps_the_resolved_path_of_a_link_this_user_owns(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(subprocess.run, ["rm", "-rf", directory])
+        link = os.path.join(directory, "ca.pem")
+        os.symlink("/etc/ssl/certs/ca-certificates.crt", link)  # the session could re-point this later
+
+        self.assertEqual(tools.git_env({"SSL_CERT_FILE": link}).get("SSL_CERT_FILE"),
+                         os.path.realpath("/etc/ssl/certs/ca-certificates.crt"))
 
     def test_drops_a_ca_file_this_user_can_write(self):
         handle, path = tempfile.mkstemp()

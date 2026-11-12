@@ -5,12 +5,14 @@
 
 The hook starts a new epoch, runs `clear` synchronously (bounded at 4 s; it removes every pass and
 reads no git), then starts `record` in the background with that epoch, both with the operator's
-launch environment, never the session's shell. `record` holds one lock for its whole run, removes
+launch environment, never the session's shell. With no epoch, or a malformed one, `record` reads
+nothing and writes no pass (it removes nothing either: a pass is only accepted under the current
+epoch, which such a recorder does not hold). Otherwise it holds one lock for its whole run, removes
 the project's cached pass before it reads anything, fetches the default branch into a fresh
 repository, runs the gate, and writes a pass only when every row is shown and the epoch it was
 handed is still current, checked before and after the write (so a recorder an earlier session
-left running, or still waiting on the lock, cannot write after a later session's clear). With no
-epoch, or one it cannot read, it writes no pass. Every other way out leaves no pass: an error,
+left running, or still waiting on the lock, cannot write after a later session's clear). It
+writes its status line under the lock too. Every other way out leaves no pass: an error,
 SIGTERM from the hook's timeout (raised as an exit, so the cleanup runs), or a kill (the pass was
 already removed). A one-line status beside the cache names why.
 
@@ -119,11 +121,9 @@ def record(project: Path, epoch: str | None = None) -> str:
     if not expected:
         # No epoch to write under: nothing it read could become a pass, so it reads nothing.
         line = "not passed: there is no epoch to write a pass under"
-        try:
-            _status(config, None, line)
-        except (guardstate.GuardStateError, OSError):
-            pass  # the status is the operator's note; no pass was or will be written
+        _try_status(config, None, line)
         return line
+    written = False
     try:
         with _locked(config):
             scratch = None
@@ -137,8 +137,6 @@ def record(project: Path, epoch: str | None = None) -> str:
                 failing = [f"{r.id}: {r.problem}" for r in gate.decide(facts) if r.problem]
                 if failing:
                     line = "not passed: " + " | ".join(failing)
-                elif not expected:
-                    line = "not passed: there is no epoch to write a pass under"
                 elif _epoch(config) != expected:
                     line = "not passed: a later session started a new epoch while this ran"
                 else:
@@ -153,12 +151,20 @@ def record(project: Path, epoch: str | None = None) -> str:
                     tools.remove_tree(scratch)
                 if line != PASSED:
                     gate.clear_pass(config, repository)  # every pass when the repository is unknown
+                # Under the lock, so a later session's clear (which takes it) cannot be followed by this status.
+                written = _try_status(config, repository, line)
     finally:
-        try:
-            _status(config, repository, line)
-        except (guardstate.GuardStateError, OSError):
-            pass  # the status is the operator's note; the pass, the fact guards read, is already settled
+        if not written:
+            _try_status(config, repository, line)  # the lock itself failed: still say why
     return line
+
+
+def _try_status(config: Path, repository: str | None, line: str) -> bool:
+    try:
+        _status(config, repository, line)
+        return True
+    except (guardstate.GuardStateError, OSError):
+        return False  # the status is the operator's note; the pass, the fact guards read, is already settled
 
 
 def _terminate(signum, frame):
