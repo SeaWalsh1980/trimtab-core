@@ -21,20 +21,26 @@
 # Before any command: tools are named bare, and the inherited PATH starts with
 # a user-writable directory (docs/adr/0065-hooks-reset-path-first.md).
 export PATH=/usr/bin:/bin
-payload=$(cat) || exit 0
+# Failing open is by design, never silent: each such exit tells the user that
+# the body went unchecked and why. Claude Code shows a hook's stderr on exit 0
+# only in its debug log, so the notice is a systemMessage on stdout, as
+# session-path.sh does, and a copy goes to stderr. Since the reset above,
+# python3 is always /usr/bin/python3, whatever newer one the session's PATH
+# holds (ADR 0065).
+unchecked() { # unchecked <why>
+  local msg="pr-body-check: the PR body was not checked: $1. CI is the gate."
+  echo "$msg" >&2
+  msg=${msg//\\/\\\\}; msg=${msg//\"/\\\"}
+  printf '{"systemMessage":"%s"}\n' "$msg"
+  exit 0
+}
+payload=$(cat) || unchecked "the hook payload could not be read"
 porcelain='gh[[:space:]]+pr'
 rest='gh[[:space:]]+api.*pulls'
 write='(-X|--method|-f|-F|--raw-field|--field|--input)'
 if ! [[ "$payload" =~ $porcelain ]]; then
   [[ "$payload" =~ $rest && "$payload" =~ $write ]] || exit 0
 fi
-# Failing open is by design, never silent: each such exit says on stderr that
-# the body went unchecked and why. Since the reset above, python3 is always
-# /usr/bin/python3, whatever newer one the session's PATH holds (ADR 0065).
-unchecked() { # unchecked <why>
-  echo "pr-body-check: the PR body was not checked: $1. CI is the gate." >&2
-  exit 0
-}
 command -v python3 >/dev/null 2>&1 || unchecked "no python3 in /usr/bin or /bin"
 # -P exists only from 3.11: an older interpreter, or one that rejects -I, fails
 # this probe, and the check fails open (CI is the gate).
@@ -55,6 +61,8 @@ here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 python3 -I -B "$here/run_module.py" "$here/.." trimtab.adapters.pr_body_check <<<"$payload"
 rc=$?
 [[ $rc -eq 2 ]] && exit 2
-# Any other non-zero is the check failing, a missing PyYAML among them.
-[[ $rc -eq 0 ]] || unchecked "the check exited $rc (PyYAML missing from $(command -v python3)?)"
+# Any other non-zero is the check failing: the loader refusing, or the adapter
+# crashing (a PyYAML missing from this python3 is one cause). Its own stderr
+# names which.
+[[ $rc -eq 0 ]] || unchecked "the check exited $rc under $(command -v python3); its stderr says why"
 exit 0

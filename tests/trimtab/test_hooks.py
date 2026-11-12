@@ -752,21 +752,29 @@ class HookPathReset(unittest.TestCase):
         home = self.root / "home"
         self.local_bin = home / ".local" / "bin"
         self.names = planted_names()
+        # session-path.sh reaches a tool (grep) only with the CLI installed and
+        # an env file that already exists.
+        cli = home / ".claude" / "bin" / "trimtab"
+        cli.parent.mkdir(parents=True)
+        cli.write_text("#!/bin/sh\n")
+        cli.chmod(0o755)
+        env_file = self.root / "claude-env"
+        env_file.write_text("")
         self.env = {"PATH": f"{self.local_bin}:/usr/bin:/bin", "HOME": str(home), "TMPDIR": str(self.root),
-                    "CLAUDE_CONFIG_DIR": str(home / ".claude")}
+                    "CLAUDE_CONFIG_DIR": str(home / ".claude"), "CLAUDE_ENV_FILE": str(env_file)}
 
     def tearDown(self):
         self._tmp.cleanup()
 
-    def ran_planted(self, hook, marker):
-        """The planted tools <hook> ran, in order, with recorders written to <marker>."""
+    def ran_planted(self, hook, marker, names=None):
+        """The planted tools <hook> ran, in order, with recorders for <names> (default: all) writing to <marker>."""
         if marker.exists():
             marker.unlink()
         if self.local_bin.exists():
             for stub in self.local_bin.iterdir():
                 stub.unlink()
             self.local_bin.rmdir()
-        plant(self.local_bin, marker, self.names)
+        plant(self.local_bin, marker, self.names if names is None else names)
         payload, args = hook_input(hook, self.root)
         subprocess.run([str(hook), *args], input=payload, capture_output=True, text=True,
                        cwd=self.root, env=self.env, timeout=30)
@@ -786,11 +794,14 @@ class HookPathReset(unittest.TestCase):
         # The control for the case above, per hook: a copy whose reset puts
         # ~/.local/bin first again, as the inherited PATH does. Each must run a
         # planted tool, so an empty record above is the reset's doing and not a
-        # payload that stops before any tool.
+        # payload that stops before any tool. `cat` is left real here: every
+        # hook reads its payload with it first, and a planted one would stop the
+        # hook there, before the fast path its payload is meant to pass.
         copies = hooks_with_path(self.root / "control", f"{self.local_bin}:/usr/bin:/bin")
+        past_cat = [n for n in self.names if n != "cat"]
         for hook in SHELL_HOOKS:
             with self.subTest(hook=hook.name):
-                self.assertNotEqual(self.ran_planted(copies / hook.name, self.root / f"{hook.name}.ctl"), [])
+                self.assertNotEqual(self.ran_planted(copies / hook.name, self.root / f"{hook.name}.ctl", past_cat), [])
 
     def test_the_planted_tools_include_what_the_guards_start(self):
         self.assertLessEqual({"python3", "jq", "git", "cat", "timeout", "sha256sum"}, set(self.names))

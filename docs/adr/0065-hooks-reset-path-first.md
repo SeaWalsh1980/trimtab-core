@@ -39,11 +39,16 @@ the reset. It also runs each hook with recording stubs in `~/.local/bin`, first 
 Debian, one stub for every word in the hooks that names an executable in `/usr/bin` or `/bin`.
 Each hook gets a payload for its own event that takes it past its fast path, and the test fails,
 naming the hook, if any stub ran. A control runs, for every hook, a copy whose reset puts
-`~/.local/bin` first again, and requires a stub to run, so no hook's empty record can come from a
-payload that stops before any tool.
+`~/.local/bin` first again, with every tool but `cat` planted, and requires a stub to run. Every
+hook reads its payload with `cat` first, so a planted one would stop it there; with `cat` real,
+the control shows each payload reaches a tool past the fast path, and no hook's empty record can
+come from a payload that stops early.
 
 pr-body-check fails open by design (ADR 0005), and the reset narrows which `python3` it can use.
-Each of its fail-open exits now says on stderr that the body went unchecked, and why. Bootstrap
+Each of its fail-open exits after reading the payload now tells the user that the body went
+unchecked, and why. Claude Code shows a hook's stderr on exit 0 only in its debug log, so the
+notice is a `systemMessage` on stdout, as session-path.sh already does, with a copy on stderr.
+An unreadable payload, which used to exit silently, takes the same path. Bootstrap
 holds the `python3` in `/usr/bin:/bin` to the 3.11 floor and requires PyYAML there, beside its
 existing checks of the `python3` first on the operator's PATH.
 

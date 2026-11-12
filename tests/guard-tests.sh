@@ -144,6 +144,7 @@ ph_case copy   "the real hooks directory is copied"                "$HOOKS"
 ph_case refuse "a hook without the canonical reset is not copied"  "$PH_FIX/none/hooks"
 ph_case refuse "a hook with two resets is not copied"              "$PH_FIX/two/hooks"
 ph_case refuse "a loader with no trimtab/ beside it is not copied" "$PH_FIX/noroot/hooks"
+ph_diff=""   # set -u: a failed copy must count one FAIL below, not abort the suite
 ph_copy=$(path_hooks "$HOOKS" "/a b/stub") && ph_diff=$(diff "$HOOKS/guard-github.sh" "$ph_copy/guard-github.sh")
 [[ "$ph_diff" == *"> export PATH=/a\\ b/stub"* && $(grep -c '^[<>]' <<<"$ph_diff") -eq 2 ]] \
   && printf 'PASS  %-14s %-6s  %s\n' path_hooks diff "a copy differs from its hook in the reset line only, quoted" \
@@ -2764,13 +2765,18 @@ if python3 -m venv --without-pip "$SC_VENV" >/dev/null 2>&1; then
   rm -f "$SC_MARK"
   # The hook resets PATH (ADR 0065), so the venv's interpreter is put first in
   # the reset itself: this case is about an interpreter that carries a package.
-  # The pass also needs evidence the hook reached the venv's python3: a block
-  # (rc 2), or its could-not-check notice (the venv has no PyYAML). A hook
-  # that never ran, or never started python3, shows neither.
+  # The pass also needs evidence the hook ran the venv's python3 and not the
+  # system one: the venv's python3 becomes a wrapper that leaves its own mark,
+  # then runs the venv interpreter (still the venv: pyvenv.cfg sits beside it).
+  SC_VMARK="$CPTMP/sc-venv-ran"
+  mv "$SC_VENV/bin/python3" "$SC_VENV/bin/python3-real"
+  printf '#!/bin/sh\n: > %q\nexec %q "$@"\n' "$SC_VMARK" "$SC_VENV/bin/python3-real" > "$SC_VENV/bin/python3"
+  chmod +x "$SC_VENV/bin/python3"
   if sc_vhooks=$(path_hooks "$SC_ROOT/hooks" "$SC_VENV/bin:/usr/bin:/bin"); then
-    sc_err=$(printf '%s' "$pl" | env SC_MARK="$SC_MARK" CLAUDE_CONFIG_DIR="$SC_CFG" \
-      bash "$sc_vhooks/pr-body-check.sh" 2>&1 >/dev/null); sc_rc=$?
-    [[ ! -e "$SC_MARK" && ( $sc_rc -eq 2 || "$sc_err" == *"the check exited"* ) ]]
+    rm -f "$SC_VMARK"
+    printf '%s' "$pl" | env SC_MARK="$SC_MARK" CLAUDE_CONFIG_DIR="$SC_CFG" \
+      bash "$sc_vhooks/pr-body-check.sh" >/dev/null 2>&1
+    [[ ! -e "$SC_MARK" && -e "$SC_VMARK" ]]
     sc_report $? pr-body-check.sh "a trimtab package in site-packages does not stand in for the checkout's"
   else
     sc_report 1 pr-body-check.sh "a trimtab package in site-packages: no hooks copy with the venv first"
