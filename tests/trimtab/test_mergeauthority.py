@@ -353,7 +353,7 @@ class AgreesWithTheSkill(unittest.TestCase):
 
     def test_the_skills_record_check_states_its_own_pr_lookup(self):
         """Check 2's lookup moved into check-plan-authorised (ADR 0059), so section 3 can't point back at it."""
-        # Section 3 now spans plan-run's SKILL.md and the top of record-authority.md (ADR 0066).
+        # Section 3 now spans plan-run's SKILL.md and the top of record-authority.md (ADR 0067).
         entry = (ROOT / "skills" / "plan-run" / "SKILL.md").read_text(encoding="utf-8")
         start = entry.index("### 3. Work out the state")
         state = entry[start:entry.index("### 4. Gate the next work", start)]

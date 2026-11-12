@@ -1,4 +1,4 @@
-"""The plan skills point at each other by path (ADR 0066).
+"""The plan skills point at each other by path (ADR 0067).
 
 Every path must name a file that exists, every reference must be reachable from a SKILL.md, each
 SKILL.md must carry the shared rule for a linked file it cannot read, and a link to a file that
