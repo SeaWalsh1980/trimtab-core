@@ -24,8 +24,12 @@ Each hook names its interpreter by absolute path: `#!/bin/bash` for the shell ho
 no shebang and is unchanged.
 
 `tests/trimtab/test_hooks.py` (`HookShebangs`) fails if any file under `hooks/` has a shebang that
-uses `env` or an interpreter outside `/bin` or `/usr/bin`. `ShebangFault` tests the checker
-itself, so the scan cannot pass by matching nothing.
+uses `env`, names an interpreter outside `/bin` or `/usr/bin`, names anything there other than
+`bash` or `python3`, or holds a carriage return. The named list matters: a wrapper in `/usr/bin`
+such as `nice`, `time` or `busybox` takes its own interpreter from PATH. A carriage return makes
+the kernel look for `/bin/bash\r`. The scan also fails if a `.sh` or executable file under `hooks/`
+has no shebang, because run by its path that file falls back to the calling shell. `ShebangFault`
+and `MissingShebang` test the checkers themselves, so the scan cannot pass by matching nothing.
 
 ## Options considered
 
@@ -40,11 +44,15 @@ itself, so the scan cannot pass by matching nothing.
 - A planted `bash` earlier in PATH no longer replaces the hooks' interpreter.
 - **A host with no `/bin/bash` runs without its guards.** The kernel cannot start the hook, the
   shell reports exit 127, and Claude Code treats any exit code other than 2 as "allow" (README,
-  Platforms). Every hook fails to start, but nothing blocks: this fails open. The SessionStart probe
-  in `settings.base.json` only checks `[ -x hook ]`, so it does not catch this. Debian, the only
-  tested platform, always has `/bin/bash`: `/bin` is a link to `/usr/bin` there. A probe for the
-  interpreter is a change to `settings.base.json` for the operator (SEC-7) and is not part of
-  this record.
+  Platforms). Every hook fails to start, but nothing blocks: this fails open. Install catches it.
+  `bootstrap.sh` runs each guard by its path and dies unless it returns 2, so neither an install
+  nor `--check` succeeds on such a host. The gap left is at runtime. The SessionStart probe in
+  `settings.base.json` only checks `[ -x hook ]`, so it does not see `/bin/bash` removed after
+  install, or hooks put in place without bootstrap. That probe is the operator's to change
+  (SEC-7), so the fix is not part of this record. Debian, the only tested platform, always has
+  `/bin/bash`: `/bin` is a link to `/usr/bin` there. A minimal container image without bash
+  (Alpine, distroless) is not a supported host. Bootstrap refuses to install on one for the same
+  reason.
 - **On macOS the hooks now always run under the system bash 3.2.** Previously a bash 4 or later
   earlier in PATH was enough; now the README's bash 3.2 warning applies to every Mac.
 - The hooks still run `python3`, `jq`, `git` and other tools by bare name from the inherited

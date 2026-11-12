@@ -1,14 +1,16 @@
 """The trimtab hooks: pr-body-check.sh (PreToolUse), doctrine-drift.sh and session-path.sh (SessionStart).
 
 Each runs as Claude Code would run it: the script, a JSON payload on stdin,
-exit code and streams observed.
+exit code and streams observed. The last section reads every file under
+hooks/ for its shebang (ADR 0064).
 """
 
 import json
+import os
 import subprocess
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from instance_fixture import INSTANCE_JSON, env_for, git, make_instance
 
@@ -532,27 +534,43 @@ class SessionPath(unittest.TestCase):
 # ~/.local/bin/bash would replace every guard before any line of it ran.
 
 HOOKS = REPO / "hooks"
-TRUSTED_DIRS = ("/bin", "/usr/bin")
+TRUSTED_DIRS = {"/bin", "/usr/bin"}
+# Named, not any binary in a trusted directory: a wrapper such as nice, time,
+# xargs or busybox takes its own interpreter from PATH, which is the hole.
+INTERPRETERS = {"bash", "python3"}
 
 
 def shebang_fault(first_line):
     """Why a file's first line is an unsafe shebang, or None when it is safe or absent."""
     if not first_line.startswith(b"#!"):
         return None
+    if b"\r" in first_line:
+        return "carriage return in the shebang: the kernel looks for an interpreter named with it"
     words = first_line[2:].decode("utf-8", "replace").split()
     if not words:
         return "empty shebang"
-    interpreter = words[0]
-    if interpreter.rsplit("/", 1)[-1] == "env":
+    interpreter = PurePosixPath(words[0])
+    if interpreter.name == "env":
         return f"{interpreter} resolves the interpreter from PATH"
-    if interpreter.rsplit("/", 1)[0] not in TRUSTED_DIRS:
-        return f"{interpreter} is outside {' and '.join(TRUSTED_DIRS)}"
+    if str(interpreter.parent) not in TRUSTED_DIRS:
+        return f"{words[0]} is outside {' and '.join(sorted(TRUSTED_DIRS))}"
+    if interpreter.name not in INTERPRETERS:
+        return f"{words[0]} is not one of {', '.join(sorted(INTERPRETERS))}"
     return None
 
 
 def first_line(path):
     with path.open("rb") as handle:
-        return handle.readline().rstrip(b"\r\n")
+        return handle.readline().rstrip(b"\n")
+
+
+def missing_shebang(path, line):
+    """Why a file must have a shebang and has none, or None."""
+    if line.startswith(b"#!"):
+        return None
+    if path.suffix == ".sh" or os.access(path, os.X_OK):
+        return "no shebang: run by its path, it falls to the calling shell"
+    return None
 
 
 class ShebangFault(unittest.TestCase):
@@ -588,15 +606,51 @@ class ShebangFault(unittest.TestCase):
     def test_a_bare_bang_is_refused(self):
         self.assertIsNotNone(shebang_fault(b"#!"))
 
+    def test_a_carriage_return_is_refused(self):
+        self.assertIsNotNone(shebang_fault(b"#!/bin/bash\r"))
+
+    def test_a_wrapper_that_searches_path_is_refused(self):
+        self.assertIsNotNone(shebang_fault(b"#!/usr/bin/nice bash"))
+
+    def test_busybox_is_refused(self):
+        self.assertIsNotNone(shebang_fault(b"#!/bin/busybox bash"))
+
+    def test_a_directory_as_interpreter_is_refused(self):
+        self.assertIsNotNone(shebang_fault(b"#!/bin/"))
+
+    def test_a_dot_dot_escape_from_bin_is_refused(self):
+        self.assertIsNotNone(shebang_fault(b"#!/bin/../tmp/bash"))
+
+    def test_a_double_leading_slash_is_refused(self):
+        self.assertIsNotNone(shebang_fault(b"#!//bin/bash"))
+
+
+class MissingShebang(unittest.TestCase):
+    def test_a_shell_hook_without_one_is_refused(self):
+        self.assertIsNotNone(missing_shebang(PurePosixPath("hooks/x.sh"), b"# no shebang"))
+
+    def test_a_module_run_by_python3_is_not_judged(self):
+        self.assertIsNone(missing_shebang(HOOKS / "run_module.py", b'"""A module."""'))
+
 
 class HookShebangs(unittest.TestCase):
-    def test_every_hook_names_an_interpreter_in_bin_or_usr_bin(self):
-        files = sorted(p for p in HOOKS.rglob("*") if p.is_file())
+    def setUp(self):
+        self.files = sorted(p for p in HOOKS.rglob("*") if p.is_file())
 
-        faults = {str(p.relative_to(REPO)): shebang_fault(first_line(p)) for p in files}
+    def test_every_hook_names_bash_or_python3_in_bin_or_usr_bin(self):
+        faults = {str(p.relative_to(REPO)): shebang_fault(first_line(p)) for p in self.files}
 
-        self.assertTrue(files, "no files found under hooks/")
         self.assertEqual({path: why for path, why in faults.items() if why}, {})
+
+    def test_every_shell_or_executable_hook_has_a_shebang(self):
+        faults = {str(p.relative_to(REPO)): missing_shebang(p, first_line(p)) for p in self.files}
+
+        self.assertEqual({path: why for path, why in faults.items() if why}, {})
+
+    def test_the_scan_sees_the_guards(self):
+        names = {p.name for p in self.files}
+
+        self.assertLessEqual({"guard-paths.sh", "guard-bash.sh", "session-mode.sh"}, names)
 
 
 if __name__ == "__main__":
