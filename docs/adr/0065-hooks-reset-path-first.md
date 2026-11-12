@@ -45,10 +45,15 @@ the control shows each payload reaches a tool past the fast path, and no hook's 
 come from a payload that stops early.
 
 pr-body-check fails open by design (ADR 0005), and the reset narrows which `python3` it can use.
-Each of its fail-open exits after reading the payload now tells the user that the body went
-unchecked, and why. Claude Code shows a hook's stderr on exit 0 only in its debug log, so the
+Every fault that stops it checking a body it set out to check now tells the user that the body
+went unchecked, and why. Claude Code shows a hook's stderr on exit 0 only in its debug log, so the
 notice is a `systemMessage` on stdout, as session-path.sh already does, with a copy on stderr.
-An unreadable payload, which used to exit silently, takes the same path. Bootstrap
+The hook covers its own faults: an unreadable payload, no or an old `python3`, a missing loader,
+and a check exit other than 0 or 2. The adapter covers its own faults: no instance, an unavailable
+registry, an unreadable body file, an `--input` file that is not JSON, and an exception in the
+check. A body the check never meant to read (`--web`, stdin, a shell-built body) stays quiet, as
+before: CI checks those. The hook holds the adapter's stdout, so a failed run cannot leave half
+of it before the notice. Bootstrap
 holds the `python3` in `/usr/bin:/bin` to the 3.11 floor and requires PyYAML there, beside its
 existing checks of the `python3` first on the operator's PATH.
 

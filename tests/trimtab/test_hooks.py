@@ -202,6 +202,53 @@ class PrBodyCheck(unittest.TestCase):
 
         self.assertEqual(done.returncode, 2)
 
+    def notice(self, done):
+        """The systemMessage the hook printed, or None; the hook must have allowed."""
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return json.loads(done.stdout)["systemMessage"] if done.stdout.strip() else None
+
+    def test_a_body_without_an_instance_is_allowed_with_a_notice(self):
+        env = {k: v for k, v in self.env.items() if k != "TRIMTAB_INSTANCE"}
+
+        done = run(PR_BODY_CHECK, bash("gh pr create --draft --body-file good.md", self.cwd), env=env)
+
+        self.assertIn("TRIMTAB_INSTANCE is not set", self.notice(done))
+
+    def test_a_body_with_the_registry_unavailable_is_allowed_with_a_notice(self):
+        (self.cwd / "instance" / "rules" / "Broken.md").write_text("no front matter, no id prefix\n")
+
+        done = run(PR_BODY_CHECK, bash("gh pr create --draft --body-file good.md", self.cwd), env=self.env)
+
+        self.assertIn("the registry is unavailable", self.notice(done))
+
+    def test_an_unreadable_body_file_is_allowed_with_a_notice(self):
+        done = self.check("gh pr create --draft --body-file missing.md")
+
+        self.assertIn("the body file could not be read", self.notice(done))
+
+    def test_an_input_file_that_is_not_json_is_allowed_with_a_notice(self):
+        done = self.check("gh api -X POST repos/o/r/pulls --input bad.md")
+
+        self.assertIn("the --input file is not JSON", self.notice(done))
+
+    def test_a_check_that_raises_is_allowed_with_a_notice(self):
+        payload = {"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": str(self.cwd),
+                   "tool_input": ["gh pr create --draft"]}
+
+        done = run(PR_BODY_CHECK, payload, env=self.env)
+
+        self.assertIn("the check failed (AttributeError)", self.notice(done))
+
+    def test_a_body_it_was_never_meant_to_read_stays_quiet(self):
+        done = self.check("gh pr create --web")
+
+        self.assertIsNone(self.notice(done))
+
+    def test_a_blocked_body_prints_no_notice(self):
+        done = self.check("gh pr create --draft --body-file bad.md")
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""))
+
     def stub_python(self):
         """A python3 that only records that it ran, first on the hook's PATH; returns (hook, marker)."""
         stub, marker = self.cwd / "stub-bin", self.cwd / "python-ran"

@@ -21,16 +21,21 @@
 # Before any command: tools are named bare, and the inherited PATH starts with
 # a user-writable directory (docs/adr/0065-hooks-reset-path-first.md).
 export PATH=/usr/bin:/bin
-# Failing open is by design, never silent: each such exit tells the user that
-# the body went unchecked and why. Claude Code shows a hook's stderr on exit 0
-# only in its debug log, so the notice is a systemMessage on stdout, as
-# session-path.sh does, and a copy goes to stderr. Since the reset above,
-# python3 is always /usr/bin/python3, whatever newer one the session's PATH
-# holds (ADR 0065).
+# Failing open is by design, never silent: each fault that stops the check
+# tells the user that the body went unchecked and why, here for the hook's own
+# faults and in the adapter for its own. Claude Code shows a hook's stderr on
+# exit 0 only in its debug log, so the notice is a systemMessage on stdout, as
+# session-path.sh does, and a copy goes to stderr. A body the check never meant
+# to read (--web, stdin, a shell-built body) stays quiet: CI checks those.
+# Since the reset above, python3 is always /usr/bin/python3, whatever newer one
+# the session's PATH holds (ADR 0065).
 unchecked() { # unchecked <why>
   local msg="pr-body-check: the PR body was not checked: $1. CI is the gate."
   echo "$msg" >&2
+  # JSON string escapes: backslash first, then quote and the control
+  # characters a path could hold.
   msg=${msg//\\/\\\\}; msg=${msg//\"/\\\"}
+  msg=${msg//$'\n'/\\n}; msg=${msg//$'\r'/\\r}; msg=${msg//$'\t'/\\t}
   printf '{"systemMessage":"%s"}\n' "$msg"
   exit 0
 }
@@ -58,11 +63,14 @@ here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # on sys.path, so no file at the root, and no trimtab package installed in
 # site-packages, can stand in for a module (ADR 0035).
 # -B: write no bytecode beside the package; a snapshot is never written.
-python3 -I -B "$here/run_module.py" "$here/.." trimtab.adapters.pr_body_check <<<"$payload"
+# Its stdout is held, so that on a failed run only this hook's notice reaches
+# Claude Code, never half of the adapter's output before it.
+out=$(python3 -I -B "$here/run_module.py" "$here/.." trimtab.adapters.pr_body_check <<<"$payload")
 rc=$?
 [[ $rc -eq 2 ]] && exit 2
 # Any other non-zero is the check failing: the loader refusing, or the adapter
 # crashing (a PyYAML missing from this python3 is one cause). Its own stderr
 # names which.
 [[ $rc -eq 0 ]] || unchecked "the check exited $rc under $(command -v python3); its stderr says why"
+[[ -n "$out" ]] && printf '%s\n' "$out"
 exit 0

@@ -154,7 +154,7 @@ def _read(cwd: Path, path: str) -> tuple[str, str | None]:
     try:
         return "check", (cwd / path).read_text(encoding="utf-8")
     except OSError:
-        return "allow", "the body file could not be read; CI checks it"
+        return "unchecked", "the body file could not be read"
 
 
 def api_body_of(action: str, options: list[tuple[str, str]], cwd: Path) -> tuple[str, str | None]:
@@ -171,7 +171,7 @@ def api_body_of(action: str, options: list[tuple[str, str]], cwd: Path) -> tuple
         try:
             payload = json.loads(text)
         except ValueError:
-            return "allow", "the --input file is not JSON; CI checks it"
+            return "unchecked", "the --input file is not JSON"
         body = payload.get("body") if isinstance(payload, dict) else None
         if isinstance(body, str):
             return "check", body
@@ -220,10 +220,12 @@ def body_of(action: str, args: list[str], cwd: Path) -> tuple[str, str | None]:
 
 
 def decide(payload: dict) -> tuple[int, str]:
+    """(BLOCK, why) | (ALLOW, "") for a body it never meant to read | (ALLOW, why) for one it could not check."""
     if payload.get("tool_name") not in (None, "Bash"):
         return ALLOW, ""
     command = (payload.get("tool_input") or {}).get("command") or ""
     cwd = Path(payload.get("cwd") or ".")
+    could_not = ""   # the first fault seen; a later segment may still block
     for tokens in _segments(command):
         porcelain, rest = _gh_pr(tokens), _gh_api_pull(tokens)
         if porcelain is not None:
@@ -231,6 +233,9 @@ def decide(payload: dict) -> tuple[int, str]:
         elif rest is not None:
             verdict, detail = api_body_of(*rest, cwd)
         else:
+            continue
+        if verdict == "unchecked":
+            could_not = could_not or detail
             continue
         if verdict == "allow":
             continue
@@ -242,17 +247,30 @@ def decide(payload: dict) -> tuple[int, str]:
         try:
             instance = roots.instance_root()
         except roots.InstanceError:
-            return ALLOW, "pr-body-check: TRIMTAB_INSTANCE is not set; allowing, CI checks the body"
+            return ALLOW, "TRIMTAB_INSTANCE is not set, or does not name an instance"
         registry, problems = registry_for(instance, project_of(cwd))
         if problems:
-            return ALLOW, "pr-body-check: registry unavailable; allowing, CI checks the body"
+            return ALLOW, "the registry is unavailable"
         result = check_body(detail, registry)
         if not result.ok:
             lines = "\n".join(f"  {p}" for p in result.problems)
             return BLOCK, (f"pr-body-check: blocked: the PR body's harness block has "
                            f"{len(result.problems)} problem(s):\n{lines}\n"
                            "Fix the body file and check it with `bin/trimtab check-pr --body-file <file>`.")
-    return ALLOW, ""
+    return ALLOW, could_not
+
+
+def unchecked(why: str) -> int:
+    """Allow a body this check had to read but could not, and tell the user so.
+
+    The notice is a systemMessage on stdout, since Claude Code shows a hook's
+    stderr on exit 0 only in its debug log (ADR 0065); the shell hook's own
+    fail-open exits print the same shape. A copy goes to stderr.
+    """
+    notice = f"pr-body-check: the PR body was not checked: {why}. CI is the gate."
+    print(notice, file=sys.stderr)
+    print(json.dumps({"systemMessage": notice}))
+    return ALLOW
 
 
 def main() -> int:
@@ -260,9 +278,12 @@ def main() -> int:
         payload = json.loads(sys.stdin.read())
         code, message = decide(payload if isinstance(payload, dict) else {})
     except Exception as err:  # fail open: this is policy, CI is the gate (ADR 0005)
-        print(f"pr-body-check: internal error ({type(err).__name__}); allowing, CI checks the body",
-              file=sys.stderr)
-        return ALLOW
+        return unchecked(f"the check failed ({type(err).__name__})")
+    # An allow with a reason is a fault that stopped the check; an allow without
+    # one is a body it was never meant to read (no PR command, --web, stdin or
+    # a shell-built body), which CI checks and which stays quiet.
+    if code == ALLOW and message:
+        return unchecked(message)
     if message:
         print(message, file=sys.stderr)
     return code

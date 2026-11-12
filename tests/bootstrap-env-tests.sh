@@ -1427,6 +1427,15 @@ check_observer_probe() {
   fi
 }
 
+# Not tested here, on purpose: bootstrap's second floor, on the python3 the
+# hooks run (`PATH=/usr/bin:/bin command -v python3`, ADR 0065). Its die paths
+# (none there, older than 3.11, no PyYAML under -I) need a different
+# /usr/bin/python3, which a test cannot provide without root. A variable that
+# pointed bootstrap at another directory would be a seam an installer must not
+# have: the check exists because the hooks cannot be pointed elsewhere. The
+# hooks' own notice, tested in tests/trimtab/test_launchers.py, is what shows
+# a bad /usr/bin/python3 at runtime.
+
 # A python3 on PATH that reports <version> to the installer's floor probe and
 # hands every other call to the real interpreter, so only the version is faked.
 # Prints the directory to put first on PATH.

@@ -75,12 +75,12 @@ class Launchers(unittest.TestCase):
         self.assertNotIn(DECOY, out.stdout + out.stderr)
         self.assertEqual(out.returncode, 0, out.stderr)
 
-    def pr_body_hook(self, fake_python3):
+    def pr_body_hook(self, fake_python3, fakebin_name="fakebin"):
         """Run pr-body-check from a copy whose reset puts a fake python3 first; returns the result.
 
         A minimal environment: nothing from the session reaches the hook.
         """
-        fakebin = self.cwd / "fakebin"
+        fakebin = self.cwd / fakebin_name
         fakebin.mkdir()
         (fakebin / "python3").write_text(fake_python3)
         (fakebin / "python3").chmod(0o755)
@@ -108,7 +108,28 @@ class Launchers(unittest.TestCase):
     def test_the_pr_body_hook_tells_the_user_it_did_not_check_when_the_interpreter_rejects_p(self):
         out = self.pr_body_hook('#!/bin/sh\necho "Unknown option: -P" >&2\nexit 2\n')
 
-        self.assertIn(NOT_CHECKED, json.loads(out.stdout)["systemMessage"])
+        self.assertIn("is older than 3.11 or rejects -P -I", json.loads(out.stdout)["systemMessage"])
+
+    def test_the_pr_body_hook_tells_the_user_it_did_not_check_without_python3(self):
+        # A PATH holding cat and nothing else: the payload is read, then no
+        # python3 is found.
+        onlycat = self.cwd / "onlycat"
+        onlycat.mkdir()
+        (onlycat / "cat").symlink_to("/usr/bin/cat")
+        hooks = hooks_with_path(self.cwd / "no-python", str(onlycat))
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr create --draft"}, "cwd": str(self.cwd)})
+
+        out = subprocess.run([str(hooks / "pr-body-check.sh")], cwd=self.cwd, input=payload,
+                             env={"PATH": "/usr/bin:/bin", "HOME": str(self.cwd)},
+                             capture_output=True, text=True, timeout=60)
+
+        self.assertEqual((out.returncode, "no python3 in /usr/bin or /bin" in json.loads(out.stdout)["systemMessage"]),
+                         (0, True), out.stderr)
+
+    def test_the_pr_body_hook_notice_is_valid_json_for_a_path_with_quotes_and_backslashes(self):
+        out = self.pr_body_hook('#!/bin/sh\nexit 2\n', fakebin_name='fake"bin\\x\ttab')
+
+        self.assertIn('fake"bin\\x\ttab', json.loads(out.stdout)["systemMessage"])
 
     def test_the_pr_body_hook_tells_the_user_it_did_not_check_when_the_check_fails(self):
         # Passes the -P probe, then fails as an import of a missing PyYAML would.

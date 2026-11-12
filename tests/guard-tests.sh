@@ -2765,12 +2765,14 @@ if python3 -m venv --without-pip "$SC_VENV" >/dev/null 2>&1; then
   rm -f "$SC_MARK"
   # The hook resets PATH (ADR 0065), so the venv's interpreter is put first in
   # the reset itself: this case is about an interpreter that carries a package.
-  # The pass also needs evidence the hook ran the venv's python3 and not the
-  # system one: the venv's python3 becomes a wrapper that leaves its own mark,
-  # then runs the venv interpreter (still the venv: pyvenv.cfg sits beside it).
+  # The pass also needs evidence the hook ran the check itself on the venv's
+  # python3, not just its -P probe and not the system one: the venv's python3
+  # becomes a wrapper that leaves its own mark when run_module.py is in its
+  # arguments, then runs the venv interpreter (still the venv: pyvenv.cfg sits
+  # beside it).
   SC_VMARK="$CPTMP/sc-venv-ran"
   mv "$SC_VENV/bin/python3" "$SC_VENV/bin/python3-real"
-  printf '#!/bin/sh\n: > %q\nexec %q "$@"\n' "$SC_VMARK" "$SC_VENV/bin/python3-real" > "$SC_VENV/bin/python3"
+  printf '#!/bin/sh\ncase "$*" in *run_module.py*) : > %q ;; esac\nexec %q "$@"\n' "$SC_VMARK" "$SC_VENV/bin/python3-real" > "$SC_VENV/bin/python3"
   chmod +x "$SC_VENV/bin/python3"
   if sc_vhooks=$(path_hooks "$SC_ROOT/hooks" "$SC_VENV/bin:/usr/bin:/bin"); then
     rm -f "$SC_VMARK"
