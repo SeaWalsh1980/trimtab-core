@@ -9,7 +9,7 @@ rows E5–E21 and E23, this base's job for E22, and the E20 command. It settles 
 record's "Requirements the later PRs must settle". Every row here keeps or tightens its row's
 text; none loosens one, and none changes a row's owner.
 
-Lands in four PRs, each citing this record: (1) this record, the ledger, E20 and E21; (2)
+Lands in four PRs, each citing this record: (1) this record, E20 and its recorder; (2)
 guard-github's E12, E14–E17 and E19; (3) the plan-run layer's E5–E11, E13, E18 and E23, and the
 E22 workflow template; (4) `wrap-merged`. Two changes are security controls (ADR 0011) and go in
 PRs of their own, made by the operator: registering the review recorder (E11) in
@@ -115,9 +115,9 @@ enforcement: a part too big for its session costs a stop, never a weaker gate.
      admin-merged PR.
   2. **The record's path.** It comes from the instance file at the lock's `trimtab_sha`, as an
      object in the instance checkout.
-  3. **The record's text.** It is the record at the first-parent commit of `trimtab_sha` that
-     added it: the merge that put it on Trimtab's default branch, so the text "as merged". A
-     later edit to the record is not read.
+  3. **The record's text.** It is the record at the latest first-parent commit of `trimtab_sha`
+     that added it: the merge that put the current file on Trimtab's default branch, so the text
+     "as merged". A later edit to the record is not read.
   4. **The table.** The §Enforcement table is parsed into exactly E1–E23, each with its
      condition, fact and owner text. A missing, extra or duplicate row, or any failed read,
      fails.
@@ -125,6 +125,12 @@ enforcement: a part too big for its session costs a stop, never a weaker gate.
   No Trimtab API read is made. A project's agent token cannot read a private instance, and a SHA
   cannot be forged, so the git objects are a stronger fact than the API would give. The admin's
   identity rests on the project's lock PR, not on Trimtab's merge.
+
+  A SHA names one object only while nothing redirects git. So git is the system's (root-owned,
+  in a root-only directory), run with an environment built from an allowlist (no steering or
+  config variables, no global or system config), replace objects off, planscope's pinned
+  settings and no hooks. A repository with a grafts file or a shallow history is refused, because
+  grafts still apply with replace objects off. gh is the system's too, keeping only its auth.
 - **Owners decide the source.** "Guard", "Guard (plan-run layer)", "guard-github" and
   "trimtab-core" rows are this base's. "Consuming project" rows are the project's. E22 is both.
 - **The pinned base** is the instance file's `base.sha` at `trimtab_sha`. The lock's derived
@@ -137,24 +143,48 @@ enforcement: a part too big for its session costs a stop, never a weaker gate.
   - its hook is one the owner names (guard-paths for "Guard (plan-run layer)", guard-github for
     "guard-github", either for "Guard");
   - its tests exist and are among those `lint-test` runs, which a contract test here pins;
-  - every attempt of `lint-test` in `.github/workflows/ci.yml`, on the `push` event, for the
-    pinned base commit, passed, read from trimtab-core's job records;
+  - every attempt of `lint-test` in `.github/workflows/ci.yml`, on the `push` event to `main`,
+    for the pinned base commit, passed with a runner and steps, read from trimtab-core's job
+    records;
   - the pinned base descends from the commit that added the entry. This holds by construction,
     because the manifest is read at the pinned base;
-  - outside `--server`, the hook is live, which takes three facts:
-    - the config dir's `hooks/<file>` resolves to this checkout's file;
+  - outside `--server`, **this checkout is the pinned base**, for every base row, hooked or not,
+    since this checkout's code is what shows the row:
+    - `HEAD` is the pinned base;
+    - every file under `hooks/` and `trimtab/` hashes to the base tree's blob, with its mode;
+    - no other file is there, ignored ones (a `__pycache__`) included;
+    - no symlink is there.
+
+    Hashing every file means no index flag (skip-worktree, assume-unchanged), stat trick or
+    ignore rule can hide an edit;
+  - outside `--server`, the hook is live:
+    - the config dir's `hooks/<file>` resolves to this checkout's file and is executable;
     - the config dir's `settings.json` registers it for the manifest's event and matcher;
-    - this checkout's `HEAD` is the pinned base, with no change to `hooks/` or `trimtab/`.
+    - no settings file, the config dir's or the project's, sets `disableAllHooks`, and none is
+      unreadable.
 - **A project row is shown** when the instance file at `trimtab_sha` names, under
-  `enforcement.projects.<owner/name>`, a workflow path and job for it, and every attempt of that job on the `push` event for the default branch's
-  latest commit passed, read from the project's job records. A row the file does not name is not
-  shown.
+  `enforcement.projects.<owner/name>` (compared without case), a workflow path and job for it,
+  and every attempt of that job, on the `push` event to the default branch for its latest
+  commit, passed with a runner and steps, read from the project's job records. A row the file
+  does not name is not shown. One memoised reader serves every row and this base's CI, so all
+  are judged from one snapshot.
 - **`--server`** runs in a project's CI, which has no instance checkout (ADR 0015). It reads
   the rows from a derived lock field that `trimtab bump` writes, as it writes `base_sha`. That
   field is designed and added with E22's PR, and until then `--server` fails.
 - **Output** is one line per row (`E7 shown` or `E7 not shown: <reason>`), never a value read
-  from a file. A pass is cached at `guard-state/enforcement/<sha256 of owner/name>.json` under
-  the key (lock SHA, pinned base SHA, default-branch head). Only a pass is cached.
+  from a file. The command only reports; it never writes the pass the guards read.
+- **The pass cache** is `guard-state/enforcement/<sha256 of owner/name>.json`. Its key is the
+  lock SHA, the pinned base SHA, the default-branch head and an **install digest**: the
+  settings files, where each hook link points, and the code and instance roots. A guard can
+  re-read the digest cheaply, so a hook unlinked or unregistered after a pass voids it at once.
+  **Only the recorder writes it**: `trimtab.adapters.enforcement_record`, which
+  hooks/session-mode.sh starts in the background in a run session, with the operator's launch
+  environment. The recorder takes the repository from the project's `origin`, and that must be
+  a project the instance file names. It first fetches the default branch with the user's git
+  config, so the user's credentials work. That fetch decides nothing: a redirected remote yields
+  a head that is not the server's, which fails the gate. On anything but a pass, including an unexpected error, it
+  removes the cached pass. It writes a one-line status beside the cache, naming the rows not
+  shown.
 
 The manifest maps each row to its refusal tests. A mutation test replaces each row's decision
 function with one that allows, runs that row's refusal tests, and fails unless they fail. So
@@ -162,15 +192,27 @@ function with one that allows, runs that row's refusal tests, and fails unless t
 
 ### 3. E21 — guards obey the gate
 
-In a run session (hooks/session-mode.sh), guard-paths refuses every Edit, Write, MultiEdit and
-NotebookEdit, and guard-github refuses every GitHub write and every `git push`, unless the cache
-holds a pass for the current lock, pinned base and default-branch head. The head is read by
-`git ls-remote` under a 3 s timeout, on every guarded write. There is no time-to-live, so the
-result is never stale. A timeout, a missing cache or a mismatch refuses. The session-start hook
-runs the full command in a run session to fill the cache. Bash file writes stay unconfined
-(ADR 0041), but they reach GitHub only through a push that this row refuses.
+In a run session (hooks/session-mode.sh), unless the cache holds a pass for the current key:
+
+- guard-paths refuses every Edit, Write, MultiEdit and NotebookEdit;
+- guard-paths refuses **every Bash command** except `trimtab check-enforcement` as the whole
+  command, which writes nothing. A shell can write any file, and E21 says "every file write",
+  so the only Bash left while the gate fails is what reports on it. Even `git fetch` writes;
+  the recorder fetches the default branch itself;
+- guard-github refuses every GitHub write and every `git push`.
+
+The current key takes four reads, on every guarded call:
+
+- the default-branch head, by `git ls-remote` under a 3 s timeout;
+- the lock and the instance's base, as objects;
+- the install digest, from local reads.
+
+There is no time-to-live, so a pass is never stale. A timeout, a missing cache or a mismatch
+refuses. A guard that finds no pass for the current key starts the recorder (at most one at a
+time) and refuses, so a merge to the default branch mid-run costs a short wait, not a stop.
 
 guard-github's prefilter grows to read `git push` and remote ref writes, which it now ignores.
+These guards land with E21's PR; this one ships E20 and the recorder.
 
 ### 4. The consuming project's facts (E2, E3, E4)
 
@@ -334,6 +376,12 @@ a run's PR, as the doctrine record says.
 | A ledger with an HMAC | The key would sit where the agent's shell can read it; the protection is still guard-paths, so it adds code and no fact |
 | Cache the E20 pass with a time-to-live instead of keying it to the default-branch head | A merge to the default branch inside the window would run under a stale gate |
 | Run the full E20 command in every hook | Dozens of API reads per write; it outlives the 6 s deadline, and a timeout fails open |
+| Let `trimtab check-enforcement` write the pass (this record's first draft) | Any invocation, from a shimmed PATH or a modified copy, would write a real-looking pass; the recorder, started by the hook with the operator's environment, is the one writer |
+| Accept the forged-pass risk with the command as writer | Leaves the ordinary routes open; the recorder costs one module |
+| Leave Bash unconfined while the gate fails, and narrow E21 upstream | E21 says "every file write"; narrowing a row needs a Trimtab record, and until then the row would not be shown |
+| Key the pass on the lock, base and head only | A hook unlinked or unregistered after a pass would leave the pass standing until the next merge |
+| Detect a changed checkout with `git status` | Index flags, stat tricks and ignore rules hide edits from it; hashing every file does not |
+| Read git and gh from PATH with the inherited environment | A session's PATH, `GIT_*`, `GH_HOST` and repo config would decide what the gate reads |
 | Read the doctrine record and its merge through Trimtab's API | A project's agent token gets 403 on a private instance, and every run would stop; the git objects behind the admin-merged lock are a stronger fact |
 | Read the lock and manifest from the working tree | The agent's shell can edit both; objects named by an admin-set SHA it cannot |
 | Read E3 facts from the review job's own log | The model step writes to the same log and could print a facts line |
@@ -369,7 +417,23 @@ a run's PR, as the doctrine record says.
 - E10, E11 and E23 rest on the ledger only. E22 cannot recheck them server-side. A session
   that forges its ledger past guard-paths could skip in-session rounds, but it could not change
   what CI review, the E22 job or the approver see.
-- Every guarded write in a run costs one `git ls-remote`.
+- **The local gate is not a fact against a session determined to forge it. Accepted, and why:**
+  - The gate runs in the same account as the session. A session can run its own copy of the
+    recorder, or any code, with a forged environment, or write the cache through a path that
+    guard-paths cannot read from the command text.
+  - It can also edit this checkout after a pass. The checkout is hashed only when the gate runs,
+    and the install digest covers the links, not the files they point at.
+  - Hardening (system binaries, a built environment, no replace objects or grafts, file
+    hashes, the recorder as the only writer) closes the ordinary routes: a shimmed PATH, a
+    `git replace`, an index flag, a planted `.pyc`, a command that happens to write the cache.
+    It cannot close these.
+  - What makes forgery gain nothing is E22. The server-side job and the approver re-check every
+    row that rests on a server fact, and only they let a run's PR merge. A forged local pass
+    buys local writes and pushes to a `plan/*` branch, never a merge.
+  - A job re-run that fails after a pass is seen only at the next recorder run (the next
+    session, or the next default-branch move); E22 sees it at merge.
+- Every guarded call in a run costs one `git ls-remote` and a few local reads.
+- While the gate fails, a run can use no Bash except `trimtab check-enforcement`.
 - The instance schema grows by `enforcement`, `review`, `secret_scan` and `fix_limits`. An
   instance without them shows no project rows.
 

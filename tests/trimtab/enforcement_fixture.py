@@ -32,8 +32,9 @@ def record_text(ids=None, before: str = "# 0001 — a record\n\n## Enforcement\n
 # --- the mutation harness: does a row's test fail with its guard removed? -----------------
 
 def survivors(function: str, allow, test_ids) -> list[str]:
-    """The tests in `test_ids` that still pass once `function` (module:name) is replaced by one
-    that always returns `allow`. A refusal test that survives this does not test its guard."""
+    """The tests in `test_ids` not killed once `function` (module:name) is replaced by one that
+    always returns `allow`. Only an assertion failure kills: a test that passes, errors or runs
+    nothing does not show that it tests its guard."""
     module_name, name = function.split(":")
     module = importlib.import_module(module_name)
     loader = unittest.TestLoader()
@@ -42,7 +43,7 @@ def survivors(function: str, allow, test_ids) -> list[str]:
         for test_id in test_ids:
             result = unittest.TestResult()
             loader.loadTestsFromName(test_id).run(result)
-            if result.wasSuccessful() and result.testsRun:
+            if not result.failures or result.errors or not result.testsRun:
                 out.append(test_id)
     return out
 
@@ -62,3 +63,6 @@ class FixtureRefusals(unittest.TestCase):
 
     def test_names_nothing_about_the_guard(self):
         self.assertEqual(ALLOW, 0)
+
+    def test_errors_whatever_the_decision(self):
+        raise RuntimeError("an error, not a failed assertion")

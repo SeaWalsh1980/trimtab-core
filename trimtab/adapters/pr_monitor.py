@@ -40,6 +40,8 @@ from enum import Enum
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from trimtab import guardstate
+
 LIST_VERSION = 1
 TTL_SECONDS = 2 * 24 * 60 * 60
 CAP = 30
@@ -469,13 +471,8 @@ class LockTimeoutError(PrMonitorError):
     """Another writer held the list's lock past the bound."""
 
 
-def config_dir() -> Path:
-    """The Claude config directory: CLAUDE_CONFIG_DIR, else ~/.claude."""
-    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude"))
-
-
-def _private(st: os.stat_result) -> bool:
-    return st.st_uid == os.geteuid() and not st.st_mode & 0o077
+config_dir = guardstate.config_dir  # one reading of the config dir for every guard-state writer
+_private = guardstate.private
 
 
 def state_dir(config: Path, create: bool) -> Path:

@@ -165,6 +165,23 @@ for k in ("cwd", "session_id"):
   sm_cwd="$cwd" sm_sid="$sid"
 }
 
+# sm_record_enforcement <project dir>: in a run session, start E20's recorder in
+# the background, the only writer of the pass cache the guards read (ADR 0063
+# §2-§3). It reads the network, which a SessionStart hook's timeout cannot
+# wait for, so it is detached and bounded; until it writes a pass, guards
+# refuse. Best effort: a recorder that cannot start leaves no pass.
+sm_record_enforcement() {
+  local here py
+  # Off only, never on: with no recorder no pass is written, and guards refuse. Tests set it.
+  [[ "${TRIMTAB_ENFORCEMENT_RECORDER:-1}" == 0 ]] && return 0
+  here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+  py=$(command -v python3) || return 0
+  [[ -r "$here/run_module.py" ]] || return 0
+  ( cd / && setsid timeout -k 5 300 "$py" -I -B "$here/run_module.py" "$here/.." \
+      trimtab.adapters.enforcement_record "$1" </dev/null >/dev/null 2>&1 & ) 2>/dev/null
+  return 0
+}
+
 # ---- SessionStart hook ----------------------------------------------------
 # Never blocks and always exits 0: SessionStart is not a gate. The guard
 # enforces the mode on every write whatever this announcement said.
@@ -178,6 +195,7 @@ sm_main() {
   local s="$sm_signals"
   s=${s//\\/\\\\}; s=${s//\"/\\\"}
   if [[ "$sm_mode" == autonomous ]]; then
+    sm_record_enforcement "$cwd"
     msg="Session mode: AUTONOMOUS PLAN RUN ($s)."
     ctx="$msg Work only as the rules for running an authorised plan allow: writes are limited to the authorised plan's .writes declaration plus its own progress records and issue-register entries, anything else is a register entry or a blocker, and the guard enforces this on every write. State this mode in your first response."
     printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$msg" "$ctx"

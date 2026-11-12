@@ -992,16 +992,8 @@ def cmd_check_enforcement(args) -> int:
         return 2
     for r in results:
         print(f"{r.id} shown" if r.problem is None else f"{r.id} not shown: {r.problem}")
-    if any(r.problem for r in results):
-        return 1
-    if not args.server:
-        try:
-            enforcement_gate.record_pass(config, args.repository, facts.pinned)
-        except (enforcement_gate.guardstate.GuardStateError, OSError) as err:
-            print(f"error: every row is shown, but the pass could not be cached ({type(err).__name__}); "
-                  "guards will refuse", file=sys.stderr)
-            return 2
-    return 0
+    # Report only: the pass the guards read is written by the session-mode hook's recorder alone (ADR 0063 §2).
+    return 1 if any(r.problem for r in results) else 0
 
 
 def cmd_routine_render(args) -> int:
@@ -1365,7 +1357,8 @@ def build_parser() -> argparse.ArgumentParser:
     ce = sub.add_parser("check-enforcement", parents=[common],
                         help="E20: whether every enforcement row E1-E23 is shown, reading the rows from the doctrine "
                              "record and their facts from git objects and job records (ADR 0063). Exits 0 if every row "
-                             "is shown (and caches the pass for the guards), 1 if not, 2 on a failed read")
+                             "is shown, 1 if not, 2 on a failed read. Reports only: it never writes the pass the "
+                             "guards read")
     ce.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the project the run is in")
     ce.add_argument("--repo", default=".", metavar="DIR", help="the project's checkout, fetched (default: .)")
     ce.add_argument("--server", action="store_true", help="run in the project's CI: no liveness, no cache")

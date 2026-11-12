@@ -27,7 +27,7 @@ def config_dir() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude"))
 
 
-def _private(st: os.stat_result) -> bool:
+def private(st: os.stat_result) -> bool:
     return st.st_uid == os.geteuid() and not st.st_mode & 0o077
 
 
@@ -49,7 +49,7 @@ def directory(config: Path, *parts: str, create: bool) -> Path:
             st = os.lstat(path)
         except FileNotFoundError as err:
             raise GuardStateError("the guard-state directory is missing") from err
-        if not stat.S_ISDIR(st.st_mode) or not _private(st):
+        if not stat.S_ISDIR(st.st_mode) or not private(st):
             raise GuardStateError("the guard-state directory is not private to this user")
     return path
 
@@ -64,7 +64,7 @@ def read(path: Path) -> str | None:
         raise GuardStateError(f"a guard-state file cannot be opened ({type(err).__name__})") from err
     with os.fdopen(fd, "rb") as fh:
         st = os.fstat(fh.fileno())
-        if not stat.S_ISREG(st.st_mode) or not _private(st):
+        if not stat.S_ISREG(st.st_mode) or not private(st):
             raise GuardStateError("a guard-state file is not a private regular file")
         data = fh.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:

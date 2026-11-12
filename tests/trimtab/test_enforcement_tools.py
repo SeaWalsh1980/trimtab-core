@@ -1,0 +1,135 @@
+"""The gate's git and gh resist what a session can write (ADR 0063 §2). Real git in temporary repos."""
+
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+from test_scrub import isolate_git
+from trimtab.enforcement import tools
+from trimtab.enforcement.tools import ToolError
+
+
+def git(repo, *args):
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def commit(repo, name, text):
+    (repo / name).write_text(text)
+    git(repo, "add", name)
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", name)
+    return git(repo, "rev-parse", "HEAD")
+
+
+class Repo(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.tmp)])
+        isolate_git(self, self.tmp)
+        self.repo = self.tmp / "repo"
+        self.repo.mkdir()
+        git(self.repo, "init", "-q", "-b", "main")
+        self.genuine = commit(self.repo, "f", "genuine\n")
+        self.git = tools.Git(environ={"HOME": str(self.tmp)})
+
+
+class ResistsRedirection(Repo):
+    def test_ignores_a_replace_ref(self):
+        forged = commit(self.repo, "f", "forged\n")
+        git(self.repo, "replace", self.genuine, forged)
+
+        self.assertEqual(self.git(self.repo, "show", f"{self.genuine}:f"), "genuine\n")
+
+    def test_refuses_a_repository_with_a_grafts_file(self):
+        grafts = Path(git(self.repo, "rev-parse", "--path-format=absolute", "--git-path", "info/grafts"))
+        grafts.parent.mkdir(parents=True, exist_ok=True)
+        grafts.write_text(self.genuine + "\n")
+
+        with self.assertRaises(ToolError):
+            self.git(self.repo, "log", "--format=%H")
+
+    def test_refuses_a_shallow_clone(self):
+        commit(self.repo, "g", "x\n")
+        clone = self.tmp / "clone"
+        subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{self.repo}", str(clone)], check=True)
+
+        with self.assertRaises(ToolError):
+            self.git(clone, "log", "--format=%H")
+
+    def test_does_not_run_a_configured_fsmonitor(self):
+        marker = self.tmp / "ran"
+        script = self.tmp / "monitor.sh"
+        script.write_text(f"#!/bin/sh\ntouch {marker}\n")
+        script.chmod(0o755)
+        git(self.repo, "config", "core.fsmonitor", str(script))
+
+        self.git(self.repo, "status", "--porcelain")
+
+        self.assertFalse(marker.exists())
+
+    def test_ignores_git_steering_variables_in_the_environment(self):
+        other = self.tmp / "other"
+        other.mkdir()
+        git(other, "init", "-q", "-b", "main")
+        commit(other, "f", "other\n")
+        steered = tools.Git(environ={"HOME": str(self.tmp), "GIT_DIR": str(other / ".git")})
+
+        self.assertEqual(steered(self.repo, "show", "HEAD:f"), "genuine\n")
+
+
+class BuildsItsEnvironment(unittest.TestCase):
+    def test_git_keeps_no_steering_or_config_variable(self):
+        env = tools.git_env({"HOME": "/h", "GIT_DIR": "/x", "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "a",
+                             "GIT_REPLACE_REF_BASE": "r", "PATH": "/evil"})
+
+        self.assertEqual(sorted(k for k in env if k.startswith("GIT_") and k not in
+                                ("GIT_NO_REPLACE_OBJECTS", "GIT_LITERAL_PATHSPECS", "GIT_CONFIG_NOSYSTEM",
+                                 "GIT_CONFIG_GLOBAL", "GIT_TERMINAL_PROMPT")), [])
+
+    def test_git_reads_no_global_config(self):
+        self.assertEqual(tools.git_env({})["GIT_CONFIG_GLOBAL"], os.devnull)
+
+    def test_paths_are_the_system_directories(self):
+        self.assertEqual(tools.git_env({"PATH": "/evil"})["PATH"], "/usr/bin:/bin")
+
+    def test_gh_keeps_its_auth_and_no_host(self):
+        env = tools.gh_env({"GH_TOKEN": "t", "GH_HOST": "evil.example", "GH_ENTERPRISE_TOKEN": "e", "GH_REPO": "o/r"})
+
+        self.assertEqual(sorted(k for k in env if k.startswith("GH_") and k != "GH_PROMPT_DISABLED"), ["GH_TOKEN"])
+
+
+class FindsTrustedBinaries(unittest.TestCase):
+    def test_finds_the_systems_git(self):
+        self.assertTrue(tools.trusted("git").startswith(("/usr/bin/", "/bin/")))
+
+    def test_refuses_a_binary_this_user_owns(self):
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(directory)])
+        (directory / "git").write_text("#!/bin/sh\n")
+        (directory / "git").chmod(0o755)
+
+        with self.assertRaises(ToolError):
+            tools.trusted("git", dirs=(str(directory),))
+
+    def test_refuses_a_name_in_no_system_directory(self):
+        with self.assertRaises(ToolError):
+            tools.trusted("no-such-tool-xyz")
+
+
+class RunsOnlyGh(unittest.TestCase):
+    def test_refuses_another_program(self):
+        run = tools.gh_runner(binary="/bin/true")
+
+        with self.assertRaises(ToolError):
+            run(["sh", "-c", "true"], None)
+
+
+class Fetches(Repo):
+    def test_refuses_a_branch_name_that_could_be_an_option(self):
+        with self.assertRaises(ToolError):
+            self.git.fetch(self.repo, "--upload-pack=x")
+
+
+if __name__ == "__main__":
+    unittest.main()

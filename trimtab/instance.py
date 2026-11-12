@@ -29,7 +29,7 @@ ACCOUNTS = {"admin", "agent", "approver"}
 NO_ID_FIELDS = {"cloud", "routines"}
 ENFORCEMENT = {"record", "projects"}
 JOB = {"workflow", "job"}
-ROW_ID = re.compile(r"^E[1-9][0-9]?$")
+ROW_ID = re.compile(r"^E([1-9]|1[0-9]|2[0-3])$")  # E1-E23, the labels AGW-1 names
 WORKFLOW = re.compile(r"^\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$")
 JOB_NAME = re.compile(r"^[^\x00-\x1f]{1,100}$")
 RECORD = re.compile(r"^docs/adr/[0-9]{4}-[a-z0-9-]+\.md$")
@@ -134,15 +134,19 @@ def _enforcement(obj: object) -> tuple[str, MappingProxyType]:
     if not isinstance(projects, dict):
         raise InstanceFileError("enforcement.projects must be an object")
     out = {}
+    seen: set[str] = set()
     for repo, rows in projects.items():
         _repo(repo, "enforcement.projects key")
+        if repo.casefold() in seen:  # GitHub compares repository names without case
+            raise InstanceFileError(f"enforcement.projects names {repo} twice, in different cases")
+        seen.add(repo.casefold())
         if not isinstance(rows, dict):
             raise InstanceFileError(f"enforcement.projects.{repo} must be an object")
         jobs = {}
         for rid, ref in rows.items():
             where = f"enforcement.projects.{repo}.{rid}"
             if not ROW_ID.fullmatch(rid):
-                raise InstanceFileError(f"{where}: not a row id")
+                raise InstanceFileError(f"{where}: not a row id E1-E23")
             if not isinstance(ref, dict):
                 raise InstanceFileError(f"{where} must be an object")
             _keys(ref, JOB, where + ".")

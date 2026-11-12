@@ -16,15 +16,22 @@ from enforcement_fixture import OWNERS, record_text, row_line
 from gh_fake import FakeGh
 from test_scrub import isolate_git
 from trimtab import cli, guardstate
-from trimtab.enforcement import gate, manifest, record
+from trimtab.enforcement import gate, manifest, record, tools
 from trimtab.enforcement.gate import Facts, GateError
 
 PROJECT = "owner/project"
 INSTANCE_REPO = "owner/instance"
 BASE_REPO = "owner/core"
-RECORD = "docs/adr/0001-the-record.md"
-HOOK = {"file": "guard-github.sh", "event": "PreToolUse", "matcher": "Bash"}
+ADR_DIR = "docs/" + "adr/"  # in two pieces: the citation test reads a whole path as a citation
+RECORD = ADR_DIR + "0001-the-record.md"
+GITHUB_HOOK = {"file": "guard-github.sh", "event": "PreToolUse", "matcher": "Bash"}
+PATHS_HOOK = {"file": "guard-paths.sh", "event": "PreToolUse", "matcher": "Edit"}
 ROWS = {r.id: r for r in record.parse(record_text())}
+BASE_ROWS = [rid for rid, r in ROWS.items() if r.side != record.PROJECT]
+HOOKED_ROWS = [rid for rid, r in ROWS.items() if r.hooks]
+GITHUB_ROWS = [rid for rid in HOOKED_ROWS if "guard-github.sh" in ROWS[rid].hooks]
+PROJECT_ROWS = [rid for rid, r in ROWS.items() if r.side != record.BASE]
+PINNED = ("a" * 40, "b" * 40, "c" * 40, "d" * 64)
 
 
 def git(repo, *args):
@@ -42,37 +49,35 @@ def init(repo):
     git(repo, "init", "-q", "-b", "main")
 
 
-def entry_json(rid, hooks=(HOOK,)):
-    return {"row_sha256": ROWS[rid].sha256, "hooks": list(hooks), "tests": ["test_enforcement_gate.Decides.test_x"],
-            "decision": {"function": "trimtab.enforcement.gate:decide", "allow": 0}}
+def hooks_for(rid):
+    row = ROWS[rid]
+    if row.hooks == frozenset({"guard-paths.sh"}):
+        return [PATHS_HOOK]
+    return [GITHUB_HOOK] if row.hooks else []
 
 
 def every_base_entry():
-    rows = {}
-    for rid, row in ROWS.items():
-        if row.side == record.PROJECT:
-            continue
-        rows[rid] = entry_json(rid, hooks=(HOOK,) if "guard-github.sh" in row.hooks else ())
-        if row.hooks == frozenset({"guard-paths.sh"}):
-            rows[rid] = entry_json(rid, hooks=({**HOOK, "file": "guard-paths.sh", "matcher": "Edit"},))
-    return rows
+    return {rid: {"row_sha256": ROWS[rid].sha256, "hooks": hooks_for(rid),
+                  "tests": ["test_enforcement_record.ParsesTheTable.test_reads_every_row_in_order"],
+                  "decision": {"function": "trimtab.enforcement.gate:decide", "allow": 0}}
+            for rid in BASE_ROWS}
 
 
-def run(head, path, status="completed", event="push", run_id=1):
-    return {"id": run_id, "head_sha": head, "path": path, "status": status, "event": event}
+def run(head, path, run_id, event="push", branch="main"):
+    return {"id": run_id, "head_sha": head, "head_branch": branch, "path": path, "status": "completed",
+            "event": event}
 
 
-def job(head, name, conclusion="success", status="completed", steps=1):
-    return {"name": name, "head_sha": head, "status": status, "conclusion": conclusion,
-            "steps": [{"name": "s"}] * steps}
+def job(head, name, conclusion="success"):
+    return {"name": name, "head_sha": head, "status": "completed", "conclusion": conclusion,
+            "steps": [{"name": "s"}], "runner_id": 1, "runner_name": "r"}
 
 
 def facts(**overrides):
     entries = manifest.parse(json.dumps({"schema_version": 1, "rows": every_base_entry()}))
     hooks = {h.file for e in entries.values() for h in e.hooks}
-    base = dict(rows=tuple(ROWS.values()), entries=entries, base_ci=None, live={h: None for h in hooks},
-                project_jobs={rid: None for rid, r in ROWS.items() if r.side != record.BASE},
-                pinned=("a" * 40, "b" * 40, "c" * 40))
+    base = dict(rows=tuple(ROWS.values()), entries=entries, base_ci=None, checkout=None,
+                live={h: None for h in hooks}, project_jobs={rid: None for rid in PROJECT_ROWS}, pinned=PINNED)
     base.update(overrides)
     return Facts(**base)
 
@@ -81,100 +86,63 @@ def problems(results):
     return {r.id: r.problem for r in results if r.problem}
 
 
-class Decides(unittest.TestCase):
-    def test_x(self):
-        """A stand-in test id the manifests in this file name."""
+def by_number(ids):
+    return sorted(ids, key=lambda r: int(r[1:]))
 
+
+class Decides(unittest.TestCase):
     def test_shows_every_row_when_every_fact_holds(self):
         self.assertEqual(problems(gate.decide(facts())), {})
 
     def test_shows_no_base_row_while_this_bases_ci_failed(self):
-        found = problems(gate.decide(facts(base_ci="this base's CI failed")))
+        self.assertEqual(by_number(problems(gate.decide(facts(base_ci="CI failed")))), BASE_ROWS)
 
-        self.assertEqual(sorted(found, key=lambda r: int(r[1:])),
-                         [r for r, row in ROWS.items() if row.side != record.PROJECT])
+    def test_shows_no_base_row_hooked_or_not_on_a_changed_checkout(self):
+        self.assertEqual(by_number(problems(gate.decide(facts(checkout="changed")))), BASE_ROWS)
 
     def test_shows_no_row_whose_hook_is_not_live(self):
         found = problems(gate.decide(facts(live={"guard-github.sh": "not linked", "guard-paths.sh": None})))
 
-        self.assertIn("E14", found)
+        self.assertEqual(by_number(found), GITHUB_ROWS)
 
     def test_skips_liveness_on_the_server(self):
-        self.assertNotIn("E14", problems(gate.decide(facts(live=None))))
+        self.assertEqual(problems(gate.decide(facts(live=None))), {})
+
+    def test_shows_no_row_whose_hook_liveness_was_never_read(self):
+        self.assertEqual(by_number(problems(gate.decide(facts(live={})))), HOOKED_ROWS)
 
     def test_shows_no_base_row_the_manifest_leaves_out(self):
         entries = dict(facts().entries)
         del entries["E9"]
 
-        self.assertIn("does not map", problems(gate.decide(facts(entries=entries)))["E9"])
+        self.assertEqual(list(problems(gate.decide(facts(entries=entries)))), ["E9"])
+
+    def test_shows_no_project_row_the_manifest_maps(self):
+        entries = dict(facts().entries)
+        entries["E1"] = entries["E20"]
+
+        self.assertIn("consuming project", problems(gate.decide(facts(entries=entries)))["E1"])
 
     def test_shows_no_project_row_the_instance_names_no_job_for(self):
-        jobs = {rid: None for rid in ("E2", "E3", "E4", "E22")}
+        jobs = {rid: None for rid in PROJECT_ROWS if rid != "E1"}
 
-        self.assertIn("names no job", problems(gate.decide(facts(project_jobs=jobs)))["E1"])
+        self.assertEqual(list(problems(gate.decide(facts(project_jobs=jobs)))), ["E1"])
 
     def test_shows_no_project_row_whose_job_failed(self):
         jobs = {**facts().project_jobs, "E3": "a job failed"}
 
         self.assertEqual(problems(gate.decide(facts(project_jobs=jobs))), {"E3": "a job failed"})
 
-    def test_needs_both_sides_for_e22(self):
+    def test_e22_needs_its_base_entry(self):
         entries = dict(facts().entries)
         del entries["E22"]
 
-        self.assertIn("E22", problems(gate.decide(facts(entries=entries))))
+        self.assertEqual(list(problems(gate.decide(facts(entries=entries)))), ["E22"])
 
+    def test_e22_needs_its_project_job(self):
+        jobs = {rid: None for rid in PROJECT_ROWS if rid != "E22"}
 
-class ReadsJobRecords(unittest.TestCase):
-    HEAD = "d" * 40
-    WORKFLOW = ".github/workflows/ci.yml"
-
-    def problem(self, runs, jobs):
-        fake = FakeGh({f"repos/{BASE_REPO}/actions/runs": json.dumps({"workflow_runs": runs}),
-                       **{f"repos/{BASE_REPO}/actions/runs/{rid}/jobs": json.dumps({"jobs": j}) for rid, j in jobs.items()}})
-        return gate.job_problem(gate.GhApi(fake), BASE_REPO, self.HEAD, self.WORKFLOW, "lint-test")
-
-    def test_passes_when_every_attempt_passed(self):
-        jobs = {1: [job(self.HEAD, "lint-test"), job(self.HEAD, "lint-test"), job(self.HEAD, "other", "failure")]}
-
-        self.assertIsNone(self.problem([run(self.HEAD, self.WORKFLOW)], jobs))
-
-    def test_refuses_when_one_attempt_failed(self):
-        jobs = {1: [job(self.HEAD, "lint-test"), job(self.HEAD, "lint-test", "failure")]}
-
-        self.assertIn("not a completed, passing", self.problem([run(self.HEAD, self.WORKFLOW)], jobs))
-
-    def test_refuses_with_no_run_of_the_workflow(self):
-        self.assertIn("no push run", self.problem([run(self.HEAD, ".github/workflows/other.yml")], {}))
-
-    def test_refuses_a_run_on_another_event(self):
-        self.assertIn("no push run", self.problem([run(self.HEAD, self.WORKFLOW, event="pull_request")], {}))
-
-    def test_refuses_an_unfinished_run(self):
-        self.assertIn("not finished", self.problem([run(self.HEAD, self.WORKFLOW, status="in_progress")], {}))
-
-    def test_refuses_a_run_with_no_such_job(self):
-        self.assertIn("lists no", self.problem([run(self.HEAD, self.WORKFLOW)], {1: [job(self.HEAD, "other")]}))
-
-    def test_refuses_a_job_with_no_steps(self):
-        self.assertIn("with steps", self.problem([run(self.HEAD, self.WORKFLOW)], {1: [job(self.HEAD, "lint-test", steps=0)]}))
-
-    def test_raises_on_unexpected_json(self):
-        with self.assertRaises(GateError):
-            self.problem([{"id": "x"}], {})
-
-    def test_raises_past_its_bound(self):
-        runs = [run(self.HEAD, self.WORKFLOW, run_id=n) for n in range(1, 100)]
-        fake = FakeGh({f"repos/{BASE_REPO}/actions/runs": [json.dumps({"workflow_runs": runs})] * 5})
-
-        with self.assertRaises(GateError):
-            gate.job_problem(gate.GhApi(fake), BASE_REPO, self.HEAD, self.WORKFLOW, "lint-test")
-
-    def test_raises_on_a_failed_read(self):
-        fake = FakeGh(returncode=1, stderr="HTTP 403")
-
-        with self.assertRaises(GateError):
-            gate.job_problem(gate.GhApi(fake), BASE_REPO, self.HEAD, self.WORKFLOW, "lint-test")
+        self.assertEqual(list(problems(gate.decide(facts(project_jobs=jobs)))), ["E22"])
 
 
 class World(unittest.TestCase):
@@ -184,6 +152,7 @@ class World(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(subprocess.run, ["rm", "-rf", str(self.tmp)])
         isolate_git(self, self.tmp)
+        self.git = tools.Git(environ={"HOME": str(self.tmp)})
         self.code, self.inst, self.proj, self.config = (self.tmp / n for n in ("code", "instance", "project", "config"))
         init(self.code)
         (self.code / "hooks").mkdir()
@@ -195,15 +164,9 @@ class World(unittest.TestCase):
         init(self.inst)
         (self.inst / "README").write_text("x\n")
         commit_all(self.inst, "root")
-        git(self.inst, "checkout", "-q", "-b", "add-record")
-        (self.inst / "docs" / "adr").mkdir(parents=True)
-        (self.inst / RECORD).write_text(record_text())
-        commit_all(self.inst, "add the record")
-        git(self.inst, "checkout", "-q", "main")
-        git(self.inst, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "merge", "-q", "--no-ff",
-            "-m", "merge", "add-record")
+        self.merge_record(record_text())
         self.jobs = {rid: {"workflow": f".github/workflows/{rid.lower()}.yml", "job": rid.lower()}
-                     for rid, r in ROWS.items() if r.side != record.BASE}
+                     for rid in PROJECT_ROWS}
         self.trimtab_sha = self.commit_instance()
         init(self.proj)
         self.head = self.commit_lock(self.trimtab_sha)
@@ -213,14 +176,24 @@ class World(unittest.TestCase):
             (self.config / "hooks" / name).symlink_to(self.code / "hooks" / name)
         self.register()
 
+    def merge_record(self, text, branch="add-record"):
+        git(self.inst, "checkout", "-q", "-b", branch)
+        (self.inst / "docs" / "adr").mkdir(parents=True, exist_ok=True)
+        (self.inst / RECORD).write_text(text)
+        commit_all(self.inst, "add the record")
+        git(self.inst, "checkout", "-q", "main")
+        git(self.inst, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "merge", "-q", "--no-ff",
+            "-m", "merge", branch)
+        return git(self.inst, "rev-parse", "HEAD")
+
     def write_manifest(self, rows):
         path = self.code / manifest.PATH
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"schema_version": 1, "rows": rows}))
 
-    def commit_instance(self, **extra):
+    def commit_instance(self, projects=None):
         body = {"schema_version": 1, "repo": INSTANCE_REPO, "base": {"repo": BASE_REPO, "sha": self.base_sha},
-                "enforcement": {"record": RECORD, "projects": {PROJECT: self.jobs}}, **extra}
+                "enforcement": {"record": RECORD, "projects": projects or {PROJECT: self.jobs}}}
         (self.inst / "instance.json").write_text(json.dumps(body))
         return commit_all(self.inst, "instance")
 
@@ -234,33 +207,36 @@ class World(unittest.TestCase):
         git(self.proj, "update-ref", "refs/remotes/origin/main", head)
         return head
 
-    def register(self, matcher_for=lambda h: h["matcher"]):
-        hooks = [{"matcher": "Bash", "hooks": [{"type": "command", "command": '"$HOME/.claude/hooks/guard-github.sh"'}]},
-                 {"matcher": "Edit", "hooks": [{"type": "command", "command": '"$HOME/.claude/hooks/guard-paths.sh"'}]}]
-        (self.config / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": hooks}}))
+    def register(self, command='"$HOME/.claude/hooks/{}"', extra=None):
+        hooks = [{"matcher": "Bash", "hooks": [{"type": "command", "command": command.format("guard-github.sh")}]},
+                 {"matcher": "Edit", "hooks": [{"type": "command", "command": command.format("guard-paths.sh")}]}]
+        (self.config / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": hooks}, **(extra or {})}))
 
-    def gh(self, server_head=None, base_jobs=None, project_job=None):
+    def gh(self, server_head=None, base_job="success", failing=None, branch="main"):
         answers = {f"repos/{PROJECT}": json.dumps({"default_branch": "main"}),
                    f"repos/{PROJECT}/branches/main": json.dumps({"commit": {"sha": server_head or self.head}}),
                    f"repos/{BASE_REPO}/actions/runs":
-                       json.dumps({"workflow_runs": [run(self.base_sha, gate.BASE_WORKFLOW, run_id=1)]}),
-                   f"repos/{BASE_REPO}/actions/runs/1/jobs":
-                       json.dumps({"jobs": base_jobs or [job(self.base_sha, "lint-test")]})}
-        runs = [run(self.head, ref["workflow"], run_id=100 + n) for n, ref in enumerate(self.jobs.values())]
+                       json.dumps({"workflow_runs": [run(self.base_sha, gate.BASE_WORKFLOW, 1)]}),
+                   f"repos/{BASE_REPO}/actions/runs/1/jobs": json.dumps({"jobs": [job(self.base_sha, "lint-test",
+                                                                                      base_job)]})}
+        runs = [run(self.head, ref["workflow"], 100 + n, branch=branch) for n, ref in enumerate(self.jobs.values())]
         answers[f"repos/{PROJECT}/actions/runs"] = json.dumps({"workflow_runs": runs})
         for n, (rid, ref) in enumerate(self.jobs.items()):
-            conclusion = "failure" if project_job == rid else "success"
             answers[f"repos/{PROJECT}/actions/runs/{100 + n}/jobs"] = json.dumps(
-                {"jobs": [job(self.head, ref["job"], conclusion)]})
+                {"jobs": [job(self.head, ref["job"], "failure" if rid == failing else "success")]})
         return FakeGh(answers)
 
-    def gather(self, fake=None, **kwargs):
-        return gate.gather(PROJECT, self.proj, self.inst, self.code, self.config, run=fake or self.gh(), **kwargs)
+    def gather(self, fake=None, repository=PROJECT, **kwargs):
+        return gate.gather(repository, self.proj, self.inst, self.code, self.config, run=fake or self.gh(),
+                           git=self.git, **kwargs)
+
+    def found(self, fake=None, **kwargs):
+        return problems(gate.decide(self.gather(fake, **kwargs)))
 
 
 class Gathers(World):
     def test_shows_every_row_on_a_complete_install(self):
-        self.assertEqual(problems(gate.decide(self.gather())), {})
+        self.assertEqual(self.found(), {})
 
     def test_reads_the_lock_at_the_default_branch_head_not_the_working_tree(self):
         (self.proj / ".claude" / "trimtab.json").write_text(json.dumps(
@@ -272,12 +248,65 @@ class Gathers(World):
         with self.assertRaises(GateError):
             self.gather(self.gh(server_head="e" * 40))
 
+    def test_refuses_a_project_never_fetched(self):
+        git(self.proj, "update-ref", "-d", "refs/remotes/origin/main")
+
+        with self.assertRaises(GateError):
+            self.gather()
+
+    def test_refuses_a_lock_with_a_short_trimtab_sha(self):
+        self.head = self.commit_lock(self.trimtab_sha[:12])
+
+        with self.assertRaises(GateError):
+            self.gather()
+
+    def test_refuses_a_lock_that_does_not_parse(self):
+        (self.proj / ".claude" / "trimtab.json").write_text("{")
+        self.head = commit_all(self.proj, "broken lock")
+        git(self.proj, "update-ref", "refs/remotes/origin/main", self.head)
+
+        with self.assertRaises(GateError):
+            self.gather()
+
+    def test_ignores_a_replace_ref_that_forges_the_instance_file(self):
+        body = json.loads(git(self.inst, "show", f"{self.trimtab_sha}:instance.json"))
+        body["enforcement"]["projects"] = {}
+        (self.inst / "instance.json").write_text(json.dumps(body))
+        forged = commit_all(self.inst, "forged")
+        git(self.inst, "replace", self.trimtab_sha, forged)
+
+        self.assertEqual(self.found(), {})
+
+    def test_refuses_an_instance_with_a_grafts_file(self):
+        grafts = Path(git(self.inst, "rev-parse", "--path-format=absolute", "--git-path", "info/grafts"))
+        grafts.write_text(self.trimtab_sha + "\n")
+
+        with self.assertRaises(GateError):
+            self.gather()
+
     def test_reads_the_record_as_merged_not_as_edited_later(self):
         lines = "".join(row_line(r, condition="loosened" if r == "E7" else None) for r in OWNERS)
         (self.inst / RECORD).write_text(record_text(lines=lines))
         self.head = self.commit_lock(commit_all(self.inst, "edit the record"))
 
-        self.assertEqual(problems(gate.decide(self.gather())), {})
+        self.assertEqual(self.found(), {})
+
+    def test_reads_the_record_last_added_when_it_was_removed_and_added_again(self):
+        git(self.inst, "rm", "-q", RECORD)
+        commit_all(self.inst, "remove the record")
+        lines = "".join(row_line(r, condition="tightened" if r == "E7" else None) for r in OWNERS)
+        self.head = self.commit_lock(self.merge_record(record_text(lines=lines), branch="re-add"))
+
+        self.assertEqual(list(self.found()), ["E7"])  # the manifest was written for the first text
+
+    def test_refuses_a_record_the_history_never_added(self):
+        body = json.loads((self.inst / "instance.json").read_text())
+        body["enforcement"]["record"] = ADR_DIR + "0002-missing.md"
+        (self.inst / "instance.json").write_text(json.dumps(body))
+        self.head = self.commit_lock(commit_all(self.inst, "missing record"))
+
+        with self.assertRaises(GateError):
+            self.gather()
 
     def test_refuses_an_instance_that_names_no_record(self):
         body = json.loads((self.inst / "instance.json").read_text())
@@ -294,82 +323,201 @@ class Gathers(World):
         with self.assertRaises(GateError):
             self.gather()
 
-    def test_reads_the_manifest_at_the_pinned_base_not_the_working_tree(self):
-        self.write_manifest({})
+    def test_refuses_a_manifest_that_breaks_its_schema(self):
+        (self.code / manifest.PATH).write_text("{}")
+        self.base_sha = commit_all(self.code, "bad manifest")
+        self.head = self.commit_lock(self.commit_instance())
 
-        found = problems(gate.decide(self.gather()))
-
-        # Still mapped from the pinned base; the edited tree only makes the hooks not live.
-        self.assertEqual([r for r, why in found.items() if "does not map" in why or "differ" not in why], [])
+        with self.assertRaises(GateError):
+            self.gather()
 
     def test_shows_no_base_row_when_this_bases_ci_failed(self):
-        found = problems(gate.decide(self.gather(self.gh(base_jobs=[job(self.base_sha, "lint-test", "failure")]))))
-
-        self.assertIn("this base's CI", found["E14"])
+        self.assertEqual(by_number(self.found(self.gh(base_job="failure"))), BASE_ROWS)
 
     def test_shows_no_project_row_whose_job_failed(self):
-        self.assertEqual(list(problems(gate.decide(self.gather(self.gh(project_job="E2"))))), ["E2"])
+        self.assertEqual(list(self.found(self.gh(failing="E2"))), ["E2"])
 
-    def test_shows_no_base_row_on_a_checkout_off_the_pinned_base(self):
-        (self.code / "hooks" / "guard-github.sh").write_text("#!/bin/sh\nexit 0\n")
+    def test_shows_no_project_row_whose_run_is_for_another_branch(self):
+        self.assertEqual(by_number(self.found(self.gh(branch="plan/x"))), PROJECT_ROWS)
 
-        self.assertIn("differ from the pinned base", problems(gate.decide(self.gather()))["E14"])
+    def test_finds_the_projects_jobs_whatever_the_case(self):
+        self.head = self.commit_lock(self.commit_instance(projects={PROJECT.upper(): self.jobs}))
 
-    def test_shows_no_row_whose_hook_is_not_registered(self):
-        (self.config / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": []}}))
-
-        self.assertIn("does not register", problems(gate.decide(self.gather()))["E14"])
-
-    def test_shows_no_row_whose_installed_hook_is_another_file(self):
-        (self.config / "hooks" / "guard-github.sh").unlink()
-        (self.config / "hooks" / "guard-github.sh").write_text("#!/bin/sh\n")
-
-        self.assertIn("not this checkout's", problems(gate.decide(self.gather()))["E14"])
+        self.assertEqual(self.found(), {})
 
     def test_server_mode_fails_until_e22_lands(self):
         with self.assertRaises(GateError):
             self.gather(server=True)
 
 
-class CachesAPass(unittest.TestCase):
-    PINNED = ("a" * 40, "b" * 40, "c" * 40)
+class JudgesTheCheckout(World):
+    def assertCheckoutRefused(self):
+        self.assertEqual(by_number(self.found()), BASE_ROWS)
 
+    def test_refuses_a_checkout_off_the_pinned_base(self):
+        (self.code / "README").write_text("x\n")
+        commit_all(self.code, "later")
+
+        self.assertCheckoutRefused()
+
+    def test_refuses_an_edited_hook(self):
+        (self.code / "hooks" / "guard-github.sh").write_text("#!/bin/sh\nexit 0\n")
+
+        self.assertCheckoutRefused()
+
+    def test_refuses_an_edit_hidden_by_skip_worktree(self):
+        git(self.code, "update-index", "--skip-worktree", "hooks/guard-github.sh")
+        (self.code / "hooks" / "guard-github.sh").write_text("#!/bin/sh\nexit 0\n")
+
+        self.assertCheckoutRefused()
+
+    def test_refuses_an_ignored_bytecode_file(self):
+        (self.code / ".gitignore").write_text("__pycache__/\n")
+        pycache = self.code / "trimtab" / "enforcement" / "__pycache__"
+        pycache.mkdir()
+        (pycache / "gate.cpython-313.pyc").write_bytes(b"forged")
+
+        self.assertCheckoutRefused()
+
+    def test_refuses_a_symlink(self):
+        (self.code / "hooks" / "extra.sh").symlink_to("/bin/true")
+
+        self.assertCheckoutRefused()
+
+    def test_refuses_a_hook_whose_mode_changed(self):
+        (self.code / "hooks" / "guard-github.sh").chmod(0o644)
+
+        self.assertCheckoutRefused()
+
+    def test_refuses_a_missing_file(self):
+        (self.code / "hooks" / "guard-paths.sh").unlink()
+
+        self.assertCheckoutRefused()
+
+    def test_reads_the_manifest_at_the_pinned_base_not_the_working_tree(self):
+        self.write_manifest({})
+
+        found = self.found()
+
+        self.assertEqual([r for r, why in found.items() if "does not map" in why], [])
+
+
+class JudgesLiveness(World):
+    def test_refuses_an_unregistered_hook(self):
+        (self.config / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": []}}))
+
+        self.assertEqual(by_number(self.found()), HOOKED_ROWS)
+
+    def test_refuses_a_hook_registered_for_another_matcher(self):
+        hooks = [{"matcher": "Write", "hooks": [{"type": "command", "command": '"$HOME/.claude/hooks/guard-github.sh"'}]},
+                 {"matcher": "Edit", "hooks": [{"type": "command", "command": '"$HOME/.claude/hooks/guard-paths.sh"'}]}]
+        (self.config / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": hooks}}))
+
+        self.assertEqual(by_number(self.found()), GITHUB_ROWS)
+
+    def test_accepts_the_config_dirs_absolute_command_form(self):
+        self.register(command=f'"{self.config}/hooks/{{}}"')
+
+        self.assertEqual(self.found(), {})
+
+    def test_refuses_an_installed_hook_that_is_another_file(self):
+        (self.config / "hooks" / "guard-github.sh").unlink()
+        (self.config / "hooks" / "guard-github.sh").write_text("#!/bin/sh\n")
+
+        self.assertEqual(by_number(self.found()), GITHUB_ROWS)
+
+    def test_refuses_an_unreadable_settings_file(self):
+        (self.config / "settings.json").write_text("{")
+
+        self.assertEqual(by_number(self.found()), HOOKED_ROWS)
+
+    def test_refuses_when_settings_disable_every_hook(self):
+        self.register(extra={"disableAllHooks": True})
+
+        self.assertEqual(by_number(self.found()), HOOKED_ROWS)
+
+    def test_refuses_when_the_projects_local_settings_disable_every_hook(self):
+        (self.proj / ".claude" / "settings.local.json").write_text(json.dumps({"disableAllHooks": True}))
+
+        self.assertEqual(by_number(self.found()), HOOKED_ROWS)
+
+
+class DigestsTheInstall(World):
+    def test_a_registration_change_changes_the_digest(self):
+        before = self.gather().pinned[3]
+        self.register(extra={"other": 1})
+
+        self.assertNotEqual(self.gather().pinned[3], before)
+
+    def test_a_relinked_hook_changes_the_digest(self):
+        before = self.gather().pinned[3]
+        (self.config / "hooks" / "guard-github.sh").unlink()
+        (self.config / "hooks" / "guard-github.sh").symlink_to(self.tmp / "elsewhere.sh")
+
+        self.assertNotEqual(self.gather().pinned[3], before)
+
+
+class CachesAPass(unittest.TestCase):
     def setUp(self):
         self.config = Path(tempfile.mkdtemp())
         self.addCleanup(subprocess.run, ["rm", "-rf", str(self.config)])
 
     def test_reads_back_the_pass_it_wrote(self):
-        gate.record_pass(self.config, PROJECT, self.PINNED)
+        gate.record_pass(self.config, PROJECT, PINNED)
 
-        self.assertTrue(gate.cached_pass(self.config, PROJECT, self.PINNED))
+        self.assertTrue(gate.cached_pass(self.config, PROJECT, PINNED))
 
-    def test_a_pass_for_another_default_head_is_no_pass(self):
-        gate.record_pass(self.config, PROJECT, self.PINNED)
+    def test_a_pass_for_any_other_key_part_is_no_pass(self):
+        gate.record_pass(self.config, PROJECT, PINNED)
+        others = [tuple("e" * len(v) if i == n else v for i, v in enumerate(PINNED)) for n in range(4)]
 
-        self.assertFalse(gate.cached_pass(self.config, PROJECT, (*self.PINNED[:2], "d" * 40)))
+        self.assertEqual([gate.cached_pass(self.config, PROJECT, k) for k in others], [False] * 4)
+
+    def test_clearing_removes_the_pass(self):
+        gate.record_pass(self.config, PROJECT, PINNED)
+        gate.clear_pass(self.config, PROJECT)
+
+        self.assertFalse(gate.cached_pass(self.config, PROJECT, PINNED))
+
+    def test_clearing_with_nothing_cached_is_harmless(self):
+        gate.clear_pass(self.config, PROJECT)
+
+        self.assertFalse(gate.cached_pass(self.config, PROJECT, PINNED))
 
     def test_no_cache_is_no_pass(self):
-        self.assertFalse(gate.cached_pass(self.config, PROJECT, self.PINNED))
+        self.assertFalse(gate.cached_pass(self.config, PROJECT, PINNED))
+
+    def test_a_malformed_cache_is_no_pass(self):
+        gate.record_pass(self.config, PROJECT, PINNED)
+        path = self.config / guardstate.ROOT / gate.CACHE_PARTS[0] / gate.cache_name(PROJECT)
+        path.write_text("{")
+
+        self.assertFalse(gate.cached_pass(self.config, PROJECT, PINNED))
 
     def test_a_planted_symlink_is_no_pass(self):
         directory = guardstate.directory(self.config, *gate.CACHE_PARTS, create=True)
         real = self.config / "elsewhere.json"
-        real.write_text("{}")
+        real.write_text(json.dumps(gate._body(PROJECT, PINNED)))
         (directory / gate.cache_name(PROJECT)).symlink_to(real)
 
-        self.assertFalse(gate.cached_pass(self.config, PROJECT, self.PINNED))
+        self.assertFalse(gate.cached_pass(self.config, PROJECT, PINNED))
 
     def test_a_directory_others_can_write_is_no_pass(self):
-        gate.record_pass(self.config, PROJECT, self.PINNED)
+        gate.record_pass(self.config, PROJECT, PINNED)
         os.chmod(self.config / guardstate.ROOT, 0o777)
 
-        self.assertFalse(gate.cached_pass(self.config, PROJECT, self.PINNED))
+        self.assertFalse(gate.cached_pass(self.config, PROJECT, PINNED))
 
 
 class TheCommand(World):
+    def setUp(self):
+        super().setUp()
+        (self.inst / "rules").mkdir()
+
     def main(self, fake):
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch("trimtab.capture.sources._subprocess_run", fake), \
+        with mock.patch.object(tools, "gh_runner", lambda: fake), \
+                mock.patch.object(tools, "Git", lambda: self.git), \
                 mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)}), \
                 mock.patch.object(cli.roots, "code_root", lambda: self.code), \
                 redirect_stdout(out), redirect_stderr(err):
@@ -377,25 +525,27 @@ class TheCommand(World):
                              "--instance", str(self.inst)])
         return code, out.getvalue()
 
-    def setUp(self):
-        super().setUp()
-        (self.inst / "rules").mkdir()
+    def cached(self):
+        return (self.config / guardstate.ROOT).exists()
 
-    def test_exits_0_and_caches_when_every_row_is_shown(self):
+    def test_exits_0_and_writes_nothing_when_every_row_is_shown(self):
         code, out = self.main(self.gh())
 
-        self.assertEqual((code, out.count(" shown\n"), gate.cached_pass(self.config, PROJECT,
-                                                                       (self.trimtab_sha, self.base_sha, self.head))),
-                         (0, 23, True))
+        self.assertEqual((code, out.count(" shown\n"), self.cached()), (0, 23, False))
 
-    def test_exits_1_and_caches_nothing_when_a_row_is_not_shown(self):
-        code, out = self.main(self.gh(project_job="E1"))
+    def test_exits_1_when_a_row_is_not_shown(self):
+        code, out = self.main(self.gh(failing="E1"))
 
-        self.assertEqual((code, "E1 not shown" in out, gate.cached_pass(
-            self.config, PROJECT, (self.trimtab_sha, self.base_sha, self.head))), (1, True, False))
+        self.assertEqual((code, "E1 not shown" in out), (1, True))
 
     def test_exits_2_on_a_failed_read(self):
         code, _ = self.main(FakeGh(returncode=1, stderr="HTTP 500"))
+
+        self.assertEqual(code, 2)
+
+    def test_exits_2_on_an_unexpected_error(self):
+        with mock.patch.object(gate, "decide", side_effect=RuntimeError("boom")):
+            code, _ = self.main(self.gh())
 
         self.assertEqual(code, 2)
 
