@@ -4,8 +4,10 @@
 
 Proposed. Replaces `skills/wrap-merged/` with `skills/plan-run/`, `skills/plan-item/` and
 `skills/plan-pr/`, each with on-demand `references/` files. The text moves; no behaviour changes.
-Earlier records that name `wrap-merged` (0042, 0043, 0048–0050, 0052, 0056, 0058–0060, 0062) stand
-as written: the procedures they changed now live under the new names.
+Earlier records that name `wrap-merged` (0042, 0043, 0048–0050, 0052, 0056, 0058–0060, 0062, 0063)
+stand as written: the procedures they changed now live under the new names. Where 0063 plans
+changes to `wrap-merged` (sizing parts to one session, the watch step), they land in the `plan-*`
+skills.
 
 ## Context
 
