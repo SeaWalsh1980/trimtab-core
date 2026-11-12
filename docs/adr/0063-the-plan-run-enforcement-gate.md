@@ -131,14 +131,22 @@ enforcement: a part too big for its session costs a stop, never a weaker gate.
   - **Verified reads.** Every commit, tree and blob a decision rests on is read through
     `git cat-file --batch`, and its SHA-1 is recomputed here. History is walked here, from
     verified commits, never by `git log`. So a substituted object file, a replace ref or a graft
-    changes nothing a SHA reads as.
-  - **Refused repositories.** A repository with alternates, a shared common dir, grafts or (but
-    for the clean fetch) a shallow history is refused.
-  - **git itself** is the system's (root-owned, in a root-only directory), run with an
-    environment built from an allowlist (no steering or config variables, no global or system
-    config), replace objects off, planscope's pinned settings and no hooks.
-  - **gh** is the system's too, keeping only its auth. Its own config is refused when it sets
-    `http_unix_socket` or names a host other than github.com.
+    changes nothing a SHA reads as. One long-lived `git cat-file --batch` per repository serves
+    every read (ENG-6.2). Commits are parsed as git parses them: the first header line names the
+    tree, then only consecutive `parent` lines count.
+  - **Refused repositories.** A repository with alternates, grafts or (but for the clean fetch)
+    a shallow history is refused. A linked worktree is read through its common dir, which
+    `--git-path` resolves.
+  - **git itself** is the system's (where it resolves: root-owned, in a root-only directory),
+    run with an environment built from an allowlist (no steering or config variables, no global
+    or system config), replace objects off, planscope's pinned settings and no hooks. Proxy and
+    CA variables are kept, so a proxied host still reaches GitHub; they can only make a read
+    fail.
+  - **gh never reads its own config.** The token is taken once, from `GH_TOKEN` or
+    `GITHUB_TOKEN`, else `gh auth token -h github.com`. Every gh call then runs with a fresh,
+    empty `GH_CONFIG_DIR`, `GH_HOST=github.com` and that token. A session-written gh config (a
+    unix socket, another host, in any YAML form) takes no part; a forged token only fails the
+    reads.
 - **Owners decide the source.** "Guard", "Guard (plan-run layer)", "guard-github" and
   "trimtab-core" rows are this base's. "Consuming project" rows are the project's. E22 is both.
 - **The pinned base** is the instance file's `base.sha` at `trimtab_sha`. The lock's derived
@@ -194,28 +202,44 @@ enforcement: a part too big for its session costs a stop, never a weaker gate.
   - this checkout's HEAD;
   - the path, mode and bytes of every file under `hooks/` and `trimtab/`.
 
-  A guard re-reads the digest locally (some 70 small files), so an edit, a checkout of another
-  commit, or a hook unlinked or unregistered after a pass voids it at the next guarded call.
+  **One snapshot.** These are read once, after every network read, into one snapshot. The
+  checkout and liveness checks judge that snapshot, and the digest seals the same bytes, so
+  nothing changed between a check and the digest can slip into a pass. Every part of the digest
+  is length-prefixed. A guard re-reads the snapshot locally (some 70 small files), so an edit, a
+  checkout of another commit, or a hook unlinked or unregistered after a pass voids it at the
+  next guarded call. Any file it cannot read as a regular file (a FIFO, a link), and any
+  repository layout it does not know (a reftable HEAD), makes no snapshot, so there is no pass.
 - **Only the recorder writes the pass**: `trimtab.adapters.enforcement_record`.
-  - **Startup.** In a run session, hooks/session-mode.sh first runs its `clear` synchronously,
-    removing the project's pass. Where that cannot run, a bash fallback removes every pass. So no
-    pass from an earlier session survives into this one. The hook then starts `record` in the
-    background with the operator's launch environment. `python3`, `setsid` and `timeout` are
-    found by absolute path, each root-owned in a root-only directory, so nothing on the
-    session's PATH is run.
-  - **The record run.** `record` holds one lock for its whole run. It removes the project's pass
-    before any read, so a SIGKILL leaves none. It then fetches and runs the gate, and writes a
-    pass only when every row is shown.
+  - **Startup.** In a run session, hooks/session-mode.sh first runs `clear` synchronously,
+    bounded at 4 s (its git reads at 2 s) inside the hook's own 10 s. The clear removes the
+    project's pass under the cache lock (waiting at most 1 s for it). If it fails or times out, a
+    bash fallback removes every pass. The hook then starts a new **epoch** and starts `record` in
+    the background with the operator's launch environment.
+  - **No session-written program runs.** Every function of the hook that the recorder depends on
+    runs with `PATH=/usr/bin:/bin`, and the hook itself sets it when run as a hook. `python3`,
+    `setsid` and `timeout` must also resolve to root-owned files in root-only directories. Every
+    interpreter the hook starts gets `-X pycache_prefix=/dev/null/…`, a path no `.pyc` can be
+    under, so a planted `__pycache__` is never loaded: `-B` only stops writes.
+  - **The record run.** `record` holds one lock for its whole run and notes the epoch. It removes
+    the project's pass before any read, so a SIGKILL leaves none. It then fetches and runs the
+    gate. It writes a pass only when every row is shown **and** the epoch is unchanged, so a
+    recorder an earlier session left running cannot write after this session's clear.
   - **Every other way out** leaves no pass: an error, SIGTERM (raised as an exit, so the cleanup
-    runs), or a repository it cannot name (then every pass is removed). Each way out writes a
-    one-line status naming why.
+    runs), or a repository it cannot name (then every pass is removed). Each way out tries to
+    write a one-line status naming why. A status that cannot be written is lost; the pass is
+    settled either way.
+  - **A session that becomes a run mid-session** (it moves onto `plan/*`) gets no
+    SessionStart clear. Its guards then find no pass for the current key, or one an earlier
+    recorder made for exactly this key, and start a recorder (E21). Accepted: the earlier pass
+    was made by the recorder for the same lock, base, head and install.
   - **The repository** comes from the project's `origin` as configured (not as `insteadOf`
-    rewrites it), and the instance file must name it.
+    rewrites it), read without the object checks since it names nothing the gate then trusts,
+    and the instance file must name it. It is session-writable: see Consequences.
   - **The fetch.** It goes to an explicit `https://github.com/<owner>/<name>.git`, built from
     that name, into a fresh bare repository in a private temporary directory, depth 1. Only
     pinned config applies: no global, system or repository config; only the https protocol; no
-    `core.sshCommand`; gh as the only credential helper; `fetch.fsckObjects`. The lock is read
-    from there, as verified objects. Nothing a session wrote to any git config takes part, and
+    `core.sshCommand`; gh (with the empty config and the token above) as the only credential
+    helper; `fetch.fsckObjects`. The lock is read from there, as verified objects. Nothing a session wrote to any git config takes part, and
     the fetched tip must still be the server's head.
 
 The manifest maps each row to its refusal tests. A mutation test replaces each row's decision
@@ -492,23 +516,33 @@ a run's PR, as the doctrine record says.
     recorder, or any code, with a forged environment, or write the cache through a path that
     guard-paths cannot read from the command text.
   - Hardening closes the ordinary routes:
-    - a shimmed PATH, at the gate and at the launcher;
-    - git and gh config, global or the repository's;
+    - a shimmed PATH, at the gate and in the hook that launches the recorder;
+    - git config, global or the repository's;
+    - gh config, which no gh call reads;
     - a `git replace`, a graft or a substituted object file;
     - an index flag or an unlistable directory;
-    - a planted `.pyc`;
+    - a planted `.pyc`, which no interpreter the hook starts reads;
+    - an edit or a checkout between a check and the digest, which one snapshot rules out;
     - an edit or a checkout after a pass, which the digest catches at the next guarded call;
     - a command that happens to write the cache;
-    - a recorder that dies.
+    - a recorder that dies, or one an earlier session left running.
 
     It cannot close the routes above: code the session runs itself, and a write through a
     hidden path.
   - **Named routes left by design:**
-    - gh's own config is checked for a socket and foreign hosts, not pinned, because the
-      operator's auth lives there;
-    - between a guarded call's digest read and the hook running the code it read, a session
-      could swap a file (a time-of-check race of milliseconds, the same class as the residual
-      above).
+    - **The project's identity** is taken from its `origin` as configured, which a session can
+      point at another project the instance file names. A pass is then written under that
+      project's name, from that project's real server facts, and a guard looking the
+      repository up the same way accepts it in this checkout. Binding a checkout to its
+      repository needs operator-set state, such as an instance mapping from project paths,
+      which is new configuration. E22 runs in the PR's own repository, so the borrowed pass never
+      reaches a merge.
+    - **Between a guarded call's snapshot and the hook running the code it read,** a session
+      could swap a file: a time-of-check race of milliseconds, the same class as the residual
+      above.
+    - **A `.pyc` for code a guard imports** is closed only for interpreters the hook starts with
+      the pycache prefix. Guards started by Claude Code's own hook runner get the same flag in
+      their launch line (E21's PR).
   - What makes forgery gain nothing is E22. The server-side job and the approver re-check every
     row that rests on a server fact, and only they let a run's PR merge. A forged local pass
     buys local writes and pushes to a `plan/*` branch, never a merge.

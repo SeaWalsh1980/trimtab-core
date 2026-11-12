@@ -48,8 +48,11 @@ class JudgesAJob(unittest.TestCase):
     def test_refuses_when_a_second_run_of_the_head_failed(self):
         self.assertIn("not a completed, passing", problem([run(1), run(2)], {1: [job()], 2: [job(conclusion="failure")]}))
 
-    def test_refuses_a_job_with_no_runner(self):
-        self.assertIn("with a runner", problem([run()], {1: [job(runner_id=None, runner_name="")]}))
+    def test_refuses_a_job_with_no_runner_id(self):
+        self.assertIn("with a runner", problem([run()], {1: [job(runner_id=None)]}))
+
+    def test_refuses_a_job_with_no_runner_name(self):
+        self.assertIn("with a runner", problem([run()], {1: [job(runner_name="")]}))
 
     def test_refuses_a_job_with_no_steps(self):
         self.assertIn("steps", problem([run()], {1: [job(steps=0)]}))

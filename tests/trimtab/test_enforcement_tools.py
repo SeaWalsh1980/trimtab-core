@@ -93,10 +93,8 @@ class BuildsItsEnvironment(unittest.TestCase):
     def test_paths_are_the_system_directories(self):
         self.assertEqual(tools.git_env({"PATH": "/evil"})["PATH"], "/usr/bin:/bin")
 
-    def test_gh_keeps_its_auth_and_no_host(self):
-        env = tools.gh_env({"GH_TOKEN": "t", "GH_HOST": "evil.example", "GH_ENTERPRISE_TOKEN": "e", "GH_REPO": "o/r"})
-
-        self.assertEqual(sorted(k for k in env if k.startswith("GH_") and k != "GH_PROMPT_DISABLED"), ["GH_TOKEN"])
+    def test_git_keeps_the_proxy_settings(self):
+        self.assertEqual(tools.git_env({"HTTPS_PROXY": "http://proxy:3128"})["HTTPS_PROXY"], "http://proxy:3128")
 
 
 class FindsTrustedBinaries(unittest.TestCase):
@@ -117,40 +115,39 @@ class FindsTrustedBinaries(unittest.TestCase):
             tools.trusted("no-such-tool-xyz")
 
 
+FIXTURE_TOKEN = "fixture" + "_" + "0" * 20  # built at run time: not a credential shape a scanner reads
+
+
+class IsolatesGhsAuth(unittest.TestCase):
+    def auth(self, environ):
+        return tools.GhAuth(environ=environ, binary="/bin/true")
+
+    def test_uses_the_token_from_the_environment(self):
+        self.assertEqual(self.auth({"GH_TOKEN": FIXTURE_TOKEN}).token, FIXTURE_TOKEN)
+
+    def test_runs_gh_with_a_fresh_empty_config_dir(self):
+        auth = self.auth({"GH_TOKEN": FIXTURE_TOKEN, "GH_CONFIG_DIR": "/session/written"})
+
+        self.assertEqual((auth.env["GH_CONFIG_DIR"] != "/session/written", list(auth.config_dir.iterdir())), (True, []))
+
+    def test_pins_the_host_to_github(self):
+        self.assertEqual(self.auth({"GH_TOKEN": FIXTURE_TOKEN, "GH_HOST": "evil.example"}).env["GH_HOST"], "github.com")
+
+    def test_refuses_a_token_of_an_unexpected_shape(self):
+        with self.assertRaises(ToolError):
+            self.auth({"GH_TOKEN": "x y"})
+
+    def test_refuses_when_gh_has_no_token(self):
+        with self.assertRaises(ToolError):
+            tools.GhAuth(environ={"HOME": "/nonexistent"}, binary="/bin/false")
+
+
 class RunsOnlyGh(unittest.TestCase):
     def test_refuses_another_program(self):
-        run = tools.gh_runner(binary="/bin/true", environ={"HOME": "/nonexistent"})
+        run = tools.gh_runner(tools.GhAuth(environ={"GH_TOKEN": FIXTURE_TOKEN}, binary="/bin/true"))
 
         with self.assertRaises(ToolError):
             run(["sh", "-c", "true"], None)
-
-
-class ReadsGhsConfig(unittest.TestCase):
-    def setUp(self):
-        self.dir = Path(tempfile.mkdtemp())
-        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.dir)])
-        self.env = {"GH_CONFIG_DIR": str(self.dir)}
-
-    def test_passes_a_config_for_github_only(self):
-        (self.dir / "hosts.yml").write_text("github.com:\n    user: someone\n    git_protocol: https\n")
-
-        self.assertIsNone(tools.gh_config_problem(self.env))
-
-    def test_refuses_a_unix_socket(self):
-        (self.dir / "config.yml").write_text("git_protocol: https\nhttp_unix_socket: /tmp/socket\n")
-
-        self.assertIn("http_unix_socket", tools.gh_config_problem(self.env))
-
-    def test_refuses_another_host(self):
-        (self.dir / "hosts.yml").write_text("github.com:\n    user: a\nevil.example:\n    user: b\n")
-
-        self.assertIn("other than github.com", tools.gh_config_problem(self.env))
-
-    def test_the_runner_refuses_a_redirecting_config(self):
-        (self.dir / "config.yml").write_text("http_unix_socket: /tmp/socket\n")
-
-        with self.assertRaises(ToolError):
-            tools.gh_runner(binary="/bin/true", environ=self.env)
 
 
 class VerifiesObjects(Repo):
@@ -198,15 +195,61 @@ class VerifiesObjects(Repo):
 
         self.assertEqual(sorted(self.git.objects(self.repo).files(top, "d")), ["d/e/h", "d/top"])
 
+    def crafted(self, body: bytes) -> str:
+        """A commit object written as given, whatever git would make of it."""
+        return subprocess.run(["git", "-C", str(self.repo), "hash-object", "-t", "commit", "-w", "--stdin",
+                               "--literally"], input=body, capture_output=True, check=True).stdout.decode().strip()
+
+    def test_reads_the_tree_from_the_commits_first_line_as_git_does(self):
+        tree = git(self.repo, "rev-parse", f"{self.genuine}^{{tree}}")
+        other = "0" * 40
+        sha = self.crafted(f"tree {tree}\nauthor a <a@x> 0 +0000\ncommitter a <a@x> 0 +0000\ntree {other}\n\nm\n"
+                           .encode())
+
+        self.assertEqual(self.git.objects(self.repo).commit(sha)[0], tree)
+
+    def test_reads_only_consecutive_parent_lines(self):
+        tree = git(self.repo, "rev-parse", f"{self.genuine}^{{tree}}")
+        sha = self.crafted(f"tree {tree}\nparent {self.genuine}\nauthor a <a@x> 0 +0000\nparent {'1' * 40}\n"
+                           f"committer a <a@x> 0 +0000\n\nm\n".encode())
+
+        self.assertEqual(self.git.objects(self.repo).commit(sha)[1], (self.genuine,))
+
+    def test_refuses_a_commit_that_does_not_open_with_its_tree(self):
+        tree = git(self.repo, "rev-parse", f"{self.genuine}^{{tree}}")
+        sha = self.crafted(f"parent {self.genuine}\ntree {tree}\n\nm\n".encode())
+
+        with self.assertRaises(ToolError):
+            self.git.objects(self.repo).commit(sha)
+
+
+class ReadsWorktrees(Repo):
+    def test_reads_a_linked_worktree_through_its_common_dir(self):
+        linked = self.tmp / "linked"
+        git(self.repo, "worktree", "add", "-q", "--detach", str(linked))
+
+        self.assertEqual(self.git.objects(linked).file(self.genuine, "f"), b"genuine\n")
+
+    def test_reads_config_without_the_object_checks(self):
+        git(self.repo, "config", "remote.origin.url", "https://github.com/o/r.git")
+        clone = self.tmp / "shallow"
+        subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{self.repo}", str(clone)], check=True)
+        git(clone, "config", "remote.origin.url", "https://github.com/o/r.git")
+
+        self.assertEqual(self.git.config_get(clone, "remote.origin.url"), "https://github.com/o/r.git")
+
 
 class Fetches(Repo):
+    def auth(self):
+        return tools.GhAuth(environ={"GH_TOKEN": FIXTURE_TOKEN}, binary="/bin/true")
+
     def test_refuses_a_branch_name_that_could_be_an_option(self):
         with self.assertRaises(ToolError):
-            self.git.fetch_clean("owner/repo", "--upload-pack=x", self.tmp / "into.git")
+            self.git.fetch_clean("owner/repo", "--upload-pack=x", self.tmp / "into.git", self.auth())
 
     def test_refuses_a_repository_that_is_not_owner_name(self):
         with self.assertRaises(ToolError):
-            self.git.fetch_clean("ext::sh -c x", "main", self.tmp / "into.git")
+            self.git.fetch_clean("ext::sh -c x", "main", self.tmp / "into.git", self.auth())
 
 
 if __name__ == "__main__":

@@ -300,6 +300,13 @@ class Gathers(World):
 
         self.assertEqual(list(self.found()), ["E7"])  # the manifest was written for the first text
 
+    def test_refuses_a_record_deleted_at_the_locks_commit(self):
+        git(self.inst, "rm", "-q", RECORD)
+        self.head = self.commit_lock(commit_all(self.inst, "remove the record"))
+
+        with self.assertRaises(GateError):
+            self.gather()
+
     def test_refuses_a_record_the_history_never_added(self):
         body = json.loads((self.inst / "instance.json").read_text())
         body["enforcement"]["record"] = ADR_DIR + "0002-missing.md"
@@ -385,6 +392,7 @@ class JudgesTheCheckout(World):
 
         self.assertIn("symlink", self.found()["E20"])
 
+    @unittest.skipIf(os.geteuid() == 0, "root lists a 0111 directory, so the case cannot be staged")
     def test_refuses_a_directory_it_cannot_list(self):
         pycache = self.code / "trimtab" / "__pycache__"
         pycache.mkdir()
@@ -395,11 +403,30 @@ class JudgesTheCheckout(World):
         self.assertIn("cannot be listed", self.found()["E20"])
 
     def test_refuses_a_substituted_tree_object_for_the_base(self):
+        # A well-formed tree, validly compressed, stored under the genuine tree's name: only the re-hash sees it.
         tree = git(self.code, "rev-parse", f"{self.base_sha}:hooks")
         objects = Path(git(self.code, "rev-parse", "--path-format=absolute", "--git-path", "objects"))
-        loose = objects / tree[:2] / tree[2:]
+        listing = git(self.code, "ls-tree", tree).replace("guard-paths.sh", "guard-pathz.sh")
+        forged = subprocess.run(["git", "-C", str(self.code), "mktree"], input=listing + "\n", text=True,
+                                capture_output=True, check=True).stdout.strip()
+        loose, source = objects / tree[:2] / tree[2:], objects / forged[:2] / forged[2:]
         loose.chmod(0o644)
-        loose.write_bytes(b"not the tree")
+        loose.write_bytes(source.read_bytes())
+
+        with self.assertRaises(GateError):
+            self.gather()
+
+    def test_refuses_a_top_level_dir_that_is_a_symlink(self):
+        real = self.tmp / "real-hooks"
+        (self.code / "hooks").rename(real)
+        (self.code / "hooks").symlink_to(real)
+
+        self.assertIn("not a plain directory", self.found()["E20"])
+
+    def test_refuses_a_head_it_cannot_read(self):
+        head = Path(git(self.code, "rev-parse", "--path-format=absolute", "--git-path", "HEAD"))
+        head.unlink()
+        os.mkfifo(head)
 
         with self.assertRaises(GateError):
             self.gather()
@@ -491,7 +518,7 @@ class DigestsTheInstall(World):
 
     def digest(self, code=None, instance_root=None):
         hooks = [manifest.Hook(**GITHUB_HOOK)]
-        return gate.install_digest(code or self.code, self.config, self.proj, instance_root or self.inst, hooks)
+        return gate.install_digest(gate.snapshot(code or self.code, self.config, self.proj, instance_root or self.inst, hooks))
 
     def test_an_edited_file_changes_the_digest(self):
         before = self.digest()
@@ -602,8 +629,8 @@ class TheCommand(World):
 
     def main(self, fake):
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.object(tools, "gh_runner", lambda: fake), \
-                mock.patch.object(tools, "Git", lambda: self.git), \
+        with mock.patch.object(tools, "gh_runner", lambda auth=None: fake), mock.patch.object(tools, "GhAuth", lambda: None), \
+                mock.patch.object(tools, "Git", lambda **kw: self.git), \
                 mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)}), \
                 mock.patch.object(cli.roots, "code_root", lambda: self.code), \
                 redirect_stdout(out), redirect_stderr(err):

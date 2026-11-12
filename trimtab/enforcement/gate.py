@@ -3,7 +3,7 @@
 `decide` is pure: it takes the rows, the manifest and the facts read, and says for each row
 whether it is shown and why not. `gather` reads those facts. Every input is a git object named by
 a SHA that only an admin's merge sets, re-hashed as it is read; a GitHub job record; or (outside
-`--server`) the install's own state:
+`--server`) one snapshot of the install's own state, which the checks judge and the digest seals:
 
 - the lock, at the project's default-branch head, which must be where the server says it is;
 - the instance file and the doctrine record, as objects in the instance checkout at the lock's
@@ -11,8 +11,8 @@ a SHA that only an admin's merge sets, re-hashed as it is read; a GitHub job rec
 - the manifest, and the tree this checkout is compared with, as objects at the pinned base;
 - job records, through one memoised reader: this base's `lint-test` on the pinned base, and each
   project row's job on the default-branch head, for the default branch;
-- outside `--server`: this checkout's files against the pinned base's tree, and the config dir's
-  hooks and settings.
+- outside `--server`: `snapshot`, read once, of this checkout's files, its HEAD, the settings
+  files and where each hook link points.
 
 Every read that fails, or returns the wrong shape, raises GateError: nothing is vouched for. Only
 the session-mode hook's recorder writes the pass cache (`trimtab.adapters.enforcement_record`); a
@@ -27,7 +27,7 @@ import os
 import re
 import stat
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote
 
@@ -49,6 +49,8 @@ CACHE_PARTS = ("enforcement",)
 CACHE_SCHEMA = 3
 SETTINGS_FILES = ("settings.json", "settings.local.json")
 CLEAN_HINT = "remove anything not in the pinned base (`git clean -xdf hooks trimtab`, `git checkout -- .`)"
+MAX_SETTINGS_BYTES = 1 << 20
+READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 
 
 class GateError(Exception):
@@ -107,6 +109,132 @@ def _base_problems(entry: manifest_mod.Entry, facts: Facts) -> list[str]:
     return problems
 
 
+# --- the install snapshot: read once, judged and sealed from the same bytes ---------------
+
+def _read_regular(path: Path, limit: int) -> bytes | None:
+    """A regular file's bytes, or None when there is none; a FIFO, a link or anything else raises OSError."""
+    try:
+        fd = os.open(path, READ_FLAGS)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(fd, "rb") as fh:
+        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            raise OSError(f"{path.name} is not a regular file")
+        data = fh.read(limit + 1)
+    if len(data) > limit:
+        raise OSError(f"{path.name} is larger than {limit} bytes")
+    return data
+
+
+@dataclass(frozen=True)
+class Install:
+    """One read of the install state a pass rests on."""
+
+    files: Mapping[str, tuple[bool, bytes]] | str  # path -> (executable, bytes) under the checked dirs, or why not
+    head: str  # this checkout's HEAD commit
+    settings: Mapping[str, bytes | None]  # "<config|project>/<name>" -> bytes, None when absent
+    links: Mapping[str, str]  # hook file -> where the config dir's hooks/<file> resolves
+    roots: tuple[str, str] = field(default=("", ""))  # the code and instance roots, resolved
+
+
+def _walk(code: Path) -> dict[str, tuple[bool, bytes]] | str:
+    """Every regular file under the checked dirs with its bytes, or why the tree cannot be judged."""
+    out: dict[str, tuple[bool, bytes]] = {}
+    failed: list[OSError] = []
+    for top in CHECKED_DIRS:
+        root = code / top
+        if not stat.S_ISDIR(os.lstat(root).st_mode):  # a symlinked or missing top is not this checkout's
+            return f"this checkout's {top}/ is not a plain directory"
+        for directory, dirs, files in os.walk(root, onerror=failed.append, followlinks=False):
+            for name in dirs + files:
+                full = Path(directory) / name
+                st = os.lstat(full)
+                if stat.S_ISLNK(st.st_mode):
+                    return "this checkout holds a symlink under hooks/ or trimtab/"
+                if stat.S_ISREG(st.st_mode):
+                    body = _read_regular(full, 1 << 24)
+                    out[full.relative_to(code).as_posix()] = (bool(st.st_mode & stat.S_IXUSR), body or b"")
+                elif not stat.S_ISDIR(st.st_mode):
+                    return "this checkout holds a special file under hooks/ or trimtab/"
+    if failed:  # a directory it cannot list could hold anything a module would load
+        return "this checkout holds a directory under hooks/ or trimtab/ that cannot be listed"
+    return out
+
+
+def head_of(code: Path) -> str:
+    """This checkout's HEAD commit, read from its files so a guard pays no git process for it; any layout this
+    does not know (a reftable repository, a FIFO, a broken pointer) raises OSError, so no digest is made."""
+    git_dir = code / ".git"
+    if stat.S_ISREG(os.lstat(git_dir).st_mode):  # a worktree's `gitdir:` pointer
+        pointer = (_read_regular(git_dir, 4096) or b"").decode("utf-8").strip()
+        if not pointer.startswith("gitdir: "):
+            raise OSError("the .git file is not a gitdir pointer")
+        git_dir = (code / pointer[len("gitdir: "):]).resolve()
+    head = (_read_regular(git_dir / "HEAD", 4096) or b"").decode("utf-8").strip()
+    if SHA.fullmatch(head):
+        return head
+    if not head.startswith("ref: refs/"):
+        raise OSError("HEAD is neither a commit nor a ref")
+    name = head[len("ref: "):]
+    common = git_dir
+    pointer = _read_regular(git_dir / "commondir", 4096)
+    if pointer is not None:
+        common = (git_dir / pointer.decode("utf-8").strip()).resolve()
+    for base in (git_dir, common):
+        value = _read_regular(base / name, 4096)
+        if value is not None and SHA.fullmatch(value.decode("utf-8").strip()):
+            return value.decode("utf-8").strip()
+    packed = _read_regular(common / "packed-refs", 1 << 24)
+    for line in (packed or b"").decode("utf-8").splitlines():
+        sha, _, ref = line.partition(" ")
+        if ref == name and SHA.fullmatch(sha):
+            return sha
+    raise OSError("HEAD names a ref this checkout does not hold")
+
+
+def snapshot(code: Path, config: Path, project: Path, instance_root: Path, hooks) -> Install:
+    """The install state, read once: what the checks judge and the digest seals (so nothing changed between
+    a check and the digest can slip into a pass)."""
+    try:
+        settings: dict[str, bytes | None] = {}
+        for label, directory in (("config", config), ("project", project / ".claude")):
+            for name in SETTINGS_FILES:
+                settings[f"{label}/{name}"] = _read_regular(directory / name, MAX_SETTINGS_BYTES)
+        links = {h.file: str((config / "hooks" / h.file).resolve()) for h in hooks}
+        return Install(_walk(code), head_of(code), settings, links,
+                       (str(code.resolve()), str(instance_root.resolve())))
+    except (OSError, UnicodeDecodeError) as err:
+        raise GateError(f"the install cannot be read ({type(err).__name__})") from err
+
+
+def install_digest(install: Install) -> str:
+    """SHA-256 over the snapshot, every part length-prefixed so no two snapshots share a digest."""
+    h = hashlib.sha256()
+
+    def part(data: bytes) -> None:
+        h.update(len(data).to_bytes(8, "big") + data)
+
+    for key in sorted(install.settings):
+        part(key.encode("utf-8"))
+        value = install.settings[key]
+        part(b"\0absent" if value is None else b"\1" + value)
+    for file in sorted(install.links):
+        part(file.encode("utf-8"))
+        part(install.links[file].encode("utf-8"))
+    for root in install.roots:
+        part(root.encode("utf-8"))
+    part(install.head.encode("ascii"))
+    if isinstance(install.files, str):
+        part(b"\0unwalkable")
+    else:
+        for path in sorted(install.files):
+            executable, body = install.files[path]
+            part(path.encode("utf-8"))
+            part(b"x" if executable else b"-")
+            part(body)
+    return h.hexdigest()
+
+
 # --- reads --------------------------------------------------------------------------------
 
 class _Reads:
@@ -115,20 +243,28 @@ class _Reads:
     def __init__(self, run: Run | None, git: tools.Git | None):
         try:
             self.git = git or tools.Git()
-            self.api = GhApi(run or tools.gh_runner())
+            self.auth = None
+            if run is None:
+                self.auth = tools.GhAuth()
+                run = tools.gh_runner(self.auth)
         except tools.ToolError as err:
             raise GateError(str(err)) from err
+        self.api = GhApi(run)
         self.jobs = actions.Reader(self.api)
-        self._objects: dict[str, tools.Objects] = {}
+        self._objects: dict[tuple[str, bool], tools.Objects] = {}
 
     def objects(self, repo: Path, allow_shallow: bool = False) -> tools.Objects:
-        key = str(repo)
+        key = (str(repo), allow_shallow)
         if key not in self._objects:
             try:
                 self._objects[key] = self.git.objects(repo, allow_shallow=allow_shallow)
             except tools.ToolError as err:
                 raise GateError(str(err)) from err
         return self._objects[key]
+
+    def close(self) -> None:
+        for objects in self._objects.values():
+            objects.close()
 
     def text(self, repo: Path, *args: str) -> str:
         try:
@@ -176,7 +312,7 @@ def _head_source(reads: _Reads, repository: str, project: Path, default: str, he
     """Where the default-branch head's objects are read from: a clean fetch, or the project as fetched."""
     if fetch_into is not None:
         try:
-            tip = reads.git.fetch_clean(repository, default, fetch_into)
+            tip = reads.git.fetch_clean(repository, default, fetch_into, reads.auth or tools.GhAuth())
         except tools.ToolError as err:
             raise GateError(str(err)) from err
         if tip != head:
@@ -211,7 +347,10 @@ def _instance(reads: _Reads, root: Path, sha: str) -> instance.InstanceFile:
 
 def _record_rows(reads: _Reads, root: Path, trimtab_sha: str, path: str) -> tuple[Row, ...]:
     try:
-        added = reads.objects(root).last_added(trimtab_sha, path)
+        objects = reads.objects(root)
+        if objects.entry(trimtab_sha, path) is None:  # the record must be there now, not only once
+            raise GateError(f"the instance has no {path} at {trimtab_sha[:12]}")
+        added = objects.last_added(trimtab_sha, path)
     except tools.ToolError as err:
         raise GateError(f"the instance's history: {err}") from err
     if added is None:
@@ -230,83 +369,42 @@ def _entries(reads: _Reads, code: Path, base_sha: str) -> Mapping[str, manifest_
         raise GateError(f"the manifest at the pinned base: {err}") from err
 
 
-def _walk(code: Path) -> list[str] | str:
-    """Every regular file under the checked dirs, or why the tree cannot be judged."""
-    have: list[str] = []
-    failed: list[OSError] = []
-    for top in CHECKED_DIRS:
-        for directory, dirs, files in os.walk(code / top, onerror=failed.append, followlinks=False):
-            for name in dirs + files:
-                full = Path(directory) / name
-                st = os.lstat(full)
-                if stat.S_ISLNK(st.st_mode):
-                    return "this checkout holds a symlink under hooks/ or trimtab/"
-                if stat.S_ISREG(st.st_mode):
-                    have.append(full.relative_to(code).as_posix())
-                elif not stat.S_ISDIR(st.st_mode):
-                    return "this checkout holds a special file under hooks/ or trimtab/"
-    if failed:  # a directory it cannot list could hold anything a module would load
-        return "this checkout holds a directory under hooks/ or trimtab/ that cannot be listed"
-    return have
-
-
-def file_digest(code: Path, paths: list[str]) -> str:
-    """SHA-256 over each path, its executable bit and its bytes: what a guard re-reads to see an edit."""
-    h = hashlib.sha256()
-    for path in sorted(paths):
-        full = code / path
-        h.update(path.encode("utf-8") + b"\0" + (b"x" if os.lstat(full).st_mode & stat.S_IXUSR else b"-") + b"\0")
-        h.update(full.read_bytes())
-        h.update(b"\0")
-    return h.hexdigest()
-
-
-def checkout_problem(reads: _Reads, code: Path, base_sha: str) -> str | None:
-    """Why this checkout's hooks/ and trimtab/ are not byte for byte the pinned base's, or None.
-
-    The base's tree is read as verified objects, and every file here is hashed against it, so no
-    index flag, stat trick, ignore rule or substituted object hides an edit; any file the base's
-    tree lacks (an ignored one, a `__pycache__`) is refused, as is a directory that cannot be listed."""
+def checkout_problem(reads: _Reads, code: Path, base_sha: str, install: Install) -> str | None:
+    """Why the snapshot of hooks/ and trimtab/ is not byte for byte the pinned base's, or None. The base's
+    tree is read as verified objects; any file it lacks (an ignored one, a `__pycache__`) is refused."""
+    if install.head != base_sha:
+        return "this checkout is not at the pinned base"
+    if isinstance(install.files, str):
+        return install.files
     try:
-        if reads.text(code, "rev-parse", "--verify", "HEAD^{commit}").strip() != base_sha:
-            return "this checkout is not at the pinned base"
         objects = reads.objects(code)
         want = {p: v for top in CHECKED_DIRS for p, v in objects.files(base_sha, top).items()}
-        have = _walk(code)
-        if isinstance(have, str):
-            return have
-        extra = sorted(set(have) - set(want))
-        if extra:
-            return f"this checkout holds {len(extra)} file(s) the pinned base does not; {CLEAN_HINT}"
-        if set(want) - set(have):
-            return "this checkout is missing files the pinned base holds under hooks/ or trimtab/"
-        for path in have:
-            mode, expected = want[path]
-            full = code / path
-            body = full.read_bytes()
-            sha = hashlib.sha1(f"blob {len(body)}\0".encode("ascii") + body).hexdigest()
-            executable = bool(os.lstat(full).st_mode & stat.S_IXUSR)
-            if sha != expected or executable != (mode == "100755"):
-                return f"this checkout's hooks/ or trimtab/ differ from the pinned base; {CLEAN_HINT}"
-    except (tools.ToolError, OSError, UnicodeDecodeError) as err:
-        raise GateError(f"this checkout cannot be compared with the pinned base ({type(err).__name__})") from err
+    except tools.ToolError as err:
+        raise GateError(f"the pinned base's tree: {err}") from err
+    extra = sorted(set(install.files) - set(want))
+    if extra:
+        return f"this checkout holds {len(extra)} file(s) the pinned base does not; {CLEAN_HINT}"
+    if set(want) - set(install.files):
+        return "this checkout is missing files the pinned base holds under hooks/ or trimtab/"
+    for path, (executable, body) in install.files.items():
+        mode, expected = want[path]
+        sha = hashlib.sha1(f"blob {len(body)}\0".encode("ascii") + body).hexdigest()
+        if sha != expected or executable != (mode == "100755"):
+            return f"this checkout's hooks/ or trimtab/ differ from the pinned base; {CLEAN_HINT}"
     return None
 
 
 UNREADABLE = object()
 
 
-def _settings(directory: Path, required: str | None) -> list[object]:
-    """Each settings file's JSON; {} for an absent optional one; UNREADABLE for a bad or absent required one."""
-    out: list[object] = []
-    for name in SETTINGS_FILES:
-        try:
-            out.append(json.loads((directory / name).read_text(encoding="utf-8")))
-        except FileNotFoundError:
-            out.append(UNREADABLE if name == required else {})
-        except (OSError, ValueError, UnicodeDecodeError):
-            out.append(UNREADABLE)
-    return out
+def _parsed(install: Install, key: str, required: bool) -> object:
+    raw = install.settings.get(key)
+    if raw is None:
+        return UNREADABLE if required else {}
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return UNREADABLE
 
 
 def _home_config() -> Path:
@@ -329,87 +427,29 @@ def _registers(settings: object, config: Path, hook: manifest_mod.Hook) -> bool:
     return False
 
 
-def liveness(code: Path, config: Path, project: Path, hooks: list[manifest_mod.Hook]) -> dict[str, str | None]:
-    """For each hook file: why it is not installed from this checkout, registered and enabled, or None."""
-    user = _settings(config, required="settings.json")
-    local = _settings(project / ".claude", required=None)
-    disabled = any(isinstance(s, dict) and s.get("disableAllHooks") is True for s in user + local)
+def liveness(code: Path, config: Path, install: Install, hooks: list[manifest_mod.Hook]) -> dict[str, str | None]:
+    """For each hook file: why the snapshot shows it not installed from this checkout, registered and enabled."""
+    parsed = [_parsed(install, f"config/{SETTINGS_FILES[0]}", True), _parsed(install, f"config/{SETTINGS_FILES[1]}", False),
+              _parsed(install, f"project/{SETTINGS_FILES[0]}", False), _parsed(install, f"project/{SETTINGS_FILES[1]}", False)]
+    disabled = any(isinstance(s, dict) and s.get("disableAllHooks") is True for s in parsed)
+    files = install.files if isinstance(install.files, Mapping) else {}
     out: dict[str, str | None] = {}
     for hook in hooks:
-        installed = config / "hooks" / hook.file
         why = None
-        if any(s is UNREADABLE for s in user + local):
+        entry = files.get(f"hooks/{hook.file}")
+        if any(s is UNREADABLE for s in parsed):
             why = "a settings file cannot be read"
         elif disabled:
             why = "a settings file sets disableAllHooks"
-        elif installed.resolve() != (code / "hooks" / hook.file).resolve():
+        elif install.links.get(hook.file) != str((code / "hooks" / hook.file).resolve()):
             why = "the config dir's hook is not this checkout's"
-        elif not os.access(installed, os.X_OK):
+        elif entry is None or not entry[0]:
             why = "the installed hook is not executable"
-        elif not _registers(user[0], config, hook):
+        elif not _registers(parsed[0], config, hook):
             why = f"settings.json does not register it for {hook.event} {hook.matcher}"
         if out.get(hook.file) is None:
             out[hook.file] = why
     return out
-
-
-def install_digest(code: Path, config: Path, project: Path, instance_root: Path, hooks) -> str:
-    """A digest of the install state a pass rests on, which a guard can re-read locally: the settings
-    files, where each hook link points, the code and instance roots, this checkout's HEAD, and every
-    file under hooks/ and trimtab/. A change to any voids a pass."""
-    h = hashlib.sha256()
-    for directory in (config, project / ".claude"):
-        for name in SETTINGS_FILES:
-            try:
-                h.update((directory / name).read_bytes())
-            except FileNotFoundError:
-                h.update(b"\0absent")
-            h.update(b"\0")
-    for file in sorted({hk.file for hk in hooks}):
-        h.update(str((config / "hooks" / file).resolve()).encode("utf-8") + b"\0")
-    for root in (code, instance_root):
-        h.update(str(root.resolve()).encode("utf-8") + b"\0")
-    h.update(head_of(code).encode("ascii") + b"\0")
-    have = _walk(code)
-    h.update(file_digest(code, have).encode("ascii") if isinstance(have, list) else b"\0unwalkable")
-    return h.hexdigest()
-
-
-def head_of(code: Path) -> str:
-    """This checkout's HEAD commit, read from its files so a guard pays no git process for it."""
-    git_dir = code / ".git"
-    try:
-        if git_dir.is_file():  # a worktree's `gitdir:` pointer
-            git_dir = (code / git_dir.read_text(encoding="utf-8").partition("gitdir:")[2].strip()).resolve()
-        ref = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
-        if ref.startswith("ref: "):
-            name = ref[5:]
-            for base in (git_dir, _common(git_dir)):
-                if (base / name).is_file():
-                    return (base / name).read_text(encoding="utf-8").strip()
-            return _packed(_common(git_dir), name)
-        return ref
-    except (OSError, UnicodeDecodeError):
-        return "unreadable"
-
-
-def _common(git_dir: Path) -> Path:
-    pointer = git_dir / "commondir"
-    try:
-        return (git_dir / pointer.read_text(encoding="utf-8").strip()).resolve()
-    except FileNotFoundError:
-        return git_dir
-
-
-def _packed(git_dir: Path, name: str) -> str:
-    try:
-        for line in (git_dir / "packed-refs").read_text(encoding="utf-8").splitlines():
-            sha, _, ref = line.partition(" ")
-            if ref == name:
-                return sha
-    except FileNotFoundError:
-        pass  # no packed refs: the ref is unborn
-    return "unborn"
 
 
 def gather(repository: str, project: Path, instance_root: Path, code: Path, config: Path,
@@ -420,6 +460,14 @@ def gather(repository: str, project: Path, instance_root: Path, code: Path, conf
     if server:
         raise GateError("--server reads the lock's derived rows, which are added with E22's PR")
     reads = _Reads(run, git)
+    try:
+        return _gather(reads, repository, project, instance_root, code, config, fetch_into)
+    finally:
+        reads.close()
+
+
+def _gather(reads: _Reads, repository: str, project: Path, instance_root: Path, code: Path, config: Path,
+            fetch_into: Path | None) -> Facts:
     default, head = _default_head(reads, repository)
     source, shallow = _head_source(reads, repository, project, default, head, fetch_into)
     lock = _lock(reads, source, head, shallow)
@@ -438,15 +486,16 @@ def gather(repository: str, project: Path, instance_root: Path, code: Path, conf
                                 branch=BASE_BRANCH) if entries else None
     if base_ci:
         base_ci = f"this base's CI on the pinned base: {base_ci}"
-    hooks = [h for e in entries.values() for h in e.hooks]
-    checkout = checkout_problem(reads, code, held.base_sha)
-    live = liveness(code, config, project, hooks)
     project_side = {r.id for r in rows if r.side in (PROJECT, BOTH)}
     project_jobs = {rid: reads.job_problem(repository, head, ref.workflow, ref.job, branch=default)
                     for rid, ref in named.items() if rid in project_side}
-    digest = install_digest(code, config, project, instance_root, hooks)
+    hooks = [h for e in entries.values() for h in e.hooks]
+    # Last, after every network read: the one snapshot both judged and sealed.
+    install = snapshot(code, config, project, instance_root, hooks)
+    checkout = checkout_problem(reads, code, held.base_sha, install)
+    live = liveness(code, config, install, hooks)
     return Facts(rows, entries, base_ci, checkout, live, project_jobs,
-                 (lock.trimtab_sha, held.base_sha, head, digest))
+                 (lock.trimtab_sha, held.base_sha, head, install_digest(install)))
 
 
 # --- the cache E21 reads -----------------------------------------------------------------
@@ -467,11 +516,14 @@ def record_pass(config: Path, repository: str, key: tuple[str, str, str, str]) -
 
 
 def clear_pass(config: Path, repository: str | None = None) -> None:
-    """Remove the cached pass for `repository`, or every cached pass when it is None."""
-    try:
-        directory = guardstate.directory(config, *CACHE_PARTS, create=False)
-    except guardstate.GuardStateError:
+    """Remove the cached pass for `repository`, or every cached pass when it is None. A cache directory that
+    is there but not private raises GuardStateError: it cannot be trusted to hold no pass."""
+    path = Path(config) / guardstate.ROOT
+    for part in CACHE_PARTS:
+        path = path / part
+    if not os.path.lexists(path):
         return  # no directory, so no pass to remove
+    directory = guardstate.directory(config, *CACHE_PARTS, create=False)
     names = [cache_name(repository)] if repository else [p.name for p in directory.glob("*.json")]
     for name in names:
         try:

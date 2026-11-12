@@ -7,6 +7,7 @@ import os
 import signal
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -26,7 +27,7 @@ class Records(World):
         git(self.proj, "push", "-q", str(self.bare), "main")
         self.fetched = []
 
-        def fetch_clean(repository, branch, into):
+        def fetch_clean(repository, branch, into, auth):
             self.fetched.append((repository, branch))
             subprocess.run(["git", "clone", "-q", "--bare", "--depth", "1", "--branch", branch,
                             f"file://{self.bare}", str(into)], check=True)
@@ -35,8 +36,8 @@ class Records(World):
         self.git.fetch_clean = fetch_clean
 
     def record(self, fake):
-        with mock.patch.object(tools, "gh_runner", lambda: fake), \
-                mock.patch.object(tools, "Git", lambda: self.git), \
+        with mock.patch.object(tools, "gh_runner", lambda auth=None: fake), mock.patch.object(tools, "GhAuth", lambda: None), \
+                mock.patch.object(tools, "Git", lambda **kw: self.git), \
                 mock.patch.object(enforcement_record.roots, "instance_root", lambda: self.inst), \
                 mock.patch.object(enforcement_record.roots, "code_root", lambda: self.code), \
                 mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)}):
@@ -149,6 +150,46 @@ class Records(World):
 
         self.assertTrue(gate.cached_pass(self.config, "other/repo", PINNED))
 
+    def new_epoch(self):
+        directory = guardstate.directory(self.config, *gate.CACHE_PARTS, create=True)
+        guardstate.write(directory / enforcement_record.EPOCH, os.urandom(8).hex())
+
+    def test_writes_no_pass_when_a_later_session_started_a_new_epoch(self):
+        self.new_epoch()
+        fetch = self.git.fetch_clean
+
+        def fetch_then_new_session(*args):
+            tip = fetch(*args)
+            self.new_epoch()  # a later session's hook, while this recorder runs
+            return tip
+
+        self.git.fetch_clean = fetch_then_new_session
+
+        self.assertIn("new epoch", self.record(self.gh()))
+
+    def test_waits_for_a_recorder_already_running(self):
+        held = threading.Event()
+        release = threading.Event()
+
+        def hold():
+            with enforcement_record._locked(self.config):
+                held.set()
+                release.wait(5)
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        held.wait(5)
+        done = []
+        runner = threading.Thread(target=lambda: done.append(self.record(self.gh())))
+        runner.start()
+        runner.join(0.5)
+        waited = runner.is_alive()
+        release.set()
+        holder.join(5)
+        runner.join(10)
+
+        self.assertEqual((waited, done), (True, [enforcement_record.PASSED]))
+
 
 class Clears(World):
     def setUp(self):
@@ -156,7 +197,7 @@ class Clears(World):
         git(self.proj, "remote", "add", "origin", f"https://github.com/{PROJECT}.git")
 
     def clear(self):
-        with mock.patch.object(tools, "Git", lambda: self.git), \
+        with mock.patch.object(tools, "Git", lambda **kw: self.git), \
                 mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)}):
             enforcement_record.clear(self.proj)
 
@@ -206,8 +247,43 @@ class TheHookClearsFirst(unittest.TestCase):
 
         self.assertTrue(gate.cached_pass(self.config, "other/repo", PINNED))
 
+    def test_a_named_project_clears_only_its_own_pass(self):
+        # Only the python clear can tell projects apart; the bash fallback removes every pass.
+        project = self.tmp / "project"
+        subprocess.run(["git", "init", "-q", str(project)], check=True)
+        subprocess.run(["git", "-C", str(project), "remote", "add", "origin", f"https://github.com/{PROJECT}.git"],
+                       check=True)
+        gate.record_pass(self.config, PROJECT, PINNED)
+
+        self.run_hook(TRIMTAB_PLAN_RUN="1")
+
+        self.assertEqual((gate.cached_pass(self.config, PROJECT, PINNED),
+                          gate.cached_pass(self.config, "other/repo", PINNED)), (False, True))
+
+    def test_trusts_the_systems_python_through_its_symlink(self):
+        out = subprocess.run(["bash", "-c", f'source "{self.HOOK}"; sm_trusted python3'], capture_output=True,
+                             text=True, env={"PATH": "/usr/bin:/bin"})
+
+        self.assertTrue(out.stdout.strip().startswith(("/usr/bin/", "/bin/")))
+
+    def test_trusts_no_binary_a_user_could_change(self):
+        out = subprocess.run(["bash", "-c", f'source "{self.HOOK}"; sm_trusted no-such-tool-xyz'],
+                             capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
+
+        self.assertEqual((out.returncode, out.stdout), (1, ""))
+
 
 class Main(unittest.TestCase):
+    def test_raises_sigterm_as_an_exit_so_the_cleanup_runs(self):
+        seen = []
+        previous = signal.getsignal(signal.SIGTERM)
+        self.addCleanup(signal.signal, signal.SIGTERM, previous)
+
+        with mock.patch.object(enforcement_record, "record", lambda p: seen.append(signal.getsignal(signal.SIGTERM))):
+            enforcement_record.main(["record", "/nonexistent"])
+
+        self.assertEqual(seen, [enforcement_record._terminate])
+
     def test_a_failed_record_exits_0(self):
         with mock.patch.object(enforcement_record, "record", side_effect=RuntimeError("boom")):
             self.assertEqual(enforcement_record.main(["record", "/nonexistent"]), 0)
