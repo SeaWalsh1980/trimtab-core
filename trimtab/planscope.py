@@ -41,8 +41,6 @@ from dataclasses import dataclass
 from enum import Enum
 from fnmatch import fnmatchcase
 
-from trimtab.capture.sources import SourceError, git_answer
-
 MAX_CHANGES = 5000  # bounded: a diff longer than this is refused, not judged in part (ENG-6.2)
 MAX_MAIN_CHANGES = 20000  # paths main's first-parent history names since a merge-base, repeats counted (ENG-6.2)
 ALLOWLIST = ".claude/write-allowlist"
@@ -256,10 +254,20 @@ def _git_answer(repo: str, *args: str, stdin: bytes | None = None, answers: tupl
            and k != "GIT_CONFIG_COUNT"}
     env.update(GIT_NO_REPLACE_OBJECTS="1", GIT_LITERAL_PATHSPECS="1", **(objects or {}))
     pins = [arg for key, value in GIT_PINNED for arg in ("-c", f"{key}={value}")]
+    from trimtab.capture.sources import SourceError  # see git_answer below
     try:
         return git_answer(repo, *pins, *args, env=env, stdin=stdin, name=args[0], answers=answers)
     except SourceError as err:
         raise PlanScopeError(str(err)) from err
+
+
+def git_answer(*args, **kwargs):
+    """capture.sources.git_answer, imported when first called rather than with this module:
+    capture.sources pulls in PyYAML, and the Bash write detector (trimtab.adapters.bash_writes,
+    ADR 0066) imports this module's pure rules under `python3 -S`. A module-level name, so a test
+    can still patch it."""
+    from trimtab.capture.sources import git_answer as answer
+    return answer(*args, **kwargs)
 
 
 def _commit(repo: str, rev: str) -> str:
