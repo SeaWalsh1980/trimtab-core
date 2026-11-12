@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Session scratch: an autonomous plan run keeps its temporary files in one
 # directory per session, and that directory goes when the session ends. See
 # docs/adr/0049-session-end-removes-an-autonomous-runs-scratch.md.

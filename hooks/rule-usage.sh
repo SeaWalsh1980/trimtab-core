@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Observability hook for InstructionsLoaded / SessionStart / SubagentStart.
 # All of the behaviour is in rule_usage.py beside this file; see its docstring.
 #

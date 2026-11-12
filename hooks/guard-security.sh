@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # PreToolUse hook, matcher: Edit|Write|MultiEdit|NotebookEdit|Bash
 #
 # Security-control policy: an agent must not change a security control on its

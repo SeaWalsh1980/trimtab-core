@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # SessionStart hook: put the installed CLI first on PATH for the session's
 # Bash calls, so commands, agents and routine prompts call it as `trimtab`.
 #

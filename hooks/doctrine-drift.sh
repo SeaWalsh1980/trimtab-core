@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # SessionStart hook, matcher: *. Registered in settings.base.json; changing
 # that registration is a security-control change (ADR 0004).
 #

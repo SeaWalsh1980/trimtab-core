@@ -24,6 +24,7 @@ from trimtab.capture.sources import (
     FixtureContents, FixtureIssues, FixtureSource, GhBodies, GhContents, GhIssues, GhPullRequests, GhSource,
     SourceError, changed_files, open_feedback_issues, real_day, staged_files,
 )
+from trimtab.enforcement import gate as enforcement_gate
 from trimtab.capture.written import SETTLE_SECONDS, Readback, WrittenBodyError, verify_body
 from trimtab.lint import overrides, references, structure
 from trimtab.propose import render
@@ -975,6 +976,26 @@ def cmd_check_plan_scope_job(args) -> int:
     return 0
 
 
+def cmd_check_enforcement(args) -> int:
+    config = enforcement_gate.guardstate.config_dir()
+    try:
+        facts = enforcement_gate.gather(args.repository, Path(args.repo), _instance(args), roots.code_root(),
+                                        config, server=args.server)
+        results = enforcement_gate.decide(facts)
+    except enforcement_gate.GateError as err:
+        print(f"error: {err}; nothing is vouched for", file=sys.stderr)
+        return 2
+    except roots.InstanceError:
+        raise
+    except Exception as err:  # noqa: BLE001 - reported; exit 1 would read as a verdict on the rows
+        print(f"error: {type(err).__name__} while checking; nothing is vouched for", file=sys.stderr)
+        return 2
+    for r in results:
+        print(f"{r.id} shown" if r.problem is None else f"{r.id} not shown: {r.problem}")
+    # Report only: the pass the guards read is written by the session-mode hook's recorder alone (ADR 0063 §2).
+    return 1 if any(r.problem for r in results) else 0
+
+
 def cmd_routine_render(args) -> int:
     pairs = {}
     for item in args.set or []:
@@ -1332,6 +1353,16 @@ def build_parser() -> argparse.ArgumentParser:
     pj.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository the PR is in")
     pj.add_argument("--head", required=True, metavar="SHA", help="the PR's final head commit")
     pj.set_defaults(func=cmd_check_plan_scope_job)
+
+    ce = sub.add_parser("check-enforcement", parents=[common],
+                        help="E20: whether every enforcement row E1-E23 is shown, reading the rows from the doctrine "
+                             "record and their facts from git objects and job records (ADR 0063). Exits 0 if every row "
+                             "is shown, 1 if not, 2 on a failed read. Reports only: it never writes the pass the "
+                             "guards read")
+    ce.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the project the run is in")
+    ce.add_argument("--repo", default=".", metavar="DIR", help="the project's checkout, fetched (default: .)")
+    ce.add_argument("--server", action="store_true", help="run in the project's CI: no liveness, no cache")
+    ce.set_defaults(func=cmd_check_enforcement)
 
     rt = sub.add_parser("routine", help="routine specs")
     rts = rt.add_subparsers(dest="routine_command", required=True)
