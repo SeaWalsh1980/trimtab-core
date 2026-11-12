@@ -10,6 +10,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path, PurePosixPath
@@ -238,6 +239,65 @@ class PrBodyCheck(unittest.TestCase):
         done = run(PR_BODY_CHECK, payload, env=self.env)
 
         self.assertIn("the check failed (AttributeError)", self.notice(done))
+
+    def test_a_body_file_that_is_not_utf8_is_allowed_with_the_unreadable_notice(self):
+        (self.cwd / "latin.md").write_bytes(b"caf\xe9 \xff\xfe")
+
+        done = self.check("gh pr create --draft --body-file latin.md")
+
+        self.assertIn("the body file could not be read", self.notice(done))
+
+    def test_an_unchecked_segment_does_not_hide_a_later_blocking_one(self):
+        done = self.check("gh pr create --draft --body-file missing.md && gh pr edit 1 --body-file bad.md")
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""))
+
+    def test_an_unchecked_segment_followed_by_a_good_one_still_gives_the_notice(self):
+        done = self.check("gh pr create --draft --body-file missing.md && gh pr create --draft --body-file good.md")
+
+        self.assertIn("the body file could not be read", self.notice(done))
+
+    def test_the_first_of_two_unchecked_segments_gives_the_notice(self):
+        done = self.check("gh api -X POST repos/o/r/pulls --input bad.md && gh pr create --draft --body-file missing.md")
+
+        self.assertIn("the --input file is not JSON", self.notice(done))
+
+    def test_a_missing_instance_does_not_hide_a_later_blocking_segment(self):
+        env = {k: v for k, v in self.env.items() if k != "TRIMTAB_INSTANCE"}
+
+        done = run(PR_BODY_CHECK, bash("gh pr create --draft --body-file good.md && gh pr create --draft", self.cwd),
+                   env=env)
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""))
+
+    def test_an_unavailable_registry_does_not_hide_a_later_blocking_segment(self):
+        (self.cwd / "instance" / "rules" / "Broken.md").write_text("no front matter, no id prefix\n")
+
+        done = self.check("gh pr create --draft --body-file good.md && gh pr create --draft")
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""))
+
+    def test_a_block_stays_a_block_when_stderr_cannot_be_written(self):
+        # A pipe whose reader is gone: printing the block message raises.
+        reader, writer = os.pipe()
+        os.close(reader)
+        try:
+            done = subprocess.run([sys.executable, "-I", "-B", str(REPO / "hooks" / "run_module.py"), str(REPO),
+                                   "trimtab.adapters.pr_body_check"],
+                                  input=json.dumps(bash("gh pr create --draft --body-file bad.md", self.cwd)),
+                                  stdout=subprocess.PIPE, stderr=writer, text=True, env=self.env, timeout=30)
+        finally:
+            os.close(writer)
+
+        self.assertEqual(done.returncode, 2)
+
+    def test_the_hook_and_the_adapter_print_the_same_sentence(self):
+        sentence = "pr-body-check: the PR body was not checked: "
+
+        both = [sentence in path.read_text(encoding="utf-8")
+                for path in (PR_BODY_CHECK, REPO / "trimtab" / "adapters" / "pr_body_check.py")]
+
+        self.assertEqual(both, [True, True])
 
     def test_a_body_it_was_never_meant_to_read_stays_quiet(self):
         done = self.check("gh pr create --web")

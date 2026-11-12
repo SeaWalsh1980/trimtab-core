@@ -126,10 +126,30 @@ class Launchers(unittest.TestCase):
         self.assertEqual((out.returncode, "no python3 in /usr/bin or /bin" in json.loads(out.stdout)["systemMessage"]),
                          (0, True), out.stderr)
 
-    def test_the_pr_body_hook_notice_is_valid_json_for_a_path_with_quotes_and_backslashes(self):
-        out = self.pr_body_hook('#!/bin/sh\nexit 2\n', fakebin_name='fake"bin\\x\ttab')
+    def test_the_pr_body_hook_notice_is_valid_json_for_a_path_with_every_escaped_character(self):
+        # Quote, backslash, tab, newline and carriage return, each of which the hook escapes.
+        name = 'fake"bin\\x\ttab\nnl\rcr'
 
-        self.assertIn('fake"bin\\x\ttab', json.loads(out.stdout)["systemMessage"])
+        out = self.pr_body_hook('#!/bin/sh\nexit 2\n', fakebin_name=name)
+
+        self.assertIn(name, json.loads(out.stdout)["systemMessage"])
+
+    def test_a_failed_check_leaves_only_the_hooks_notice_on_stdout(self):
+        # The adapter prints, then fails: half of its output must not precede the notice.
+        out = self.pr_body_hook('#!/bin/sh\ncase "$*" in *run_module.py*) echo adapter-noise; exit 1 ;; esac\nexit 0\n')
+
+        self.assertEqual("adapter-noise" in out.stdout, False)
+        self.assertIn("the check exited 1", json.loads(out.stdout)["systemMessage"])
+
+    def test_a_block_leaves_nothing_on_stdout(self):
+        out = self.pr_body_hook('#!/bin/sh\ncase "$*" in *run_module.py*) echo adapter-noise; exit 2 ;; esac\nexit 0\n')
+
+        self.assertEqual((out.returncode, out.stdout), (2, ""))
+
+    def test_a_good_check_passes_the_adapters_own_stdout_through(self):
+        out = self.pr_body_hook('#!/bin/sh\ncase "$*" in *run_module.py*) echo "{\\"systemMessage\\":\\"from the adapter\\"}"; exit 0 ;; esac\nexit 0\n')
+
+        self.assertEqual((out.returncode, json.loads(out.stdout)), (0, {"systemMessage": "from the adapter"}))
 
     def test_the_pr_body_hook_tells_the_user_it_did_not_check_when_the_check_fails(self):
         # Passes the -P probe, then fails as an import of a missing PyYAML would.

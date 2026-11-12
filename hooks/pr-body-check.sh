@@ -29,7 +29,7 @@ export PATH=/usr/bin:/bin
 # to read (--web, stdin, a shell-built body) stays quiet: CI checks those.
 # Since the reset above, python3 is always /usr/bin/python3, whatever newer one
 # the session's PATH holds (ADR 0065).
-unchecked() { # unchecked <why>
+unchecked() { # unchecked <why>; the adapter's `unchecked` prints the same sentence
   local msg="pr-body-check: the PR body was not checked: $1. CI is the gate."
   echo "$msg" >&2
   # JSON string escapes: backslash first, then quote and the control
