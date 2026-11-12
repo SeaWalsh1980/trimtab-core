@@ -11,6 +11,10 @@
 # observability hook's exit code as non-blocking whatever it is. A missing
 # python3 is therefore reported on stderr, which is the only channel left, and
 # never blocks the session that tripped it.
+#
+# Before any command: tools are named bare, and the inherited PATH starts with
+# a user-writable directory (docs/adr/0065-hooks-reset-path-first.md).
+export PATH=/usr/bin:/bin
 set -uo pipefail
 
 dir="$(dirname "${BASH_SOURCE[0]}")"

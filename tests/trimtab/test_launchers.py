@@ -14,6 +14,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from hook_fixture import hooks_with_path
+
 CHECKOUT = Path(__file__).resolve().parents[2]
 DECOY = "DECOY-PACKAGE-RAN"
 
@@ -83,10 +85,11 @@ class Launchers(unittest.TestCase):
             "done\nexit 0\n"
         )
         fake.chmod(0o755)
-        env = {**os.environ, "PATH": f"{fakebin}:{os.environ['PATH']}"}
+        # The hook resets PATH (ADR 0065): the fake goes first in a copy's reset.
+        hooks = hooks_with_path(self.cwd / "fake-hooks", f"{fakebin}:/usr/bin:/bin")
         payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr create --draft"}, "cwd": str(self.cwd)})
-        out = subprocess.run([str(CHECKOUT / "hooks" / "pr-body-check.sh")], cwd=self.cwd, input=payload,
-                             env=env, capture_output=True, text=True, timeout=60)
+        out = subprocess.run([str(hooks / "pr-body-check.sh")], cwd=self.cwd, input=payload,
+                             env=dict(os.environ), capture_output=True, text=True, timeout=60)
         self.assertEqual(out.returncode, 0, out.stderr)
 
 

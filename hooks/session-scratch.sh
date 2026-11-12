@@ -30,6 +30,10 @@
 # Never blocks and always exits 0: neither event is a gate. SessionEnd has no
 # one to tell, so a removal that fails is reported on stderr, which Claude
 # Code shows in its debug log, and the directory stays for the operator.
+#
+# Before any command: tools are named bare, and the inherited PATH starts with
+# a user-writable directory (docs/adr/0065-hooks-reset-path-first.md).
+export PATH=/usr/bin:/bin
 set -uo pipefail
 
 ss_here="${BASH_SOURCE[0]%/*}"

@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path, PurePosixPath
 
+from hook_fixture import PATH_RESET, hooks_with_path
 from instance_fixture import INSTANCE_JSON, env_for, git, make_instance
 
 REPO = Path(__file__).resolve().parents[2]
@@ -200,24 +201,25 @@ class PrBodyCheck(unittest.TestCase):
         self.assertEqual(done.returncode, 2)
 
     def stub_python(self):
-        """A python3 on PATH that only records that it ran; returns (env, marker)."""
+        """A python3 that only records that it ran, first on the hook's PATH; returns (hook, marker)."""
         stub, marker = self.cwd / "stub-bin", self.cwd / "python-ran"
         stub.mkdir()
         (stub / "python3").write_text(f"#!/bin/sh\n: > '{marker}'\n")
         (stub / "python3").chmod(0o755)
-        return {**self.env, "PATH": f"{stub}:{self.env.get('PATH', '')}"}, marker
+        hooks = hooks_with_path(self.cwd / "stub-hooks", f"{stub}:/usr/bin:/bin")
+        return hooks / PR_BODY_CHECK.name, marker
 
     def test_a_read_of_pulls_never_starts_python(self):
-        env, marker = self.stub_python()
+        hook, marker = self.stub_python()
 
-        run(PR_BODY_CHECK, bash('gh api "repos/$REPO/pulls?state=open&per_page=100" --jq .', self.cwd), env=env)
+        run(hook, bash('gh api "repos/$REPO/pulls?state=open&per_page=100" --jq .', self.cwd), env=self.env)
 
         self.assertFalse(marker.exists())
 
     def test_a_write_to_pulls_starts_python(self):
-        env, marker = self.stub_python()
+        hook, marker = self.stub_python()
 
-        run(PR_BODY_CHECK, bash('gh api -X POST "repos/$REPO/pulls" -F body=@bad.md', self.cwd), env=env)
+        run(hook, bash('gh api -X POST "repos/$REPO/pulls" -F body=@bad.md', self.cwd), env=self.env)
 
         self.assertTrue(marker.exists())
 
@@ -675,6 +677,83 @@ class HookShebangs(unittest.TestCase):
         names = {p.name for p in self.files}
 
         self.assertLessEqual({"guard-paths.sh", "guard-bash.sh", "session-mode.sh"}, names)
+
+
+# ---- PATH reset (ADR 0065) -------------------------------------------------
+# The absolute shebang fixes bash, but each hook still names python3, jq, git
+# and the rest bare, and the inherited PATH puts the user-writable
+# ~/.local/bin first. So the first statement of every shell hook is the reset.
+
+# Every command a hook runs by name, and more: each is planted as a recorder.
+PLANTED = ("awk basename cat chmod cksum cut date dirname env find gh git grep head id jq "
+           "ln ls mkdir mktemp mv python3 readlink realpath rm rmdir sed sort stat tail "
+           "tee touch tr uname wc xargs").split()
+
+
+def first_statement(path):
+    """The first line of a shell hook that is neither the shebang, blank, nor a comment."""
+    for line in path.read_text(encoding="utf-8").split("\n")[1:]:
+        if line.strip() and not line.lstrip().startswith("#"):
+            return line
+    return None
+
+
+def plant(directory, marker):
+    """Recording stubs for every name in PLANTED; returns the directory."""
+    directory.mkdir()
+    for name in PLANTED:
+        (directory / name).write_text(f"#!/bin/sh\necho {name} >> '{marker}'\nexit 1\n")
+        (directory / name).chmod(0o755)
+    return directory
+
+
+class HookPathReset(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.marker = self.root / "planted-ran"
+        self.planted = plant(self.root / "planted", self.marker)
+        home = self.root / "home"
+        home.mkdir()
+        self.env = {"PATH": str(self.planted), "HOME": str(home), "TMPDIR": str(self.root),
+                    "CLAUDE_CONFIG_DIR": str(home / ".claude")}
+        self.hooks = sorted((REPO / "hooks").glob("*.sh"))
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def run_hook(self, hook):
+        payload = json.dumps({"hook_event_name": "PreToolUse", "session_id": "path-reset",
+                              "tool_name": "Bash", "cwd": str(self.root),
+                              "tool_input": {"command": "gh pr create --draft"}})
+        subprocess.run([str(hook)], input=payload, capture_output=True, text=True,
+                       cwd=self.root, env=self.env, timeout=30)
+
+    def test_every_shell_hook_resets_path_before_its_first_command(self):
+        faults = {p.name: first_statement(p) for p in self.hooks}
+
+        self.assertEqual({name: line for name, line in faults.items() if line != PATH_RESET}, {})
+
+    def test_no_hook_runs_a_tool_from_the_inherited_path(self):
+        for hook in self.hooks:
+            self.run_hook(hook)
+
+        ran = self.marker.read_text() if self.marker.exists() else ""
+        self.assertEqual(ran, "")
+
+    def test_without_the_reset_a_planted_tool_does_run(self):
+        copy = self.root / "no-reset.sh"
+        copy.write_text(DRIFT.read_text(encoding="utf-8").replace(PATH_RESET + "\n", ""), encoding="utf-8")
+        copy.chmod(0o755)
+
+        self.run_hook(copy)
+
+        self.assertTrue(self.marker.exists())
+
+    def test_the_scan_sees_every_shell_hook(self):
+        names = {p.name for p in self.hooks}
+
+        self.assertLessEqual({"guard-github.sh", "guard-mcp.sh", "pr-body-check.sh", "session-path.sh"}, names)
 
 
 if __name__ == "__main__":

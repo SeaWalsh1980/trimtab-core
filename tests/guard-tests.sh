@@ -82,6 +82,43 @@ j() {
 # while the workstation goes red.
 CPTMP=$(mktemp -d -t guard-tests.XXXXXX)
 trap 'rm -rf "$CPTMP"' EXIT
+
+# Every hook sets PATH=/usr/bin:/bin before its first command (ADR 0065), so a
+# case that hides or replaces a dependency by narrowing PATH can no longer do
+# it from outside: the hook would find the real tool in /usr/bin and the case
+# would pass, or fail, for the wrong reason. Such a case runs a copy of the
+# hooks directory whose reset names the stub PATH instead. The copy differs
+# from the original in that one line: each .sh is copied with the canonical
+# line swapped, everything else is linked, and the package beside hooks/ is
+# linked too, so `$here/..` still finds it. A hook without exactly one
+# canonical line is not copied; the case fails rather than run an unknown hook.
+PATH_RESET='export PATH=/usr/bin:/bin'
+path_hooks() { # path_hooks <hooks dir> <PATH>  — print a copy whose reset sets <PATH>
+  local src="$1" want="$2" out f n line
+  out="$CPTMP/path-hooks/$(printf '%s\n%s' "$src" "$want" | cksum | cut -d' ' -f1)"
+  if [[ ! -d "$out/hooks" ]]; then
+    mkdir -p "$out/hooks" || return 1
+    [[ -e "$src/../trimtab" ]] && ln -s "$(readlink -f "$src/../trimtab")" "$out/trimtab"
+    for f in "$src"/*; do
+      if [[ "$f" == *.sh ]]; then
+        n=$(grep -cxF -- "$PATH_RESET" "$f")
+        if [[ "$n" != 1 ]]; then
+          echo "path_hooks: $f has $n canonical PATH resets, not 1" >&2
+          rm -rf "$out"
+          return 1
+        fi
+        while IFS= read -r line || [[ -n "$line" ]]; do
+          [[ "$line" == "$PATH_RESET" ]] && line="export PATH=$(printf '%q' "$want")"
+          printf '%s\n' "$line"
+        done < "$f" > "$out/hooks/${f##*/}"
+        chmod +x "$out/hooks/${f##*/}"
+      else
+        ln -s "$(readlink -f "$f")" "$out/hooks/${f##*/}"
+      fi
+    done
+  fi
+  printf '%s\n' "$out/hooks"
+}
 J_LOG="$CPTMP/j-payloads"
 CP_REPO="$CPTMP/config-repo"
 CP_HOME="$CPTMP/home/.claude"
@@ -1811,7 +1848,15 @@ echo "== guard-mcp =="
 # docs/adr/0013-guard-mcp-asks-before-mcp-tools-that-may-write.md.
 tm() { # tm <want: pass|ask|deny> <label> <payload> [PATH for the guard] [its cwd] [text the reason holds]
   local want="$1" label="$2" payload="$3" p="${4:-$PATH}" d="${5:-.}" says="${6:-}" out rc verdict
-  out=$(cd "$d" && printf '%s' "$payload" | PATH="$p" "$BASH" "${TM_HOOK:-$HOOKS/guard-mcp.sh}" 2>/dev/null); rc=$?
+  local hook="${TM_HOOK:-$HOOKS/guard-mcp.sh}" dir
+  if [[ "$p" != "$PATH" ]]; then   # a stub PATH: run a copy whose reset names it
+    if ! dir=$(path_hooks "${hook%/*}" "$p"); then
+      printf 'FAIL  %-14s %-4s  %s  -- no copy with the stub PATH\n' guard-mcp.sh "$want" "$label"
+      fails=$((fails+1)); return
+    fi
+    hook="$dir/${hook##*/}"
+  fi
+  out=$(cd "$d" && printf '%s' "$payload" | PATH="$p" "$BASH" "$hook" 2>/dev/null); rc=$?
   verdict=$(printf '%s' "$out" | python3 -c '
 import json, sys
 want, rc, out = sys.argv[1], int(sys.argv[2]), sys.stdin.read()
@@ -2470,7 +2515,8 @@ pm_report $? state "no output names the URL, the session or its hash"
 PM_STUB="$CPTMP/pm-stub"
 mkdir -p "$PM_STUB"
 for c in bash cat readlink dirname; do ln -sf "$(command -v "$c")" "$PM_STUB/$c"; done
-pm_o=$(printf '%s' "$(pm_post $PM_A 'gh pr create --fill' "$PR/15")" | PATH="$PM_STUB" CLAUDE_CONFIG_DIR="$PM_CFG" "$BASH" "$HOOKS/pr-monitor-record.sh" 2>&1 >/dev/null); pm_rc=$?
+PM_HOOKS=$(path_hooks "$HOOKS" "$PM_STUB") || fails=$((fails+1))
+pm_o=$(printf '%s' "$(pm_post $PM_A 'gh pr create --fill' "$PR/15")" | PATH="$PM_STUB" CLAUDE_CONFIG_DIR="$PM_CFG" "$BASH" "$PM_HOOKS/pr-monitor-record.sh" 2>&1 >/dev/null); pm_rc=$?
 [[ $pm_rc == 1 && "$pm_o" == *python3* ]]; pm_report $? exit=1 "no python3: exit 1 and says so"
 pmv not-recorded "a create made without python3 is denied"  "$(pm_fix $PM_A 15)"
 
@@ -2556,8 +2602,9 @@ gm_fake() { # gm_fake <case body>: point $GM_FAKE/python3 at a check that does <
   printf '#!/bin/sh\ncase "$*" in *pr_monitor*) %s ;; esac\nexec %s "$@"\n' "$1" "$(command -v python3)" > "$GM_FAKE/python3"
   chmod +x "$GM_FAKE/python3"
 }
+GM_HOOKS=$(path_hooks "$HOOKS" "$GM_FAKE") || fails=$((fails+1))
 gm_failed() { # gm_failed <label>: the call is denied with the could-not-run reason
-  local out; out=$(printf '%s' "$(pm_fix gm-a 7)" | PATH="$GM_FAKE" "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null)
+  local out; out=$(printf '%s' "$(pm_fix gm-a 7)" | PATH="$GM_FAKE" "$BASH" "$GM_HOOKS/guard-mcp.sh" 2>/dev/null)
   [[ "$out" == *'"permissionDecision":"deny"'* && "$out" == *"could not run to a verdict"* \
      && "$out" != *"not on the session's list"* ]]
   pm_report $? deny "$1"
@@ -2570,7 +2617,7 @@ gm_failed "a check that prints nothing is denied as could-not-run"
 gm_fake 'echo maybe; exit 0'
 gm_failed "a verdict the guard does not know is denied as could-not-run"
 gm_fake 'echo not-recorded; exit 0'
-out=$(printf '%s' "$(pm_fix gm-a 7)" | PATH="$GM_FAKE" "$BASH" "$HOOKS/guard-mcp.sh" 2>/dev/null)
+out=$(printf '%s' "$(pm_fix gm-a 7)" | PATH="$GM_FAKE" "$BASH" "$GM_HOOKS/guard-mcp.sh" 2>/dev/null)
 [[ "$out" == *"not on the session's list"* && "$out" != *"could not run"* ]]
 pm_report $? deny "a not-recorded verdict keeps the url reason"
 if command -v jq >/dev/null 2>&1; then
@@ -2686,8 +2733,11 @@ if python3 -m venv --without-pip "$SC_VENV" >/dev/null 2>&1; then
   printf '%s\n' "$sc_plant" > "$sc_vsite/trimtab/adapters/pr_body_check.py"
   pl=$(sc_payload pr-body-check.sh)
   rm -f "$SC_MARK"
-  printf '%s' "$pl" | env PATH="$SC_VENV/bin:$PATH" SC_MARK="$SC_MARK" CLAUDE_CONFIG_DIR="$SC_CFG" \
-    bash "$SC_ROOT/hooks/pr-body-check.sh" >/dev/null 2>&1
+  # The hook resets PATH (ADR 0065), so the venv's interpreter is put first in
+  # the reset itself: this case is about an interpreter that carries a package.
+  sc_vhooks=$(path_hooks "$SC_ROOT/hooks" "$SC_VENV/bin:/usr/bin:/bin") || fails=$((fails+1))
+  printf '%s' "$pl" | env SC_MARK="$SC_MARK" CLAUDE_CONFIG_DIR="$SC_CFG" \
+    bash "$sc_vhooks/pr-body-check.sh" >/dev/null 2>&1
   [[ ! -e "$SC_MARK" ]]; sc_report $? pr-body-check.sh "a trimtab package in site-packages does not stand in for the checkout's"
   rm -f "$SC_MARK"
   SC_MARK="$SC_MARK" "$SC_VENV/bin/python3" -I -c 'import trimtab.adapters.pr_body_check' >/dev/null 2>&1
@@ -2776,10 +2826,16 @@ stub_bin() { # stub_bin <cmd>...  — leave only these commands resolvable
 }
 
 tp() { # tp <stub-dir> <t-args>...  — run one `t` case with PATH restricted
-  local saved="$PATH" dir="$1"; shift
-  PATH="$dir"
+  local saved="$PATH" hooks="$HOOKS" dir="$1" copy; shift
+  # The hooks reset PATH themselves (ADR 0065): run a copy whose reset names
+  # the stub, built under the full PATH before the swap.
+  if ! copy=$(path_hooks "$HOOKS" "$dir"); then
+    printf 'FAIL  %-14s  %s  -- no copy with the stub PATH\n' "$1" "$3"
+    fails=$((fails+1)); return
+  fi
+  HOOKS="$copy"; PATH="$dir"
   t "$@"
-  PATH="$saved"
+  PATH="$saved"; HOOKS="$hooks"
 }
 
 PEM_PAYLOAD="$(j Write "{\"file_path\":\"/p/app/x.py\",\"content\":\"KEY = \\\"$PEM\\\"\"}")"

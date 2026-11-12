@@ -32,6 +32,11 @@
 # worker) starts a new one. So a run must not rely on signals 2 and 3 alone:
 # every autonomous run, local as well as cloud, is launched with
 # TRIMTAB_PLAN_RUN=1, which no clear removes.
+#
+# Before any command: tools are named bare, and the inherited PATH starts with
+# a user-writable directory (docs/adr/0065-hooks-reset-path-first.md). Sourced,
+# this also sets the caller's PATH, to the value every caller has already set.
+export PATH=/usr/bin:/bin
 set -uo pipefail
 
 sm_git() {   # $1 = a directory in the repository, then git's arguments

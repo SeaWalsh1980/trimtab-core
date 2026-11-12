@@ -18,6 +18,9 @@
 # docs/adr/0005-harness-items-by-id-and-the-evidence-loop.md). The adapter
 # decides the rest: a read, or another endpoint, passes there.
 
+# Before any command: tools are named bare, and the inherited PATH starts with
+# a user-writable directory (docs/adr/0065-hooks-reset-path-first.md).
+export PATH=/usr/bin:/bin
 payload=$(cat) || exit 0
 porcelain='gh[[:space:]]+pr'
 rest='gh[[:space:]]+api.*pulls'

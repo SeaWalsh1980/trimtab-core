@@ -18,6 +18,12 @@
 # and when it cannot do its job it says so as a systemMessage, never silently:
 # a session without `trimtab` would otherwise fail every method's first call
 # with no hint why.
+#
+# Before any command: tools are named bare, and the inherited PATH starts with
+# a user-writable directory (docs/adr/0065-hooks-reset-path-first.md). This is
+# the hook's own PATH; the session's is the line written below, which keeps
+# "$PATH" literal for Claude Code to expand, so the reset never reaches it.
+export PATH=/usr/bin:/bin
 set -uo pipefail
 
 cat >/dev/null 2>&1   # the payload carries nothing this hook needs

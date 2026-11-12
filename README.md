@@ -95,6 +95,10 @@ Linux is the only tested platform. Known gaps, not yet handled:
   name `/bin/bash` (ADR 0064), so a newer bash on PATH does not help.
 - A host with no `/bin/bash` cannot start any hook, and the exit code it
   gets back (127) also means "allow": every guard is off (ADR 0064).
+- The hooks set `PATH=/usr/bin:/bin` before any command (ADR 0065), so
+  `python3`, `jq`, `git` and `gh` must be there. On a Mac `/usr/bin` has
+  no `jq` and only Apple's Python 3.9 stub, and Homebrew's tools are not
+  seen.
 - macOS: `readlink -f` (bootstrap and two hooks) needs macOS 12.3 or later,
   and the weekly usage report's timer uses systemd, which macOS lacks.
 - Native Windows: creating symlinks needs Developer Mode or administrator
