@@ -1014,7 +1014,7 @@ check_skills_drop_a_stale_link_and_keep_the_operators() {
 }
 
 check_skills_drop_the_removed_wrap_merged_link() {
-  # ADR 0063: an install from before the split linked skills/wrap-merged; the base no longer ships it.
+  # ADR 0065: an install from before the split linked skills/wrap-merged; the base no longer ships it.
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
   mkdir -p "$h/.claude/skills"

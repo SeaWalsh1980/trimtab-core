@@ -1,4 +1,4 @@
-"""The plan skills point at each other by path (ADR 0063); every path must name a file that exists."""
+"""The plan skills point at each other by path (ADR 0065); every path must name a file that exists."""
 import re
 import unittest
 from pathlib import Path

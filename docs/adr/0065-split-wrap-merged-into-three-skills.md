@@ -1,4 +1,4 @@
-# 0063. Split `wrap-merged` into three skills
+# 0065. Split `wrap-merged` into three skills
 
 ## Status
 
@@ -60,8 +60,10 @@ No measurement drove this beyond the line count; the finding was readability.
 - `bootstrap.sh` links each directory under `skills/` by name (ADR 0050), so the three skills are
   linked with no installer change, and a machine re-bootstrapped onto this base loses the
   `wrap-merged` link.
-- A plan run now reads more than one file. A link it fails to follow loses that part's rules; the
-  cross-links are imperative ("see …") to keep that cost visible.
+- A plan run now reads more than one file. A link it fails to follow loses that part's rules. So
+  each skill says what its paths are relative to, the entry's links to checks 1–4, the record
+  check and the gate say an unreadable file is a stop, and `tests/trimtab/test_skills.py` fails
+  when a cross-link names no file or a reference file is linked from nowhere.
 - `plan-run/SKILL.md` is about 170 lines, above the ~150 aimed for; moving more of it out would
   leave the entry without the steps every run takes.
 - Tests that read the skill's text now read the file that holds each passage.
