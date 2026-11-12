@@ -40,9 +40,9 @@ how to read it, and what a verdict means: plan-pr/references/ci-review.md.
 
 | What arrives within the bound | Then |
 |---|---|
-| A readable verdict | Step 2. |
-| A verdict that failed closed before reaching any finding | Request it again once, through the named mechanism (step 3). That is not a round. A second on the same head is a stop. |
-| No CI review on the draft, or no readable verdict | A stop. |
+| A readable verdict on the current head | Step 2. |
+| A verdict that failed closed (`fail-closed`), whatever findings it carries | Request it again once, through the named mechanism (step 3). That is not a round. A second on the same head is a stop. |
+| No CI review of the current head, or no readable verdict | A stop. |
 
 ## 2. Reply to every thread
 
@@ -64,21 +64,24 @@ When a verdict or thread needs a fix within scope:
    names and the guards permit, never one that marks the PR ready or toggles it. Re-request only a
    new head (the one fail-closed re-request apart). Where none is named, or the guard refuses it,
    that is a stop.
-5. Back to step 1.
+5. Back to step 1 (wait for the CI review of the new head).
 
 **At most three CI fix rounds per item part**, counted across every PR and branch the part has had,
 from server facts (E12). One round is the push after the draft opened that answers a CI review or a
 failing check, together with the push that fixes its in-session round. Not rounds: the review the
 draft's opening starts, the fail-closed re-request, and the register-only commit (step 4). An
-infrastructure failure is re-run once and does not count; where your token may not re-run it, name
-it for the operator in a PR comment. A fourth round needed is a stop.
+infrastructure failure is re-run once and does not count; a second failure is then an ordinary
+failing check. Where your token may not re-run it, name it for the operator in a PR comment. A
+fourth round needed is a stop.
 
 ## 4. Ready
 
 **Mark the PR ready** only when all of these hold, through what the guards permit (`gh pr ready`,
 or `update_pull_request` with `draft` false where `gh pr` is blocked):
 
-- no CI verdict on the head reports a CRITICAL or HIGH finding, in scope or out;
+- the latest CI verdict on the exact head is `pass` (or, for the register-only commit below, on the
+  commit it follows), and no CI verdict on the head reports a CRITICAL or HIGH finding, in scope or
+  out;
 - every thread any CI review run posted on the PR has your reply opening with an outcome tag;
 - every MEDIUM or LOW finding the in-session rounds left is a register entry in the PR;
 - the local checks pass.
@@ -102,6 +105,6 @@ in plan-pr/references/watch.md. Whatever needs a commit goes back to draft first
 ## 6. The merge
 
 The item PR needs an approving review from the approver or the admin on its final head commit, and
-is merged by the admin, or by the approver when every condition in plan-run/references/record-authority.md
-holds. If you cannot read it, the record authorises nothing: stop. The agent account never merges.
-When it merges, plan-run/SKILL.md takes over.
+is merged by the admin, or by the approver when every condition in
+plan-run/references/record-authority.md holds. If you cannot read it, the record authorises nothing:
+stop. The agent account never merges. When it merges, plan-run/SKILL.md takes over.

@@ -6,6 +6,9 @@ Accepted on merge. Changes the round definition in `wrap-merged`'s "Working a pl
 step 4. Amends ADR 0060's "A round runs `/trimtab-review` plus `/code-review`" without
 editing 0060; the rest of 0060 stands. The CI review does not change here.
 
+Amended by [ADR 0069](0069-plan-skills-follow-the-run-owns-its-pr-flow.md): rounds now gate the
+draft (one to five), with one round per CI fix and at most three CI fix rounds per item part.
+
 ## Context
 
 The instance's doctrine now requires every code review, interactive or in a plan run, to run

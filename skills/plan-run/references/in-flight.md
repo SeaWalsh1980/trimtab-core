@@ -22,6 +22,7 @@ Take the first row that applies:
 
 | What you find | Then |
 |---|---|
+| Any read this table needs fails (the PR, its author, its labels, the label events, the branch's updates) | Stop and report it. Never resume on a read you could not make. |
 | The PR's head is in a fork, or its author is neither the agent nor the admin account (`accounts.agent` from `trimtab instance --json`, and the admin login `check-plan-authorised` printed on its verdict line; a file naming no agent leaves only the admin) | Stop and report it. Never resume or build on it. |
 | An open PR labelled `plan:blocked` | Not resumed this way. Only a valid restart resumes it: plan-run/references/restart.md. If you cannot read it, no session is a restart: the stop stands. |
 | A branch with no PR, while the plan's most recent `plan:blocked` label event has no later removal by the admin | Not resumed this way; only a valid restart resumes it, as in the row above. |

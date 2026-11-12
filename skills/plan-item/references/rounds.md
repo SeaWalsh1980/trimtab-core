@@ -3,15 +3,17 @@
 Paths such as `plan-run/SKILL.md` are relative to the skills directory, two levels above this file.
 
 Step 5 of plan-item/SKILL.md (the rounds before the draft), and the one round after each CI fix in
-plan-pr/SKILL.md (trimtab-core ADRs 0060, 0062; the five-round count from trimtab-core ADR 0069).
+plan-pr/SKILL.md (trimtab-core ADRs 0060, 0062, 0069; the counts are the doctrine record's, the
+instance's decision record that trimtab-core ADR 0063 designs against).
 
 ## A round
 
 A round runs `/trimtab-review`, `/security-review` and `/code-review` on the branch's current head,
-in parallel, folded into one report. A pass that fails or returns nothing usable is named in it,
-and the round is incomplete until it runs. Grade each finding at the higher of the pass's own
-severity and the doctrine's finding-severity rule: raise a pass's grade, never lower it. Whether a
-finding is within the item's scope is decided only as plan-item/references/scope.md says.
+in parallel, folded into one report. A pass that fails or returns nothing usable is named in it, and
+the round is incomplete until it runs. Run a failed pass again once on the same head; a second
+failure there is a stop. Grade each finding at the higher of the pass's own severity and the
+doctrine's finding-severity rule: raise a pass's grade, never lower it. Whether a finding is within
+the item's scope is decided only as plan-item/references/scope.md says.
 
 Each finding outside the item's scope becomes its own register entry, unless an entry already
 records it; one graded CRITICAL or HIGH is also a stop, in any round. Each round's outcome goes into

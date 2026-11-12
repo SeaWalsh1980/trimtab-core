@@ -74,10 +74,10 @@ and start nothing.
 0. **This session is a launched run:** the session-mode announcement says autonomous and its signals
    include `TRIMTAB_PLAN_RUN=1`. (With no announcement, check 4 fails anyway; still check
    `TRIMTAB_PLAN_RUN` in your own shell environment, because it decides how you stop.) Without the
-   variable, make no file write at all, not even a progress record: label the item's PR `plan:blocked`
-   or, before it exists, the merged PR whose progress record the session took its next work from
-   (the plan's own PR for item 01); remove any `plan:continue` from it; and report. A clear loses the
-   session's autonomous record; only the variable survives it.
+   variable, make no file write at all, not even a progress record: label the item's PR
+   `plan:blocked` or, before it exists, the merged PR whose progress record the session took its
+   next work from (the plan's own PR for item 01); remove any `plan:continue` from it; and report. A
+   clear loses the session's autonomous record; only the variable survives it.
 
 Then read plan-run/references/authorisation.md and run checks 1–4 from it before going on. If you
 cannot read it, the check fails: stop. Check 4 passes only on the enforcement command's exit 0,
@@ -116,7 +116,7 @@ condition in plan-run/references/gate.md holds. If you cannot read it, the gate 
 | Result | Then |
 |---|---|
 | Every condition holds | Go to section 5. |
-| A condition fails | Say "needs approval: <reason>", list the open issues with their PR links, propose ways forward, and stop as plan-run/references/stops.md says for a stop before the draft. |
+| A condition fails | Say "needs approval: <reason>", list the open issues with their PR links, propose ways forward, and stop as plan-run/references/stops.md says for where the part is. |
 | `## Next` is `plan complete` | Say so and stop. Nothing is labelled. |
 
 ### 5. Record
@@ -142,7 +142,8 @@ Report first, in a few lines:
 
 ```text
 PR <n> merged <date> (<sha>) — plan <plan>, <Status line>.
-Authorisation: ok. Next: <item NN part Y: one-line summary> | needs approval: <reason> | plan complete.
+Authorisation: ok. Next: <item NN part Y: one-line summary> | needs approval: <reason> | plan
+complete.
 Open issues: <item-NN-partK-MM (PR link), ...> | none.
 ```
 

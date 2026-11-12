@@ -9,17 +9,17 @@ Section numbers in this file are plan-run/SKILL.md's.
 
 **Every stop** reports the blocker and proposes one to three ways forward for the operator (for
 example: approve a new plan covering it, make the guarded change by hand, or correct the record in a
-reviewed PR). Then, by where the part is:
+reviewed PR). Then, by where the part is; take the first row that applies:
 
 | Where the part is | Record | Labels |
 |---|---|---|
+| The merge was not confirmed (section 1) | No file write. | None: that stop reports only. |
 | No branch pushed yet: the authorisation check (section 2) or the gate (section 4) failed at the start of a session | No file write. | `plan:blocked` on the merged PR whose progress record the session took its next work from (the plan's own PR for item 01), through `gh api` if `gh pr` is blocked; remove `plan:continue` from it. |
 | Work began on a `plan/…` branch, and its draft has not opened | Commit the progress record on the branch, with `## Status` saying whether this part finished (`stopped unfinished` if not) and `## Next` reading `blocked: <reason>`, and push it, unless the stop is one of the "Stops that forbid a write". | The same merged PR as the row above: `plan:blocked` on, `plan:continue` off. |
 | The item's PR is open | As the row above, pushed to the PR's branch (returning the PR to draft first if it is ready). | `plan:blocked` on the PR; remove any `plan:continue` from it. The labels always follow the final `## Next`. |
-| A valid restart that has not reached a branch or PR yet | No file write. | None: it has no merged PR of its own to label. |
-| The merge was not confirmed (section 1) | No file write. | None: that stop reports only. |
 
-So every stop that has a part leaves a label the admin can remove to allow a restart.
+A restart counts as the first row too: its record PR is the latest authorised record's. So every
+stop but the unconfirmed merge leaves a label the admin can remove to allow a restart.
 
 ## Stops that forbid a write
 
@@ -27,8 +27,8 @@ So every stop that has a part leaves a label the admin can remove to allow a res
   Label as the table says and report.
 - **A secret-scan failure:** never fixed by the run. The only push allowed is one touching only the
   part's progress record.
-- **Watch-only** (a session holding no round ledger, with the PR ready; plan-pr/references/watch.md):
-  no file write or push. Label the PR and report.
+- **No round ledger for the part** (plan-pr/SKILL.md, "Who owns the PR"): no file write or push,
+  whether the PR is ready (watch-only) or a draft. Label the PR and report.
 - **A stray Bash write** (a path the call changed outside the plan's scope, reported after the
   call): do not commit it, and name its path in the `blocked:` reason of `## Next`.
 

@@ -45,7 +45,8 @@ Each part has its own round counts (in-session and CI fix rounds). A new part K+
 - on a valid restart from a merged record whose part stopped unfinished.
 
 K is the highest part the item has had anywhere: the progress-record file names on the default
-branch, the head refs of every PR in the repository (`state=all`), and the round ledger
-(trimtab-core ADR 0063 §6). A failed read of any of them is a stop. A restart that resumes an open
-PR or branch keeps its part and its counts, so a part that reached its round cap continues only
+branch, the head refs of every PR in the repository (`state=all`), the pushed branches (`gh api
+'repos/{owner}/{repo}/git/matching-refs/heads/plan/<plan>/item-NN-part' --paginate`), and the round
+ledger (trimtab-core ADR 0063 §6). A failed read of any of them is a stop. A restart that resumes an
+open PR or branch keeps its part and its counts, so a part that reached its round cap continues only
 after the operator deletes its branch.

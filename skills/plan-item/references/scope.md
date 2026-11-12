@@ -37,8 +37,8 @@ round's finding, a CI review's finding or a failing check.
   configuration.
 - The one exception for both: the authorised plan's item names that marker, test, check or
   threshold.
-- **A secret-scan failure is never fixed by the run.** It is a stop, whatever it found. The only push
-  allowed after it is one touching only the part's progress record.
+- **A secret-scan failure is never fixed by the run.** It is a stop, whatever it found. The only
+  push allowed after it is one touching only the part's progress record.
 
 The guard refuses a push that breaks a limit (E18, E19). If it refuses, do not route around it: a
 fix that needs the limit broken is not made, and the finding stays open as a stop or an entry.

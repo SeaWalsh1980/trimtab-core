@@ -67,14 +67,24 @@ unmeasured defaults a project may override.
   enforcement check's sources.
 - **The shared unreadable-link rule** now names the same label target as the stop protocol, and
   says the label is authoritative when the record's `## Next` could not be updated. `stops.md`
-  says so too, as a table by where the part is, with the stops that forbid a write.
+  says so too, as a first-row-applies table by where the part is, with the stops that forbid a
+  write. Every stop but an unconfirmed merge leaves a label; the old exemption for a restart that
+  had not reached a branch is gone, since a restart has a record PR to label.
+- **Fail closed where the text left a gap:** ready needs a `pass` verdict on the exact head, not
+  only the absence of a CRITICAL or HIGH one; any `fail-closed` verdict is re-requested once; a
+  review pass that fails twice on one head is a stop; a failed read anywhere in the in-flight table
+  is a stop; an infrastructure failure that fails its re-run is an ordinary failing check.
 - **Form:** steps are decision tables or if/then lists; each SKILL.md stays under 180 lines, with
   detail in references. The "not merged" stop says it reports only; the `clear_session` fallback
   is a table row; the ruleset `updated_at` test names its cost.
 - **Tests** (`tests/trimtab/test_skills.py`): the shared rule must sit above an entry's first link;
-  a deciding link's meaning must follow "If you cannot read it, "; a link may not climb with `..`,
-  and a `#anchor` must name a heading; each root-line wording is accepted only in its own file type,
-  and a comment says why the wording is pinned.
+  every link, in any plan skill file, to one of the four deciding files must give its meaning after
+  "If you cannot read it, ", in its own paragraph, list item or table row; a link may not climb
+  with `..`; a `#anchor` must name a heading (fenced code skipped, repeats numbered), and an anchor
+  on an extensionless link is refused; each root-line wording is accepted only in its own file type,
+  and a comment says why the wording is pinned. `test_mergeauthority`'s skill-wording checks follow
+  the text to its new places.
+- ADRs 0060, 0062 and 0068 gain an "Amended by" line pointing here.
 
 ## Options considered
 
@@ -87,6 +97,7 @@ unmeasured defaults a project may override.
 | Restate E1–E23 in the skills | The rows are guard and job work, owned by ADR 0063; a skill that restated them would drift, and only a guard counts as enforcement. The skills name a row only where a run meets its refusal |
 | Leave the shared rule's label target as "the merged PR that started the session" | Disagrees with the new stop protocol, which labels the PR whose record supplied the work; the two would label different PRs for the same stop |
 | Keep stacked exception prose | The original review found a reader had to hold every exception to apply any one; tables put each case on one row |
+| Make the watch bound running out a stop, with a label (raised in review) | The doctrine says reaching the bound unmerged is reported, not a stop; a skill may not loosen or redefine the flow, and a ready PR that is only slow needs no admin act to continue |
 
 ## Consequences
 
@@ -106,5 +117,5 @@ unmeasured defaults a project may override.
 
 ## Measurements
 
-None. The line counts after the change: `plan-run/SKILL.md` 173, `plan-item/SKILL.md` 108,
-`plan-pr/SKILL.md` 107.
+None. The line counts after the change: `plan-run/SKILL.md` 174, `plan-item/SKILL.md` 108,
+`plan-pr/SKILL.md` 110.
