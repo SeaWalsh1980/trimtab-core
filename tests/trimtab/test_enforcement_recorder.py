@@ -196,6 +196,25 @@ class Records(World):
         self.assertEqual((line.startswith("not passed"), gate.cached_pass(self.config, PROJECT, self.key())),
                          (True, False))
 
+    def test_a_new_session_between_the_check_and_the_write_leaves_no_pass(self):
+        # The interleaving an unlocked clear allows: the recorder checks its epoch, then a later session's hook
+        # writes a new epoch and clears, then the recorder writes. The post-write check and the pass's own epoch
+        # must both leave nothing a guard would accept.
+        real = gate.record_pass
+
+        def new_session_then_write(*args):
+            self.new_epoch()
+            gate.clear_pass(self.config, None)
+            real(*args)
+            seen.append(gate.cached_pass(self.config, PROJECT, self.key()))  # what a guard sees in the window
+
+        seen = []
+        with mock.patch.object(gate, "record_pass", new_session_then_write):
+            line = self.record(self.gh())
+
+        self.assertEqual((line.startswith("not passed"), seen, pass_file(self.config, PROJECT).exists()),
+                         (True, [False], False))
+
     def test_writes_no_pass_with_no_epoch(self):
         self.assertIn("no epoch", self.record(self.gh(), epoch=None))
 

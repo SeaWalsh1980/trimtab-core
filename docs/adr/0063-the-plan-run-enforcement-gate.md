@@ -596,6 +596,10 @@ a run's PR, as the doctrine record says.
     buys local writes and pushes to a `plan/*` branch, never a merge.
   - A job re-run that fails after a pass is seen only at the next recorder run (the next
     session, or the next default-branch move); E22 sees it at merge.
+- **Linux only, for runs.** The recorder's launch needs GNU `mv -T`, `setsid` and `timeout`
+  under `/usr/bin:/bin`. macOS ships none of them there, so a plan run on macOS never gets a
+  pass. That fails closed: guards refuse every write in the run. Interactive sessions are
+  unaffected, and the README's platform list says so. A macOS path is not designed here.
 - Every guarded call in a run costs one `git ls-remote` and a few local reads.
 - While the gate fails, a run can use no Bash except `trimtab check-enforcement`.
 - The instance schema grows by `enforcement`, `review`, `secret_scan` and `fix_limits`. An

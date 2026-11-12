@@ -95,6 +95,12 @@ Linux is the only tested platform. Known gaps, not yet handled:
   bash 4 or later.
 - macOS: `readlink -f` (bootstrap and two hooks) needs macOS 12.3 or later,
   and the weekly usage report's timer uses systemd, which macOS lacks.
+- macOS: an autonomous plan run never gets an E20 pass. The session-mode
+  hook's recorder needs GNU `mv -T`, `setsid` and `timeout` under
+  `/usr/bin:/bin`, which macOS does not ship. This fails closed, so guards
+  refuse every write in the run
+  (docs/adr/0063-the-plan-run-enforcement-gate.md, Consequences).
+  Interactive sessions are unaffected.
 - Native Windows: creating symlinks needs Developer Mode or administrator
   rights; Git for Windows defaults to `core.symlinks=false`, and Git Bash's
   `ln -s` copies by default, so the linked hooks directory would become a
