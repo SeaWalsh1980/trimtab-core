@@ -48,8 +48,9 @@ Trimtab is split in two, and this repository is only one half.
   `trimtab-*` agents, the skills (`plan-run`, `plan-item` and `plan-pr`: in a
   project that runs an instance's authorised plans, `plan-run` verifies the
   plan when a plan PR merges, then continues, hands over or stops on the
-  merged progress record's `## Next`, `plan-item` works one item in one PR,
-  and `plan-pr` reviews that PR to ready; they do nothing for other merges),
+  merged progress record's `## Next`, `plan-item` works one item on its
+  branch through the in-session reviews to a draft PR, and `plan-pr` takes
+  that draft through CI review to merge; they do nothing for other merges),
   `bootstrap.sh`, the routine templates and the tests.
   It holds no rules and no deployment values: no repository names, no
   paths, no identities. A skill may carry the procedure an instance's rule

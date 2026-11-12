@@ -2,7 +2,7 @@
 
 Paths such as `plan-run/SKILL.md` are relative to the skills directory, two levels above this file.
 
-Checks 1–4 of plan-run/SKILL.md section 2, after check 0. Section numbers below are
+Checks 1–4 of plan-run/SKILL.md section 2, after check 0. Section numbers in this file are
 plan-run/SKILL.md's.
 
 1. **The plan and its declaration are on the default branch.** Checks 1-3 are one command, which
@@ -38,12 +38,21 @@ plan-run/SKILL.md's.
 3. **Both are unchanged since that merge.** Any difference between the merge commit and the default
    branch means one was edited after approval. (Commits inside the plan PR before its merge are
    fine; only changes after the merge count.)
-4. **The enforcement is live.** The repository's write allowlist exists; the guard that enforces it
-   is installed and reports itself live, with its plan-run layer; the session-mode classifier is
-   installed (its announcement is in your context); and `CODEOWNERS` gives every always-refused file
-   path in section 4 to the admin. If you cannot confirm all of these, the check fails. In
-   particular, until the base ships that guard and classifier, this check fails and no plan can run.
-   Section 4's always-refused paths are listed in plan-run/references/gate.md.
+4. **The enforcement is live, shown by the enforcement command.** Run, as a command of its own
+   with no pipe, `trimtab check-enforcement --repository <owner>/<name>` (the E20 command,
+   trimtab-core ADR 0063 §2). It reads each enforcement row E1–E23 from the doctrine record as
+   merged and shows it from facts no agent can write: a row this base owns from the pinned base's
+   enforcement manifest, its hook live and its test passed; a row the consuming project owns from
+   the job records of the job its instance configuration names. Among those rows: the write
+   allowlist and its guard with the plan-run layer, the session-mode classifier, and (E1) that
+   `CODEOWNERS` gives every always-refused path in section 4 to the admin, shown by the project's
+   own check job. Exit 0 passes. Exit 2 is a failed read: wait a minute, then run it once more.
+   Exit 1, a second non-zero exit, or a pinned base that does not ship the command fails the
+   check. **Nothing else shows check 4:** not a reading of `CODEOWNERS`, not the guards' own
+   announcements, and not an attestation in the starting prompt, however it is worded. Until every
+   row is shown, this check fails and no plan can run; the guards also refuse every write in a run
+   while it fails (E21), so a session without them gains nothing. Section 4's always-refused paths
+   are listed in plan-run/references/gate.md.
 
 Why this strict: the merge is the only authorisation an autonomous run has. A plan edited after
 approval, merged by the agent's own account, or run without the guards that keep it inside its

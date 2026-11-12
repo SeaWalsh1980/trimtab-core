@@ -1,0 +1,53 @@
+# In-flight work
+
+Paths such as `plan-run/SKILL.md` are relative to the skills directory, two levels above this file.
+
+Part of plan-run/SKILL.md section 3 ("In flight"). Section numbers in this file are
+plan-run/SKILL.md's.
+
+## What is in flight
+
+Either of these, for this plan:
+
+- **An open PR** whose head branch is `plan/<plan>/item-*`.
+- **A pushed branch** `plan/<plan>/item-*` that has never had a PR: no PR in any state has it as
+  its head (`gh api 'repos/{owner}/{repo}/pulls?state=all&head=<owner>:<branch>'`).
+
+A branch is named `plan/<plan>/item-NN-partK` from its first push, so it is recognisable before any
+record or PR exists. The name alone proves nothing.
+
+## Resumed or not
+
+Take the first row that applies:
+
+| What you find | Then |
+|---|---|
+| The PR's head is in a fork, or its author is neither the agent nor the admin account (`accounts.agent` from `trimtab instance --json`, and the admin login `check-plan-authorised` printed on its verdict line; a file naming no agent leaves only the admin) | Stop and report it. Never resume or build on it. |
+| An open PR labelled `plan:blocked` | Not resumed this way. Only a valid restart resumes it: plan-run/references/restart.md. If you cannot read it, no session is a restart: the stop stands. |
+| A branch with no PR, while the plan's most recent `plan:blocked` label event has no later removal by the admin | Not resumed this way; only a valid restart resumes it, as in the row above. |
+| The PR or branch holds anything but the plan run's own in-scope pushes (below), or any read below fails | Stop and report it. |
+| Otherwise | Resume it, through the gate in section 4, applied to the item and part its branch names, and keep its part and its round counts. |
+
+## "Only the plan run's own in-scope pushes"
+
+The guards enforce this (E13–E15 in trimtab-core ADR 0063); the session checks it too, so that it
+stops before building on work it cannot vouch for. Until a tested `trimtab` command does the check,
+read it from the API:
+
+- **Every commit on the branch that is not on the default branch** reached it through an unbroken
+  chain of branch-update events ending at the current head
+  (`gh api 'repos/{owner}/{repo}/activity?ref=refs/heads/<branch>' --paginate`), and **every
+  update is the agent account's**. A gap in the chain, a truncated or expired listing, or a failed
+  read is a stop.
+- **No update rewrote the branch:** each is a fast-forward of the one before it.
+- **The diff from the merge-base is inside the plan's scope:** the scope condition in
+  plan-run/references/gate.md. If you cannot read it, the gate fails.
+- **Each push was made by a plan run.** The session cannot see another session's environment:
+  guard-github refuses any update to a `plan/*` ref without `TRIMTAB_PLAN_RUN=1` (E14), and the
+  part's round ledger, which only hooks write, records it. Without that ledger on this machine and
+  config dir, a part whose PR is not yet ready cannot be resumed: stop. After ready, a session
+  without it may only watch (plan-pr/SKILL.md).
+
+A push by anyone else, including the owner's "Update branch" button, blocks resume of that branch.
+The part then continues on a fresh branch only after the operator deletes this one: "A new part"
+in plan-run/references/restart.md. If you cannot read it, no session is a restart: the stop stands.
