@@ -13,6 +13,7 @@ from gh_fake import FakeGh, path_of, query_of
 from instance_fixture import env_for, make_instance
 from test_scrub import isolated_git_env
 from trimtab import mergeauthority, planscope
+from trimtab.capture import sources
 from trimtab.capture.sources import PER_PAGE, GhApi
 from trimtab.mergeauthority import (Accounts, Activity, CheckRun, Containment, JobRecord, MergeAuthorityError, Pr,
                                     RequiredCheck, Review, RouteFacts)
@@ -3036,6 +3037,41 @@ class Freshness(ApproverAction):
         with mock.patch.object(planscope.tempfile, "TemporaryDirectory", side_effect=OSError("full")), \
                 self.assertRaisesRegex(planscope.PlanScopeError, "scratch"):
             planscope.merges_cleanly(str(self.repo), self.base, self.head)
+
+    def test_git_returns_an_exit_code_the_caller_allows(self):
+        answer = sources.git_answer(self.repo, "merge-base", "--is-ancestor", self.head, self.start, answers=(0, 1))
+
+        self.assertEqual(answer, (1, b""))
+
+    def test_git_raises_on_an_exit_code_the_caller_does_not_allow(self):
+        with self.assertRaisesRegex(sources.SourceError, "merge-base exited 1"):
+            sources.git_answer(self.repo, "merge-base", "--is-ancestor", self.head, self.start)
+
+    def test_git_scrubs_an_id_from_the_stderr_it_reports(self):
+        run_id = "session" + "_" + "A1b2C3d4E5f6G7h8J9k0"
+
+        with self.assertRaises(sources.SourceError) as caught:
+            sources.git_answer(self.repo, "show", run_id, answers=(0, 1))
+
+        self.assertIn("exited 128", str(caught.exception))
+        self.assertNotIn(run_id, str(caught.exception))
+
+    def test_git_that_cannot_run_or_times_out_raises(self):
+        for failure in (FileNotFoundError("git"), subprocess.TimeoutExpired("git", sources.GIT_TIMEOUT_SECONDS)):
+            with self.subTest(failure=type(failure).__name__):
+                with mock.patch.object(sources.subprocess, "run", side_effect=failure), \
+                        self.assertRaisesRegex(sources.SourceError, type(failure).__name__):
+                    sources.git_answer(self.repo, "merge-base", "--all", self.base, self.head, answers=(0, 1))
+
+    def test_a_long_list_of_stale_paths_is_cut_short(self):
+        paths = [f"src/new{i}.py" for i in range(mergeauthority.SHOWN_PATHS + 2)]
+        judged = mergeauthority.freshness_problems(
+            mergeauthority.MainRead((self.start,), clean=True, touched=frozenset(paths)),
+            self.PLAN, [planscope.Change("A", p, "100644") for p in paths], WORKFLOWS)
+
+        self.assertEqual(len(judged), 1)
+        self.assertIn(f"{sorted(paths)[mergeauthority.SHOWN_PATHS - 1]} and 2 more since", judged[0])
+        self.assertNotIn(sorted(paths)[mergeauthority.SHOWN_PATHS], judged[0])
 
     def test_judging_a_conflict_writes_no_object_into_the_repository(self):
         self.on_main(("src/app.py", "x = 3\n"))

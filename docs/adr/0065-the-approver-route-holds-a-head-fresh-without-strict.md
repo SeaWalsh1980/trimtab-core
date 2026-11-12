@@ -5,6 +5,10 @@
 Accepted on merge. Amends ADR 0057's containment: the route no longer asks for the
 ruleset to hold `plan-scope` to a strict policy, and asks instead that the head be fresh
 against the default branch, judged from git. 0057 is not edited, and the rest of it stands.
+It also replaces ADR 0044's reliance on "require branches to be up to date" to bring
+plan-scope's base and merge-authority's base together before a merge: for the approver
+route, `check-approver-route`'s comparison with the server's tip now does that. 0044 is
+not edited either.
 
 ## Context
 
@@ -24,8 +28,10 @@ merge forced every open PR to update and re-run CI. The owner decided that:
   as a CI fix round.
 
 At ControlTower's locked base (4b91db2d), strict off closes the approver route for every
-approve and merge, in both `check-merge-authority` and `check-approver-route`. Rows may
-only tighten (NRM-3), so the strict requirement could not just be dropped. Something had
+approve and merge, in both `check-merge-authority` and `check-approver-route`. The route
+is what AGW-4's approver-merge conditions rest on, and an autonomous run may only ever be
+narrower than an interactive session (AGW-2), so its rows may only tighten: the strict
+requirement could not just be dropped. Something had
 to keep plan-scope's pass judged against what `main` now holds (SEC-2.3 "Fresh").
 
 No measurement drove this. The cost of strict is a cost in process: the forced updates
@@ -88,7 +94,7 @@ unread, and unread closes the route.
 | Option | Why it lost |
 |---|---|
 | Keep requiring strict | The owner turned it off: every merge forced every PR to update and re-run CI |
-| Delete the strict check | Rows only tighten (NRM-3); a stale plan-scope pass would then count against a narrowed allowlist or a withdrawn plan |
+| Delete the strict check | Rows only tighten (AGW-2, AGW-4); a stale plan-scope pass would then count against a narrowed allowlist or a withdrawn plan |
 | A consumer-side list of inputs to hold on | A hand-kept copy of what plan-scope reads drifts from the code; core reads its own constants, and the consumer's preflight cannot vouch for core's route |
 | Re-run plan-scope against the new base | Needs a workflow trigger on base moves (a SEC-7 control change), and a check run cannot vouch for its own freshness at the moment the App writes |
 | Refuse on any change on `main` since the merge-base | That is strict again, enforced by core |
