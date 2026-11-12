@@ -94,7 +94,7 @@ Everything comes from the default branch and open PRs, never from memory:
   plan-run/references/record-authority.md.
 - **That record's PR must carry the code gate and be merged by the admin, or by the approver with
   every condition met.** Read plan-run/references/record-authority.md to check it. If you cannot
-  read it, the record authorises nothing: stop.
+  read it, the record authorises nothing: stop and label that PR `plan:blocked`.
 - **Done:** the `## Status` lines of the merged records.
 - **Open issues:** the entry files in `<plans>/unauthorised/<plan>/` whose `status` is `open`.
 - **The merged PR carries no record** → stop, unless it is the PR that added the authorised plan

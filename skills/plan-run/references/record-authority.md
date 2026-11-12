@@ -1,5 +1,7 @@
 # The latest record and its PR
 
+Paths such as `plan-run/SKILL.md` are relative to the skills directory, two levels above this file.
+
 Part of plan-run/SKILL.md section 3 ("Next"). Section numbers below are plan-run/SKILL.md's.
 
 ## Which record is the latest

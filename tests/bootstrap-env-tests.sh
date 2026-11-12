@@ -1014,17 +1014,17 @@ check_skills_drop_a_stale_link_and_keep_the_operators() {
 }
 
 check_skills_drop_the_removed_wrap_merged_link() {
-  # ADR 0065: an install from before the split linked skills/wrap-merged; the base no longer ships it.
+  # ADR 0065: an install from an older core checkout linked its skills/wrap-merged, which this base
+  # no longer ships. (The snapshot route is check_skills_drop_a_stale_link_and_keep_the_operators.)
   local h inst
   h=$(new_home); inst=$(inst_of "$h")
-  mkdir -p "$h/.claude/skills"
-  ln -s "$(old_snap "$h")/skills/wrap-merged" "$h/.claude/skills/wrap-merged"
+  fake_core "$h/old-checkout"; mkdir -p "$h/old-checkout/skills/wrap-merged" "$h/.claude/skills"
+  ln -s "$h/old-checkout/skills/wrap-merged" "$h/.claude/skills/wrap-merged"
   boot "$h" "$live" --instance "$inst"
-  if [[ $rc -eq 0 && ! -L "$h/.claude/skills/wrap-merged" && ! -e "$h/.claude/skills/wrap-merged" ]] \
-     && skill_linked "$h"; then
-    pass "skills: an earlier install's wrap-merged link goes, and the three plan skills are linked"
+  if [[ $rc -eq 0 && ! -L "$h/.claude/skills/wrap-merged" ]] && skill_linked "$h"; then
+    pass "skills: an older checkout's wrap-merged link goes, and the three plan skills are linked"
   else
-    fail "skills: an earlier install's wrap-merged link goes, and the three plan skills are linked" "rc=$rc"
+    fail "skills: an older checkout's wrap-merged link goes, and the three plan skills are linked" "rc=$rc"
   fi
 }
 

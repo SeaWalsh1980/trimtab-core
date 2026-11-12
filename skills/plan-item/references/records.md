@@ -1,5 +1,7 @@
 # Progress records and register entries
 
+Paths such as `plan-run/SKILL.md` are relative to the skills directory, two levels above this file.
+
 Step 2 of plan-item/SKILL.md. `<plans>` and `<plan>` are as plan-run/SKILL.md defines them.
 
 ## The progress record

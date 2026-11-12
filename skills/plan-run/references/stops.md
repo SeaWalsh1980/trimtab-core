@@ -1,5 +1,7 @@
 # Stops
 
+Paths such as `plan-run/SKILL.md` are relative to the skills directory, two levels above this file.
+
 Every stop in a plan run follows this, whichever skill it happens in (plan-run, plan-item, plan-pr).
 Section numbers below are plan-run/SKILL.md's; step numbers are plan-item/SKILL.md's.
 

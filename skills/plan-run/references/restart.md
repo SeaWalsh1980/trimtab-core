@@ -1,5 +1,7 @@
 # Restarting after a stop
 
+Paths such as `plan-run/SKILL.md` are relative to the skills directory, two levels above this file.
+
 Part of plan-run/SKILL.md ("Restarting after a stop"). Section numbers below are
 plan-run/SKILL.md's.
 

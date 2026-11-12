@@ -1,5 +1,7 @@
 # Authorisation checks 1–4
 
+Paths such as `plan-run/SKILL.md` are relative to the skills directory, two levels above this file.
+
 Checks 1–4 of plan-run/SKILL.md section 2, after check 0. Section numbers below are
 plan-run/SKILL.md's.
 

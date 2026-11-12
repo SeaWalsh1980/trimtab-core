@@ -1,5 +1,7 @@
 # After the merge: scratch files and the hand-over
 
+Paths such as `plan-run/SKILL.md` are relative to the skills directory, two levels above this file.
+
 Part of plan-run/SKILL.md sections 6 and 7.
 
 ## Scratch files (section 6)

@@ -1,5 +1,7 @@
 # The gate on the next work
 
+Paths such as `plan-run/SKILL.md` are relative to the skills directory, two levels above this file.
+
 The conditions of plan-run/SKILL.md section 4. Every one must hold. In each, "it" is the next work.
 
 - It names an item that exists in the authorised plan (as `check-plan-authorised --print-plan`
