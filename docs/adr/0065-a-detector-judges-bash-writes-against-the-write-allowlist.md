@@ -69,8 +69,9 @@ git failing inside a repository, and the state directory failing.
 it) and judge two sets of paths:
 
 - every path listed now that was not listed before or has a new fingerprint,
-  and every harness path listed before and gone now (an untracked harness
-  file has no HEAD content to return to, so its deletion is a write);
+  but for a tracked harness file the call restored to HEAD's content; and
+  every harness path listed before and now gone from the disk (an untracked
+  harness file has no HEAD content to return to, so its deletion is a write);
 - every path changed by a commit the call made on any branch. That is a commit
   reachable from a tip that is new since the snapshot, from no tip the
   snapshot held, and committed since the snapshot was taken (one second's

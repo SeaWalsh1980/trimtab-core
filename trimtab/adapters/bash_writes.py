@@ -127,18 +127,29 @@ def fingerprint(status: str, st: os.stat_result | None) -> str:
     return f"{status}|{stat.S_IFMT(st.st_mode):o}:{st.st_size}:{st.st_ino}:{st.st_mtime_ns}:{st.st_ctime_ns}"
 
 
-def moved(before: dict[str, str], after: dict[str, str]) -> list[str]:
-    """Paths listed after the call that were not listed before it or whose fingerprint differs, and
-    harness paths listed before and gone after.
+def _restored(before: str | None, after: str) -> bool:
+    """Whether a path git listed as changed before the call is clean now, seen only by the harness walk:
+    its content is HEAD's again (a `git restore`), or a commit took it, which the commit check covers.
+    An untracked path (`??`) that went quiet was not restored; it was hidden, so it is judged."""
+    if before is None or not after.startswith("[fs]|"):
+        return False
+    status = before.split("|", 1)[0]
+    return bool(status) and not status.startswith("[fs]") and "??" not in status
 
-    Any other path changed before and clean after is not judged: its content is HEAD's again (a
-    `git restore`), or a commit took it, which the commit check covers. A harness entry git does not
-    track (a gitignored `CLAUDE.local.md`, `.claude/` with nothing tracked) has no HEAD content to
-    return to, so its going is a write (found in review)."""
+
+def moved(before: dict[str, str], after: dict[str, str], on_disk) -> list[str]:
+    """Paths listed after the call that were not listed before it or whose fingerprint differs, and
+    harness paths listed before and gone after, from git's listing and from the disk.
+
+    A path changed before and clean after is not judged: its content is HEAD's again (a `git
+    restore`), or a commit took it, which the commit check covers. A harness entry git does not track
+    (a gitignored `CLAUDE.local.md`, `.claude/` with nothing tracked) has no HEAD content to return
+    to, so its going from the disk is a write (found in review); `on_disk(path)` says whether a path
+    is still there."""
     from trimtab import planscope  # its pure rules only; no git
 
-    changed = {p for p, fp in after.items() if before.get(p) != fp}
-    gone = {p for p in before if p not in after and planscope.refused(p)}
+    changed = {p for p, fp in after.items() if before.get(p) != fp and not _restored(before.get(p), fp)}
+    gone = {p for p in before if p not in after and planscope.refused(p) and not on_disk(p)}
     return sorted(changed | gone)
 
 
@@ -604,7 +615,11 @@ def judge(payload: object, config: Path, mode: str, branch: str, deadline: Deadl
         if root is None:
             return 0, ""  # the call started outside any repository
         repo = Repo(root, deadline)
-        paths = sorted(set(moved(data["paths"], repo.listed())) | set(repo.committed(data["tips"], data["taken"])))
+        def on_disk(path: str) -> bool:
+            return os.path.lexists(os.path.join(root, path))
+
+        paths = sorted(set(moved(data["paths"], repo.listed(), on_disk))
+                       | set(repo.committed(data["tips"], data["taken"])))
         if not paths:
             return 0, ""
         root_branch = repo.branch()

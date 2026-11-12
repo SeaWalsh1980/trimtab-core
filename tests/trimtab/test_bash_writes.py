@@ -56,21 +56,38 @@ class Status(unittest.TestCase):
         self.assertEqual(bw.parse_flagged(out), {"hidden.json": "S", "quiet.md": "h"})
 
 
+def GONE(path):
+    return False
+
+
+def STILL_THERE(path):
+    return True
+
+
 class Moved(unittest.TestCase):
     def test_a_path_clean_before_and_changed_after_has_moved(self):
-        self.assertEqual(bw.moved({}, {"src/a.py": "f1"}), ["src/a.py"])
+        self.assertEqual(bw.moved({}, {"src/a.py": "f1"}, GONE), ["src/a.py"])
 
     def test_a_dirty_path_rewritten_has_moved(self):
-        self.assertEqual(bw.moved({"src/a.py": "f1"}, {"src/a.py": "f2"}), ["src/a.py"])
+        self.assertEqual(bw.moved({"src/a.py": "f1"}, {"src/a.py": "f2"}, GONE), ["src/a.py"])
 
     def test_a_dirty_path_left_alone_has_not_moved(self):
-        self.assertEqual(bw.moved({"src/a.py": "f1"}, {"src/a.py": "f1"}), [])
+        self.assertEqual(bw.moved({"src/a.py": "f1"}, {"src/a.py": "f1"}, GONE), [])
 
     def test_a_path_restored_to_head_is_not_judged(self):
-        self.assertEqual(bw.moved({"src/a.py": "f1"}, {}), [])
+        self.assertEqual(bw.moved({"src/a.py": "f1"}, {}, GONE), [])
 
     def test_a_harness_entry_that_is_gone_has_moved(self):
-        self.assertEqual(bw.moved({"CLAUDE.local.md": "[fs]|f1"}, {}), ["CLAUDE.local.md"])
+        self.assertEqual(bw.moved({"CLAUDE.local.md": "[fs]|f1"}, {}, GONE), ["CLAUDE.local.md"])
+
+    def test_a_tracked_harness_file_restored_outside_the_walk_has_not_moved(self):
+        self.assertEqual(bw.moved({".github/ci.yml": " M|f1"}, {}, STILL_THERE), [])
+
+    def test_a_tracked_harness_file_restored_inside_the_walk_has_not_moved(self):
+        self.assertEqual(bw.moved({"CLAUDE.md": " M|f1"}, {"CLAUDE.md": "[fs]|f2"}, STILL_THERE), [])
+
+    def test_an_untracked_harness_file_that_went_quiet_has_moved(self):
+        self.assertEqual(bw.moved({"CLAUDE.md": "??|f1"}, {"CLAUDE.md": "[fs]|f1"}, STILL_THERE), ["CLAUDE.md"])
 
     def test_a_change_to_the_index_alone_changes_the_fingerprint(self):
         st = os.stat(__file__)
@@ -385,6 +402,16 @@ class Hook(unittest.TestCase):
         done = self.around("rm CLAUDE.local.md")
 
         self.assertIn("CLAUDE.local.md", done.stderr)
+
+    def test_restoring_a_tracked_harness_file_is_not_reported(self):
+        (self.repo / "CLAUDE.md").write_text("tracked\n")
+        git(self.repo, "add", "CLAUDE.md")
+        git(self.repo, "commit", "-qm", "instructions")
+        (self.repo / "CLAUDE.md").write_text("edited\n")
+
+        done = self.around("git restore CLAUDE.md")
+
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
 
     def test_writes_under_claude_worktrees_are_not_judged_as_harness(self):
         (self.repo / ".claude" / "worktrees").mkdir()
