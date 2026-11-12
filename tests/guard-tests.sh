@@ -7,6 +7,8 @@ set -u
 # clear them all before any case runs. The override cases below set their own,
 # per case, after this.
 for v in $(compgen -v HOOK_ALLOW_); do unset "$v"; done
+# A plan run exports this, and guard-github's E14 case below must see it unset, not read GitHub.
+unset TRIMTAB_PLAN_RUN
 HOOKS="${1:?usage: guard-tests.sh <hooks-dir>}"
 # Absolute, because the relative-path cases below run `t` from a different cwd.
 # Left relative, `bash "$HOOKS/guard-paths.sh"` would resolve against THAT cwd
@@ -3159,8 +3161,10 @@ tg 2 'gh api -X DELETE repos/o/r/contents/a/b.md -f message=m -f sha=x'
 tg 2 'gh api -X POST repos/o/r/merge-upstream -f branch=main'
 # Merging a PR is left to the project's merge gate and the server ruleset
 # (ADR 0037): the base cannot know a project's merge conditions.
-tg 0 'gh pr merge 1 --squash'                            'a PR merge is the merge gate'"'"'s, not this guard'"'"'s'
-tg 0 'gh api -X PUT repos/o/r/pulls/1/merge'             'a REST PR merge is the merge gate'"'"'s, not this guard'"'"'s'
+# Whether a merge is allowed stays the merge gate's. This guard only reads the PR's base, because a merge into
+# a plan/* base writes that ref (ADR 0063 §5); here the base cannot be read, so the merge refuses (closed).
+tg 2 'gh pr merge 1 --squash'                            'a merge whose base cannot be read refuses'
+tg 2 'gh api -X PUT repos/o/r/pulls/1/merge'             'a REST merge whose base cannot be read refuses'
 tg 2 'gh repo sync --force'
 tg 2 'gh repo sync o/r --source u/r --force'
 tg 0 'gh repo sync -b feat'
@@ -3332,6 +3336,8 @@ gg_long 2 'a long crafted command ending in a refused write' 'run -a ' 20000 ' ;
 gg_long 2 'the same shape on another group'                  'pr -a ' 20000 ' ; gh pr create --title t'
 gg_long 2 'a very long one'                                  'run -a ' 100000 ' ; gh pr create --title t'
 gg_long 0 'a long harmless command still passes'             'run -a ' 20000
+gg_long 0 'many git words stay fast through the prefilter'   'git ' 7000
+gg_long 0 'many brace lists stay fast through the prefilter' '{a,b} ' 5000
 tg 0 'gh run view 123'
 tg 0 'gh run list'
 tg 0 'gh run watch 123'
@@ -3376,6 +3382,17 @@ tg 2 "gh api -X PATCH repos/o/r/git/refs/heads/$PB -f sha=$PSHA -F force=true" '
 tg 2 "gh api -X PUT repos/o/r/contents/a.txt -f branch=$PB -f message=m" 'E14: a contents write'
 tg 2 "gh api -X POST repos/o/r/branches/$PB/rename -f new_name=x" 'E16: a rename of plan/*'
 tg 0 "gh api -X POST repos/o/r/git/refs -f ref=refs/heads/feature/x -f sha=$PSHA" 'another ref is not a plan write'
+tg 2 "git pu{s,}h origin $PB"                            'a push spelled with a brace expansion'
+tg 2 "{git,push} origin $PB"                             'a push spelled as one brace list'
+tg 2 "/usr/lib/git-core/git-push origin $PB"             'the git-push binary'
+tg 2 'git -c remote.origin.mirror=true push origin feature/x' 'a push steered by inline configuration'
+tg 2 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=x git push' 'a push steered by the environment'
+tg 2 "git push --all -f origin"                          'E15: --all with a force flag (no local plan branch is needed to refuse an unreadable repository)'
+tg 2 "F=--force; git push \$F origin $PB"                'a force option held in a variable'
+tg 2 "G=git; S=push; \$G \$S origin $PB"                 'git and push both held in variables'
+tg 2 "M=DELETE; gh api -X \"\$M\" repos/o/r/git/refs/heads/$PB" 'a delete whose method is a variable'
+tg 2 "N=5; gh api -X PATCH repos/o/r/pulls/\$N -f state=closed" 'a close whose PR number is a variable'
+tg 2 'gh api graphql -f query='"'"'mutation { updatePullRequestBranch(input:{pullRequestId:"PR_x"}) { clientMutationId } }'"'"'' 'updatePullRequestBranch'
 tg 2 "gh pr close $PB"                                   'E16: closing a PR by its plan branch'
 tg 2 "gh pr close -R o/r $PB --comment x"
 tg 2 "gh pr merge $PB --delete-branch"                   'E16: merge with --delete-branch'

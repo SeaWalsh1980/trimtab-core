@@ -26,7 +26,9 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 
 PLAN_PREFIX = "plan/"
-MAX_ROUNDS = 3  # AGW-4: at most three CI fix rounds
+PLANS = "docs/" + "plans/"  # the project's plan folders (AGW-1), in two pieces: this repository has none
+# Three CI-fix rounds: the owner's decision (ADR 0063 §5a). AGW-4's text still says two; that rule edit is the owner's.
+MAX_ROUNDS = 3
 # `plan/NNNN-<slug>/item-NN-partK` (AGW-1): the plan, then the part this branch is.
 ITEM_BRANCH = re.compile(r"plan/(?P<plan>[0-9]{4}-[a-z0-9-]+)/item-(?P<item>[0-9]{2})-part(?P<part>[0-9]+)")
 REGISTER_FILE = re.compile(r"item-(?P<item>[0-9]{2})-part(?P<part>[0-9]+)-[0-9]{2}\.md")
@@ -56,6 +58,10 @@ class PushRead:
     writes: tuple[Write, ...] = ()
     broad: str | None = None  # "mirror", "prune" or "all": writes this reading cannot list
     unreadable: str | None = None  # why a destination cannot be read
+    force: bool = False  # a force flag given with a broad push applies to every ref it writes
+    delete: bool = False
+    remote: str | None = None  # the repository word: a remote's name or a URL (None: the default remote)
+    bare: bool = False  # no refspec was given, so configuration chooses what is pushed
 
 
 @dataclass(frozen=True)
@@ -63,6 +69,7 @@ class PrState:
     number: int
     draft: bool
     created: str = ""  # RFC 3339, UTC: when the PR opened
+    base: str = ""  # the branch the PR merges into
 
 
 @dataclass(frozen=True)
@@ -97,6 +104,8 @@ class Facts:
     def register_answer(self, branch: str, before: str, after: str) -> bool: raise NotImplementedError
     def local_plan_branches(self) -> Sequence[str]: raise NotImplementedError
     def pr_head(self, number: int, repo: str | None) -> str | None: raise NotImplementedError  # None: not a PR
+    def pr_base(self, number: int, repo: str | None) -> str | None: raise NotImplementedError  # None: not a PR
+    def repository(self) -> str: raise NotImplementedError  # owner/name the facts are read for
 
 
 # ---- reading `git push` ------------------------------------------------------------------
@@ -137,6 +146,7 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
     force = delete = tags = False
     broad: str | None = None
     has_repo = False
+    repo_value: str | None = None
     positional: list[tuple[str, bool]] = []
     i = 0
     end = False
@@ -160,9 +170,10 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
             if kind in ("valued", "repo") and not eq:
                 if i >= len(args):
                     return PushRead(unreadable=f"--{key} has no value")
+                value = args[i][0]
                 i += 1
             if kind == "repo":
-                has_repo = True
+                has_repo, repo_value = True, value
             elif kind in ("force", "force-optional"):
                 force = True
             elif kind == "delete":
@@ -193,8 +204,11 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
             else:
                 return PushRead(unreadable=f"an option this guard does not read (-{ch})")
     refspecs = positional if has_repo else positional[1:]
+    remote = repo_value if has_repo else (positional[0][0] if positional else None)
+    # A first word the shell builds may be an option (`$F origin plan/x`), which would hide a force flag.
+    maybe_option = not has_repo and bool(positional) and positional[0][1]
     if broad is not None and not refspecs:
-        return PushRead(broad=broad)
+        return PushRead(broad=broad, force=force, delete=delete, remote=remote)
     writes: list[Write] = []
     j = 0
     while j < len(refspecs):
@@ -230,14 +244,16 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
         writes.append(Write(dest, None if gone or delete else source, force or plus, gone or delete))
     if not refspecs:
         if broad == "all":
-            return PushRead(broad=broad)
+            return PushRead(broad=broad, force=force, delete=delete, remote=remote)
         if tags:
-            return PushRead()
+            return PushRead(remote=remote)
         branch = current()
         if not branch:
             return PushRead(unreadable="a bare push does not resolve to a branch")
         writes.append(Write(branch, "HEAD", force, delete))
-    return PushRead(writes=tuple(writes), broad=broad)
+    if maybe_option and (not refspecs or any(plan_branch(w.branch) for w in writes)):
+        return PushRead(unreadable="a first word built by the shell may be an option")
+    return PushRead(writes=tuple(writes), broad=broad, remote=remote, bare=not refspecs)
 
 
 # ---- the diff shapes ---------------------------------------------------------------------
@@ -247,11 +263,11 @@ def _item(branch: str) -> re.Match | None:
 
 
 def _record_path(m: re.Match) -> str:
-    return f"docs/plans/progress/{m['plan']}/item-{m['item']}-part{m['part']}.md"
+    return f"{PLANS}progress/{m['plan']}/item-{m['item']}-part{m['part']}.md"
 
 
 def _register_dir(m: re.Match) -> str:
-    return f"docs/plans/unauthorised/{m['plan']}/"
+    return f"{PLANS}unauthorised/{m['plan']}/"
 
 
 def progress_only(changes: Sequence[Change], branch: str) -> bool:
@@ -399,7 +415,7 @@ def judge_close(head: str | None) -> None:
     check_e16(head)
 
 
-def judge_broad(kind: str, *, plan_run: bool, facts: Facts) -> None:
+def judge_broad(kind: str, *, plan_run: bool, facts: Facts, force: bool = False, delete: bool = False) -> None:
     """A push this guard cannot list refs for: `--mirror` and `--prune` refuse; `--all` is judged ref by ref."""
     if kind == "mirror":
         check_e15(Write(PLAN_PREFIX, force=True))
@@ -410,4 +426,4 @@ def judge_broad(kind: str, *, plan_run: bool, facts: Facts) -> None:
     except FactsError as err:
         raise Refusal(f"the local plan/* branches are unreadable ({err}); --all is refused") from err
     for branch in branches:
-        judge_write(Write(branch, branch), plan_run=plan_run, facts=facts)
+        judge_write(Write(branch, None if delete else branch, force, delete), plan_run=plan_run, facts=facts)

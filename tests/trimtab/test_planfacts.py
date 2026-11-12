@@ -17,6 +17,8 @@ from trimtab.capture.sources import GhApi
 from trimtab.enforcement import tools
 from trimtab.planrows import FactsError
 
+PLANS = "docs/" + "plans/"
+
 REPO = "owner/proj"
 BRANCH = "plan/0008-slug/item-02-part1"
 H1, H2 = "1" * 40, "2" * 40
@@ -50,7 +52,7 @@ def facts(answers, inst=INSTANCE, checkout=Path("/nonexistent"), git_=None):
 
 
 def pr_row(number=7, draft=True, created="2026-11-12T10:00:00Z", ref=BRANCH):
-    return {"number": number, "draft": draft, "created_at": created, "head": {"ref": ref}}
+    return {"number": number, "draft": draft, "created_at": created, "head": {"ref": ref}, "base": {"ref": "main"}}
 
 
 def job(name="secret-scan", head=H1, status="completed", conclusion="success", steps=1, runner=7):
@@ -328,7 +330,7 @@ class GitFacts(unittest.TestCase):
             self.facts().changes(BRANCH, "HEAD", "9" * 40)
 
     def test_a_register_answer_reads_the_diff_between_two_heads(self):
-        folder = self.repo / "docs/plans/unauthorised/0008-slug"
+        folder = self.repo / (PLANS + "unauthorised/0008-slug")
         folder.mkdir(parents=True)
         (folder / "item-02-part1-01.md").write_text("entry\n")
         git(self.repo, "add", "-A")

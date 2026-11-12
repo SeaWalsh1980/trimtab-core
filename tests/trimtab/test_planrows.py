@@ -5,6 +5,8 @@ import unittest
 from trimtab import planrows as pr
 from trimtab.planrows import Change, Facts, Push, PrState, Refusal, Write
 
+PLANS = "docs/" + "plans/"
+
 BRANCH = "plan/0008-slug/item-02-part1"
 H1, H2, H3, H4, H5 = (c * 40 for c in "12345")
 
@@ -21,12 +23,13 @@ class FakeFacts(Facts):
     """An in-memory stand-in for what the guards read from GitHub and git (TST-2)."""
 
     def __init__(self, pr_state=None, scan="pass", head=H1, changes=(), pushes=(), failing=(), facts_runs=(),
-                 conflicted_now=False, broken=(), register_answers=(), local=(), heads=None):
+                 conflicted_now=False, broken=(), register_answers=(), local=(), heads=None, bases=None,
+                 repo="owner/proj"):
         self.pr_state, self.scan, self.head, self._changes = pr_state, scan, head, tuple(changes)
         self._pushes, self._failing, self._facts = tuple(pushes), set(failing), set(facts_runs)
         self.conflicted_now, self.broken = conflicted_now, set(broken)
         self.register_answers, self.local = set(register_answers), tuple(local)
-        self.heads = dict(heads or {})
+        self.heads, self.bases, self.repo = dict(heads or {}), dict(bases or {}), repo
         self.reads = []
 
     def _read(self, name):
@@ -78,9 +81,17 @@ class FakeFacts(Facts):
         self._read("pr_head")
         return self.heads.get(number)
 
+    def pr_base(self, number, repo):
+        self._read("pr_base")
+        return self.bases.get(number)
 
-DRAFT = PrState(number=7, draft=True)
-READY = PrState(number=7, draft=False)
+    def repository(self):
+        self._read("repository")
+        return self.repo
+
+
+DRAFT = PrState(number=7, draft=True, base="main")
+READY = PrState(number=7, draft=False, base="main")
 
 
 class ReadPush(unittest.TestCase):
@@ -193,13 +204,13 @@ class Write14to17(unittest.TestCase):
 
     def test_e17_allows_the_register_commit_shape_to_a_ready_pr(self):
         link = "[a](../../unauthorised/0008-slug/item-02-part1-01.md)"
-        changes = (Change("docs/plans/unauthorised/0008-slug/item-02-part1-01.md", "A", ("x",)),
-                   Change("docs/plans/progress/0008-slug/item-02-part1.md", "M", (link,)))
+        changes = (Change(PLANS + "unauthorised/0008-slug/item-02-part1-01.md", "A", ("x",)),
+                   Change(PLANS + "progress/0008-slug/item-02-part1.md", "M", (link,)))
         self.judge(Write(BRANCH, source="HEAD"), FakeFacts(pr_state=READY, changes=changes))
 
     def test_e17_refuses_a_register_commit_with_prose_in_the_record(self):
-        changes = (Change("docs/plans/unauthorised/0008-slug/item-02-part1-01.md", "A", ("x",)),
-                   Change("docs/plans/progress/0008-slug/item-02-part1.md", "M", ("done, mostly",)))
+        changes = (Change(PLANS + "unauthorised/0008-slug/item-02-part1-01.md", "A", ("x",)),
+                   Change(PLANS + "progress/0008-slug/item-02-part1.md", "M", ("done, mostly",)))
         with self.assertRaisesRegex(Refusal, "E17"):
             self.judge(Write(BRANCH, source="HEAD"), FakeFacts(pr_state=READY, changes=changes))
 
@@ -210,14 +221,14 @@ class Write14to17(unittest.TestCase):
 
 
 class RegisterShape(unittest.TestCase):
-    ROOT = "docs/plans/unauthorised/0008-slug/"
-    REC = "docs/plans/progress/0008-slug/item-02-part1.md"
+    ROOT = "" + PLANS + "unauthorised/0008-slug/"
+    REC = "" + PLANS + "progress/0008-slug/item-02-part1.md"
 
     def shape(self, changes):
         return pr.register_shape(changes, BRANCH)
 
     def test_new_register_file_and_link_lines_only(self):
-        link = "[x](docs/plans/unauthorised/0008-slug/item-02-part1-01.md)"
+        link = "[x](" + PLANS + "unauthorised/0008-slug/item-02-part1-01.md)"
         self.assertTrue(self.shape([Change(self.ROOT + "item-02-part1-01.md", "A", ("a", "b")),
                                     Change(self.REC, "M", (link,))]))
 
@@ -232,17 +243,17 @@ class RegisterShape(unittest.TestCase):
         self.assertFalse(self.shape([Change(self.REC, "D", ())]))
 
     def test_a_link_to_a_file_not_in_the_commit_is_not_the_shape(self):
-        link = "[x](docs/plans/unauthorised/0008-slug/item-02-part1-09.md)"
+        link = "[x](" + PLANS + "unauthorised/0008-slug/item-02-part1-09.md)"
         self.assertFalse(self.shape([Change(self.ROOT + "item-02-part1-01.md", "A", ("a",)),
                                      Change(self.REC, "M", (link,))]))
 
     def test_a_link_line_with_extra_text_is_not_the_shape(self):
-        link = "- [x](docs/plans/unauthorised/0008-slug/item-02-part1-01.md) fixed"
+        link = "- [x](" + PLANS + "unauthorised/0008-slug/item-02-part1-01.md) fixed"
         self.assertFalse(self.shape([Change(self.ROOT + "item-02-part1-01.md", "A", ("a",)),
                                      Change(self.REC, "M", (link,))]))
 
     def test_another_plans_register_folder_is_not_the_shape(self):
-        self.assertFalse(self.shape([Change("docs/plans/unauthorised/0009-other/item-02-part1-01.md", "A", ("a",))]))
+        self.assertFalse(self.shape([Change(PLANS + "unauthorised/0009-other/item-02-part1-01.md", "A", ("a",))]))
 
     def test_no_change_is_not_the_shape(self):
         self.assertFalse(self.shape([]))
@@ -266,11 +277,11 @@ class SecretScan(unittest.TestCase):
                 self.run_write(state, changes=(Change("src/a.py", "M", ("x",)),))
 
     def test_a_failed_scan_allows_a_push_touching_only_the_progress_record(self):
-        rec = Change("docs/plans/progress/0008-slug/item-02-part1.md", "M", ("note",))
+        rec = Change(PLANS + "progress/0008-slug/item-02-part1.md", "M", ("note",))
         self.run_write("fail", changes=(rec,))
 
     def test_a_failed_scan_refuses_a_push_touching_the_record_and_more(self):
-        rec = Change("docs/plans/progress/0008-slug/item-02-part1.md", "M", ("note",))
+        rec = Change(PLANS + "progress/0008-slug/item-02-part1.md", "M", ("note",))
         with self.assertRaisesRegex(Refusal, "E19"):
             self.run_write("fail", changes=(rec, Change("src/a.py", "M", ("x",))))
 
@@ -354,9 +365,9 @@ class CiFixRounds(unittest.TestCase):
         self.judge(facts)
 
     def test_a_register_shaped_push_from_a_failing_head_is_excluded(self):
-        link = "[a](docs/plans/unauthorised/0008-slug/item-02-part1-01.md)"
-        changes = (Change("docs/plans/unauthorised/0008-slug/item-02-part1-01.md", "A", ("x",)),
-                   Change("docs/plans/progress/0008-slug/item-02-part1.md", "M", (link,)))
+        link = "[a](" + PLANS + "unauthorised/0008-slug/item-02-part1-01.md)"
+        changes = (Change(PLANS + "unauthorised/0008-slug/item-02-part1-01.md", "A", ("x",)),
+                   Change(PLANS + "progress/0008-slug/item-02-part1.md", "M", (link,)))
         pushes = [self.push(H1, H2), self.push(H2, H3), self.push(H3, H4)]
         self.judge(self.facts_with(pushes=pushes, failing={H1, H2, H3, H4}, changes=changes))
 

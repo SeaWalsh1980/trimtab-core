@@ -33,8 +33,10 @@ def fake_git(answers):
 
 PUSH_REF = ("rev-parse", "--symbolic-full-name", "@{push}")
 HEAD_REF = ("symbolic-ref", "--short", "-q", "HEAD")
-ON_PLAN = {PUSH_REF: f"refs/remotes/origin/{BRANCH}\n", HEAD_REF: f"{BRANCH}\n"}
-ON_MAIN = {PUSH_REF: "refs/remotes/origin/main\n", HEAD_REF: "main\n"}
+CONFIG_REF = ("config", "--list", "-z")
+ORIGIN = "remote.origin.url\nhttps://github.com/owner/proj.git\0"
+ON_PLAN = {PUSH_REF: f"refs/remotes/origin/{BRANCH}\n", HEAD_REF: f"{BRANCH}\n", CONFIG_REF: ORIGIN}
+ON_MAIN = {PUSH_REF: "refs/remotes/origin/main\n", HEAD_REF: "main\n", CONFIG_REF: ORIGIN}
 
 
 def decide(command, run=True, facts=None, git=None, cwd=CWD):
@@ -149,84 +151,84 @@ class Rest(Cases):
         return decide(f"gh api -X {method} {path} {flags}", **kw)
 
     def test_a_ref_create_naming_a_plan_branch(self):
-        code, msg = self.api("POST", "repos/o/r/git/refs", f"ref=refs/heads/{BRANCH}", f"sha={H1}", run=False)
+        code, msg = self.api("POST", "repos/owner/proj/git/refs", f"ref=refs/heads/{BRANCH}", f"sha={H1}", run=False)
         self.assertEqual(code, guard_github.BLOCK)
         self.assertIn("E14", msg)
 
     def test_a_ref_create_of_another_branch_reads_nothing(self):
-        self.assertEqual(self.api("POST", "repos/o/r/git/refs", "ref=refs/heads/feature/x", f"sha={H1}",
+        self.assertEqual(self.api("POST", "repos/owner/proj/git/refs", "ref=refs/heads/feature/x", f"sha={H1}",
                                   facts=NoFacts())[0], guard_github.ALLOW)
 
     def test_a_ref_update_forces(self):
-        code, msg = self.api("PATCH", f"repos/o/r/git/refs/heads/{BRANCH}", f"sha={H1}", "force=true")
+        code, msg = self.api("PATCH", f"repos/owner/proj/git/refs/heads/{BRANCH}", f"sha={H1}", "force=true")
         self.assertEqual(code, guard_github.BLOCK)
         self.assertIn("E15", msg)
 
     def test_a_ref_update_without_force_is_judged_like_a_push(self):
-        self.assertEqual(self.api("PATCH", f"repos/o/r/git/refs/heads/{BRANCH}", f"sha={H1}")[0], guard_github.ALLOW)
-        code, msg = self.api("PATCH", f"repos/o/r/git/refs/heads/{BRANCH}", f"sha={H1}", run=False)
+        self.assertEqual(self.api("PATCH", f"repos/owner/proj/git/refs/heads/{BRANCH}", f"sha={H1}")[0], guard_github.ALLOW)
+        code, msg = self.api("PATCH", f"repos/owner/proj/git/refs/heads/{BRANCH}", f"sha={H1}", run=False)
         self.assertIn("E14", msg)
 
     def test_a_ref_delete(self):
         for run in (True, False):
-            code, msg = decide(f"gh api -X DELETE repos/o/r/git/refs/heads/{BRANCH}", run=run)
+            code, msg = decide(f"gh api -X DELETE repos/owner/proj/git/refs/heads/{BRANCH}", run=run)
             self.assertEqual(code, guard_github.BLOCK)
             self.assertIn("E16", msg)
 
     def test_a_ref_delete_in_the_case_the_branch_has(self):
         # The normalised path is lower case; the branch is looked up as spelled.
         facts = FakeFacts(pr_state=DRAFT, head=H1)
-        decide("gh api -X PATCH repos/o/r/git/refs/heads/plan/0008-Slug/item-02-part1 -f sha=" + H1, facts=facts)
+        decide("gh api -X PATCH repos/owner/proj/git/refs/heads/plan/0008-Slug/item-02-part1 -f sha=" + H1, facts=facts)
         self.assertIn("open_pr", facts.reads)
 
     def test_a_contents_write_on_a_plan_branch(self):
-        code, msg = self.api("PUT", "repos/o/r/contents/a.txt", f"branch={BRANCH}", "message=m", run=False)
+        code, msg = self.api("PUT", "repos/owner/proj/contents/a.txt", f"branch={BRANCH}", "message=m", run=False)
         self.assertIn("E14", msg)
-        self.assertEqual(self.api("PUT", "repos/o/r/contents/a.txt", "branch=feature/x", "message=m",
+        self.assertEqual(self.api("PUT", "repos/owner/proj/contents/a.txt", "branch=feature/x", "message=m",
                                   facts=NoFacts())[0], guard_github.ALLOW)
 
     def test_a_contents_write_to_a_ready_pr_refuses(self):
-        code, msg = self.api("PUT", "repos/o/r/contents/a.txt", f"branch={BRANCH}", "message=m",
+        code, msg = self.api("PUT", "repos/owner/proj/contents/a.txt", f"branch={BRANCH}", "message=m",
                              facts=FakeFacts(pr_state=READY, head=H1))
         self.assertIn("E17", msg)
 
     def test_a_merge_into_a_plan_branch(self):
-        code, msg = self.api("POST", "repos/o/r/merges", f"base={BRANCH}", "head=main", run=False)
+        code, msg = self.api("POST", "repos/owner/proj/merges", f"base={BRANCH}", "head=main", run=False)
         self.assertIn("E14", msg)
 
     def test_a_rename_of_a_plan_branch(self):
         for run in (True, False):
-            code, msg = decide(f"gh api -X POST repos/o/r/branches/{BRANCH}/rename -f new_name=x", run=run)
+            code, msg = decide(f"gh api -X POST repos/owner/proj/branches/{BRANCH}/rename -f new_name=x", run=run)
             self.assertIn("E16", msg)
 
     def test_a_rename_onto_a_plan_branch_is_a_plan_write(self):
-        code, msg = self.api("POST", "repos/o/r/branches/feature/rename", f"new_name={BRANCH}", run=False)
+        code, msg = self.api("POST", "repos/owner/proj/branches/feature/rename", f"new_name={BRANCH}", run=False)
         self.assertIn("E14", msg)
 
     def test_update_branch_of_a_plan_pr(self):
         facts = FakeFacts(pr_state=DRAFT, head=H1, heads={7: BRANCH})
-        self.assertEqual(self.api("PUT", "repos/o/r/pulls/7/update-branch", facts=facts)[0], guard_github.ALLOW)
-        code, msg = self.api("PUT", "repos/o/r/pulls/7/update-branch", run=False, facts=facts)
+        self.assertEqual(self.api("PUT", "repos/owner/proj/pulls/7/update-branch", facts=facts)[0], guard_github.ALLOW)
+        code, msg = self.api("PUT", "repos/owner/proj/pulls/7/update-branch", run=False, facts=facts)
         self.assertIn("E14", msg)
 
     def test_closing_a_plan_pr(self):
         facts = FakeFacts(heads={7: BRANCH, 8: "feature/x"})
         for path in ("pulls", "issues"):
-            code, msg = self.api("PATCH", f"repos/o/r/{path}/7", "state=closed", facts=facts)
+            code, msg = self.api("PATCH", f"repos/owner/proj/{path}/7", "state=closed", facts=facts)
             self.assertEqual(code, guard_github.BLOCK, path)
             self.assertIn("E16", msg)
-            self.assertEqual(self.api("PATCH", f"repos/o/r/{path}/8", "state=closed", facts=facts)[0],
+            self.assertEqual(self.api("PATCH", f"repos/owner/proj/{path}/8", "state=closed", facts=facts)[0],
                              guard_github.ALLOW)
-            self.assertEqual(self.api("PATCH", f"repos/o/r/{path}/7", "title=t", facts=facts)[0], guard_github.ALLOW)
+            self.assertEqual(self.api("PATCH", f"repos/owner/proj/{path}/7", "title=t", facts=facts)[0], guard_github.ALLOW)
 
     def test_closing_a_pr_whose_lookup_fails_refuses(self):
-        code, msg = self.api("PATCH", "repos/o/r/pulls/7", "state=closed",
+        code, msg = self.api("PATCH", "repos/owner/proj/pulls/7", "state=closed",
                              facts=FakeFacts(heads={7: BRANCH}, broken=("pr_head",)))
         self.assertEqual(code, guard_github.BLOCK)
         self.assertIn("unreadable", msg)
 
     def test_reads_are_not_writes(self):
-        self.assertEqual(decide(f"gh api repos/o/r/git/refs/heads/{BRANCH}", run=False, facts=NoFacts())[0],
+        self.assertEqual(decide(f"gh api repos/owner/proj/git/refs/heads/{BRANCH}", run=False, facts=NoFacts())[0],
                          guard_github.ALLOW)
 
 
@@ -298,7 +300,7 @@ class TheExistingRulesStandAlone(Cases):
         self.assertEqual(code, guard_github.BLOCK)
 
     def test_main_still_cannot_be_written_through_the_api(self):
-        code, msg = decide("gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=" + H1, facts=NoFacts())
+        code, msg = decide("gh api -X PATCH repos/owner/proj/git/refs/heads/main -f sha=" + H1, facts=NoFacts())
         self.assertEqual(code, guard_github.BLOCK)
 
 

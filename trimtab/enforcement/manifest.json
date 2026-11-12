@@ -43,7 +43,11 @@
         "test_guard_github_plan.Rest.test_a_ref_create_naming_a_plan_branch",
         "test_guard_github_plan.Rest.test_a_ref_update_without_force_is_judged_like_a_push",
         "test_guard_github_plan.Rest.test_a_rename_onto_a_plan_branch_is_a_plan_write",
-        "test_guard_github_plan.Rest.test_update_branch_of_a_plan_pr"
+        "test_guard_github_plan.Rest.test_update_branch_of_a_plan_pr",
+        "test_guard_github_plan_bypasses.MergeIntoAPlanBase.test_gh_pr_merge_by_branch",
+        "test_guard_github_plan_bypasses.MergeIntoAPlanBase.test_gh_pr_merge_by_number",
+        "test_guard_github_plan_bypasses.MergeIntoAPlanBase.test_rest_merge",
+        "test_guard_github_plan_bypasses.RouteOrder.test_a_contents_path_that_looks_like_a_ref_route_is_still_contents"
       ],
       "decision": {
         "function": "trimtab.planrows:check_e14",
@@ -64,7 +68,9 @@
         "test_planrows.Write14to17.test_e15_refuses_force_even_in_a_run",
         "test_guard_github_plan.GitPush.test_a_hidden_command_is_read_by_the_naive_pass",
         "test_guard_github_plan.GitPush.test_e15_force_refuses_in_a_run",
-        "test_guard_github_plan.Rest.test_a_ref_update_forces"
+        "test_guard_github_plan.Rest.test_a_ref_update_forces",
+        "test_guard_github_plan_bypasses.AllWithForce.test_force_and_delete_carry_into_each_branch",
+        "test_guard_github_plan_bypasses.GitConfigSteering.test_a_mirror_remote_refuses_any_push"
       ],
       "decision": {
         "function": "trimtab.planrows:check_e15",
@@ -92,7 +98,11 @@
         "test_guard_github_plan.Graphql.test_closing_a_pull_request_refuses",
         "test_guard_github_plan.Rest.test_a_ref_delete",
         "test_guard_github_plan.Rest.test_a_rename_of_a_plan_branch",
-        "test_guard_github_plan.Rest.test_closing_a_plan_pr"
+        "test_guard_github_plan.Rest.test_closing_a_plan_pr",
+        "test_guard_github_plan_bypasses.AllWithForce.test_force_and_delete_carry_into_each_branch",
+        "test_guard_github_plan_bypasses.Graphql.test_update_pull_request_branch_writes_the_head",
+        "test_guard_github_plan_bypasses.Graphql.test_update_pull_request_with_a_state_closes_a_pr",
+        "test_guard_github_plan_bypasses.RouteOrder.test_cheap_rows_refuse_before_any_repository_lookup"
       ],
       "decision": {
         "function": "trimtab.planrows:check_e16",

@@ -103,7 +103,11 @@ class GitHubFacts(Facts):
                 if (type(number) is not int or type(draft) is not bool or not isinstance(created, str)
                         or not isinstance(head, dict) or head.get("ref") != branch):
                     raise FactsError("gh api pulls returned unexpected JSON")
-                state = PrState(number, draft, created)
+                base = row.get("base")
+                base_ref = base.get("ref") if isinstance(base, dict) else None
+                if not isinstance(base_ref, str):
+                    raise FactsError("gh api pulls returned unexpected JSON")
+                state = PrState(number, draft, created, base_ref)
             self._pr[branch] = state
         return self._pr[branch]
 
@@ -229,16 +233,25 @@ class GitHubFacts(Facts):
     def register_answer(self, branch: str, before: str, after: str) -> bool:
         return register_shape(self._diff(before, after), branch)
 
-    def pr_head(self, number: int, repo: str | None) -> str | None:
+    def _pull_ref(self, number: int, repo: str | None, side: str) -> str | None:
         try:
             data = self._json(f"repos/{repo or self.repo}/pulls/{number}", "gh api pull")
         except NotFound:
             return None  # an issue, not a pull request
-        head = data.get("head") if isinstance(data, dict) else None
-        ref = head.get("ref") if isinstance(head, dict) else None
+        part = data.get(side) if isinstance(data, dict) else None
+        ref = part.get("ref") if isinstance(part, dict) else None
         if not isinstance(ref, str):
             raise FactsError("gh api pull returned unexpected JSON")
         return ref
+
+    def pr_head(self, number: int, repo: str | None) -> str | None:
+        return self._pull_ref(number, repo, "head")
+
+    def pr_base(self, number: int, repo: str | None) -> str | None:
+        return self._pull_ref(number, repo, "base")
+
+    def repository(self) -> str:
+        return self.repo
 
     def local_plan_branches(self) -> Sequence[str]:
         try:

@@ -57,8 +57,11 @@ about_github='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-]|$)|graphql|github\.com'
 opt='((-|\$)[^[:space:]]+[[:space:]]+([^[:space:]-][^[:space:]]*[[:space:]]+)?)*'
 about_github+="|(^|[^A-Za-z0-9_])(pr[[:space:]]+${opt}(create|new|review|close|merge|update-branch)|api[[:space:]]|repo[[:space:]]+${opt}sync|alias[[:space:]]+(set|import)|run[[:space:]]+${opt}delete|workflow[[:space:]]+${opt}run|issue[[:space:]]+${opt}close)"
 # A push writes remote refs, plan/* among them (ADR 0063 §5): the word `push`, a plumbing push, or a git
-# subcommand the shell builds (`git $C origin x`) goes to the adapter, which reads it.
+# subcommand the shell builds (`git $C origin x`) goes to the adapter, which reads it. So does the binary
+# `git-push`, and a brace expansion that can spell either word (`git pu{s,}h`, `{git,push}`): the braces of
+# the payload's own JSON hold no comma between them and the command, so they do not match.
 about_github+="|(^|[^A-Za-z0-9_.-])(push|send-pack|http-push)([^A-Za-z0-9_.-]|$)|(^|[^A-Za-z0-9_.-])git[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[^[:space:]]*[\$\`]"
+about_github+="|git-(push|send-pack|http-push)|(^|[^A-Za-z0-9_.-])git[[:space:]][^{}]{0,200}\{[^{}]{0,200},[^{}]{0,200}\}|\{[^{}]{0,200}(git|push|gh)[^{}]{0,200},[^{}]{0,200}\}|\{[^{}]{0,200},[^{}]{0,200}(git|push|gh)[^{}]{0,200}\}"
 # The regex's time grows steeply with a long crafted command (over 20 s at 140 KB,
 # ADR 0055), and a hook that outlives its timeout fails open. So a long payload
 # goes to the adapter, which stops itself and blocks.

@@ -672,3 +672,41 @@ for the hook.
 - A bare push in a shallow clone refuses, because the gate's git refuses shallow history.
 - `update-branch`, a contents write and a ref update by REST carry no source commit, so on a ready
   PR they refuse (E17) and cannot take the register-commit exception.
+
+**Review round 1 (three passes) changed these, and added these residuals.**
+- **Read as well:**
+  - A command word the shell builds, followed by a push or another word the shell builds, when the
+    command names `push` or `plan/`.
+  - An HTTP method the shell builds.
+  - A PR or issue number the shell builds in a close, merge or `update-branch` route.
+  - A GraphQL `updatePullRequest` with a `state`, every `updatePullRequestBranch`, and string
+    escapes in a ref or commit mutation.
+  - A merge into a `plan/*` base, by `gh pr merge` or `PUT pulls/N/merge` (the PR's base is looked
+    up, so every merge now needs that read; an unreadable base refuses).
+- **Routes are anchored to `repos/<owner>/<name>/`** and contents is matched before refs, so a
+  contents path that looks like a ref route is still contents. A ref write to another repository
+  than the facts are read for is refused, after the rows that read nothing (E14, E15, E16).
+- **Git configuration that steers a push.** `-c` keys under `remote.`, `push.`, `url.`, `alias.`,
+  `include`, `branch.` and `core.sshCommand`, `--config-env`, and the variables `GIT_CONFIG_*`,
+  `GIT_DIR` and kin on the command refuse. The repository's effective configuration is read for
+  every push: a mirror remote refuses (E15), a bare push with `remote.<r>.push` refuses, and
+  `push.default=matching` refuses when local `plan/*` branches exist.
+- **Where a push goes.** For a push that writes `plan/*`, the destination is the named remote's
+  `pushurl`, else its `url`, or the literal URL; it must be the repository the facts are read for.
+  `url.<base>.insteadOf` refuses. Facts, diffs and local branches come from the directory the push
+  runs in (`-C`).
+- **`--all` carries `-f`, `--force-with-lease` and `--delete` into each local `plan/*` branch.** A
+  first word the shell builds, before a `plan/*` refspec, may be an option and refuses.
+- **The prefilter** also passes a brace expansion that can spell `git` or `push`, and the
+  `git-push` binary.
+- **E12's cap.** The code holds the owner's three rounds (§5a). AGW-4's text says two; changing
+  the rule is the owner's, in a Trimtab PR of its own.
+
+Residuals added:
+- A command built from variables defined outside the command (`$G $S origin x` where `G` and `S`
+  came from the environment) is not seen by the prefilter and is not read.
+- Configuration set by an earlier command (`git config remote.origin.push …`) is read when the push
+  runs, not when it is set; a push is then refused if the effective setting steers it.
+- A sourceless write (`update-branch`, a contents write, a ref update with no sha) on a draft whose
+  head is failing or conflicted refuses, as it does on a ready PR, because the register-commit shape
+  cannot be shown for it.

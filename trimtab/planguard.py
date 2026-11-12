@@ -1,10 +1,15 @@
-"""What guard-github needs to judge a `plan/*` write: the environment, the facts, and the branch names git resolves.
+"""What guard-github needs to judge a `plan/*` write: the environment, the facts, and the names git resolves.
 
 `PlanSupport` holds one command's view. It reads `TRIMTAB_PLAN_RUN` from the hook's own environment
 (a session cannot set a variable for its hook, only the operator before launch, which is how the
 run's flag works), and builds `GitHubFacts` on the first fact a row asks for, so a command that
 writes no `plan/*` ref reads nothing and starts no `gh`. A build that fails is a `FactsError` at
 the read, which the rows turn into a refusal (ADR 0063 §5).
+
+A push is judged against the checkout it runs in (`-C`) and the repository it writes: the named
+remote's effective push URL, or the literal URL. The repository's own configuration is read first,
+because it can change what a push writes (`remote.<r>.mirror`, `remote.<r>.push`, `push.default`)
+or where it goes (`pushurl`, `url.<base>.insteadOf`).
 """
 
 from __future__ import annotations
@@ -64,6 +69,23 @@ class LazyFacts(Facts):
 
     def local_plan_branches(self) -> Sequence[str]: return self._facts().local_plan_branches()
     def pr_head(self, number: int, repo: str | None) -> str | None: return self._facts().pr_head(number, repo)
+    def pr_base(self, number: int, repo: str | None) -> str | None: return self._facts().pr_base(number, repo)
+    def repository(self) -> str: return self._facts().repository()
+
+
+def parse_config(raw: str) -> dict[str, list[str]]:
+    """`git config --list -z` as {lower-case key: [values]}: entries end at NUL, a key ends at a newline."""
+    out: dict[str, list[str]] = {}
+    for entry in raw.split("\0"):
+        if not entry:
+            continue
+        key, _, value = entry.partition("\n")
+        out.setdefault(key.lower(), []).append(value)
+    return out
+
+
+def _true(values: Sequence[str]) -> bool:
+    return any(v.strip().lower() in ("", "true", "yes", "on", "1") for v in values)  # a bare key means true
 
 
 class PlanSupport:
@@ -73,27 +95,83 @@ class PlanSupport:
                  git: tools.Git | None = None):
         self.cwd = cwd
         self.plan_run = environ.get(RUN_FLAG) == "1"
+        self._injected = facts is not None
         self.facts: Facts = facts or LazyFacts(cwd)
+        self._by_dir: dict[str, Facts] = {str(cwd): self.facts}
         self._environ, self._git = environ, git
+
+    def facts_for(self, cwd: Path) -> Facts:
+        """The facts for the checkout a push runs in; injected facts stand for every directory."""
+        if self._injected:
+            return self.facts
+        return self._by_dir.setdefault(str(cwd), LazyFacts(cwd))
+
+    def _git_run(self, cwd: Path, *args: str) -> str:
+        return (self._git or tools.Git(environ=self._environ))(cwd, *args)
 
     def _run(self, cwd: Path, *args: str) -> str | None:
         try:
-            git = self._git or tools.Git(environ=self._environ)
-            return git(cwd, *args).strip() or None
+            return self._git_run(cwd, *args).strip() or None
         except (tools.ToolError, OSError):
             return None
 
-    def push_branch(self, cwd: Path | None = None) -> str | None:
-        """The remote branch a bare `git push` writes: `@{push}` without its `refs/remotes/<remote>/`."""
+    def push_ref(self, cwd: Path | None = None) -> tuple[str, str] | None:
+        """(remote, branch) a bare push writes: `@{push}` without its `refs/remotes/` prefix."""
         ref = self._run(cwd or self.cwd, "rev-parse", "--symbolic-full-name", "@{push}")
         if ref is None or not ref.startswith("refs/remotes/"):
             return None
         parts = ref.split("/", 3)  # refs, remotes, <remote>, <branch>
-        return parts[3] if len(parts) == 4 and parts[3] else None
+        return (parts[2], parts[3]) if len(parts) == 4 and parts[2] and parts[3] else None
+
+    def push_branch(self, cwd: Path | None = None) -> str | None:
+        found = self.push_ref(cwd)
+        return found[1] if found else None
 
     def head_branch(self, cwd: Path | None = None) -> str | None:
         """The checked-out branch, which a `HEAD` refspec writes under the same name."""
         return self._run(cwd or self.cwd, "symbolic-ref", "--short", "-q", "HEAD")
+
+    def config(self, cwd: Path) -> dict[str, list[str]]:
+        """The repository's effective configuration at `cwd`; empty where there is no repository to push from."""
+        try:
+            return parse_config(self._git_run(cwd, "config", "--list", "-z"))
+        except (tools.ToolError, OSError) as err:
+            if self._run(cwd, "rev-parse", "--git-dir") is None:
+                return {}  # not a repository: a push there fails by itself
+            raise FactsError(f"the repository's configuration cannot be read ({type(err).__name__})") from err
+
+
+def _destination(remote: str | None, config: Mapping[str, list[str]], support: PlanSupport, cwd: Path) -> str:
+    """The owner/name a push writes, or a FactsError saying why it cannot be told."""
+    name = remote
+    if name is None:
+        resolved = support.push_ref(cwd)
+        name = resolved[0] if resolved else None
+    if name is None:
+        raise FactsError("the remote of a push cannot be resolved")
+    if any(k.startswith("url.") and k.endswith(("insteadof", "pushinsteadof")) for k in config):
+        raise FactsError("URL rewrites in the configuration can send a push elsewhere")
+    if "://" in name or name.startswith("git@"):
+        return planfacts.repository_of(name)
+    urls = config.get(f"remote.{name.lower()}.pushurl") or config.get(f"remote.{name.lower()}.url")
+    if not urls or len(urls) != 1:
+        raise FactsError("the remote has no single URL")
+    return planfacts.repository_of(urls[0])
+
+
+def _steering(found: planrows.PushRead, config: Mapping[str, list[str]], support: PlanSupport, cwd: Path,
+              facts: Facts) -> None:
+    """Configuration that changes what a push writes (E15, E16): a mirror remote, a push refspec, matching."""
+    name = (found.remote or "").lower()
+    if not name and (resolved := support.push_ref(cwd)):
+        name = resolved[0].lower()
+    if f"remote.{name}.mirror" in config and _true(config[f"remote.{name}.mirror"]):
+        planrows.check_e15(planrows.Write(planrows.PLAN_PREFIX, force=True))  # a mirror forces and prunes
+    if found.bare:
+        if config.get(f"remote.{name}.push"):
+            raise FactsError("a bare push takes its refspecs from configuration, which this guard does not read")
+        if "matching" in [v.lower() for v in config.get("push.default", [])] and facts.local_plan_branches():
+            raise FactsError("push.default=matching would push every local plan/* branch")
 
 
 def judge_push(args: Sequence[tuple[str, bool]], support: PlanSupport, cwd: Path | None) -> str | None:
@@ -103,8 +181,22 @@ def judge_push(args: Sequence[tuple[str, bool]], support: PlanSupport, cwd: Path
                                lambda: support.head_branch(cwd) if cwd else None)
     if found.unreadable:
         return found.unreadable
+    plan_involved = bool(found.broad) or any(planrows.plan_branch(w.branch) for w in found.writes)
+    if cwd is None:
+        return "a push touching plan/* runs in a directory the guard cannot tell" if plan_involved else None
+    facts = support.facts_for(cwd)
+    try:
+        config = support.config(cwd)
+        _steering(found, config, support, cwd, facts)
+        if plan_involved:  # only a plan write needs the repository it goes to
+            ours = facts.repository()
+            if _destination(found.remote, config, support, cwd).casefold() != ours.casefold():
+                return f"a push to a repository other than {ours}, which this guard reads facts for"
+    except FactsError as err:
+        raise planrows.Refusal(f"a push cannot be judged ({err}); refusing (ADR 0063 §5)") from err
     if found.broad:
-        planrows.judge_broad(found.broad, plan_run=support.plan_run, facts=support.facts)
+        planrows.judge_broad(found.broad, plan_run=support.plan_run, facts=facts, force=found.force,
+                             delete=found.delete)
     for write in found.writes:
-        planrows.judge_write(write, plan_run=support.plan_run, facts=support.facts)
+        planrows.judge_write(write, plan_run=support.plan_run, facts=facts)
     return None
