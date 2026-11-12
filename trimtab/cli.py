@@ -1310,7 +1310,9 @@ def build_parser() -> argparse.ArgumentParser:
     ar.add_argument("--pr", required=True, type=int, metavar="N", help="the PR's number")
     ar.add_argument("--head", required=True, metavar="SHA",
                     help="the commit the write will be pinned to; it must be the PR's head on the server")
-    ar.add_argument("--base", required=True, metavar="SHA", help="the default branch's tip, in the checkout")
+    ar.add_argument("--base", required=True, metavar="SHA",
+                    help="the default branch's tip, in the checkout; it must be the tip the server reports at the "
+                         "check, or the route refuses (ADR 0065)")
     ar.add_argument("--admin", required=True, metavar="LOGIN",
                     help="the admin login, from configuration the PR cannot change")
     ar.add_argument("--approver", required=True, metavar="LOGIN", help="the approver login, from the same configuration")

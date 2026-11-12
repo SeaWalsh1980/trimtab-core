@@ -28,7 +28,7 @@ from trimtab.capture.written import SETTLE_SECONDS, WrittenBodyError, verify_bod
 from trimtab.ids import ANY_ID_SHAPE
 from trimtab.capture.ghapi import (  # noqa: F401  (re-exported: callers import these from here)
     CLIENT_ERROR, GH_TIMEOUT_SECONDS, GIT_TIMEOUT_SECONDS, PER_PAGE, GhApi, HostError, NotFound, Refused, Run,
-    SourceError, _subprocess_run, git_bytes)
+    SourceError, _subprocess_run, git_answer, git_bytes)
 from trimtab.dependabot import CiRun, PullRequestView
 from trimtab.propose import Filer, PullTitle
 from trimtab.upstream import Issue
