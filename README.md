@@ -30,6 +30,10 @@ The same pull-request writes guard-github refuses in a shell are denied as
 MCP calls, on any server, before any pass can answer: a merge, a PR opened
 without `draft` set to true, an approving review, and resolving a review
 thread, by name or by a review tool's method (ADR 0038).
+A Bash write detector (`hooks/bash-writes.sh`) snapshots the repository before
+each Bash call and, after it, judges every path the call changed against the
+write allowlist and an autonomous run's plan scope, as the guard judges an
+Edit or a Write; it reports, since the command has already run (ADR 0066).
 And it runs a **loop** over a body of engineering rules: every rule is a
 *harness item* with a stable ID, pull requests cite the items they applied
 and report friction against them, and a retrospective tallies that evidence
@@ -95,13 +99,19 @@ Linux is the only tested platform. Known gaps, not yet handled:
   name `/bin/bash` (ADR 0064), so a newer bash on PATH does not help.
 - A host with no `/bin/bash` cannot start any hook, and the exit code it
   gets back (127) also means "allow": every guard is off (ADR 0064).
-- The hooks set `PATH=/usr/bin:/bin` before any command (ADR 0065), so
+- The hooks set `PATH=/usr/bin:/bin` before any command (ADR 0067), so
   `python3` (3.11 or newer, with PyYAML), `jq` and `git` must be there;
   bootstrap checks that `python3`. On a Mac `/usr/bin` has
   no `jq` and only Apple's Python 3.9 stub, and Homebrew's tools are not
   seen.
 - macOS: `readlink -f` (bootstrap and two hooks) needs macOS 12.3 or later,
   and the weekly usage report's timer uses systemd, which macOS lacks.
+- macOS: an autonomous plan run never gets an E20 pass. The session-mode
+  hook's recorder needs GNU `mv -T`, `setsid` and `timeout` under
+  `/usr/bin:/bin`, which macOS does not ship. This fails closed: once the
+  E21 guards land they refuse every write in such a run
+  (docs/adr/0063-the-plan-run-enforcement-gate.md, Consequences).
+  Interactive sessions are unaffected.
 - Native Windows: creating symlinks needs Developer Mode or administrator
   rights; Git for Windows defaults to `core.symlinks=false`, and Git Bash's
   `ln -s` copies by default, so the linked hooks directory would become a

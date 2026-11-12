@@ -19,7 +19,7 @@
 # decides the rest: a read, or another endpoint, passes there.
 
 # Before any command: tools are named bare, and the inherited PATH starts with
-# a user-writable directory (docs/adr/0065-hooks-reset-path-first.md).
+# a user-writable directory (docs/adr/0067-hooks-reset-path-first.md).
 export PATH=/usr/bin:/bin
 # Failing open is by design, never silent: each fault that stops the check
 # tells the user that the body went unchecked and why, here for the hook's own
@@ -28,7 +28,7 @@ export PATH=/usr/bin:/bin
 # session-path.sh does, and a copy goes to stderr. A body the check never meant
 # to read (--web, stdin, a shell-built body) stays quiet: CI checks those.
 # Since the reset above, python3 is always /usr/bin/python3, whatever newer one
-# the session's PATH holds (ADR 0065).
+# the session's PATH holds (ADR 0067).
 unchecked() { # unchecked <why>; the adapter's `unchecked` prints the same sentence
   local msg="pr-body-check: the PR body was not checked: $1. CI is the gate."
   echo "$msg" >&2

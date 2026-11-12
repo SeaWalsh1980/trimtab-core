@@ -19,7 +19,7 @@
 # `gh api`. Anything else exits after one bash startup.
 
 # Before any command: tools are named bare, and the inherited PATH starts with
-# a user-writable directory (docs/adr/0065-hooks-reset-path-first.md).
+# a user-writable directory (docs/adr/0067-hooks-reset-path-first.md).
 export PATH=/usr/bin:/bin
 payload=$(cat) || exit 1
 create='gh[[:space:]]+(pr[[:space:]]+create|api)'

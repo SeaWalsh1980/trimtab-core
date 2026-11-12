@@ -1428,7 +1428,7 @@ check_observer_probe() {
 }
 
 # Not tested here, on purpose: bootstrap's second floor, on the python3 the
-# hooks run (`PATH=/usr/bin:/bin command -v python3`, ADR 0065). Its die paths
+# hooks run (`PATH=/usr/bin:/bin command -v python3`, ADR 0067). Its die paths
 # (none there, older than 3.11, no PyYAML under -I) need a different
 # /usr/bin/python3, which a test cannot provide without root. A variable that
 # pointed bootstrap at another directory would be a seam an installer must not

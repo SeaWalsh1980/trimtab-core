@@ -18,9 +18,13 @@ name: plan-scope
 # A pass is judged against the base commit of the event that started it; a
 # re-run reuses that event. Nothing here runs when the base branch moves, so
 # if the admin narrows the allowlist or withdraws the plan after the last
-# push, the old pass stands. The ruleset's "require branches to be up to
-# date" closes that: the PR must take the new base, and that push runs the
-# job against it.
+# push, the old pass stands. Where the ruleset has "require branches to be up
+# to date", that closes it: the PR must take the new base, and that push runs
+# the job against it. Where it does not, the approver route closes it instead
+# (ADR 0065): `check-approver-route` refuses a head that conflicts with the
+# default branch, or when the default branch has changed what this job judges
+# by since the head left it. A pass that stands alone, with the approver route
+# not involved, is only as fresh as its base.
 #
 # Check runs belong to a commit, not to a PR. A non-plan PR whose head is the
 # same commit as a plan PR's adds a `skipped` run there, which becomes the

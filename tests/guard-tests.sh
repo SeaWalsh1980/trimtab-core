@@ -83,7 +83,7 @@ j() {
 CPTMP=$(mktemp -d -t guard-tests.XXXXXX)
 trap 'rm -rf "$CPTMP"' EXIT
 
-# Every hook sets PATH=/usr/bin:/bin before its first command (ADR 0065), so a
+# Every hook sets PATH=/usr/bin:/bin before its first command (ADR 0067), so a
 # case that hides or replaces a dependency by narrowing PATH can no longer do
 # it from outside: the hook would find the real tool in /usr/bin and the case
 # would pass, or fail, for the wrong reason. Such a case runs a copy of the
@@ -117,7 +117,9 @@ path_hooks() { # path_hooks <hooks dir> <PATH>  — print a copy whose reset set
           return 1
         fi
         while IFS= read -r line || [[ -n "$line" ]]; do
+          # session-mode.sh sets PATH again from SM_SYSTEM_PATH when it runs as the hook.
           [[ "$line" == "$PATH_RESET" ]] && line="export PATH=$(printf '%q' "$want")"
+          [[ "$line" == "SM_SYSTEM_PATH=/usr/bin:/bin" ]] && line="SM_SYSTEM_PATH=$(printf '%q' "$want")"
           printf '%s\n' "$line"
         done < "$f" > "$out/hooks/${f##*/}"
         chmod +x "$out/hooks/${f##*/}"
@@ -179,6 +181,9 @@ mkdir -p "$CP_HOME/commands" "$CP_HOME/agents" "$CP_HOME/skills" \
          "$CP_HOME/projects/-a-project/memory" "$CP_HOME/plans" \
          "$CP_HOME/todos" "$CP_HOME/logs"
 export CLAUDE_CONFIG_DIR="$CP_HOME"
+# A run-mode SessionStart starts E20's recorder, which reads the network; these
+# cases test the announcement, not the recorder (tests/trimtab covers it).
+export TRIMTAB_ENFORCEMENT_RECORDER=0
 # guard-paths also derives the snapshot store from XDG_DATA_HOME (else
 # ~/.local/share) and resolves its deepest existing ancestor. Pin it inside the
 # fixture too, or every case would read the operator's real data directory, and
@@ -1299,8 +1304,10 @@ t guard-paths.sh 2 "allowlist: a symlinked .claude directory fails closed (Edit)
 DL4="$CPTMP/dl-linked-noallow"; mkdir -p "$DL4/.git" "$DL4/src" "$CPTMP/elsewhere-empty"
 ln -s "$CPTMP/elsewhere-empty" "$DL4/.claude"
 t guard-paths.sh 2 "allowlist: a symlinked .claude with no allowlist also fails closed" "$(e Edit "$DL4/src/a.py")"
-# The allowlist never confines Bash (ADR 0039); CODEOWNERS covers shell
-# writes. Pinned so a change to that is seen.
+# guard-paths never judges Bash against the allowlist (ADR 0039); the
+# bash-writes detector judges what a shell call changed, after it ran
+# (ADR 0066), and CODEOWNERS and plan-scope gate the merge. Pinned so a
+# change to guard-paths' part is seen.
 t guard-paths.sh 0 "allowlist: a shell write is not judged against it" "$(bsh 'sed -i s/a/b/ src/a.py')" "$DL2"
 # Accepted residual: a shell command reaching a protected file through a hard
 # link is judged at its spelt path; the link-count check runs for Edit and
@@ -2673,7 +2680,7 @@ SC_ROOT=$(mktemp -d "$CPTMP/pkgroot.XXXXXX")
 cp -RL "$HOOKS" "$SC_ROOT/hooks"
 cp -RL "$HOOKS/../trimtab" "$SC_ROOT/trimtab"
 SC_BASE=$(mktemp -d "$CPTMP/usersite.XXXXXX")
-# The hooks run the python3 in /usr/bin:/bin (ADR 0065), which need not be the
+# The hooks run the python3 in /usr/bin:/bin (ADR 0067), which need not be the
 # ambient one (CI puts setup-python's first on PATH). User site is named by the
 # interpreter's version, so the plant goes where the hooks' interpreter looks.
 SC_SITE=$(PATH=/usr/bin:/bin PYTHONUSERBASE="$SC_BASE" python3 -c 'import site; print(site.getusersitepackages())')
@@ -2766,7 +2773,7 @@ if python3 -m venv --without-pip "$SC_VENV" >/dev/null 2>&1; then
   printf '%s\n' "$sc_plant" > "$sc_vsite/trimtab/adapters/pr_body_check.py"
   pl=$(sc_payload pr-body-check.sh)
   rm -f "$SC_MARK"
-  # The hook resets PATH (ADR 0065), so the venv's interpreter is put first in
+  # The hook resets PATH (ADR 0067), so the venv's interpreter is put first in
   # the reset itself: this case is about an interpreter that carries a package.
   # The pass also needs evidence the hook ran the check itself on the venv's
   # python3, not just its -P probe and not the system one: the venv's python3
@@ -2874,7 +2881,7 @@ stub_bin() { # stub_bin <cmd>...  — leave only these commands resolvable
 
 tp() { # tp <stub-dir> <t-args>...  — run one `t` case with PATH restricted
   local saved="$PATH" hooks="$HOOKS" dir="$1" copy; shift
-  # The hooks reset PATH themselves (ADR 0065): run a copy whose reset names
+  # The hooks reset PATH themselves (ADR 0067): run a copy whose reset names
   # the stub, built under the full PATH before the swap.
   if ! copy=$(path_hooks "$HOOKS" "$dir"); then
     printf 'FAIL  %-14s  %s  -- no copy with the stub PATH\n' "$1" "$3"
@@ -3664,6 +3671,35 @@ PY
 fails=$((fails + $?))
 [[ -x "$REPO/hooks/pr-monitor-record.sh" ]]
 pm_report $? state "the registered recorder ships executable"
+
+echo "== bash-writes registration (settings.base.json) =="
+# The Bash write detector (ADR 0066) needs three registrations on Bash alone:
+# `pre` on PreToolUse to snapshot, and `post` on PostToolUse and on
+# PostToolUseFailure, since a command that exits non-zero raises the second
+# and would otherwise go unjudged. Checked as the file ships.
+python3 - "$REPO/settings.base.json" <<'PY'
+import json, re, sys
+events = json.load(open(sys.argv[1]))["hooks"]
+base = '"$HOME/.claude/hooks/bash-writes.sh"'
+found = [(event, g.get("matcher"), h) for event, groups in events.items() for g in groups
+         for h in g["hooks"] if str(h.get("command", "")).startswith(base)]
+def case(ok, label):
+    print("%s  %-14s %s" % ("PASS" if ok else "FAIL", "registration", label))
+    return 0 if ok else 1
+want = {("PreToolUse", base + " pre"), ("PostToolUse", base + " post"), ("PostToolUseFailure", base + " post")}
+got = {(event, h.get("command")) for event, _, h in found}
+fails = case(len(found) == 3 and got == want,
+             "the detector is registered pre on PreToolUse and post on both post events")
+for event, matcher, hook in found:
+    fails += case(hook.get("timeout") == 10, "%s: the 10 s timeout" % event)
+    m = re.compile(matcher or "")
+    fails += case(bool(m.fullmatch("Bash")) and not any(m.fullmatch(t) for t in ("Edit", "Write", "Read", "BashX")),
+                  "%s: its matcher catches Bash and nothing else" % event)
+sys.exit(fails)
+PY
+fails=$((fails + $?))
+[[ -x "$REPO/hooks/bash-writes.sh" ]]
+pm_report $? state "the registered detector ships executable"
 
 echo "== guard-paths registration (settings.base.json) =="
 # The guard enforces on every tool but Read, but only on the tools its matcher

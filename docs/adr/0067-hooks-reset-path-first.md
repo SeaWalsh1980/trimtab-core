@@ -1,4 +1,4 @@
-# 0065. Hooks reset PATH before their first command
+# 0067. Hooks reset PATH before their first command
 
 ## Status
 
@@ -25,7 +25,10 @@ and before `set` or any command. The line is exact, so a test can find it.
   is the line the hook writes to `CLAUDE_ENV_FILE`, which keeps `"$PATH"` literal for Claude Code
   to expand. The reset never reaches it.
 - `session-mode.sh` is also a library that guard-paths and session-scratch source. Sourced, it
-  sets the caller's PATH again, to the value the caller has already set.
+  sets the caller's PATH again, to the value the caller has already set. Run as the hook it also
+  sets PATH from `SM_SYSTEM_PATH` before `sm_main`, which the enforcement-gate work added; the
+  test copies swap that literal along with the first reset, or a stub PATH would be dropped
+  before any tool ran.
 - Exported, so `python3`, `git` and any child the hook starts inherit the same PATH.
 
 "Before any command" means any command in the hook. Bash itself reads `BASH_ENV` and imports

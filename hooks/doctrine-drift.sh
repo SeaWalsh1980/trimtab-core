@@ -9,7 +9,7 @@
 # so it always exits 0, including on malformed input.
 
 # Before any command: tools are named bare, and the inherited PATH starts with
-# a user-writable directory (docs/adr/0065-hooks-reset-path-first.md).
+# a user-writable directory (docs/adr/0067-hooks-reset-path-first.md).
 export PATH=/usr/bin:/bin
 payload=$(cat) || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0

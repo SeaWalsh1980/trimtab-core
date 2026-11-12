@@ -1,4 +1,4 @@
-"""A copy of hooks/ whose PATH reset names a test's stub directory (ADR 0065).
+"""A copy of hooks/ whose PATH reset names a test's stub directory (ADR 0067).
 
 Every shell hook sets `PATH=/usr/bin:/bin` before its first command, so a case
 that swaps a tool through PATH cannot do it from outside the hook: the hook
@@ -13,6 +13,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 PATH_RESET = "export PATH=/usr/bin:/bin"
+# session-mode.sh sets PATH again from this variable when it runs as the hook,
+# so a copy that names a stub PATH has to change it too.
+SYSTEM_PATH_LITERAL = "SM_SYSTEM_PATH=/usr/bin:/bin"
 
 
 class NoCanonicalReset(AssertionError):
@@ -25,7 +28,14 @@ def swap_reset(text, path):
     count = lines.count(PATH_RESET)
     if count != 1:
         raise NoCanonicalReset(f"{count} canonical PATH resets, not 1")
-    return "\n".join(f"export PATH={shlex.quote(path)}" if line == PATH_RESET else line for line in lines)
+    swapped = []
+    for line in lines:
+        if line == PATH_RESET:
+            line = f"export PATH={shlex.quote(path)}"
+        elif line == SYSTEM_PATH_LITERAL:
+            line = f"SM_SYSTEM_PATH={shlex.quote(path)}"
+        swapped.append(line)
+    return "\n".join(swapped)
 
 
 def hooks_with_path(dest, path, hooks=REPO / "hooks"):

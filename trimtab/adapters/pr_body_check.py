@@ -21,7 +21,7 @@ Failing open is never silent when the check was meant to happen and could not:
 no instance, an unavailable registry, an unreadable body file, an `--input` file
 that is not JSON, or an exception each print a systemMessage notice on stdout
 (`unchecked`), because Claude Code shows exit-0 stderr only in its debug log
-(ADR 0065). A body it never meant to read (`--web`, stdin, a shell-built body)
+(ADR 0067). A body it never meant to read (`--web`, stdin, a shell-built body)
 stays quiet.
 
 The message names sections, entries and fields; it never quotes the body.
@@ -279,7 +279,7 @@ def unchecked(why: str) -> int:
     """Allow a body this check had to read but could not, and tell the user so.
 
     The notice is a systemMessage on stdout, since Claude Code shows a hook's
-    stderr on exit 0 only in its debug log (ADR 0065); the shell hook's own
+    stderr on exit 0 only in its debug log (ADR 0067); the shell hook's own
     fail-open exits print the same shape. A copy goes to stderr.
     """
     # The same sentence as hooks/pr-body-check.sh's own notice: a test holds the two together.

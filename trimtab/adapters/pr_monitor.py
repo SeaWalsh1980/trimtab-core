@@ -40,6 +40,8 @@ from enum import Enum
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from trimtab import guardstate
+
 LIST_VERSION = 1
 TTL_SECONDS = 2 * 24 * 60 * 60
 CAP = 30
@@ -469,23 +471,20 @@ class LockTimeoutError(PrMonitorError):
     """Another writer held the list's lock past the bound."""
 
 
-def config_dir() -> Path:
-    """The Claude config directory: CLAUDE_CONFIG_DIR, else ~/.claude."""
-    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude"))
+config_dir = guardstate.config_dir  # one reading of the config dir for every guard-state writer
+_private = guardstate.private
 
 
-def _private(st: os.stat_result) -> bool:
-    return st.st_uid == os.geteuid() and not st.st_mode & 0o077
-
-
-def state_dir(config: Path, create: bool) -> Path:
-    """`<config>/guard-state/pr-monitor`, each level a real directory private to this user.
+def state_dir(config: Path, create: bool, parts: tuple[str, ...] = STATE_PARTS) -> Path:
+    """`<config>/guard-state/pr-monitor` (or another `parts` below the config directory), each
+    level a real directory private to this user. The Bash write detector keeps its snapshots
+    under its own `parts` (ADR 0066).
 
     With `create`, missing levels are made 0700. Raises StateDirError otherwise, or OSError
     when a level cannot be made.
     """
     path = config
-    for part in STATE_PARTS:
+    for part in parts:
         path = path / part
         if create:
             try:

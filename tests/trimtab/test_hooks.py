@@ -788,7 +788,7 @@ class HookShebangs(unittest.TestCase):
         self.assertLessEqual({"guard-paths.sh", "guard-bash.sh", "session-mode.sh"}, names)
 
 
-# ---- PATH reset (ADR 0065) -------------------------------------------------
+# ---- PATH reset (ADR 0067) -------------------------------------------------
 # The absolute shebang fixes bash, but each hook still names python3, jq, git
 # and the rest bare, and the inherited PATH puts the user-writable
 # ~/.local/bin first. So the first statement of every shell hook is the reset.
@@ -847,6 +847,7 @@ def hook_input(hook, cwd):
                                       tool_response={"stdout": "", "stderr": "", "interrupted": False}), []),
         "rule-usage.sh": (tool("Skill", {"skill": "trimtab-plan"}), []),
         "session-scratch.sh": (start, ["start"]),
+        "bash-writes.sh": (tool("Bash", {"command": "true"}, session_id="path-reset", tool_use_id="toolu_1"), ["pre"]),
     }.get(hook.name, (start, []))
 
 
@@ -943,7 +944,15 @@ class HooksWithPath(unittest.TestCase):
         for hook in SHELL_HOOKS:
             with self.subTest(hook=hook.name):
                 self.assertEqual((copies / hook.name).read_text(encoding="utf-8"),
-                                 hook.read_text(encoding="utf-8").replace(PATH_RESET, "export PATH=/stub"))
+                                 hook.read_text(encoding="utf-8").replace(PATH_RESET, "export PATH=/stub")
+                                 .replace("SM_SYSTEM_PATH=/usr/bin:/bin", "SM_SYSTEM_PATH=/stub"))
+
+    def test_the_second_system_path_in_session_mode_is_swapped_with_the_first(self):
+        text = f"#!/bin/bash\n{PATH_RESET}\nSM_SYSTEM_PATH=/usr/bin:/bin\n"
+
+        swapped = swap_reset(text, "/stub:/usr/bin")
+
+        self.assertEqual(swapped, "#!/bin/bash\nexport PATH=/stub:/usr/bin\nSM_SYSTEM_PATH=/stub:/usr/bin\n")
 
     def test_a_path_with_a_space_is_quoted(self):
         self.assertIn("export PATH='/a b:/usr/bin'", swap_reset(f"#!/bin/bash\n{PATH_RESET}\n", "/a b:/usr/bin"))
