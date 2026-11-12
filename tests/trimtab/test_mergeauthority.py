@@ -2846,7 +2846,9 @@ class Freshness(ApproverAction):
         self.base = self.commit("rename")
         git(self.repo, "switch", "-q", PLAN_REF)
 
-        self.assert_refused("renamed away src/app.py")
+        # Some git versions follow the rename and merge cleanly; others report a conflict as well. The rename
+        # refusal must stand on its own either way.
+        self.assert_refused("renamed away src/app.py", alone=False)
 
     def test_main_deleting_a_path_the_head_changes_refuses(self):
         self.on_main(("src/app.py", None))

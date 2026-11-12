@@ -53,9 +53,10 @@ when:
    - the plan-scope workflow, both the expected path and the one configured with
      `--job-workflow`;
 4. that history touches a path the head adds, where the create-only check reads the base;
-5. that history deletes, or renames away, a path the head changes. merge-tree detects
-   renames even with `diff.renames` off, so it would carry the head's edit onto a path
-   plan-scope never judged;
+5. that history deletes, or renames away, a path the head changes. Whether merge-tree
+   follows a rename with `diff.renames` off depends on the git version. Where it does, it
+   merges cleanly and carries the head's edit onto a path plan-scope never judged. So
+   this holds whatever merge-tree reports;
 6. that history touches an instruction file (`CLAUDE.md`, `CLAUDE.local.md`, in any
    directory) or the rules directory the base commit's lock names (by default
    `.claude/rules/`). Strict kept the verdict of a merge judged against those current too.
