@@ -46,7 +46,7 @@ from pathlib import Path
 
 from trimtab.adapters.pr_monitor import READ_FLAGS, PrMonitorError, _private, config_dir, state_dir
 
-SNAPSHOT_VERSION = 2
+SNAPSHOT_VERSION = 3
 STATE_PARTS = ("guard-state", "bash-writes")
 ALLOWLIST = ".claude/write-allowlist"
 PLANS_DIR = "docs/" + "plans"  # in two pieces, as in planscope, so the citation test does not read a path
@@ -71,6 +71,10 @@ GIT_STEERING = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECT
                 "GIT_GRAFT_FILE", "GIT_NAMESPACE", "GIT_REPLACE_REF_BASE", "GIT_CONFIG_PARAMETERS")
 GIT_PINNED = (("core.fsmonitor", "false"), ("core.commitGraph", "false"), ("log.showSignature", "false"),
               ("log.follow", "false"), ("diff.renames", "false"))
+# And the settings that decide whether git status sees a change at all, which a command can weaken in
+# the repository's own config (found in review): pinned to git's defaults for this detector's reads.
+STATUS_PINNED = (("core.trustctime", "true"), ("core.checkStat", "default"), ("core.fileMode", "true"),
+                 ("core.untrackedCache", "false"))
 
 
 class BashWritesError(Exception):
@@ -249,6 +253,46 @@ class Deadline:
         return left
 
 
+# Layer-1 files git may never list: `.claude/` is commonly gitignored, and its settings, hooks and rules
+# take effect in the session without reaching a PR. Fingerprinted from the filesystem, not from git.
+HARNESS_FILES = ("CLAUDE.md", "CLAUDE.local.md")
+HARNESS_DIR = ".claude"
+HARNESS_SKIP = ".claude/worktrees"
+
+
+def harness_paths(root: str) -> dict[str, os.stat_result]:
+    """Every entry under the root's `.claude/` (but `worktrees/`), and the root's instruction files, by
+    lstat: links are recorded, never followed. Bounded by MAX_PATHS."""
+    found: dict[str, os.stat_result] = {}
+    for name in HARNESS_FILES:
+        try:
+            found[name] = os.lstat(os.path.join(root, name))
+        except FileNotFoundError:
+            continue  # absent: a later write shows as a new entry
+    top = os.path.join(root, HARNESS_DIR)
+    try:
+        st = os.lstat(top)
+    except FileNotFoundError:
+        return found
+    found[HARNESS_DIR] = st
+    if not stat.S_ISDIR(st.st_mode):
+        return found
+    pending = [HARNESS_DIR]
+    while pending:
+        rel = pending.pop()
+        with os.scandir(os.path.join(root, rel)) as it:
+            for entry in it:
+                child = f"{rel}/{entry.name}"
+                if child == HARNESS_SKIP:
+                    continue
+                found[child] = entry.stat(follow_symlinks=False)
+                if len(found) > MAX_PATHS:
+                    raise BashWritesError(f"more than {MAX_PATHS} harness entries; too many to judge")
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(child)
+    return found
+
+
 class Repo:
     """A repository named by its root, read with git told the root outright: `--git-dir` and
     `--work-tree` outrank `core.bare`, `core.worktree` and any steering variable the command set."""
@@ -263,7 +307,7 @@ class Repo:
                and k != "GIT_CONFIG_COUNT"}
         # GIT_OPTIONAL_LOCKS=0: status must not take the index lock a concurrent command may want.
         env.update(GIT_NO_REPLACE_OBJECTS="1", GIT_LITERAL_PATHSPECS="1", GIT_OPTIONAL_LOCKS="0")
-        pins = [arg for key, value in GIT_PINNED for arg in ("-c", f"{key}={value}")]
+        pins = [arg for key, value in GIT_PINNED + STATUS_PINNED for arg in ("-c", f"{key}={value}")]
         argv = ["git", f"--git-dir={os.path.join(self.root, '.git')}", f"--work-tree={self.root}",
                 "-C", self.root, *pins, *args]
         try:
@@ -309,7 +353,11 @@ class Repo:
             status[path] = status.get(path, "") + f"[{tag}]"
         if len(status) > MAX_PATHS:
             raise BashWritesError(f"more than {MAX_PATHS} paths to fingerprint; too many to judge")
-        found = {}
+        try:
+            harness = harness_paths(self.root)
+        except OSError as err:
+            raise BashWritesError(f"cannot read the repository's harness files ({type(err).__name__})") from err
+        found = {path: fingerprint("[fs]", st) for path, st in harness.items() if path not in status}
         for path, xy in status.items():
             try:
                 st = os.lstat(os.path.join(self.root, path))
@@ -331,25 +379,17 @@ class Repo:
             raise BashWritesError(f"more than {MAX_REFS} branch tips; too many to judge")
         return sorted(shas)
 
-    def default_tip(self) -> str | None:
-        """The commit origin's default branch names now, or None when there is no origin/HEAD."""
-        rc, ref = self.run("symbolic-ref", "-q", "refs/remotes/origin/HEAD", ok=(0, 1))
-        if rc != 0:
-            return None
-        rc, out = self.run("rev-parse", "--verify", "-q", ref.decode("utf-8", errors="replace").strip() + "^{commit}",
-                           ok=(0, 1))
-        sha = out.decode("ascii", errors="replace").strip()
-        return sha if rc == 0 and SHA.fullmatch(sha) else None
-
-    def committed(self, before: list[str]) -> list[str]:
+    def committed(self, before: list[str], taken: int) -> list[str]:
         """Paths changed by commits the call made on any branch: reachable from a tip now that was not a
-        tip before, and from no tip before nor origin's default branch now (so a pull of merged work is
-        not judged as the call's writing). A merge counts only the paths that differ from every parent."""
+        tip before, from no tip before, and committed since the snapshot was taken. The time is what
+        tells the call's own commits, pushed or not, from others' work a fetch or pull brought in. A
+        merge counts only the paths that differ from every parent."""
         new = sorted(set(self.tips()) - set(before))
         if not new:
             return []
-        exclude = sorted(set(before) | {t for t in (self.default_tip(),) if t})
-        out = self.out("rev-list", f"--max-count={MAX_COMMITS + 1}", *new, "--not", *exclude, "--")
+        # A second's slack for the clock's resolution; a commit dated earlier on purpose is evasion.
+        out = self.out("rev-list", f"--max-count={MAX_COMMITS + 1}", f"--max-age={taken - 1}", *new,
+                       "--not", *before, "--")
         commits = [c for c in out.decode("ascii", errors="replace").split() if c]
         if len(commits) > MAX_COMMITS:
             raise BashWritesError(f"the call made more than {MAX_COMMITS} commits; too many to judge")
@@ -512,7 +552,8 @@ def _valid_snapshot(data: dict) -> dict:
             or not all(isinstance(t, str) and SHA.fullmatch(t) for t in tips)
             or not isinstance(data.get("allowlist"), (str, type(None)))
             or not isinstance(data.get("list_bad"), str)
-            or data.get("mode") not in MODES or not isinstance(data.get("branch"), str)):
+            or data.get("mode") not in MODES or not isinstance(data.get("branch"), str)
+            or not isinstance(data.get("taken"), int) or isinstance(data.get("taken"), bool)):
         raise BashWritesError("the snapshot is malformed")
     return data
 
@@ -532,7 +573,7 @@ def snapshot(payload: object, config: Path, now: float, mode: str, branch: str,
             repo = Repo(root, deadline)
             allowlist, bad = read_allowlist(root)
             data.update(paths=repo.listed(), tips=repo.tips(), allowlist=allowlist, list_bad=bad,
-                        mode=mode, branch=repo.branch() or branch)
+                        mode=mode, branch=repo.branch() or branch, taken=int(now))
         directory = state_dir(config, create=True, parts=STATE_PARTS)
         _write_snapshot(directory, name, data)
         _prune(directory, name, now)
@@ -556,7 +597,7 @@ def judge(payload: object, config: Path, mode: str, branch: str, deadline: Deadl
         if root is None:
             return 0, ""  # the call started outside any repository
         repo = Repo(root, deadline)
-        paths = sorted(set(moved(data["paths"], repo.listed())) | set(repo.committed(data["tips"])))
+        paths = sorted(set(moved(data["paths"], repo.listed())) | set(repo.committed(data["tips"], data["taken"])))
         if not paths:
             return 0, ""
         root_branch = repo.branch()

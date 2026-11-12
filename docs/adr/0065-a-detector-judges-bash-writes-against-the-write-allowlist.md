@@ -48,7 +48,12 @@ holding `.git`). The snapshot holds:
   lists, and every tracked path `git ls-files -v` marks skip-worktree or
   assume-unchanged, each with a fingerprint of git's status and its lstat
   (type, size, inode, mtime and ctime in ns);
-- every local branch and remote-tracking tip, and HEAD;
+- every entry under the root's `.claude/` (except `worktrees/`) and the root's
+  `CLAUDE.md` and `CLAUDE.local.md`, by lstat from the filesystem, not from
+  git: `.claude/*` is commonly gitignored, as it is here, and its settings,
+  hooks and rules take effect in the session without reaching a PR;
+- every local branch and remote-tracking tip, HEAD, and the time the snapshot
+  was taken;
 - the allowlist's text as guard-paths reads it, where a link at `.claude` or
   at the list, an unreadable or non-UTF-8 list, or one over 1 MiB, is recorded
   as untrustworthy;
@@ -65,11 +70,12 @@ it) and judge two sets of paths:
 
 - every path listed now that was not listed before or has a new fingerprint;
 - every path changed by a commit the call made on any branch. That is a commit
-  reachable from a tip that is new since the snapshot, and from no tip the
-  snapshot held, nor from origin's default branch now. So switching to an
-  existing branch, or pulling merged work, is not judged as the call's own
-  writing. Merges are read by combined diff, so a merged branch's own changes
-  are not judged either.
+  reachable from a tip that is new since the snapshot, from no tip the
+  snapshot held, and committed since the snapshot was taken (one second's
+  slack). The time is what tells the call's own commits, pushed or not, from
+  others' work a fetch or pull brought in; switching to an existing branch is
+  excluded by the tips. Merges are read by combined diff, so a merged branch's
+  own changes are not judged either.
 
 Each path is judged as `hl_check_abs` judges a write, using `trimtab.planscope`'s
 parser and matcher, so the session and the server read globs one way:
@@ -89,7 +95,10 @@ exits non-zero raises it instead of PostToolUse.
 
 Every git call names the repository outright (`--git-dir`, `--work-tree`),
 which outranks `core.bare`, `core.worktree` and steering variables. The
-environment is hardened as `planscope._git` does it. Each phase has one 7 s
+environment is hardened as `planscope._git` does it. The settings that decide
+whether `git status` notices a change at all (`core.trustctime`,
+`core.checkStat`, `core.fileMode`, `core.untrackedCache`) are pinned to
+git's defaults, since a command can weaken them in the repository's config. Each phase has one 7 s
 deadline for all its git calls together, inside the hook's 10 s timeout. A hook
 killed at its timeout reports nothing, so the adapter gives up first and says
 so.
@@ -106,7 +115,9 @@ so.
   - the deadline passing;
   - more than 20,000 paths, 5,000 tips or 200 new commits.
 - `HOOK_ALLOW_HARNESS=1` lifts the detector, as it lifts guard-paths' harness
-  layers.
+  layers. `HOOK_ALLOW_BASH_WRITES=1` lifts the detector alone. The operator
+  exports either before launching claude; an inline prefix on a Bash command
+  never reaches a hook.
 
 `trimtab.planscope` now imports its git edge lazily, so its pure rules load
 under `python3 -S` without PyYAML. `pr_monitor.state_dir` takes the state
@@ -126,6 +137,9 @@ the guards are whole without it.
 | Judge every dirty path after each call, with no snapshot | A path dirtied earlier by the operator, or by an allowed Write, would be reported on every later call; a rewrite of an already-dirty file would look the same as none |
 | Judge in PostToolUse only, keyed by status bytes | Misses a second write to a file already dirty (status unchanged); the fingerprint is what catches it |
 | Walk HEAD only for commits | Misses a commit moved onto another branch and HEAD reset, and judges the history of any existing branch the call switches to (found in review) |
+| Exclude commits reachable from origin's default branch after the call, to pass pulled work | A `git commit && git push origin main` in one call moves that ref, so the call's own commit read as merged work (found in review); committer time since the snapshot replaces it |
+| Lift the detector only with `HOOK_ALLOW_HARNESS` | That also lifts guard-paths' harness layers, the only way out of a repository the detector cannot judge; a detector-only lift costs one line (found in review) |
+| Fail open at `pre` when the repository is too large or slow to snapshot | Turns "cannot judge" into "judged clean" silently, against SEC-2.5; the narrow lift is the operator's way out instead |
 | Let git find the repository (`rev-parse --show-toplevel`) | `core.bare` or `core.worktree` set by a command turned the detector off or pointed it at an empty directory, and a git failure read as "outside a repository" (found in review) |
 | Use the server's per-item plan scope | The session's rule is the hook's wider scope (ADR 0042 explains why the server is narrower); the detector reproduces the hook, not the server |
 
@@ -148,23 +162,44 @@ the guards are whole without it.
 - rewriting its own snapshot, which lives where only a shell path built at run
   time reaches it (as with the session-mode record, ADR 0041). The snapshot
   carries nothing the agent cannot forge;
-- moving origin's default-branch ref in the same call (`git update-ref`), so
-  its commits read as merged work;
+- committing with a date set before the snapshot (`GIT_COMMITTER_DATE`), so
+  the commit reads as others' work;
+- a clean filter set in the repository's config with `.git/info/attributes`
+  (a same-size edit then reads as unchanged), or an ignore rule the command
+  writes (a `.gitignore` that ignores itself, `core.excludesFile`,
+  `.git/info/exclude`), which hides new files from `git status`;
+- writing deep inside a nested repository or a submodule, which `git status`
+  shows as one directory entry whose lstat does not change;
+- forging `.git/index` stat data, or swapping `.git` for a gitfile that points
+  at another clone;
+- parking a commit on a ref outside branches and remote-tracking refs (a tag,
+  the stash, a custom ref) with HEAD reset;
 - writing from a process the call left running, after the call returned. The
   next Bash call judges it only if it lands before that call's snapshot;
 - writing into another repository: only the repository of the call's `cwd`
   before the call is judged (`git -C`, an absolute path, a `cd` inside the
-  command).
+  command). A call that starts outside every repository is not judged at all,
+  and says nothing, since a PostToolUse exit 0 shows the agent no output.
 
-**Residuals that are not evasion, accepted:**
+**Costs and residuals that are not evasion, accepted:**
 
-- gitignored paths are invisible to `git status` (they cannot reach a PR
-  either);
+- fail closed has a price. A repository too large or slow for the bounds
+  (more than 20,000 changed, untracked or flagged paths, such as an unignored
+  virtualenv; 5,000 tips; or `git status` slower than the 7 s deadline) has
+  every Bash call refused at `pre`, read-only ones included, on every project
+  the base is installed into. The way out is the operator exporting
+  `HOOK_ALLOW_BASH_WRITES=1` (or ignoring the directory), not a fail-open;
+- gitignored paths are invisible to `git status`. Outside the root's
+  `.claude/` and instruction files, which are walked directly, they cannot
+  reach a PR; a gitignored `.claude` directory or `CLAUDE.md` below the root
+  is not walked;
 - a path changed before the call and restored to HEAD's content by it is not
   judged, since the outcome is HEAD's content;
-- pulling other people's commits into a branch other than the default one
-  (a fetch moves a remote-tracking tip, then a merge) judges those commits as
-  the call's. This is loud, not silent, and a false refusal;
+- an amend or rebase in the call judges the rewritten commits in full, so a
+  path an earlier commit changed outside the list (by the operator, say) is
+  reported again. This is loud, not silent;
+- others' commits dated within a second of the snapshot, then fetched or
+  pulled in the same call, are judged as the call's. This is loud, and rare;
 - a cancelled call raises neither post event (Claude Code's hooks reference),
   so its snapshot is pruned after 24 hours unjudged;
 - parallel Bash calls in one repository may each see the other's writes; a
@@ -199,5 +234,9 @@ files, 2026-11-12):
   version itself.
 - After review round 1 (both phases classify the session; `ls-files -v`, the
   branch tips and explicit `--git-dir` added): `pre` 132–201 ms, `post` 157–209
-  ms. `pre` runs in parallel with the other PreToolUse hooks, so the wait it
-  adds is less than its run time.
+  ms, on a machine busy with review agents.
+- After review round 2 (the harness walk, the status pins and the time-based
+  commit check added), on a quieter machine: `pre` 81–90 ms, `post` 80–98 ms.
+  The spread between runs is the machine's load more than the code. `pre`
+  runs in parallel with the other PreToolUse hooks, so the wait it adds is
+  less than its run time.

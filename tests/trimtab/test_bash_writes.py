@@ -20,6 +20,7 @@ HOOK = REPO / "hooks" / "bash-writes.sh"
 SESSION = "session-under-test"
 PLAN = "0001-demo"
 PLAN_BRANCH = f"plan/{PLAN}/item-01-part1"
+THEIR_COMMIT_DATE = "2026-01-01T00:00:00+00:00"
 ALLOWLIST_TEXT = "src/**\n+docs/notes/**\ntests/\n" + "docs/" + "plans/**\n"
 
 
@@ -227,20 +228,33 @@ class Hook(unittest.TestCase):
         return subprocess.run([str(HOOK), phase], input=json.dumps(payload), capture_output=True, text=True,
                               env=env or self.env, timeout=60)
 
-    def around(self, command, env=None, event=None):
-        """Run `command` in the repository between the two phases; return the post result."""
+    def around(self, command, env=None, event=None, fails=False, cwd=None):
+        """Run `command` between the two phases, from `cwd` (the repository by default); return the post
+        result. The command must succeed unless `fails`, so a test cannot pass on a write that never ran."""
         self.calls += 1
         call = f"toolu_{self.calls:04d}"
-        pre = self.hook("pre", call, env)
+        where = cwd or self.repo
+        pre = self.hook("pre", call, env, cwd=str(where))
         self.assertEqual(pre.returncode, 0, pre.stderr)
-        subprocess.run(["bash", "-c", command], cwd=self.repo, check=False, capture_output=True, env=env or self.env)
-        return self.hook("post", call, env, event=event)
+        ran = subprocess.run(["bash", "-c", command], cwd=where, check=False, capture_output=True, text=True,
+                             env=env or self.env)
+        if not fails:
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+        return self.hook("post", call, env, event=event, cwd=str(where))
+
+    def commit_in_origin(self):
+        """Someone else's commit, made before the call: what a fetch or pull brings in."""
+        origin = self.config.parent / "origin"
+        (origin / "Makefile").write_text("theirs\n")
+        subprocess.run(["git", "-C", str(origin), "-c", "user.email=o@o", "-c", "user.name=o", "commit", "-qam",
+                        "theirs"], check=True, capture_output=True,
+                       env={**self.env, "GIT_COMMITTER_DATE": THEIR_COMMIT_DATE, "GIT_AUTHOR_DATE": THEIR_COMMIT_DATE})
 
     def snapshot_file(self, call):
         return self.config / "guard-state" / "bash-writes" / bw.snapshot_name(SESSION, call)
 
     def test_a_write_inside_the_allowlist_passes(self):
-        done = self.around("sed -i s/one/two/ src/a.py")
+        done = self.around("sed -i s/one/two/ src/a.py && grep -q two src/a.py")
 
         self.assertEqual((done.returncode, done.stderr), (0, ""))
 
@@ -276,12 +290,12 @@ class Hook(unittest.TestCase):
         self.assertIn("made.txt", done.stderr)
 
     def test_a_command_that_fails_after_writing_is_still_judged(self):
-        done = self.around("echo x > stray.txt; false")
+        done = self.around("echo x > stray.txt; false", fails=True)
 
         self.assertIn("stray.txt", done.stderr)
 
     def test_a_failed_call_judged_on_post_tool_use_failure_is_reported(self):
-        done = self.around("echo x > stray.txt; exit 1", event="PostToolUseFailure")
+        done = self.around("echo x > stray.txt; exit 1", event="PostToolUseFailure", fails=True)
 
         self.assertIn("stray.txt", done.stderr)
 
@@ -323,6 +337,12 @@ class Hook(unittest.TestCase):
 
         self.assertIn("stray.txt", done.stderr)
 
+    def test_turning_off_ctime_checks_does_not_hide_a_same_size_rewrite(self):
+        done = self.around("git config core.trustctime false && git config core.checkStat minimal "
+                           "&& t=$(stat -c %Y Makefile) && printf 'two\\n' > Makefile && touch -d @$t Makefile")
+
+        self.assertIn("Makefile", done.stderr)
+
     def test_core_bare_does_not_hide_a_write(self):
         done = self.around("echo x > stray.txt && git config core.bare true")
 
@@ -336,6 +356,63 @@ class Hook(unittest.TestCase):
         done = self.around("mkdir .claude && echo x > .claude/notes.txt")
 
         self.assertIn("harness or control", done.stderr)
+
+    def test_a_write_from_a_subdirectory_is_judged_in_its_repository(self):
+        done = self.around("echo two > ../Makefile", cwd=self.repo / "src")
+
+        self.assertIn("Makefile", done.stderr)
+
+    def test_a_write_in_a_worktree_is_judged_in_that_worktree(self):
+        tree = self.config / "tree"
+        git(self.repo, "worktree", "add", "-q", "-b", "side", str(tree))
+        self.repo = tree
+
+        done = self.around("echo x > stray.txt")
+
+        self.assertIn("stray.txt", done.stderr)
+
+    def test_a_same_size_rewrite_of_an_already_dirty_file_is_reported(self):
+        (self.repo / "Makefile").write_text("aaa\n")
+
+        done = self.around("sleep 0.01 && printf 'bbb\\n' > Makefile")
+
+        self.assertIn("Makefile", done.stderr)
+
+    def test_a_commit_pushed_to_the_default_branch_in_the_same_call_is_reported(self):
+        git(self.config.parent / "origin", "config", "receive.denyCurrentBranch", "ignore")
+
+        done = self.around("echo two > Makefile && git -c user.email=t@t -c user.name=t commit -qam x "
+                           "&& git push -q origin HEAD:main")
+
+        self.assertIn("Makefile", done.stderr)
+
+    def test_fetching_others_work_is_not_reported(self):
+        self.commit_in_origin()
+
+        done = self.around("git fetch -q origin")
+
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
+
+    def test_pulling_others_work_is_not_reported(self):
+        self.commit_in_origin()
+
+        done = self.around("git pull -q --ff-only origin main")
+
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
+
+    def test_a_write_to_a_gitignored_harness_file_is_reported(self):
+        (self.repo / ".git" / "info" / "exclude").write_text(".claude/local.json\n")
+
+        done = self.around("echo x > .claude/local.json")
+
+        self.assertIn(".claude/local.json: a repository harness or control path", done.stderr)
+
+    def test_the_detector_alone_can_be_lifted(self):
+        env = {**self.env, "HOOK_ALLOW_BASH_WRITES": "1"}
+
+        done = self.around("echo x > stray.txt", env)
+
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
 
     def test_a_write_committed_in_the_same_call_is_reported(self):
         done = self.around("echo two > Makefile && git -c user.email=t@t -c user.name=t commit -qam x")
@@ -429,6 +506,33 @@ class Hook(unittest.TestCase):
         done = self.hook("post", "toolu_bad")
 
         self.assertIn("malformed", done.stderr)
+
+    def test_a_run_with_no_merge_base_cannot_be_scoped(self):
+        git(self.repo, "remote", "set-head", "origin", "-d")
+        git(self.repo, "switch", "-qc", PLAN_BRANCH)
+
+        done = self.around("mkdir -p src/feature && echo x > src/feature/x.py")
+
+        self.assertIn("merge-base with origin's default branch cannot be read", done.stderr)
+
+    def test_a_run_whose_plan_is_not_at_the_merge_base_cannot_be_scoped(self):
+        git(self.repo, "switch", "-qc", "plan/0002-absent/item-01-part1")
+
+        done = self.around("mkdir -p src/feature && echo x > src/feature/x.py")
+
+        self.assertIn("cannot be read at the merge-base", done.stderr)
+
+    def test_an_unknown_phase_is_refused(self):
+        done = subprocess.run([str(HOOK), "sideways"], input="{}", capture_output=True, text=True, env=self.env,
+                              timeout=60)
+
+        self.assertEqual(done.returncode, 2)
+
+    def test_a_payload_that_is_not_json_blocks_the_call(self):
+        done = subprocess.run([str(HOOK), "pre"], input="not json", capture_output=True, text=True, env=self.env,
+                              timeout=60)
+
+        self.assertEqual(done.returncode, 2)
 
     def test_a_run_on_a_branch_that_names_no_plan_is_refused(self):
         env = {**self.env, "TRIMTAB_PLAN_RUN": "1"}

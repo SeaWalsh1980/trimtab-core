@@ -18,13 +18,17 @@
 # raises that event, not PostToolUse, and would otherwise go unjudged.
 #
 # Fails closed: a missing python3 3.11, loader or classifier blocks (`pre`)
-# or reports the call unjudged (`post`). The operator lifts it, with
-# guard-paths' harness layers, by exporting HOOK_ALLOW_HARNESS=1 before
-# launching claude; an inline prefix on a Bash command never reaches a hook.
+# or reports the call unjudged (`post`). The operator lifts it before
+# launching claude, with guard-paths' harness layers by exporting
+# HOOK_ALLOW_HARNESS=1, or alone by exporting HOOK_ALLOW_BASH_WRITES=1; an
+# inline prefix on a Bash command never reaches a hook.
 
 phase="${1:-}"
 [[ "$phase" == pre || "$phase" == post ]] || { echo "bash-writes: usage: bash-writes.sh pre|post" >&2; exit 2; }
 [[ "${HOOK_ALLOW_HARNESS:-0}" == "1" ]] && exit 0
+# The detector alone, for a repository too large or slow for its bounds,
+# without lifting guard-paths' harness layers as HOOK_ALLOW_HARNESS does.
+[[ "${HOOK_ALLOW_BASH_WRITES:-0}" == "1" ]] && exit 0
 
 payload=$(cat) || { echo "bash-writes: the hook payload could not be read; this call was not judged" >&2; exit 2; }
 # The adapter checks the version itself (3.11 or later): a separate probe
