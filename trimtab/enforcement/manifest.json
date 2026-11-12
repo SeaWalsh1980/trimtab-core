@@ -44,10 +44,12 @@
         "test_guard_github_plan.Rest.test_a_ref_update_without_force_is_judged_like_a_push",
         "test_guard_github_plan.Rest.test_a_rename_onto_a_plan_branch_is_a_plan_write",
         "test_guard_github_plan.Rest.test_update_branch_of_a_plan_pr",
+        "test_guard_github_plan_bypasses.HiddenCommandWords.test_the_binary_behind_the_push_subcommand_is_judged_as_a_push",
         "test_guard_github_plan_bypasses.MergeIntoAPlanBase.test_gh_pr_merge_by_branch",
         "test_guard_github_plan_bypasses.MergeIntoAPlanBase.test_gh_pr_merge_by_number",
         "test_guard_github_plan_bypasses.MergeIntoAPlanBase.test_rest_merge",
-        "test_guard_github_plan_bypasses.RouteOrder.test_a_contents_path_that_looks_like_a_ref_route_is_still_contents"
+        "test_guard_github_plan_bypasses.RouteOrder.test_a_contents_path_that_looks_like_a_ref_route_is_still_contents",
+        "test_guard_github_plan_round2.GraphqlLookingRoute.test_a_rest_route_ending_in_graphql_is_still_rest"
       ],
       "decision": {
         "function": "trimtab.planrows:check_e14",
@@ -102,7 +104,11 @@
         "test_guard_github_plan_bypasses.AllWithForce.test_force_and_delete_carry_into_each_branch",
         "test_guard_github_plan_bypasses.Graphql.test_update_pull_request_branch_writes_the_head",
         "test_guard_github_plan_bypasses.Graphql.test_update_pull_request_with_a_state_closes_a_pr",
-        "test_guard_github_plan_bypasses.RouteOrder.test_cheap_rows_refuse_before_any_repository_lookup"
+        "test_guard_github_plan_bypasses.RouteOrder.test_cheap_rows_refuse_before_any_repository_lookup",
+        "test_guard_github_plan_round2.GraphqlLookingRoute.test_a_bare_graphql_path_is_still_graphql",
+        "test_guard_github_plan_round2.GraphqlLookingRoute.test_a_rest_route_ending_in_graphql_is_still_rest",
+        "test_guard_github_plan_round2.GraphqlMerges.test_merging_a_pull_request_by_id_refuses",
+        "test_guard_github_plan_round2.TrackedBranchSelector.test_gh_without_a_selector_follows_the_branch_upstream"
       ],
       "decision": {
         "function": "trimtab.planrows:check_e16",

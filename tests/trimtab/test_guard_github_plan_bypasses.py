@@ -94,10 +94,14 @@ class GitConfigSteering(Cases):
         git = with_config(("remote.origin.mirror", "false"), base=ON_MAIN)
         self.allowed("git push origin feature/x", git=git, facts=NoFacts())
 
-    def test_push_refspecs_in_config_refuse_a_bare_push_only(self):
+    def test_push_refspecs_in_config_refuse_a_push_with_no_destination(self):
         git = with_config(("remote.origin.push", "+HEAD:refs/heads/plan/x"), base=ON_MAIN)
         self.refused("git push", "configuration", git=git, facts=NoFacts())
-        self.allowed("git push origin feature/x", git=git, facts=NoFacts())
+        self.refused("git push origin feature/x", "configuration", git=git, facts=NoFacts())
+
+    def test_push_refspecs_in_config_leave_a_push_with_a_destination_alone(self):
+        git = with_config(("remote.origin.push", "+HEAD:refs/heads/plan/x"), base=ON_MAIN)
+        self.allowed("git push origin feature/x:feature/x", git=git, facts=NoFacts())
 
     def test_matching_refuses_a_bare_push_when_plan_branches_exist(self):
         git = with_config(("push.default", "matching"), base=ON_MAIN)
@@ -151,8 +155,8 @@ class DynamicFirstWord(Cases):
             with self.subTest(cmd):
                 self.refused(cmd, "built by the shell", git=ON_PLAN)
 
-    def test_a_variable_remote_with_a_non_plan_refspec_passes(self):
-        self.allowed("git push $REMOTE feature/x", git=ON_MAIN, facts=NoFacts())
+    def test_a_variable_remote_may_split_into_refspecs_and_refuses(self):
+        self.refused("git push $REMOTE feature/x", "built by the shell", git=ON_MAIN, facts=NoFacts())
 
 
 class RouteOrder(Cases):

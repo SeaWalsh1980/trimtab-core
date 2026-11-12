@@ -15,6 +15,7 @@ or where it goes (`pushurl`, `url.<base>.insteadOf`).
 from __future__ import annotations
 
 import os
+import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -131,10 +132,42 @@ class PlanSupport:
         """The checked-out branch, which a `HEAD` refspec writes under the same name."""
         return self._run(cwd or self.cwd, "symbolic-ref", "--short", "-q", "HEAD")
 
+    def pr_branch(self, cwd: Path) -> str | None:
+        """The branch `gh` takes the current PR from: the checked-out branch's upstream if it has one, else it."""
+        head = self.head_branch(cwd)
+        if head is None:
+            return None
+        merge = self.config(cwd).get(f"branch.{head.lower()}.merge", [])
+        if len(merge) == 1 and merge[0].startswith("refs/heads/"):
+            return merge[0][len("refs/heads/"):]
+        return head
+
+    def _config_text(self, cwd: Path) -> str:
+        """`git config --list -z` as a push would see it. An injected git answers for itself; the gate's git reads
+        global and system configuration too, which it ignores for objects but a push does not (reads only)."""
+        if self._git is not None:
+            return self._git(cwd, "config", "--list", "-z")
+        git = tools.Git(environ=self._environ)
+        env = git.env
+        for key in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM"):
+            env.pop(key, None)
+        for key in ("HOME", "XDG_CONFIG_HOME"):
+            if key in self._environ:
+                env[key] = self._environ[key]
+        git.check(cwd)
+        try:
+            done = subprocess.run(git.argv(cwd, "config", "--list", "-z"), capture_output=True, env=env,
+                                  timeout=tools.GIT_TIMEOUT_SECONDS)
+        except (OSError, subprocess.TimeoutExpired) as err:
+            raise tools.ToolError(f"git config failed ({type(err).__name__})") from err
+        if done.returncode != 0:
+            raise tools.ToolError(f"git config exited {done.returncode}")
+        return done.stdout.decode("utf-8", "replace")
+
     def config(self, cwd: Path) -> dict[str, list[str]]:
         """The repository's effective configuration at `cwd`; empty where there is no repository to push from."""
         try:
-            return parse_config(self._git_run(cwd, "config", "--list", "-z"))
+            return parse_config(self._config_text(cwd))
         except (tools.ToolError, OSError) as err:
             if self._run(cwd, "rev-parse", "--git-dir") is None:
                 return {}  # not a repository: a push there fails by itself
@@ -167,9 +200,10 @@ def _steering(found: planrows.PushRead, config: Mapping[str, list[str]], support
         name = resolved[0].lower()
     if f"remote.{name}.mirror" in config and _true(config[f"remote.{name}.mirror"]):
         planrows.check_e15(planrows.Write(planrows.PLAN_PREFIX, force=True))  # a mirror forces and prunes
-    if found.bare:
+    if found.bare or found.colonless:  # git maps these through remote.<r>.push
         if config.get(f"remote.{name}.push"):
-            raise FactsError("a bare push takes its refspecs from configuration, which this guard does not read")
+            raise FactsError("this push takes its refspecs from configuration, which this guard does not read")
+    if found.bare:
         if "matching" in [v.lower() for v in config.get("push.default", [])] and facts.local_plan_branches():
             raise FactsError("push.default=matching would push every local plan/* branch")
 

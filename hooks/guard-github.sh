@@ -67,7 +67,11 @@ about_github+="|git-(push|send-pack|http-push)|(^|[^A-Za-z0-9_.-])git[[:space:]]
 # goes to the adapter, which stops itself and blocks.
 if (( ${#payload} <= 32768 )) && [[ "$payload" != *'\u'* && "$payload" != *"\$'"* ]]; then
   shopt -s nocasematch
-  [[ "$flat" =~ $about_github ]] || exit 0
+  if ! [[ "$flat" =~ $about_github ]]; then
+    # git beside a word the shell builds (`G=git P=pus; $G ${P}h …`) can spell a push without ever naming it.
+    git_word='(^|[^A-Za-z0-9_.-])git([^A-Za-z0-9_.-]|$)'
+    [[ "$flat" =~ $git_word && "$flat" == *[\$\`]* ]] || exit 0
+  fi
   shopt -u nocasematch
 fi
 

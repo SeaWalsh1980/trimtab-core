@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gh_fake import FakeGh
+from gh_fake import FakeGh, path_of
 from test_enforcement_tools import commit, git
 from test_scrub import isolate_git
 from trimtab import instance, planfacts, planrows
@@ -49,6 +49,16 @@ def facts(answers, inst=INSTANCE, checkout=Path("/nonexistent"), git_=None):
     out = planfacts.GitHubFacts(REPO, GhApi(fake), git_ or tools.Git(), checkout, inst, sleep=sleeps.append)
     out.fake, out.sleeps = fake, sleeps
     return out
+
+
+def gh_404(missing, repo_readable=True):
+    """A gh whose answer for each path in `missing` is 404; the repository itself answers only if readable."""
+    def run(argv, stdin):
+        path = path_of(argv)
+        if path in missing or (path == f"repos/{REPO}" and not repo_readable):
+            return subprocess.CompletedProcess(argv, 1, "", "gh: Not Found (HTTP 404)")
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"full_name": REPO}), "")
+    return run
 
 
 def pr_row(number=7, draft=True, created="2026-11-12T10:00:00Z", ref=BRANCH):
@@ -111,10 +121,15 @@ class BranchHead(unittest.TestCase):
     def test_reads_the_sha(self):
         self.assertEqual(facts({self.PATH: {"object": {"sha": H1}}}).branch_head(BRANCH), H1)
 
-    def test_none_when_the_branch_is_absent(self):
-        f = planfacts.GitHubFacts(REPO, GhApi(FakeGh(returncode=1, stderr="gh: Not Found (HTTP 404)")),
-                                  tools.Git(), Path("."), INSTANCE)
+    def test_none_when_the_branch_is_absent_and_the_repository_answers(self):
+        f = planfacts.GitHubFacts(REPO, GhApi(gh_404({self.PATH})), tools.Git(), Path("."), INSTANCE)
         self.assertIsNone(f.branch_head(BRANCH))
+
+    def test_a_404_from_a_repository_the_token_cannot_read_is_not_absence(self):
+        f = planfacts.GitHubFacts(REPO, GhApi(gh_404({self.PATH}, repo_readable=False)), tools.Git(), Path("."),
+                                  INSTANCE)
+        with self.assertRaisesRegex(FactsError, "not readable"):
+            f.branch_head(BRANCH)
 
     def test_a_bad_shape_refuses(self):
         with self.assertRaises(FactsError):
@@ -242,9 +257,19 @@ class PrHead(unittest.TestCase):
         self.assertEqual(f.pr_head(7, "other/repo"), BRANCH)
 
     def test_a_number_that_is_not_a_pull_request_is_none(self):
-        f = planfacts.GitHubFacts(REPO, GhApi(FakeGh(returncode=1, stderr="gh: Not Found (HTTP 404)")),
-                                  tools.Git(), Path("."), INSTANCE)
+        f = planfacts.GitHubFacts(REPO, GhApi(gh_404({f"repos/{REPO}/pulls/7"})), tools.Git(), Path("."), INSTANCE)
         self.assertIsNone(f.pr_head(7, None))
+
+    def test_a_404_from_a_repository_the_token_cannot_read_is_not_an_issue(self):
+        f = planfacts.GitHubFacts(REPO, GhApi(gh_404({f"repos/{REPO}/pulls/7"}, repo_readable=False)), tools.Git(),
+                                  Path("."), INSTANCE)
+        with self.assertRaisesRegex(FactsError, "not readable"):
+            f.pr_base(7, None)
+
+    def test_head_and_base_come_from_one_read(self):
+        f = facts({f"repos/{REPO}/pulls/7": {"head": {"ref": BRANCH}, "base": {"ref": "main"}}})
+        self.assertEqual((f.pr_head(7, None), f.pr_base(7, None), f.pr_head(7, None)), (BRANCH, "main", BRANCH))
+        self.assertEqual(len(f.fake.calls), 1)
 
     def test_a_bad_shape_or_failed_read_refuses(self):
         with self.assertRaises(FactsError):

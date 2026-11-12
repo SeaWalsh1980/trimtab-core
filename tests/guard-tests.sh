@@ -3393,6 +3393,13 @@ tg 2 "G=git; S=push; \$G \$S origin $PB"                 'git and push both held
 tg 2 "M=DELETE; gh api -X \"\$M\" repos/o/r/git/refs/heads/$PB" 'a delete whose method is a variable'
 tg 2 "N=5; gh api -X PATCH repos/o/r/pulls/\$N -f state=closed" 'a close whose PR number is a variable'
 tg 2 'gh api graphql -f query='"'"'mutation { updatePullRequestBranch(input:{pullRequestId:"PR_x"}) { clientMutationId } }'"'"'' 'updatePullRequestBranch'
+tg 2 'G=git P=pus; $G ${P}h origin HEAD'                 'git and the subcommand both assembled in the command'
+tg 2 "gh api -X PUT repos/o/r/contents/graphql -f message=m -f content=aGk= -f branch=$PB" 'a contents path ending in graphql'
+tg 2 "bash -c 'cd /tmp && git push'"                     'a directory change inside a shell string'
+tg 2 "HOME=/tmp git push origin feature/x"               'a push under another HOME'
+tg 2 "gh api -X PATCH 'repos/o/r/pulls/5?state=closed'"  'a close carried in the query string'
+tg 0 "cd /tmp && git push origin feature/x"              'a push after a cd that names no plan branch'
+tg 2 'git push $REMOTE feature/x'                        'a remote word that can split into refspecs'
 tg 2 "gh pr close $PB"                                   'E16: closing a PR by its plan branch'
 tg 2 "gh pr close -R o/r $PB --comment x"
 tg 2 "gh pr merge $PB --delete-branch"                   'E16: merge with --delete-branch'

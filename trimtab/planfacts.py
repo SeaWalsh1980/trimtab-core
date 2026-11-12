@@ -73,16 +73,20 @@ class GitHubFacts(Facts):
         self._sleep = sleep
         self._reader = actions.Reader(api)
         self._pr: dict[str, PrState | None] = {}
+        self._pulls: dict[tuple[str, int], dict | None] = {}
         self._run_rows: dict[str, list[dict]] = {}
         self._diffs: dict[tuple[str, str], tuple[Change, ...]] = {}
 
     # -- GitHub --------------------------------------------------------------------------
 
-    def _json(self, path: str, what: str, query: dict | None = None):
+    def _json(self, path: str, what: str, query: dict | None = None, missing_ok: bool = False):
+        """A read; a 404 is the caller's answer only where `missing_ok` (a branch or PR that may not exist)."""
         try:
             return self._api.json("GET", path, what, query=query)
-        except NotFound:
-            raise
+        except NotFound as err:
+            if missing_ok:
+                raise
+            raise FactsError(f"{what}: not found") from err
         except SourceError as err:
             raise FactsError(str(err)) from err
 
@@ -111,10 +115,18 @@ class GitHubFacts(Facts):
             self._pr[branch] = state
         return self._pr[branch]
 
+    def _confirm_repo(self, repo: str) -> None:
+        """A 404 means absent only if the repository itself answers: a token without access gets 404 for everything."""
+        try:
+            self._json(f"repos/{repo}", "gh api repo")
+        except FactsError as err:
+            raise FactsError(f"{repo} is not readable with this token") from err
+
     def branch_head(self, branch: str) -> str | None:
         try:
-            data = self._json(f"repos/{self.repo}/git/ref/heads/{quote(branch, safe='/')}", "gh api ref")
+            data = self._json(f"repos/{self.repo}/git/ref/heads/{quote(branch, safe='/')}", "gh api ref", missing_ok=True)
         except NotFound:
+            self._confirm_repo(self.repo)
             return None
         sha = data.get("object", {}).get("sha") if isinstance(data, dict) and isinstance(data.get("object"), dict) else None
         if not isinstance(sha, str) or not SHA.fullmatch(sha):
@@ -233,11 +245,21 @@ class GitHubFacts(Facts):
     def register_answer(self, branch: str, before: str, after: str) -> bool:
         return register_shape(self._diff(before, after), branch)
 
+    def _pull(self, number: int, repo: str | None) -> dict | None:
+        key = (repo or self.repo, number)
+        if key not in self._pulls:  # one read per PR (ENG-6.2): head and base come from the same answer
+            try:
+                data = self._json(f"repos/{key[0]}/pulls/{number}", "gh api pull", missing_ok=True)
+            except NotFound:
+                self._confirm_repo(key[0])
+                data = None  # an issue, not a pull request
+            self._pulls[key] = data
+        return self._pulls[key]
+
     def _pull_ref(self, number: int, repo: str | None, side: str) -> str | None:
-        try:
-            data = self._json(f"repos/{repo or self.repo}/pulls/{number}", "gh api pull")
-        except NotFound:
-            return None  # an issue, not a pull request
+        data = self._pull(number, repo)
+        if data is None:
+            return None
         part = data.get(side) if isinstance(data, dict) else None
         ref = part.get("ref") if isinstance(part, dict) else None
         if not isinstance(ref, str):

@@ -62,6 +62,7 @@ class PushRead:
     delete: bool = False
     remote: str | None = None  # the repository word: a remote's name or a URL (None: the default remote)
     bare: bool = False  # no refspec was given, so configuration chooses what is pushed
+    colonless: bool = False  # a refspec had no `:dst`, so `remote.<r>.push` can map it elsewhere
 
 
 @dataclass(frozen=True)
@@ -210,6 +211,7 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
     if broad is not None and not refspecs:
         return PushRead(broad=broad, force=force, delete=delete, remote=remote)
     writes: list[Write] = []
+    colonless = False
     j = 0
     while j < len(refspecs):
         text, dynamic = refspecs[j]
@@ -229,6 +231,7 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
             gone = source == ""
         else:
             source, dest, gone = spec, spec, False
+            colonless = True
         if dest in ("HEAD", "@"):
             dest = (head or current)() or ""
             if not dest:
@@ -251,9 +254,9 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
         if not branch:
             return PushRead(unreadable="a bare push does not resolve to a branch")
         writes.append(Write(branch, "HEAD", force, delete))
-    if maybe_option and (not refspecs or any(plan_branch(w.branch) for w in writes)):
-        return PushRead(unreadable="a first word built by the shell may be an option")
-    return PushRead(writes=tuple(writes), broad=broad, remote=remote, bare=not refspecs)
+    if maybe_option:  # an unquoted expansion splits into words: options, or refspecs of its own (`:plan/x`)
+        return PushRead(unreadable="a remote built by the shell may be options or refspecs")
+    return PushRead(writes=tuple(writes), broad=broad, remote=remote, bare=not refspecs, colonless=colonless)
 
 
 # ---- the diff shapes ---------------------------------------------------------------------

@@ -710,3 +710,37 @@ Residuals added:
 - A sourceless write (`update-branch`, a contents write, a ref update with no sha) on a draft whose
   head is failing or conflicted refuses, as it does on a ready PR, because the register-commit shape
   cannot be shown for it.
+
+**Review round 2 (three passes) changed these, and added these residuals.**
+- **Read as well:**
+  - A REST route that ends in `graphql` is REST; only a bare `graphql` path is GraphQL.
+  - A directory change (`cd`, `pushd`, `popd`, `env -C`, `--chdir`) or a variable that steers git
+    (`GIT_*`, `HOME`, `XDG_CONFIG_HOME`) anywhere in the command text, including nested strings and
+    earlier segments. A push after such a change is read only if it names no plan branch.
+  - A command that assembles `git` and its subcommand from variables inside the command.
+  - A write to a ref, contents, merge, rename, PR-update or PR-close route whose path carries a
+    query string.
+  - `gh pr close`, `merge` and `update-branch` with no selector take the PR from the checked-out
+    branch's upstream (`branch.<b>.merge`), as `gh` does.
+  - A remote word the shell builds (it can split into options or refspecs of its own), a refspec with
+    no `:dst` while `remote.<r>.push` maps it, `-c alias.*`, GraphQL `mergePullRequest` and
+    `enablePullRequestAutoMerge`.
+- **Configuration is read as a push sees it:** global and system configuration are read for the
+  steering keys, though never for objects. The gate's own reads still ignore them.
+- **A 404 is absence only where the repository answers.** A branch or PR that returns 404 while the
+  repository itself is unreadable is a refusal. Every other 404 is a `FactsError`. A PR is read once
+  for its head and base.
+- **A push after a `cd` that names no plan branch is no longer refused** (round 1 over-refused it).
+
+Residuals added:
+- **Alias residual stays.** A stored alias (`alias.p=push` in a config file) used as `git p …` never
+  reaches the prefilter; only `-c alias.*` on the command is read. E22 is the bound.
+- **Commands that run a string**, such as `git rebase -x`, `git submodule foreach`,
+  `git bisect run` and `git filter-branch --exec`, and a renamed copy of the git binary, are not read.
+- **`--all` reads facts once per local `plan/*` branch.** Each is a handful of `gh` calls against
+  the adapter's 6 s limit. No timing has been measured; a slow read refuses.
+- **Not done in this PR** (medium and low findings left for the owner's decision): refusal text still
+  quotes words from the command in a few places, `cancelled` runs count as E12 rounds, activity
+  paging may need cursors, a binary change to the progress record can pass as register-only, E19 reads
+  only the latest head, selector URLs are matched case-sensitively, and `merge-upstream` of a
+  `plan/*` branch is not read.

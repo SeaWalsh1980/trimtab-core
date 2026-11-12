@@ -487,6 +487,7 @@ class Request:
     fields: list[tuple[str, Word]]  # (option, "key=value" word), in order
     input: Word | None
     orig: str = ""                 # the same path with its case kept: branch names are case-sensitive
+    query: bool = False            # the path carried a query string, which a write may take its fields from
 
 
 _ID_PARENTS = {"repos", "pulls", "issues", "comments", "reviews", "replies", "check-runs", "check-suites",
@@ -564,7 +565,7 @@ def parse_api(args: list[Word], ctx: Ctx) -> Request | None:
     if method == "":
         method = "POST" if fields or source is not None else "GET"
     raw = positional[0]
-    return Request(method, _norm_path(raw.text), fields, source, _norm_path(raw.text, lower=False))
+    return Request(method, _norm_path(raw.text), fields, source, _norm_path(raw.text, lower=False), "?" in raw.text)
 
 
 def _typed(value: str):
@@ -698,7 +699,7 @@ def check_api(args: list[Word], ctx: Ctx) -> None:
     if req is None:
         return
     # GitHub Enterprise serves GraphQL at api/graphql; any path ending in it is read as GraphQL.
-    if req.path.split("/")[-1] == "graphql":
+    if req.path.split("/")[-1] == "graphql" and not req.path.startswith("repos/"):
         check_graphql(req, ctx)
         return
     if req.method == "GET" or req.method == "HEAD":
@@ -906,14 +907,20 @@ _REPO_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _BRANCH_WRITE_MUTATION = re.compile(r"(?<![A-Za-z0-9_])(?:createRef|createCommitOnBranch|mergeBranch)(?![A-Za-z0-9_])",
                                     re.I)
 # A mutation that writes a plan branch's head or closes its PR by an ID this guard cannot read.
-_PR_ID_MUTATION = re.compile(r"(?<![A-Za-z0-9_])(?:closePullRequest|updatePullRequestBranch)(?![A-Za-z0-9_])", re.I)
+_PR_ID_MUTATION = re.compile(r"(?<![A-Za-z0-9_])(?:closePullRequest|updatePullRequestBranch|mergePullRequest|enablePullRequestAutoMerge)(?![A-Za-z0-9_])", re.I)
 _UPDATE_PR_MUTATION = re.compile(r"(?<![A-Za-z0-9_])updatePullRequest(?![A-Za-z0-9_])", re.I)
 _STATE_ARG = re.compile(r"(?<![A-Za-z0-9_])state(?![A-Za-z0-9_])", re.I)
 # The routes check_plan_api reads: a ref, contents, a merge, a rename, a PR's branch update or merge, a PR close.
 _PLAN_ROUTE = re.compile(r"(?:contents(?:/|$)|git/refs|merges$|branches/.+/rename$|pulls/[^/]+/(?:update-branch|merge)$"
                          r"|(?:pulls|issues)/[^/]+$)", re.I)
+# A directory change or an environment that steers git, anywhere in the command text (nested strings, earlier
+# segments, `export`, `env -C`): the push's checkout and configuration are then not the ones the guard reads.
+_DIR_CHANGE_TEXT = re.compile(r"(?<![A-Za-z0-9_./=-])(?:cd|pushd|popd)(?![A-Za-z0-9_-])|--chdir"
+                              r"|(?<![A-Za-z0-9_-])env\b[^;|&\n]*[ \t]-[A-Za-z]*C", re.I)
+STEER_ANYWHERE = re.compile(r"(?<![A-Za-z0-9_])(?:GIT_(?:CONFIG|DIR|WORK_TREE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE"
+                            r"|NAMESPACE|EXEC_PATH|SSH|PROXY)[A-Za-z0-9_]*|HOME|XDG_CONFIG_HOME)=", re.I)
 # A command that names a push or a plan branch: where an unreadable command word may hide one.
-_PUSHY = re.compile(r"(?<![A-Za-z0-9_.-])push(?![A-Za-z0-9_.-])|plan/", re.I)
+_PUSHY = re.compile(r"(?<![A-Za-z0-9_.-])push(?![A-Za-z0-9_.-])|plan/|(?<![A-Za-z0-9_.-])git(?![A-Za-z0-9_-])", re.I)
 
 
 def _refusal(err: planrows.FactsError) -> planrows.Refusal:
@@ -938,7 +945,7 @@ def check_git(args: list[Word], before: list[Word], ctx: Ctx) -> None:
     plan = ctx.plan
     if plan is None:
         return
-    i, dirs, steered = 0, [], False
+    i, dirs, steered, aliased = 0, [], False, False
     while i < len(args) and args[i].text.startswith("-") and not args[i].dynamic:
         name = args[i].text.partition("=")[0]
         value = args[i + 1] if i + 1 < len(args) else None
@@ -947,11 +954,16 @@ def check_git(args: list[Word], before: list[Word], ctx: Ctx) -> None:
         if name == "--config-env" or (name == "-c" and (value is None or value.dynamic
                                                        or GIT_STEERING_KEY.match(value.text.partition("=")[0]))):
             steered = True
+            aliased |= name == "--config-env" or value is None or value.dynamic \
+                or value.text.lower().startswith("alias.")
         steered |= name in ("--git-dir", "--work-tree")
         i += 2 if name in GIT_OPTION_VALUED and "=" not in args[i].text else 1
     if i >= len(args):
         return
     sub = args[i]
+    if aliased:
+        ctx.unknown("configuration on the command defines a git alias, which may stand for a push")
+        return
     if sub.dynamic:
         ctx.unknown("the git command is a shell expansion")
         return
@@ -960,21 +972,20 @@ def check_git(args: list[Word], before: list[Word], ctx: Ctx) -> None:
         return
     if sub.text != "push":
         return
-    if steered or any(d.dynamic for d in dirs) or any(GIT_STEERING_ENV.match(w.text) for w in before):
+    if steered or any(d.dynamic for d in dirs) or STEER_ANYWHERE.search(ctx.command):
         ctx.unknown("a push run with configuration, a repository or a directory chosen by an option, a variable "
                     "or a shell expansion")
         return
     cwd = ctx.cwd if ctx.cwd_known else None
     for d in dirs:
         cwd = (cwd / d.text) if cwd is not None else None
-    if cwd is None:
-        ctx.unknown("a push runs in a directory the guard cannot tell")
     why = planguard.judge_push([(w.text, w.dynamic) for w in args[i + 1:]], plan, cwd)
     if why:
         ctx.unknown(f"a push this guard cannot read: {why}")
 
 
-def _selected(group: list[Word], tail: list[Word], valued: set[str], boolean: set[str], ctx: Ctx):
+def _selected(group: list[Word], tail: list[Word], valued: set[str], boolean: set[str], ctx: Ctx,
+              want_head: bool = True):
     """(head branch of the PR a gh command selects or None, the command's options, (number, repo) or None)."""
     plan = ctx.plan
     opts, positional = parse_options(tail, valued, boolean, strict=ctx.strict)
@@ -987,7 +998,7 @@ def _selected(group: list[Word], tail: list[Word], valued: set[str], boolean: se
             return None, opts, None
         repo = value.text
     if not positional:
-        head = plan.head_branch(ctx.cwd) if ctx.cwd_known else None
+        head = _plan_ref(plan.pr_branch, ctx.cwd) if ctx.cwd_known else None
         if head is None:
             ctx.unknown("the PR is the current branch's, which cannot be read here")
         return head, opts, None
@@ -997,10 +1008,11 @@ def _selected(group: list[Word], tail: list[Word], valued: set[str], boolean: se
         return None, opts, None
     text = sel.text
     if (m := _PR_URL.fullmatch(text)):
-        return _plan_head(plan, int(m.group(2)), m.group(1)), opts, (int(m.group(2)), m.group(1))
-    if text.lstrip("#").isdigit():
+        return (_plan_head(plan, int(m.group(2)), m.group(1)) if want_head else None), opts, \
+            (int(m.group(2)), m.group(1))
+    if text.lstrip("#").isascii() and text.lstrip("#").isdigit():
         number = int(text.lstrip("#"))
-        return _plan_head(plan, number, repo), opts, (number, repo)
+        return (_plan_head(plan, number, repo) if want_head else None), opts, (number, repo)
     return text.rpartition(":")[2], opts, None  # a branch, or owner:branch
 
 
@@ -1024,8 +1036,10 @@ def check_plan_gh(group: str, sub: str, pre: list[Word], tail: list[Word], ctx: 
         head, _, _ = _selected(pre, tail, PR_CLOSE_VALUED, PR_CLOSE_BOOL, ctx)
         planrows.judge_close(head)
     elif group == "pr" and sub == "merge":
-        head, opts, ref = _selected(pre, tail, PR_MERGE_VALUED, PR_MERGE_BOOL, ctx)
-        if any(o.name in ("-d", "--delete-branch") and _bool(o) for o in opts):
+        opts, _ = parse_options(tail, PR_MERGE_VALUED, PR_MERGE_BOOL, strict=ctx.strict)
+        delete = any(o.name in ("-d", "--delete-branch") and _bool(o) for o in opts)
+        head, _, ref = _selected(pre, tail, PR_MERGE_VALUED, PR_MERGE_BOOL, ctx, want_head=delete)
+        if delete:  # the head is read only to judge the delete; a merge reads the base
             planrows.judge_close(head)
         base = _base_of(plan, head, ref)
         if base is not None and planrows.plan_branch(base):
@@ -1086,6 +1100,9 @@ def check_plan_api(req: Request, ctx: Ctx) -> None:
             ctx.unknown("the repository of an API write is a shell expansion")
         return
     repo, rest = f"{found[1]}/{found[2]}", found[3]
+    if req.query and _PLAN_ROUTE.match(rest):
+        ctx.unknown("a write to a ref, contents, merge or PR route with a query string, which may carry its fields")
+        return
     if re.fullmatch(r"contents(?:/.*)?", rest, re.I):
         branch = _get(body_of(req, ctx), "branch", ctx, "the contents write's branch is unreadable")
         if isinstance(branch, str) and planrows.plan_branch(branch):
@@ -1281,7 +1298,7 @@ def decide(payload: dict, plan: planguard.PlanSupport | None = None) -> tuple[in
     cwd = payload.get("cwd")
     parsed = segments(command)
     cwd_known = isinstance(cwd, str) and cwd.startswith("/") and not any(
-        w.text in DIR_CHANGERS for s in parsed for w in s)
+        w.text in DIR_CHANGERS for s in parsed for w in s) and not _DIR_CHANGE_TEXT.search(command)
     where = Path(cwd) if isinstance(cwd, str) and cwd else Path("/")
     try:
         judge(command, Ctx(where, cwd_known, True, command, plan or planguard.PlanSupport(where)), parsed)
