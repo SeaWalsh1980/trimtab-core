@@ -32,6 +32,8 @@ fallback) takes ownership after running plan-run's sections 2–4 for the PR's i
 | Holds no ledger, and the PR is ready | Only watch: plan-pr/references/watch.md, "Watch-only". |
 | Holds no ledger, and the PR is a draft | Nothing: a stop. |
 
+A ledger the session cannot read counts as none.
+
 ## 1. Wait for the CI review
 
 Opening the draft starts the CI review. Wait for its verdict and threads, within the bound the
@@ -43,6 +45,7 @@ how to read it, and what a verdict means: plan-pr/references/ci-review.md.
 | A readable verdict on the current head | Step 2. |
 | A verdict that failed closed (`fail-closed`), whatever findings it carries | Request it again once, through the named mechanism (step 3). That is not a round. A second on the same head is a stop. |
 | No CI review of the current head, or no readable verdict | A stop. |
+| A `fail` verdict that, once every thread has its reply (step 2), leaves nothing to fix within scope | A stop: ready needs `pass`, and a re-request needs a new head. |
 
 ## 2. Reply to every thread
 
@@ -59,10 +62,10 @@ When a verdict or thread needs a fix within scope:
 1. Fix every in-scope finding, within the fix limits (plan-item/references/scope.md), write the CI
    fix round into the progress record in the same commit, and push.
 2. Run the one in-session round on the new head and act on it as plan-item/references/rounds.md
-   says for the round after a CI fix. Its outcome goes into the record in the same push as its
-   fixes; when it finds nothing to fix, that record line is the one push after the round's head.
-   No other push follows the round's head before the re-request: the guard allows exactly one
-   (E10).
+   says for the round after a CI fix. Its outcome, and any register entries it writes, go into the
+   record in the same push as its fixes; when it finds nothing to fix, that record line is the one
+   push after the round's head. No other push follows the round's head before the re-request: the
+   guard allows exactly one (E10).
 3. Reply to the threads (step 2).
 4. Request a re-review of the new head, only through the mechanism the project's instruction file
    names and the guards permit, never one that marks the PR ready or toggles it. Re-request only a

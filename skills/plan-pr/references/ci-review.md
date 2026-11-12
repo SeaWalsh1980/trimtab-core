@@ -35,10 +35,15 @@ applies:
 | CRITICAL or HIGH, within scope, and you fixed it | Fix, push, cite the commit | the fixed tag, then the commit's full SHA |
 | CRITICAL or HIGH, anything else (out of scope, wrong, cannot fix) | A stop; out of scope, also a register entry | no tag: only the fixed tag is accepted on it |
 | MEDIUM or LOW, within scope, fixed | Fix, push, cite the commit | the fixed tag, then the commit's full SHA |
+| MEDIUM or LOW, within scope, and it cannot be fixed within the fix limits | A stop | no tag |
 | MEDIUM or LOW, out of scope | A register entry (plan-item/references/records.md) | the deferral tag, then the entry's path |
 | MEDIUM or LOW, the finding is not true of the code | Nothing | the wrong tag, with the reason |
 | MEDIUM or LOW, the behaviour is deliberate and in the item's brief | Nothing | the intentional tag, citing the brief |
 | MEDIUM or LOW, the code it names is gone from the head | Nothing | the moot tag, citing the commit that removed it |
+
+The wrong, intentional and moot tags are your own claim: no guard checks them. Use one only when
+it is true of the code, with its citation (the reason, the brief, the removing commit); never for a
+finding you simply did not fix.
 
 What the guard holds you to (E8, E9):
 

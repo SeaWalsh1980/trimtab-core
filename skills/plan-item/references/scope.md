@@ -19,6 +19,7 @@ merge of the default branch into the branch.
 | Any other finding, including an old one elsewhere in a file the item touched | No |
 | A failing check that passes on the merge-base | Yes |
 | A failing check that also fails on the merge-base | No |
+| A check whose merge-base result you cannot read or find | Not decidable: a stop |
 
 An in-scope finding is fixed, whatever its severity. An out-of-scope finding becomes its own
 register entry (plan-item/references/records.md), unless an entry already records it; one graded

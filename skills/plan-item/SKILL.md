@@ -104,5 +104,5 @@ the draft, every thread, ready, and the watch to merge are plan-pr/SKILL.md.
 Then stop as plan-run/references/stops.md says: before the draft opens, the label goes on the merged
 PR whose record supplied this work; after, on this PR.
 
-The session ends once the PR merges, a stop applies, or the watch bound runs out (plan-pr/SKILL.md).
-The PR's merge starts the session after.
+The session ends at a stop or when the watch bound runs out (plan-pr/SKILL.md). When the PR merges,
+it continues with plan-run/SKILL.md from section 1, whose section 7 hands over to the next session.

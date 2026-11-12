@@ -60,6 +60,9 @@ OWN_MEANING_IN = {"plan-run/SKILL.md": tuple(OWN_MEANING)}
 # Every link to these, in any plan skill file, must carry its meaning.
 EVERY_LINK_NEEDS_MEANING = tuple(OWN_MEANING)
 
+# ADR 0069: each SKILL.md stays at or under this many lines; detail goes to references.
+MAX_ENTRY_LINES = 180
+
 # More links than this means the scan is reading the files; the real count is about forty.
 MIN_LINKS = 20
 
@@ -113,11 +116,18 @@ def heading_anchors(text):
     and a repeated heading numbered from -1 past any slug already taken. A `#` line inside a fenced
     code block (backticks or tildes, indented or not) is not a heading."""
     out, repeats, fence = [], {}, None
-    for line in text.splitlines():
-        opener = re.match(r"^\s*(`{3,}|~{3,})", line)
-        if opener:
-            mark = opener.group(1)[0] * 3
-            fence = None if fence == mark else (fence or mark)
+    lines = text.splitlines()
+    if lines and lines[0] == "---":  # frontmatter: skip to its closing line
+        end = next((i for i, line in enumerate(lines[1:], 1) if line == "---"), 0)
+        lines = lines[end + 1:]
+    for line in lines:
+        mark = re.match(r"^\s*(`{3,}|~{3,})(.*)$", line)
+        if mark and fence is None:
+            fence = mark.group(1)  # opens, whatever info string follows
+            continue
+        if mark and mark.group(1)[0] == fence[0] and len(mark.group(1)) >= len(fence) \
+                and not mark.group(2).strip():
+            fence = None  # closes: the same character, at least as long, nothing after it
             continue
         m = None if fence else re.match(r"^#{1,6}\s+(.+?)\s*$", line)
         if m:
@@ -259,7 +269,12 @@ class Helpers(unittest.TestCase):
         self.assertEqual(broken("see plan-run/../plan-pr/SKILL.md"), ["plan-run/../plan-pr/SKILL.md"])
 
     def test_an_anchor_to_a_missing_heading_is_broken(self):
-        self.assertEqual(broken("see plan-run/SKILL.md#nowhere"), ["plan-run/SKILL.md#nowhere"])
+        fake = {"plan-run/SKILL.md": "# Run\n"}.get
+
+        self.assertEqual(broken("see plan-run/SKILL.md#nowhere", fake), ["plan-run/SKILL.md#nowhere"])
+
+    def test_an_anchor_on_a_missing_file_is_reported_once_as_the_missing_file(self):
+        self.assertEqual(broken("see plan-itm/SKILL.md#x", {}.get), ["plan-itm/SKILL.md"])
 
     def test_an_anchor_to_a_real_heading_is_not_broken(self):
         fake = {"plan-run/SKILL.md": "# Run\n## 1. Confirm the merge\n"}.get
@@ -284,8 +299,22 @@ class Helpers(unittest.TestCase):
     def test_a_hash_line_in_a_code_block_is_not_a_heading(self):
         self.assertEqual(heading_anchors("# Real\n```bash\n# a comment\n```\n"), ["real"])
 
-    def test_a_hash_line_in_a_tilde_or_indented_fence_is_not_a_heading(self):
-        self.assertEqual(heading_anchors("# Real\n~~~\n# one\n~~~\n- item\n  ```\n  # two\n  ```\n"), ["real"])
+    def test_a_hash_line_in_a_tilde_fence_is_not_a_heading(self):
+        self.assertEqual(heading_anchors("# Real\n~~~\n# one\n~~~\n"), ["real"])
+
+    def test_a_hash_line_in_an_indented_fence_is_not_a_heading(self):
+        self.assertEqual(heading_anchors("# Real\n- item\n  ```\n  # two\n  ```\n"), ["real"])
+
+    def test_a_shorter_or_other_fence_inside_a_fence_does_not_close_it(self):
+        text = "# Real\n````\n```\n# inner\n```\n~~~\n# still\n````\n# After\n"
+
+        self.assertEqual(heading_anchors(text), ["real", "after"])
+
+    def test_a_fence_line_with_an_info_string_does_not_close_a_fence(self):
+        self.assertEqual(heading_anchors("# Real\n```\n```bash\n# inner\n```\n"), ["real"])
+
+    def test_frontmatter_is_not_a_heading(self):
+        self.assertEqual(heading_anchors("---\nname: x\n# not a heading\n---\n# Real\n"), ["real"])
 
     def test_a_repeat_skips_a_slug_another_heading_already_took(self):
         self.assertEqual(heading_anchors("## Round\n## Round 1\n## Round"), ["round", "round-1", "round-2"])
@@ -382,6 +411,10 @@ class PlanSkillLinks(unittest.TestCase):
     def test_no_file_uses_the_other_types_root_line(self):
         self.assertEqual([rel(f) for f in skill_files() for t in ROOT_LINE_FOR
                           if t != file_type(rel(f)) and ROOT_LINE_FOR[t].search(read(rel(f)))], [])
+
+    def test_each_skill_entry_stays_within_its_line_budget(self):
+        """ADR 0069: detail goes to references, so an entry stays short enough to read whole."""
+        self.assertEqual([e for e in ENTRIES if len(read(e).splitlines()) > MAX_ENTRY_LINES], [])
 
     def test_the_shared_rule_sits_above_each_entrys_first_link(self):
         """A run that stops reading at the first link it cannot follow must already have the rule."""

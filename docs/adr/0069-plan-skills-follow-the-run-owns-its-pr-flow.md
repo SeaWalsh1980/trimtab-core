@@ -74,14 +74,22 @@ unmeasured defaults a project may override.
   only the absence of a CRITICAL or HIGH one; any `fail-closed` verdict is re-requested once; a
   review pass that fails twice on one head is a stop; a failed read anywhere in the in-flight table
   is a stop; an infrastructure failure that fails its re-run is an ordinary failing check.
+- **No write without authority:** a failed authorisation check or gate, in any session, and
+  in-flight work the run may not build on, forbid every file write; the stop only labels. A
+  ledger the session cannot read counts as none. A label write that fails twice is reported as
+  "stopped but unlabelled". An open blocked PR is judged by its label events, not the label's
+  presence. A `fail` verdict that leaves nothing to fix, an in-scope finding the fix limits
+  forbid fixing, an unreadable merge-base result, and a request for changes by the approver or
+  admin are stops. The self-asserted tags (wrong, intentional, moot) need their citation.
 - **Form:** steps are decision tables or if/then lists; each SKILL.md stays under 180 lines, with
   detail in references. The "not merged" stop says it reports only; the `clear_session` fallback
   is a table row; the ruleset `updated_at` test names its cost.
 - **Tests** (`tests/trimtab/test_skills.py`): the shared rule must sit above an entry's first link;
   every link, in any plan skill file, to one of the four deciding files must give its meaning after
   "If you cannot read it, ", in its own paragraph, list item or table row; a link may not climb
-  with `..`; a `#anchor` must name a heading (fenced code skipped, repeats numbered), and an anchor
-  on an extensionless link is refused; each root-line wording is accepted only in its own file type,
+  with `..`; a `#anchor` must name a heading (frontmatter and fenced code skipped by CommonMark's
+  fence rules, repeats numbered as github-slugger does), and an anchor on an extensionless link is
+  refused; each SKILL.md is held to 180 lines; each root-line wording is accepted only in its own file type,
   and a comment says why the wording is pinned. `test_mergeauthority`'s skill-wording checks follow
   the text to its new places.
 - ADRs 0060, 0062 and 0068 gain an "Amended by" line pointing here.
@@ -118,4 +126,4 @@ unmeasured defaults a project may override.
 ## Measurements
 
 None. The line counts after the change: `plan-run/SKILL.md` 174, `plan-item/SKILL.md` 108,
-`plan-pr/SKILL.md` 110.
+`plan-pr/SKILL.md` 117.
