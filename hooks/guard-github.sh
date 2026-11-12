@@ -26,6 +26,9 @@
 #   (must be exported before launching claude — an inline prefix on a Bash
 #    command never reaches this process). The operator's decision only.
 
+# Before any command: tools are named bare, and the inherited PATH starts with
+# a user-writable directory (docs/adr/0067-hooks-reset-path-first.md).
+export PATH=/usr/bin:/bin
 set -uo pipefail   # deliberately not -e: an unexpected non-zero must not
                    # short-circuit into a silent pass
 

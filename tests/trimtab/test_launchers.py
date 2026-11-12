@@ -14,8 +14,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from hook_fixture import hooks_with_path
+
 CHECKOUT = Path(__file__).resolve().parents[2]
 DECOY = "DECOY-PACKAGE-RAN"
+NOT_CHECKED = "the PR body was not checked"
 
 
 def plant_decoy(root: Path) -> None:
@@ -57,7 +60,8 @@ class Launchers(unittest.TestCase):
         payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr view 1"}, "cwd": str(self.cwd)})
         out = self.run_from_decoy([str(CHECKOUT / "hooks" / "pr-body-check.sh")], payload)
         self.assertNotIn(DECOY, out.stdout + out.stderr)
-        self.assertEqual(out.returncode, 0, out.stderr)
+        # An allow that is not the adapter's (an unchecked body) says so.
+        self.assertEqual((out.returncode, NOT_CHECKED in out.stdout), (0, False), out.stderr)
 
     def test_the_pr_monitor_recorder_runs_the_base_adapter_from_a_directory_with_a_decoy(self):
         # `gh pr create` passes the recorder's gate, so Python runs; the empty stdout is not
@@ -70,6 +74,22 @@ class Launchers(unittest.TestCase):
                              env=env, capture_output=True, text=True, timeout=60)
         self.assertNotIn(DECOY, out.stdout + out.stderr)
         self.assertEqual(out.returncode, 0, out.stderr)
+
+    def pr_body_hook(self, fake_python3, fakebin_name="fakebin"):
+        """Run pr-body-check from a copy whose reset puts a fake python3 first; returns the result.
+
+        A minimal environment: nothing from the session reaches the hook.
+        """
+        fakebin = self.cwd / fakebin_name
+        fakebin.mkdir()
+        (fakebin / "python3").write_text(fake_python3)
+        (fakebin / "python3").chmod(0o755)
+        # The hook resets PATH (ADR 0067): the fake goes first in a copy's reset.
+        hooks = hooks_with_path(self.cwd / "fake-hooks", f"{fakebin}:/usr/bin:/bin")
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr create --draft"}, "cwd": str(self.cwd)})
+        return subprocess.run([str(hooks / "pr-body-check.sh")], cwd=self.cwd, input=payload,
+                              env={"PATH": "/usr/bin:/bin", "HOME": str(self.cwd)},
+                              capture_output=True, text=True, timeout=60)
 
     def test_the_bash_write_detector_runs_the_base_adapter_from_a_directory_with_a_decoy(self):
         # Outside a repository the real adapter records an empty snapshot and exits 0; the decoy exits 3.
@@ -86,20 +106,81 @@ class Launchers(unittest.TestCase):
     def test_the_pr_body_hook_allows_when_the_interpreter_rejects_p(self):
         # An interpreter older than 3.11 exits 2 on the unknown -P option, the
         # code the adapter uses for BLOCK. The hook fails open, so it must exit 0.
-        fakebin = self.cwd / "fakebin"
-        fakebin.mkdir()
-        fake = fakebin / "python3"
-        fake.write_text(
-            '#!/bin/sh\nfor a in "$@"; do\n'
-            '  [ "$a" = "-P" ] && { echo "Unknown option: -P" >&2; exit 2; }\n'
-            "done\nexit 0\n"
-        )
-        fake.chmod(0o755)
-        env = {**os.environ, "PATH": f"{fakebin}:{os.environ['PATH']}"}
+        # The fake records each run, so a pass cannot come from a hook that
+        # never reached it.
+        marker = self.cwd / "fake-ran"
+
+        out = self.pr_body_hook(f"#!/bin/sh\necho ran >> '{marker}'\n"
+                                'for a in "$@"; do\n'
+                                '  [ "$a" = "-P" ] && { echo "Unknown option: -P" >&2; exit 2; }\n'
+                                "done\nexit 0\n")
+
+        self.assertEqual((out.returncode, marker.exists()), (0, True), out.stderr)
+
+    def test_the_pr_body_hook_tells_the_user_it_did_not_check_when_the_interpreter_rejects_p(self):
+        out = self.pr_body_hook('#!/bin/sh\necho "Unknown option: -P" >&2\nexit 2\n')
+
+        self.assertIn("is older than 3.11 or rejects -P -I", json.loads(out.stdout)["systemMessage"])
+
+    def test_the_pr_body_hook_tells_the_user_it_did_not_check_without_python3(self):
+        # A PATH holding cat and nothing else: the payload is read, then no
+        # python3 is found.
+        onlycat = self.cwd / "onlycat"
+        onlycat.mkdir()
+        (onlycat / "cat").symlink_to("/usr/bin/cat")
+        hooks = hooks_with_path(self.cwd / "no-python", str(onlycat))
         payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr create --draft"}, "cwd": str(self.cwd)})
-        out = subprocess.run([str(CHECKOUT / "hooks" / "pr-body-check.sh")], cwd=self.cwd, input=payload,
-                             env=env, capture_output=True, text=True, timeout=60)
-        self.assertEqual(out.returncode, 0, out.stderr)
+
+        out = subprocess.run([str(hooks / "pr-body-check.sh")], cwd=self.cwd, input=payload,
+                             env={"PATH": "/usr/bin:/bin", "HOME": str(self.cwd)},
+                             capture_output=True, text=True, timeout=60)
+
+        self.assertEqual((out.returncode, "no python3 in /usr/bin or /bin" in json.loads(out.stdout)["systemMessage"]),
+                         (0, True), out.stderr)
+
+    def test_the_pr_body_hook_notice_is_valid_json_for_a_path_with_every_escaped_character(self):
+        # Quote, backslash, tab, newline and carriage return, each of which the hook escapes.
+        name = 'fake"bin\\x\ttab\nnl\rcr'
+
+        out = self.pr_body_hook('#!/bin/sh\nexit 2\n', fakebin_name=name)
+
+        self.assertIn(name, json.loads(out.stdout)["systemMessage"])
+
+    def test_a_failed_check_leaves_only_the_hooks_notice_on_stdout(self):
+        # The adapter prints, then fails: half of its output must not precede the notice.
+        out = self.pr_body_hook('#!/bin/sh\ncase "$*" in *run_module.py*) echo adapter-noise; exit 1 ;; esac\nexit 0\n')
+
+        self.assertEqual("adapter-noise" in out.stdout, False)
+        self.assertIn("the check exited 1", json.loads(out.stdout)["systemMessage"])
+
+    def test_a_block_leaves_nothing_on_stdout(self):
+        out = self.pr_body_hook('#!/bin/sh\ncase "$*" in *run_module.py*) echo adapter-noise; exit 2 ;; esac\nexit 0\n')
+
+        self.assertEqual((out.returncode, out.stdout), (2, ""))
+
+    def test_a_good_check_passes_the_adapters_own_stdout_through(self):
+        out = self.pr_body_hook('#!/bin/sh\ncase "$*" in *run_module.py*) echo "{\\"systemMessage\\":\\"from the adapter\\"}"; exit 0 ;; esac\nexit 0\n')
+
+        self.assertEqual((out.returncode, json.loads(out.stdout)), (0, {"systemMessage": "from the adapter"}))
+
+    def test_the_pr_body_hook_tells_the_user_it_did_not_check_when_the_check_fails(self):
+        # Passes the -P probe, then fails as an import of a missing PyYAML would.
+        out = self.pr_body_hook('#!/bin/sh\ncase "$*" in *run_module.py*) echo "No module named yaml" >&2; exit 1 ;; esac\nexit 0\n')
+
+        self.assertEqual((out.returncode, "the check exited 1" in json.loads(out.stdout)["systemMessage"]),
+                         (0, True), out.stderr)
+
+    def test_the_pr_body_hook_tells_the_user_it_did_not_check_without_its_loader(self):
+        hooks = hooks_with_path(self.cwd / "no-loader", "/usr/bin:/bin")
+        (hooks / "run_module.py").unlink()
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr create --draft"}, "cwd": str(self.cwd)})
+
+        out = subprocess.run([str(hooks / "pr-body-check.sh")], cwd=self.cwd, input=payload,
+                             env={"PATH": "/usr/bin:/bin", "HOME": str(self.cwd)},
+                             capture_output=True, text=True, timeout=60)
+
+        self.assertEqual((out.returncode, "run_module.py is missing" in json.loads(out.stdout)["systemMessage"]),
+                         (0, True), out.stderr)
 
 
 class NoBytecode(unittest.TestCase):

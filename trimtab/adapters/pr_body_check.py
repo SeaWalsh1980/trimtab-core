@@ -17,6 +17,13 @@ anything it cannot evaluate without running the command (a body built by
 `$(...)`, a body on stdin): CI is the real gate. It blocks (exit 2) only when it
 has read the body and `check_body` rejects it.
 
+Failing open is never silent when the check was meant to happen and could not:
+no instance, an unavailable registry, an unreadable body file, an `--input` file
+that is not JSON, or an exception each print a systemMessage notice on stdout
+(`unchecked`), because Claude Code shows exit-0 stderr only in its debug log
+(ADR 0067). A body it never meant to read (`--web`, stdin, a shell-built body)
+stays quiet.
+
 The message names sections, entries and fields; it never quotes the body.
 
 The project whose IDs the body may cite is the git toplevel of the session's
@@ -28,6 +35,7 @@ behaviour). A `--body-file` path stays relative to `cwd`, as `gh` reads it.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -153,12 +161,15 @@ def _read(cwd: Path, path: str) -> tuple[str, str | None]:
         return "allow", "the body comes from stdin or the shell; CI checks it"
     try:
         return "check", (cwd / path).read_text(encoding="utf-8")
-    except OSError:
-        return "allow", "the body file could not be read; CI checks it"
+    except (OSError, UnicodeDecodeError):   # unreadable, or not UTF-8 text
+        return "unchecked", "the body file could not be read"
 
 
 def api_body_of(action: str, options: list[tuple[str, str]], cwd: Path) -> tuple[str, str | None]:
-    """('check', body) | ('block', reason) | ('allow', reason), for the `gh api` form.
+    """('check', body) | ('block', reason) | ('allow', reason) | ('unchecked', reason), for the `gh api` form.
+
+    'allow' is a body this check never meant to read (CI checks it); 'unchecked'
+    is one it set out to read and could not, which `decide` reports to the user.
 
     With `--input`, gh sends that file as the request body and any fields as
     query parameters, so the file is read and the fields are not.
@@ -171,7 +182,7 @@ def api_body_of(action: str, options: list[tuple[str, str]], cwd: Path) -> tuple
         try:
             payload = json.loads(text)
         except ValueError:
-            return "allow", "the --input file is not JSON; CI checks it"
+            return "unchecked", "the --input file is not JSON"
         body = payload.get("body") if isinstance(payload, dict) else None
         if isinstance(body, str):
             return "check", body
@@ -203,7 +214,7 @@ def _option(args: list[str], names: set[str]) -> str | None:
 
 
 def body_of(action: str, args: list[str], cwd: Path) -> tuple[str, str | None]:
-    """('check', body) | ('block', reason) | ('allow', reason)."""
+    """('check', body) | ('block', reason) | ('allow', reason) | ('unchecked', reason); see `api_body_of`."""
     if "--web" in args or "-w" in args:
         return "allow", "opened in the browser; CI checks it"
     inline, path = _option(args, BODY), _option(args, BODY_FILE)
@@ -220,10 +231,12 @@ def body_of(action: str, args: list[str], cwd: Path) -> tuple[str, str | None]:
 
 
 def decide(payload: dict) -> tuple[int, str]:
+    """(BLOCK, why) | (ALLOW, "") for a body it never meant to read | (ALLOW, why) for one it could not check."""
     if payload.get("tool_name") not in (None, "Bash"):
         return ALLOW, ""
     command = (payload.get("tool_input") or {}).get("command") or ""
     cwd = Path(payload.get("cwd") or ".")
+    could_not = ""   # the first fault seen; a later segment may still block
     for tokens in _segments(command):
         porcelain, rest = _gh_pr(tokens), _gh_api_pull(tokens)
         if porcelain is not None:
@@ -232,6 +245,9 @@ def decide(payload: dict) -> tuple[int, str]:
             verdict, detail = api_body_of(*rest, cwd)
         else:
             continue
+        if verdict == "unchecked":
+            could_not = could_not or detail
+            continue
         if verdict == "allow":
             continue
         if verdict == "block":
@@ -239,20 +255,49 @@ def decide(payload: dict) -> tuple[int, str]:
                            "(## Harness items applied, ## Harness feedback, ## Process cost). Write it to a "
                            "file, check it with `bin/trimtab check-pr --body-file <file>`, and pass the file "
                            "(--body-file, or -F body=@<file> with gh api).")
+        # A fault here stops the check of this segment only: a later segment
+        # that needs no registry (a body-less create) can still block.
         try:
             instance = roots.instance_root()
         except roots.InstanceError:
-            return ALLOW, "pr-body-check: TRIMTAB_INSTANCE is not set; allowing, CI checks the body"
+            could_not = could_not or "TRIMTAB_INSTANCE is not set, or does not name an instance"
+            continue
         registry, problems = registry_for(instance, project_of(cwd))
         if problems:
-            return ALLOW, "pr-body-check: registry unavailable; allowing, CI checks the body"
+            could_not = could_not or "the registry is unavailable"
+            continue
         result = check_body(detail, registry)
         if not result.ok:
             lines = "\n".join(f"  {p}" for p in result.problems)
             return BLOCK, (f"pr-body-check: blocked: the PR body's harness block has "
                            f"{len(result.problems)} problem(s):\n{lines}\n"
                            "Fix the body file and check it with `bin/trimtab check-pr --body-file <file>`.")
-    return ALLOW, ""
+    return ALLOW, could_not
+
+
+def unchecked(why: str) -> int:
+    """Allow a body this check had to read but could not, and tell the user so.
+
+    The notice is a systemMessage on stdout, since Claude Code shows a hook's
+    stderr on exit 0 only in its debug log (ADR 0067); the shell hook's own
+    fail-open exits print the same shape. A copy goes to stderr.
+    """
+    # The same sentence as hooks/pr-body-check.sh's own notice: a test holds the two together.
+    notice = f"pr-body-check: the PR body was not checked: {why}. CI is the gate."
+    _say(notice)
+    print(json.dumps({"systemMessage": notice}))
+    return ALLOW
+
+
+def _say(message: str) -> None:
+    """Write <message> to stderr; a stderr that cannot be written must not change the verdict."""
+    try:
+        print(message, file=sys.stderr)
+        sys.stderr.flush()
+    except OSError:
+        # The interpreter flushes stderr again at exit and would fail with
+        # status 120, which the hook reads as a crashed check: a block lost.
+        sys.stderr = open(os.devnull, "w")
 
 
 def main() -> int:
@@ -260,11 +305,14 @@ def main() -> int:
         payload = json.loads(sys.stdin.read())
         code, message = decide(payload if isinstance(payload, dict) else {})
     except Exception as err:  # fail open: this is policy, CI is the gate (ADR 0005)
-        print(f"pr-body-check: internal error ({type(err).__name__}); allowing, CI checks the body",
-              file=sys.stderr)
-        return ALLOW
+        return unchecked(f"the check failed ({type(err).__name__})")
+    # An allow with a reason is a fault that stopped the check; an allow without
+    # one is a body it was never meant to read (no PR command, --web, stdin or
+    # a shell-built body), which CI checks and which stays quiet.
+    if code == ALLOW and message:
+        return unchecked(message)
     if message:
-        print(message, file=sys.stderr)
+        _say(message)   # a block must stay a block even if its message cannot be written
     return code
 
 

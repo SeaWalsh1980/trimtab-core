@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from hook_fixture import hooks_with_path
 from trimtab import planscope
 from trimtab.adapters import bash_writes as bw
 
@@ -282,12 +283,12 @@ class Hook(unittest.TestCase):
         self.env["CLAUDE_CONFIG_DIR"] = str(self.config)
         self.calls = 0
 
-    def hook(self, phase, call, env=None, event=None, **fields):
+    def hook(self, phase, call, env=None, event=None, script=None, **fields):
         payload = {"hook_event_name": event or ("PreToolUse" if phase == "pre" else "PostToolUse"),
                    "session_id": SESSION, "tool_use_id": call, "cwd": str(self.repo), "tool_name": "Bash",
                    "tool_input": {"command": "a command"}, **fields}
-        return subprocess.run([str(HOOK), phase], input=json.dumps(payload), capture_output=True, text=True,
-                              env=env or self.env, timeout=60)
+        return subprocess.run([str(script or HOOK), phase], input=json.dumps(payload), capture_output=True,
+                              text=True, env=env or self.env, timeout=60)
 
     def around(self, command, env=None, event=None, fails=False, cwd=None):
         """Run `command` between the two phases, from `cwd` (the repository by default); return the post
@@ -621,8 +622,11 @@ class Hook(unittest.TestCase):
             found = subprocess.run(["bash", "-c", f"command -v {name}"], capture_output=True, text=True).stdout.strip()
             (tools / name).symlink_to(found)
         env = {**self.env, "PATH": str(tools)}
+        # The hook resets PATH to /usr/bin:/bin first (ADR 0067), so git cannot be hidden from outside it:
+        # run a copy whose reset names the tools directory.
+        copy = hooks_with_path(self.config / "git-less", str(tools))
 
-        done = self.hook("pre", "toolu_nogit", env)
+        done = self.hook("pre", "toolu_nogit", env, script=copy / HOOK.name)
 
         self.assertEqual(done.returncode, 2)
         self.assertIn("blocked", done.stderr)

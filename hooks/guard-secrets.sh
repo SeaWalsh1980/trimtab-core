@@ -32,6 +32,9 @@
 # Per-line override: put the marker  hook:allow-secret  in a comment on the
 #                    same line as the value.
 
+# Before any command: tools are named bare, and the inherited PATH starts with
+# a user-writable directory (docs/adr/0067-hooks-reset-path-first.md).
+export PATH=/usr/bin:/bin
 set -uo pipefail
 
 [[ "${HOOK_ALLOW_SECRETS:-0}" == "1" ]] && exit 0

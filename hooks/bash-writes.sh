@@ -23,6 +23,9 @@
 # HOOK_ALLOW_HARNESS=1, or alone by exporting HOOK_ALLOW_BASH_WRITES=1; an
 # inline prefix on a Bash command never reaches a hook.
 
+# Before any command: tools are named bare, and the inherited PATH starts with
+# a user-writable directory (docs/adr/0067-hooks-reset-path-first.md).
+export PATH=/usr/bin:/bin
 phase="${1:-}"
 [[ "$phase" == pre || "$phase" == post ]] || { echo "bash-writes: usage: bash-writes.sh pre|post" >&2; exit 2; }
 # A lift reads the payload first, so Claude Code's write to the hook's stdin

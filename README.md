@@ -99,6 +99,11 @@ Linux is the only tested platform. Known gaps, not yet handled:
   name `/bin/bash` (ADR 0064), so a newer bash on PATH does not help.
 - A host with no `/bin/bash` cannot start any hook, and the exit code it
   gets back (127) also means "allow": every guard is off (ADR 0064).
+- The hooks set `PATH=/usr/bin:/bin` before any command (ADR 0067), so
+  `python3` (3.11 or newer, with PyYAML), `jq` and `git` must be there;
+  bootstrap checks that `python3`. On a Mac `/usr/bin` has
+  no `jq` and only Apple's Python 3.9 stub, and Homebrew's tools are not
+  seen.
 - macOS: `readlink -f` (bootstrap and two hooks) needs macOS 12.3 or later,
   and the weekly usage report's timer uses systemd, which macOS lacks.
 - macOS: an autonomous plan run never gets an E20 pass. The session-mode
