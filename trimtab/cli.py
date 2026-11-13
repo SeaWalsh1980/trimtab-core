@@ -16,7 +16,7 @@ from trimtab import bump
 from trimtab import config as project_config
 from trimtab import dependabot
 from trimtab import guardstate, instance, mergeauthority, planacts, planauth, planchecks, planguard
-from trimtab import planledger
+from trimtab import planledger, planrecord
 from trimtab import planscope, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
@@ -965,6 +965,46 @@ def cmd_check_plan_authorised(args) -> int:
     return 0
 
 
+def cmd_latest_record(args) -> int:
+    try:
+        problems = planrecord.name_problems(args.plan)  # before any read: no fetch fixes a typo
+        if problems:
+            return _print_problems(problems)
+        fetched = planrecord.fetched(args.repo, args.repository, args.default_branch)
+        problems = planrecord.plan_problems(args.repo, fetched.tip, args.plan)
+        if problems:
+            return _print_problems(problems)
+        record = planrecord.latest(args.repo, fetched.tip, args.plan)
+        if record.problems:
+            return _print_problems(record.problems)
+        if not args.next_on_restart:
+            print(f"{record.path} {record.commit} item {record.item:02d} part {record.part}"
+                  if record.path else "item 01 part 1")
+            return 0
+        text = ""
+        if record.path:  # no record: the first run, which needs no item list
+            admin = instance.load(_instance(args)).admin
+            problems = mergeauthority.plan_admin_problems(admin, args.repository)
+            if problems:
+                return _print_problems(problems)
+            result = planauth.check(args.repo, args.repository, args.plan, admin)
+            if result.problems:
+                return _print_problems(result.problems)
+            text = result.plan_text or ""
+        work, problems = planrecord.next_work(args.repo, fetched.tip, record, text)
+        if problems:
+            return _print_problems(problems)
+        print(work)
+        return 0
+    except (instance.InstanceFileError, mergeauthority.MergeAuthorityError, planauth.PlanAuthError,
+            planrecord.PlanRecordError) as err:
+        print(f"error: {err}; no record is named", file=sys.stderr)
+        return 2
+    except Exception as err:  # noqa: BLE001 - reported; exit 1 would read as a verdict the session doesn't re-run
+        print(f"error: {type(err).__name__} while reading the records; no record is named", file=sys.stderr)
+        return 2
+
+
 def cmd_check_plan_scope_job(args) -> int:
     try:
         result = mergeauthority.plan_scope_job_result(args.repository, args.head)
@@ -1415,6 +1455,19 @@ def build_parser() -> argparse.ArgumentParser:
                        help="on a pass, print the declaration from the default branch after the verdict line")
     pp.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout, fetched (default: .)")
     pp.set_defaults(func=cmd_check_plan_authorised)
+
+    lr = sub.add_parser("latest-record", parents=[common],
+                        help="the plan's latest progress record on the fetched default branch, from first-parent "
+                             "history in one git call (ADR 0071); with --next-on-restart, the work a restart takes "
+                             "from its file name and ## Status line. Exits 0 if so, 1 on a named problem, 2 on a "
+                             "failed read, a stale fetch or a cut history. For sessions only")
+    lr.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository the plan is in")
+    lr.add_argument("--plan", required=True, metavar="NAME", help="the plan's name, as its plan/<name>/ branches spell it")
+    lr.add_argument("--default-branch", metavar="NAME", help="the default branch (default: the one the server reports)")
+    lr.add_argument("--next-on-restart", action="store_true",
+                    help="print the next work (item NN part K, or plan complete) instead of the record")
+    lr.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout, fetched (default: .)")
+    lr.set_defaults(func=cmd_latest_record)
 
     pj = sub.add_parser("check-plan-scope-job",
                         help="whether a head's plan-scope jobs are all real and passing, on a ruleset binding the check "

@@ -75,3 +75,11 @@ the token. No change to the assertion.
 On the next core PR: the review and tracking comment are authored by `github-actions[bot]`,
 the "Fail closed when no review was posted" step passes, and the job log shows
 "Using provided GITHUB_TOKEN" with no "Requesting OIDC token".
+
+## Follow-up note
+
+The workflow comments and failure message that described the skip were corrected after
+this record merged: a PR that edits the workflow runs its own copy of the assertion, the
+prompt and the tool allowlist, so a green `claude-review` on such a PR carries no
+information, while a red one still means no review was posted; the admin's CODEOWNERS
+review of the diff is the only gate there. The decision above is unchanged.

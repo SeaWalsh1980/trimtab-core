@@ -77,7 +77,7 @@ jobs:
 
       - name: Claude Code Review
         id: claude
-        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
+        uses: anthropics/claude-code-action@4fa93a88de49bbef68b10eb15aabedf28ca0e1ed  # v1.0.271
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The job's own token, bounded by the permissions above, instead of
@@ -137,11 +137,16 @@ jobs:
       # Assert THIS RUN'S end state, not the step outcomes or "some bot posted".
       # Every step above can report `success` while no review happened:
       #
-      #   * the action skips itself when this PR's copy of the workflow differs
-      #     from the one on the default branch (its anti-tampering check; it sets
-      #     skipped_due_to_workflow_validation_mismatch, run.ts:178-181, and
-      #     writes no execution file). A PR that edits the reviewer is then not
-      #     reviewed, and reports green;
+      #   * the action could skip itself when this PR's copy of the workflow
+      #     differed from the default branch's (its anti-tampering check, which
+      #     rode on the App-token exchange). This job uses its own token now
+      #     (ADR 0071), so that validation skip is gone, and a PR that edits this
+      #     file runs ITS OWN copy of everything here - this assertion, the
+      #     prompt and `--allowedTools` included. Read such a run
+      #     asymmetrically: green proves nothing, because the same diff can
+      #     weaken or delete what produces it, while red still means this step
+      #     found no review (nobody gains by forging a failure). The admin's
+      #     CODEOWNERS review of the diff is the only gate there;
       #   * a denied posting permission loses the findings but exits clean;
       #   * the one-shot session can end early and freeze the tracking comment.
       #
@@ -203,11 +208,17 @@ jobs:
                "finished tracking comments for this run: $finished"
           if [ "$result_ok" != "true" ] || [ "$finished" -lt 1 ]; then
             echo "::error::This run produced no successful review result and" \
-                 "finished tracking comment, so this PR has NOT been reviewed. If" \
-                 "this PR edits .github/workflows/claude-code-review.yml (the" \
-                 "reviewer), the action refuses to run until that change is on" \
-                 "the default branch - review the workflow diff by hand and" \
-                 "merge on that basis. Otherwise check the step log for denied" \
-                 "tool permissions or an early exit."
+                 "finished tracking comment, so this PR has NOT been reviewed." \
+                 "The action no longer skips a PR that edits this workflow" \
+                 "(ADR 0071), so that is not the explanation: this is a real" \
+                 "failure. Check the step log for a missing or unreadable" \
+                 "execution file, a final result that is not success, a" \
+                 "tracking comment frozen at running or starting \"Claude" \
+                 "encountered an error\", a denied tool permission, a 403 when" \
+                 "the job token posted the comment, or an early exit. A PR that" \
+                 "edits this workflow ran its own copy of this step, so on one" \
+                 "of those a PASS would prove nothing - but this failure still" \
+                 "stands, and the admin's CODEOWNERS review of the diff is the" \
+                 "only gate there."
             exit 1
           fi

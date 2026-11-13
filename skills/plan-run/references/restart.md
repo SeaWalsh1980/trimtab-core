@@ -28,7 +28,7 @@ The restarted session then runs section 2 and reads the latest authorised record
 |---|---|
 | An unmerged blocked PR | Resume it as an in-flight PR (plan-run/references/in-flight.md), in its own part and with its round counts. |
 | A blocked branch with no PR | Resume it as an in-flight branch, the same way. |
-| The latest record's `## Next` is `blocked:`, with nothing in flight | Take it from the record's file name (`item-NN-partK`) and `## Status`, never from its text: part K+1 of the same item when the item continues or part K stopped unfinished (that part then covers what part K left), otherwise the plan's next item. |
+| The latest record's `## Next` is `blocked:`, with nothing in flight | Run `trimtab latest-record --repository <owner>/<name> --plan <plan> --next-on-restart`, as a command of its own. It takes the work from the record's file name (`item-NN-partK`) and `## Status`, never from its text: part K+1 of the same item when the item continues or part K stopped unfinished (that part then covers what part K left), otherwise the plan's next item. Exit 1 is a blocker; on exit 2 run `git fetch origin` once (adding `--unshallow` for a shallow clone) and run it once more; a second exit 2 is a blocker. |
 | Anything else | The latest record's `## Next`, gated as section 4 says. |
 
 When the stop was a record merged by an account not allowed to merge it, the admin's removal of

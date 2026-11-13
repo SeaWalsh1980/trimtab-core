@@ -66,3 +66,13 @@ defect and needs the same fix upstream.
 - A PR that edits the workflow still goes unreviewed by CI and still fails the check.
   That is unchanged: a human reviews the diff and the admin merges with bypass.
 - The assertion is not run-proven in core until the first review after merge.
+
+## Note
+
+Superseded in part by ADR 0071: its consequence that a PR editing the workflow "still
+goes unreviewed by CI and still fails the check" no longer holds in its first half — such
+a PR is now reviewed, after a fashion. It runs its own copy of this assertion, of the
+prompt and of `--allowedTools`, so read the check asymmetrically: green carries no
+information, because the same diff could weaken or delete what produces it, while red
+still means this step found no review. The admin's CODEOWNERS review of the diff is the
+only gate there.

@@ -102,13 +102,22 @@ counts, and they are read only while inside the `--ingest-weeks` floor.
 
 ## 2. claude-review findings (a fourth reviewer)
 
-For each PR recorded in step 1, read the review bot's comments. It posts as
-`claude[bot]`, as issue comments (observed on a live PR), and may add review
-or inline comments:
+For each PR recorded in step 1, read the review bot's comments. Which login
+posts them depends on the repository's token (trimtab-core ADR 0071): `claude[bot]`
+when `claude-review` runs on the Claude App's token, `github-actions[bot]` when
+it runs on the job's own `github.token`. Read both. It posts as issue comments
+(observed on a live PR), and may add review or inline comments. Every other
+workflow's comments also post as `github-actions[bot]`, so keep one of that
+login's comments only when it is the review's tracking comment, whose body
+starts `**Claude finished ` (trimtab-core ADR 0069). On core PR 171 that comment
+held the whole review. A separate summary posted as its own PR comment, and
+review or inline comments, carry no such marker and are not counted under
+`github-actions[bot]`: say that the yield from such a reviewer is a lower bound:
 
 ```bash
 for kind in issues/<n>/comments pulls/<n>/reviews pulls/<n>/comments; do
-  gh api "repos/$REPO/$kind" --jq '.[] | select(.user.login == "claude[bot]") | .body'
+  gh api "repos/$REPO/$kind" --jq '.[] | select(.user.login == "claude[bot]"
+    or (.user.login == "github-actions[bot]" and ((.body // "") | startswith("**Claude finished ")))) | .body'
 done
 ```
 
