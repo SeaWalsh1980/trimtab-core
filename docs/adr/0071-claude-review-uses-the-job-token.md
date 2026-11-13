@@ -75,3 +75,9 @@ the token. No change to the assertion.
 On the next core PR: the review and tracking comment are authored by `github-actions[bot]`,
 the "Fail closed when no review was posted" step passes, and the job log shows
 "Using provided GITHUB_TOKEN" with no "Requesting OIDC token".
+
+## Follow-up note
+
+The workflow comments and failure message that described the skip were corrected after
+this record merged: a PR that edits the workflow runs its own copy, and a green
+`claude-review` on it is a self-review. The decision above is unchanged.

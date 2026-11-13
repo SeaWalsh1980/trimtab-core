@@ -66,3 +66,9 @@ defect and needs the same fix upstream.
 - A PR that edits the workflow still goes unreviewed by CI and still fails the check.
   That is unchanged: a human reviews the diff and the admin merges with bypass.
 - The assertion is not run-proven in core until the first review after merge.
+
+## Note
+
+Superseded in part by ADR 0071: its consequence that a PR editing the workflow "still
+goes unreviewed by CI and still fails the check" no longer holds. Such a PR now runs its
+own copy and can go green, as a self-review; the admin's CODEOWNERS review is the gate.

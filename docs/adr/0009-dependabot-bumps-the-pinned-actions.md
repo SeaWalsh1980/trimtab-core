@@ -57,6 +57,9 @@ PR to review rather than as a hand edit.
 - Accepted: every action used here appears in `claude-code-review.yml`, so
   each Dependabot PR edits that workflow and claude-review skips it while
   still reporting success. The operator reviews every one.
+  (Since ADR 0071 the action no longer skips such a PR: `claude-review` reviews
+  under the PR's own copy of the workflow, a self-review, and the operator's review
+  is still the gate.)
 - Accepted: a claude-code-action bump can change the reviewing model even
   though the PR names only the action version. The reviewer checks the
   action's release notes for the Claude Code version it installs.

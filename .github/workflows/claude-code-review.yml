@@ -137,11 +137,12 @@ jobs:
       # Assert THIS RUN'S end state, not the step outcomes or "some bot posted".
       # Every step above can report `success` while no review happened:
       #
-      #   * the action skips itself when this PR's copy of the workflow differs
-      #     from the one on the default branch (its anti-tampering check; it sets
-      #     skipped_due_to_workflow_validation_mismatch, run.ts:178-181, and
-      #     writes no execution file). A PR that edits the reviewer is then not
-      #     reviewed, and reports green;
+      #   * the action could skip itself when this PR's copy of the workflow
+      #     differed from the default branch's (its anti-tampering check, which
+      #     rode on the App-token exchange). This job uses its own token now
+      #     (ADR 0071), so that skip is gone: a PR that edits this file runs ITS
+      #     OWN copy of this workflow, and a green `claude-review` on it is a
+      #     self-review. The admin's CODEOWNERS review of the diff is the gate;
       #   * a denied posting permission loses the findings but exits clean;
       #   * the one-shot session can end early and freeze the tracking comment.
       #
@@ -204,10 +205,10 @@ jobs:
           if [ "$result_ok" != "true" ] || [ "$finished" -lt 1 ]; then
             echo "::error::This run produced no successful review result and" \
                  "finished tracking comment, so this PR has NOT been reviewed. If" \
-                 "this PR edits .github/workflows/claude-code-review.yml (the" \
-                 "reviewer), the action refuses to run until that change is on" \
-                 "the default branch - review the workflow diff by hand and" \
-                 "merge on that basis. Otherwise check the step log for denied" \
-                 "tool permissions or an early exit."
+                 "this PR edits .github/workflows/claude-code-review.yml, it ran" \
+                 "its own copy of this workflow, so even a pass would be a" \
+                 "self-review; the admin's CODEOWNERS review is the gate." \
+                 "Check the step log for denied tool permissions or an early" \
+                 "exit."
             exit 1
           fi

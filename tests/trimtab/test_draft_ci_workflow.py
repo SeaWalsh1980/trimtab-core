@@ -12,6 +12,11 @@ import yaml
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
 
+REVIEW_ACTION_PREFIX = "anthropics/claude-code-action@"
+JOB_TOKEN = "${{ github.token }}"
+# The inputs and permission through which the action reaches the App-token exchange.
+OIDC_MARKERS = ("id-token", "use_app_token", "app_id", "app-id", "oidc")
+
 
 def load(name: str) -> dict:
     # PyYAML reads the bare key `on` as True.
@@ -70,12 +75,21 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
         self.assertNotIn("id-token", self.workflow.get("permissions", {}))
         self.assertNotIn("id-token", job.get("permissions", {}))
 
+    def test_no_step_re_adds_an_oidc_path(self):
+        # Restoring the Claude App's token (ADR 0071) needs an OIDC permission or an
+        # action input that asks for one; either, in any step or permission block,
+        # fails here. Comments are not parsed, so prose may still name them.
+        rendered = yaml.safe_dump(self.workflow).lower()
+
+        for marker in OIDC_MARKERS:
+            self.assertNotIn(marker, rendered)
+
     def test_the_review_uses_the_jobs_own_token(self):
         steps = self.workflow["jobs"]["claude-review"]["steps"]
-        action = [s for s in steps if str(s.get("uses", "")).startswith("anthropics/claude-code-action@")]
+        action = [s for s in steps if str(s.get("uses", "")).startswith(REVIEW_ACTION_PREFIX)]
 
         self.assertEqual(len(action), 1)
-        self.assertEqual(action[0]["with"]["github_token"], "${{ github.token }}")
+        self.assertEqual(action[0]["with"]["github_token"], JOB_TOKEN)
 
     def test_the_review_token_is_comment_only(self):
         self.assertEqual(self.workflow["permissions"],
