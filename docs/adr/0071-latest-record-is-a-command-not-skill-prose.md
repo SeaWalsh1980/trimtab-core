@@ -36,6 +36,13 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
   complete`) for `item NN complete`. The item list comes from `planauth.check`'s plan text, so the
   command never names the authorised plans folder. A `## Status` that is missing, in none of the
   three forms, or that names another item or part than the file name, is exit 1.
+- The item list is one strict section, not a pattern over the whole plan. The plan holds exactly one
+  `## Items` heading; its section runs to the next `## ` heading or the end of the file; every
+  non-blank line in it is a top-level item `N. <text>`, numbered from 1 with no gap, no repeat and
+  no reordering, or a line indented under an item (its wrapped text or its sub-steps, which are
+  never items). A missing or repeated heading, an empty section, a line that is neither, or a number
+  out of sequence is a named problem (exit 1). `plan complete` is printed only when the record's
+  item is the section's last item.
 - Exit codes follow `check-plan-authorised`: 0 ok, 1 a named problem, 2 a failed read, a stale fetch
   (origin's default branch must be where the server says it is, which is why `--repository` is
   required), a shallow clone or a grafts file. One difference: a malformed plan name is exit 1
@@ -52,6 +59,17 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
 - **Pick the record by commit date or by highest number.** Rejected: dates inside a branch are
   arbitrary, and a later merge may legitimately carry a lower item number (a re-run part).
   First-parent order is merge order. Only a tie within one commit falls back to the numbers.
+- **Read the item list by pattern, anywhere in the plan** (this PR's first three rounds: `Item N`,
+  a heading or checklist item, a column-0 `N.`, then a second wider scan for `Step N`, `Task N` and
+  indented numbers). Rejected after three review rounds each found another shape it missed
+  (`**3.** c`, `+ Item 3`, `> 3.`, a table row, `Item #4`, `Phase 4`). A shape whitelist cannot
+  prove that no later item exists, so every miss ended a plan early and silently, and every
+  addition widened the opposite error, where a numbered sub-step or a preamble list stopped a
+  finished plan or invented an item. A declared section is checkable: the plan either has it or the
+  command refuses.
+- **Not parsing the plan at all** — take the next item as `record.item + 1` and leave the end of the
+  plan to the operator. Rejected: a run would then start an item the plan does not have, and
+  `plan complete` could never be printed, so every plan would end as a blocker.
 
 ## Consequences
 
@@ -60,28 +78,27 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
 - `--next-on-restart` also needs the instance's admin login and runs the authorisation check, since
   the plan's item list is read through it. When the latest record is item-complete and the plan
   names no following item, it prints `plan complete`.
-- The plan's item list is recognised by a pattern (`Item N`, a heading or checklist item, or a
-  numbered line at column 0; an indented numbered line is a sub-step, not an item). Both errors
-  are guarded: a record whose item the list does not name (including an empty or unrecognised
-  list) is a named problem (exit 1), never `plan complete`; and a nested step cannot invent an
-  item (an indented `- Item N` bullet does still count, so a stray one can add an item, which
-  only makes the command stop or name an item the gate then checks against the plan). When the
-  record's item is not the highest the list names and `item + 1` is missing, the answer is a named
-  problem ("skips from N to M"), never `plan complete`. Rejected: jumping to the next recognised
-  number, which would run an item out of the plan's order on a list the command half-reads. Before
-  printing `plan complete` it also scans the plan with a wider pattern (any indent, `Step N`,
-  `Task N`, `N.` under a list marker or heading); a number above the record's item that the strict
-  pattern did not read is a named problem. The accepted cost is the other direction: a nested
-  numbered sub-step above the last item, or a numbered list in the plan's preamble, also stops the
-  run (or, for a preamble list at column 0, can add an item), for the operator to look at. A plan
-  whose items are written in another shape therefore stops for the operator rather than guessing.
-- `plan complete` and the first-run `item 01 part 1` are not authorisation verdicts: the command
-  does not check who merged the plan or a record, and the skill says so. A fixed plan format is separate work.
+- **A plan written without a `## Items` section stops for the operator**, on the restart path only:
+  `--next-on-restart` exits 1 naming what it could not read, and every other use of the command is
+  unaffected. That is the accepted cost of the strict section, and it falls on the plans that exist
+  today, none of which has one. The instance's rule for an authorised plan should state the format,
+  so a plan that lacks it fails when it is written rather than at a restart; until it does, this
+  record is the only statement of the format.
+- Text outside the section is never read, so a numbered list in the plan's preamble can no longer
+  add an item, and a sub-step indented under an item can no longer stop a finished plan. Those two
+  errors, which the earlier pattern had, are closed rather than narrowed.
+- Wrapped text and sub-steps are allowed inside the section when indented under an item, so a plan
+  may describe its items there. An unindented line that is not an item is refused, which also keeps
+  a stray paragraph from reading as the section's end.
+- `plan complete` and the first-run `item 01 part 1` are not authorisation verdicts. The command
+  never checks who merged a record, and it checks the plan's merger only with `--next-on-restart`
+  when a record exists (a first run skips that check); the skill says so.
 - Exit 2 is answered by fetching once and running the command again; a second exit 2 is a blocker.
   This replaces the skill's earlier "a shallow clone is a stop" for the latest-record lookup,
   because the command now detects the cut history itself and a fetch fixes it.
-- The plan must exist on the default branch (exit 1 otherwise), so a mistyped plan name is not read
-  as a plan that has not started. `--default-branch` must be the repository's default branch.
+- The plan and its `.writes` declaration must both exist on the default branch (exit 1 otherwise),
+  so a mistyped plan name is not read as a plan that has not started. `--default-branch` must be the
+  repository's default branch.
 - A record added and since deleted is a named problem, not the latest record.
 - `planauth` gains two thin public wrappers around the checks it already made, so the stale-fetch
   rule stays in one place.

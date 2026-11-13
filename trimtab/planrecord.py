@@ -33,12 +33,11 @@ NAME = re.compile(r"item-([0-9]{2,})-part([0-9]+)\.md")
 COMPLETE = re.compile(r"item ([0-9]+) complete")
 CONTINUES = re.compile(r"item ([0-9]+) part ([0-9]+) complete; item continues")
 UNFINISHED = re.compile(r"item ([0-9]+) part ([0-9]+) stopped unfinished")
-# An item of a plan's todo list, as `Item 3`, `### Item 3`, `- [ ] Item 3` or a numbered line `3.`.
-# A numbered line counts only at column 0: an indented one is a sub-step, not an item.
-PLAN_ITEM = re.compile(r"^(?:[ \t]*(?:#{1,6}[ \t]+|[-*][ \t]+(?:\[.\][ \t]+)?)?(?:\*\*)?item[ \t-]*([0-9]+)\b"
-                       r"|([0-9]+)[.)][ \t])", re.IGNORECASE)
-LOOSE_ITEM = re.compile(r"^[ \t]*(?:#{1,6}[ \t]+|[-*][ \t]+(?:\[.\][ \t]+)?)?(?:\*\*)?"
-                        r"(?:(?:item|step|task)[ \t-]*([0-9]+)\b|([0-9]+)[.)\]*][ \t])", re.IGNORECASE)
+# The plan's item list: one `## Items` section of top-level `N. ` lines, numbered 1..n (ADR 0071).
+# Nothing outside the section is read, and a section holding anything else is a named problem, never a guess.
+ITEMS_HEADING = re.compile(r"##[ \t]+Items[ \t]*", re.IGNORECASE)
+SECTION_HEADING = re.compile(r"##[ \t]+\S")
+ITEM_LINE = re.compile(r"([0-9]+)\.[ \t]+\S.*")
 MAX_RECORDS = 5000  # record paths git names in one answer; past it, an error rather than a partial list (ENG-6.2)
 
 
@@ -122,20 +121,14 @@ def next_work(repo: str, default: str, record: Latest, plan_text: str) -> tuple[
         return "", (f"{record.path}: {why}",)
     if kind == "continues":
         return f"item {record.item:02d} part {record.part + 1}", ()
-    items = plan_items(plan_text)
-    if record.item not in items:  # an item list that does not parse is a fault, never "plan complete"
-        return "", (f"the plan's item list does not name item {record.item}; it could not be read as a todo list",)
-    following = record.item + 1
-    if following in items:
-        return f"item {following:02d} part 1", ()
-    higher = max(items)
-    if higher > record.item:  # a gap, or a next item written in a shape the pattern misses: never "plan complete"
-        return "", (f"the plan's item list skips from item {record.item} to item {higher}",)
-    unread = sorted(n for n in _looks_like_items(plan_text) if n > record.item)
-    if unread:  # a later item in a shape PLAN_ITEM does not accept: stop for the operator rather than end the plan
-        return "", (f"the plan has a line that looks like item {unread[0]} but is not one the item list reads; "
-                    "it may be a later item",)
-    return "plan complete", ()
+    items, problems = plan_items(plan_text)
+    if problems:
+        return "", problems
+    if record.item not in items:
+        return "", (f"the plan's ## Items section names items 1 to {items[-1]}, not item {record.item}",)
+    if record.item == items[-1]:  # the numbers are 1..n, so the last item is the only end of the plan
+        return "plan complete", ()
+    return f"item {record.item + 1:02d} part 1", ()
 
 
 def _status(text: str) -> str | None:
@@ -169,26 +162,40 @@ def _status_fields(status: str, record: Latest) -> tuple[str | None, str]:
     return None, "## Status is none of the three forms plan-item writes"
 
 
-def _looks_like_items(plan_text: str) -> frozenset[int]:
-    """Numbers on lines that look like an item in a wider range of shapes than PLAN_ITEM reads (any indent,
-    `Step N`, `Task N`, `N.` under a list marker or heading), so that a last item the strict pattern misses is
-    seen. Used only to refuse `plan complete`; it never names work."""
-    found = set()
-    for line in plan_text.splitlines():
-        m = LOOSE_ITEM.match(line)
-        if m:
-            found.add(int(m.group(1) or m.group(2)))
-    return frozenset(found)
+def plan_items(plan_text: str) -> tuple[tuple[int, ...], tuple[str, ...]]:
+    """The plan's items as (1, 2, ... n), or why its `## Items` section cannot be read.
 
-
-def plan_items(plan_text: str) -> frozenset[int]:
-    """The item numbers the plan's todo list names."""
-    found = set()
-    for line in plan_text.splitlines():
-        m = PLAN_ITEM.match(line)
-        if m:
-            found.add(int(m.group(1) or m.group(2)))
-    return frozenset(found)
+    The plan holds exactly one `## Items` heading. Its section runs to the next `## ` heading or the end of the
+    file, and every non-blank line in it is either a top-level item `N. <text>`, numbered from 1 with no gap,
+    no repeat and no reordering, or a line indented under one (an item's own wrapped text or sub-steps). Any
+    other line, and a missing or repeated heading, is a named problem: the plan is not read as a todo list at
+    all, so nothing outside the section can add or hide an item."""
+    lines = plan_text.splitlines()
+    heads = [i for i, line in enumerate(lines) if ITEMS_HEADING.fullmatch(line)]
+    if not heads:
+        return (), ("the plan has no ## Items section",)
+    if len(heads) > 1:
+        return (), (f"the plan has {len(heads)} ## Items headings, not one",)
+    found: list[int] = []
+    for line in lines[heads[0] + 1:]:
+        if SECTION_HEADING.match(line):
+            break
+        if not line.strip():
+            continue
+        if line[:1] in (" ", "\t"):
+            if not found:  # indented text before any item: the section's shape is not one this reads
+                return (), ("the plan's ## Items section opens with an indented line, not item 1",)
+            continue  # an item's own wrapped text or sub-step
+        m = ITEM_LINE.fullmatch(line)
+        if m is None:
+            return (), (f"the plan's ## Items section holds a line that is not an item: {line.strip()[:60]!r}",)
+        if int(m.group(1)) != len(found) + 1:
+            return (), (f"the plan's ## Items section names item {int(m.group(1))} where item {len(found) + 1} "
+                        "should be; the items run 1 to n in order",)
+        found.append(int(m.group(1)))
+    if not found:
+        return (), ("the plan's ## Items section names no item",)
+    return tuple(found), ()
 
 
 def fetched(repo: str, repository: str, default: str | None = None, run: Run | None = None) -> str:

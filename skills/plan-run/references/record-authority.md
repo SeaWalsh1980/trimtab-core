@@ -16,12 +16,18 @@ No records yet → it prints `item 01 part 1`. It names no plans-folder path, so
 | Exit | Meaning | What you do |
 |---|---|---|
 | 0 | the line above | Use it. |
-| 1 | a named problem: a malformed record name, a malformed plan name, a plan (or its declaration) not on the default branch, a record added and since deleted, or (with `--next-on-restart`) a failed authorisation or admin check, an unreadable `## Status`, or an item list that is unreadable, skips an item or has a line that may be a later item | A blocker: stop and report stderr. |
+| 1 | a named problem: a malformed record name, a malformed plan name, a plan (or its declaration) not on the default branch, a record added and since deleted, or (with `--next-on-restart`) a failed authorisation or admin check, an unreadable `## Status`, or a plan whose `## Items` section is missing, repeated, empty, out of sequence or holds a line that is not an item | A blocker: stop and report stderr. |
 | 2 | a failed read, a stale fetch, a shallow clone or a grafts file; also an unreadable instance or admin variable, or a `--default-branch` that is not the default | Run `git fetch origin` (and `git fetch --unshallow origin` for a shallow clone) once, then run it again. A second exit 2 is a blocker. |
 
 On a restart whose latest record's `## Next` is `blocked:`, add `--next-on-restart`: it prints the next work, `item NN part K` or `plan complete`, taken only from the record's file name
 and `## Status` line. It also runs the plan authorisation check, so it needs the instance's admin
 login; exit 1 there, or for an unparseable or mismatched `## Status`, is a blocker.
+
+It reads the plan's items from one `## Items` section: top-level `N. ` lines numbered 1 to n in
+order, with an item's wrapped text or sub-steps indented under it, and nothing else in the section.
+Nothing outside the section is read. `plan complete` means the record's item is the section's last.
+A plan without that section is exit 1, which is a blocker on the restart path: report it rather than
+work out the next item by hand (trimtab-core ADR 0071).
 
 The command makes the lookup repeatable; it enforces nothing, and exit 0 is not an authorisation
 verdict: it does not check who merged the plan or the record (a first run with no record skips the

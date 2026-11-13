@@ -16,7 +16,7 @@ from trimtab.planrecord import PlanRecordError
 PLAN = "0002-items"
 PLAN_FILE = f"{planscope.AUTHORISED}/{PLAN}.md"
 WRITES_FILE = f"{planscope.AUTHORISED}/{PLAN}.writes"
-PLAN_TEXT = "# plan\n\n1. first item\n2. second item\n"
+PLAN_TEXT = "# plan\n\n## Items\n\n1. first item\n2. second item\n"
 FOLDER = f"{planscope.PLANS_DIR}/progress/{PLAN}"
 DEFAULT = tpa.DEFAULT
 OLD = "2020-01-01T00:00:00"
@@ -181,7 +181,8 @@ class NextOnRestart(Records):
                 self.publish()
 
     def test_a_status_naming_another_item_or_part_is_a_named_problem(self):
-        for status in ("item 2 complete", "item 1 part 2 complete; item continues"):
+        for status in ("item 2 complete", "item 1 part 2 complete; item continues",
+                       "item 2 part 1 stopped unfinished", "item 1 part 3 stopped unfinished"):
             with self.subTest(status=status):
                 self.assertEqual(len(self.next_work(status)[1]), 1)
                 tpa.git(self.repo, "reset", "-q", "--hard", "HEAD~1")
@@ -208,26 +209,22 @@ class NextOnRestart(Records):
                 tpa.git(self.repo, "branch", "-q", "-D", "empty-status")
                 self.publish()
 
-    def test_a_gap_in_the_item_list_is_a_named_problem_not_plan_complete(self):
-        work, problems = planrecord.next_work(str(self.repo), DEFAULT, self.record_with("item 1 complete"),
-                                              "1. a\n3. c\n")
-
-        self.assertEqual((work, len(problems)), ("", 1))
-        self.assertIn("skips from item 1 to item 3", problems[0])
-
-    def test_an_item_list_that_does_not_parse_is_a_named_problem_not_plan_complete(self):
-        for text in ("", "# a plan in prose\n", "1. a\n2. b\n"):
+    def test_a_plan_the_items_section_cannot_be_read_from_is_a_named_problem(self):
+        for text in ("", "# a plan in prose\n", "1. a\n2. b\n", "## Items\n\n## Next\n"):
             with self.subTest(text=text):
-                self.merge_record(5, 1, "item 5 complete")
-
-                work, problems = planrecord.next_work(str(self.repo), DEFAULT, self.latest(), text)
+                work, problems = planrecord.next_work(str(self.repo), DEFAULT,
+                                                      self.record_with("item 1 complete"), text)
 
                 self.assertEqual((work, len(problems)), ("", 1))
                 tpa.git(self.repo, "reset", "-q", "--hard", "HEAD~1")
                 self.publish()
 
-    def test_numbered_sub_steps_are_not_items(self):
-        self.assertEqual(planrecord.plan_items("1. a\n   1. step\n   2. step\n2. b\n"), frozenset({1, 2}))
+    def test_a_record_the_items_section_does_not_name_is_a_named_problem(self):
+        work, problems = planrecord.next_work(str(self.repo), DEFAULT,
+                                              self.record_with("item 5 complete", item=5), PLAN_TEXT)
+
+        self.assertEqual((work, len(problems)), ("", 1))
+        self.assertIn("not item 5", problems[0])
 
     def test_a_record_that_is_a_symlink_is_a_named_problem(self):
         tpa.git(self.repo, "switch", "-q", "-c", "link")
@@ -243,30 +240,49 @@ class NextOnRestart(Records):
         self.assertEqual((work, len(problems)), ("", 1))
         self.assertIn("not a regular file", problems[0])
 
-    def test_a_last_item_in_a_shape_the_list_does_not_read_is_a_named_problem_not_plan_complete(self):
-        for last in ("- [ ] 3. c\n", "## Step 3\n", "Task 3: c\n", "   3. c\n"):
+    def test_a_last_item_the_section_names_in_any_markdown_shape_is_not_lost(self):
+        """A shape the old pattern missed (`**3.** c`, a table row) is now either an item or a refusal, never
+        silently absent: the section's own lines decide."""
+        for last in ("**3.** c\n", "+ Item 3\n", "> 3. c\n", "| 3 | c |\n", "Phase 3\n", "Item #3\n"):
             with self.subTest(last=last):
-                work, problems = planrecord.next_work(str(self.repo), DEFAULT, self.record_with("item 2 complete", item=2),
-                                                      "1. a\n2. b\n" + last)
+                work, problems = planrecord.next_work(str(self.repo), DEFAULT,
+                                                      self.record_with("item 2 complete", item=2),
+                                                      "## Items\n\n1. a\n2. b\n" + last)
 
                 self.assertEqual((work, len(problems)), ("", 1))
+                self.assertIn("not an item", problems[0])
                 tpa.git(self.repo, "reset", "-q", "--hard", "HEAD~1")
                 self.publish()
 
-    def test_a_plan_whose_last_item_is_complete_and_read_ends(self):
-        work, problems = planrecord.next_work(str(self.repo), DEFAULT, self.record_with("item 2 complete", item=2),
-                                              "1. a\n2. b\n   1. sub\n   2. sub\n")
+    def test_the_sections_last_item_complete_ends_the_plan(self):
+        work, problems = planrecord.next_work(str(self.repo), DEFAULT,
+                                              self.record_with("item 2 complete", item=2), PLAN_TEXT)
 
         self.assertEqual((work, problems), ("plan complete", ()))
+
+    def test_an_items_wrapped_text_and_sub_steps_are_not_items(self):
+        text = "## Items\n\n1. a\n   more about a\n   1. step\n   2. step\n2. b\n\tindented with a tab\n"
+
+        self.assertEqual(planrecord.plan_items(text), ((1, 2), ()))
+
+    def test_text_outside_the_section_is_never_read(self):
+        text = "# plan\n\n## Context\n\n3. not an item\n\n## Items\n\n1. a\n2. b\n\n## Notes\n\n4. nor this\n"
+
+        self.assertEqual(planrecord.plan_items(text), ((1, 2), ()))
+
+    def test_a_missing_repeated_or_malformed_items_section_is_a_named_problem(self):
+        cases = ("# plan\n1. a\n", "## Items\n1. a\n## Items\n1. b\n", "## Items\n\n## Next\nx\n",
+                 "## Items\n\n1. a\n3. c\n", "## Items\n\n2. b\n1. a\n", "## Items\n\n1. a\n1. a\n",
+                 "## Items\n\n1. a\nsome prose\n2. b\n", "## Items\n\n   1. a\n2. b\n", "## Items\n\n1.\n")
+        for text in cases:
+            with self.subTest(text=text):
+                items, problems = planrecord.plan_items(text)
+
+                self.assertEqual((items, len(problems)), ((), 1))
 
     def record_with(self, status, item=1):
         self.merge_record(item, 1, status)
         return self.latest()
-
-    def test_plan_items_read_headings_checklists_and_numbered_lines(self):
-        text = "### Item 1\n- [ ] Item 2: x\n3. three\n- **Item 4** y\nnot an item 5\n"
-
-        self.assertEqual(planrecord.plan_items(text), frozenset({1, 2, 3, 4}))
 
 
 class Guards(Records):
@@ -288,6 +304,27 @@ class Guards(Records):
 
         with mock.patch.object(planrecord, "MAX_RECORDS", 2):
             self.assertEqual(self.latest().part, 2)
+
+    def test_a_commit_adding_a_valid_and_a_malformed_record_name_is_a_named_problem(self):
+        self.merge_branch("mixed", {record_path(2, 1): record_text("item 2 complete"),
+                                    f"{FOLDER}/notes.md": "x\n"})
+        self.publish()
+
+        result = self.latest()
+
+        self.assertEqual((result.path, len(result.problems)), (None, 1))
+
+    def test_a_plan_without_its_markdown_file_is_a_named_problem(self):
+        self.merge_branch("writes-only", {f"{planscope.AUTHORISED}/0004-nomd.writes": ""})
+        self.publish()
+
+        problems = planrecord.plan_problems(str(self.repo), DEFAULT, "0004-nomd")
+
+        self.assertEqual(len(problems), 1)
+        self.assertIn("md", problems[0])
+
+    def test_a_plan_with_both_files_has_no_problem(self):
+        self.assertEqual(planrecord.plan_problems(str(self.repo), DEFAULT, PLAN), ())
 
     def test_a_plan_without_its_declaration_is_a_named_problem(self):
         self.merge_branch("half", {f"{planscope.AUTHORISED}/0003-half.md": "# p\n"})
@@ -492,6 +529,16 @@ class Cli(tpa.Cli):
                         env_extra={"TRIMTAB_INSTANCE": str(self.root / "no-such-instance")})
 
         self.assertEqual((done.returncode, done.stdout), (2, ""), done.stderr)
+
+    def test_next_on_restart_prints_plan_complete_for_the_last_item(self):
+        self.merge_branch("rec", {record_path(2, 1): record_text("item 2 complete")})
+        self.publish()
+        self.answers[tpa.pulls_path(self.plan2_merge)] = json.dumps([tpa.listed_pull(tpa.LATER_PR)])
+        self.answers[tpa.pull_path(tpa.LATER_PR)] = tpa.pull_row(tpa.LATER_PR, self.plan2_merge)
+
+        done = self.run_cli("--next-on-restart")
+
+        self.assertEqual((done.returncode, done.stdout), (0, "plan complete\n"), done.stderr)
 
     def test_next_on_restart_with_an_unparseable_status_exits_1(self):
         self.merge_branch("rec", {record_path(1, 1): record_text("nonsense")})
