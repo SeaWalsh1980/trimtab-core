@@ -13,8 +13,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from trimtab import guardstate
 
@@ -23,6 +23,15 @@ SUBDIR = "plan-runs"
 PASSES = ("trimtab-review", "security-review", "code-review")
 EVENT_TYPES = ("push", "round", "draft", "rerequest", "stop", "conflict")
 SHA = re.compile(r"[0-9a-f]{40}")
+# The fields each event type must carry, so a reader indexing one never meets a KeyError.
+FIELDS = {
+    "push": {"branch": str, "old": str, "new": str, "run": str},
+    "round": {"head": str, "pass": str, "before_draft": bool},
+    "draft": {"pr": int, "head": str},
+    "rerequest": {"head": str, "reason": str},
+    "stop": {"reason": str},
+    "conflict": {"head": str},
+}
 
 
 class LedgerError(Exception):
@@ -83,6 +92,7 @@ class Ledger:
             raise LedgerError(str(err)) from err
 
     def events(self) -> list[dict]:
+        self._dir(create=False)  # every level private and real, not only the last path component
         try:
             text = guardstate.read(self.path)
         except guardstate.GuardStateError as err:
@@ -90,7 +100,9 @@ class Ledger:
         if text is None:
             raise LedgerError("the part has no ledger")
         out = []
-        for raw in text.splitlines():
+        for raw in text.split("\n"):
+            if not raw:
+                continue
             try:
                 ev = json.loads(raw)
             except ValueError as err:
@@ -98,6 +110,8 @@ class Ledger:
             if not isinstance(ev, dict) or ev.get("v") != VERSION or ev.get("type") not in EVENT_TYPES \
                     or not isinstance(ev.get("time"), str):
                 raise LedgerError("a ledger line has an unknown shape or version")
+            if not all(isinstance(ev.get(f), kind) for f, kind in FIELDS[ev["type"]].items()):
+                raise LedgerError("a ledger line is missing a field its type needs")
             out.append(ev)
         return out
 

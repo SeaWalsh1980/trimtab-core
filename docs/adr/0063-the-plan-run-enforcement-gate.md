@@ -860,7 +860,30 @@ calls it, so E5-E11, E13, E18, E21 and E23 get their manifest entries in 2b, wit
 the guard wiring. 2c holds E22 and its lock field. The mutation check for 2a's rows was run by hand: with
 each decision function replaced by one that allows, at least one of its tests fails.
 
+**Review round 1 (three passes) changed these in 2a.**
+- **The E3 parser splits the log on `\n` only** (`str.splitlines()` also splits on U+2028, `\x0b`, `\x0c`,
+  `\x85` and a bare `\r`, which let a repository filename start a forged `resolved` line) and accepts a
+  `path` of `[A-Za-z0-9._/@+-]` only. A path that breaks either way fails the whole read.
+- **E18 pairs threshold lines by text with the numbers masked**, so an unrelated added line cannot stand in
+  for a removed one; a removed line with no replacement refuses; a replacement the plan names exactly may be
+  lower. Markers match without regard to case or spacing, the defaults are wider (`xfail`, `pytest.skip(`,
+  `if: false`, `--no-verify`, `# pyright: ignore`), and `fix_limits.markers: []` is refused rather than
+  switching the check off. Negative numbers are read as negative.
+- **E7 takes the latest verdict per head**, as E6 does. **E10** refuses when a ledger push is not on the
+  branch rather than leaving it uncounted. **E23** takes the heads, not a count. **E9** refuses a thread with
+  no anchor commit.
+- **The ledger** checks every directory level on read and append, requires each line's type fields, and
+  `guardstate.append` takes the lock before it reads the size. **Link headers** are read whole (repeated
+  headers joined, `rel` anywhere in an entry); a header that says `next` in a form this reader cannot place is
+  an error, as is a page limit below 1 or a caller-set `page`, `after` or `per_page`.
+
 **Residuals recorded here (not fixed in PR 166 or 2a); E22 bounds the shell-spelling ones.**
+- A `fix_limits.thresholds` pattern is the admin's and is only compiled; a catastrophic pattern would stall
+  the hook, which fails closed at the 6 s deadline. `Thread.commit` is not in the E3 line, so 2b fills it
+  from the review comment before E9 can pass. The `once` de-duplication reads outside the lock, so two
+  hooks at once can write one line twice; readers treat that as one.
+- The facts job is a separate job with no model step (§4), which is what keeps model output out of the
+  log's line starts; the parser's own checks above are a second layer, not a nonce binding.
 - A push spelled with a glob (`git pu?h` with a file named `push` in the directory), a push whose every
   word is a bare substitution, a stored git alias, commands that run a string (`git rebase -x`,
   `git submodule foreach`, `git bisect run`, `git filter-branch --exec`) and a legacy `.git/remotes` push

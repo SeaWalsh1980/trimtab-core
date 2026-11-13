@@ -69,6 +69,38 @@ class CursorPagesTest(unittest.TestCase):
         with self.assertRaises(SourceError):
             GhApi(gh).cursor_pages(ACTIVITY, {}, page_limit=3, per_page=2, what="activity")
 
+    def test_a_next_link_after_a_prev_link_is_followed(self):
+        link = ('<https://api.github.com/repos/o/r/activity?before=b0>; rel="prev", '
+                '<https://api.github.com/repos/o/r/activity?after=c9>; rel="next"')
+        gh = FakeGh({ACTIVITY: [reply([1], link=link), reply([2])]})
+        self.assertEqual(GhApi(gh).cursor_pages(ACTIVITY, {}, page_limit=3, per_page=2, what="activity"), [1, 2])
+        self.assertEqual(query_of(gh.argvs()[1])["after"], "c9")
+
+    def test_a_next_entry_with_rel_after_other_parameters_is_followed(self):
+        link = '<https://api.github.com/repos/o/r/activity?after=c9>; title="x"; rel="next"'
+        gh = FakeGh({ACTIVITY: [reply([1], link=link), reply([2])]})
+        self.assertEqual(GhApi(gh).cursor_pages(ACTIVITY, {}, page_limit=3, per_page=2, what="activity"), [1, 2])
+
+    def test_a_link_header_that_says_next_in_a_form_not_read_is_an_error(self):
+        gh = FakeGh({ACTIVITY: [reply([1], link="rel=next;<https://api.github.com/x?after=c9>")]})
+        with self.assertRaises(SourceError):
+            GhApi(gh).cursor_pages(ACTIVITY, {}, page_limit=3, per_page=2, what="activity")
+
+    def test_a_repeated_link_header_is_read_whole(self):
+        raw = ("HTTP/2.0 200 OK\r\nLink: <https://api.github.com/x?before=b>; rel=\"prev\"\r\n"
+               "Link: <https://api.github.com/x?after=c9>; rel=\"next\"\r\n\r\n[1]")
+        gh = FakeGh({ACTIVITY: [raw, reply([2])]})
+        self.assertEqual(GhApi(gh).cursor_pages(ACTIVITY, {}, page_limit=3, per_page=2, what="activity"), [1, 2])
+
+    def test_a_page_limit_below_one_or_a_caller_set_cursor_is_an_error(self):
+        gh = FakeGh({ACTIVITY: reply([])})
+        for kwargs in ({"query": {}, "page_limit": 0}, {"query": {"page": 2}, "page_limit": 2},
+                       {"query": {"after": "x"}, "page_limit": 2}):
+            with self.subTest(kwargs), self.assertRaises(SourceError):
+                GhApi(gh).cursor_pages(ACTIVITY, kwargs["query"], page_limit=kwargs["page_limit"], per_page=2,
+                                       what="activity")
+        self.assertEqual(gh.calls, [])
+
     def test_a_failed_read_is_an_error(self):
         gh = FakeGh({ACTIVITY: reply([])}, returncode=1, stderr="HTTP 500")
         with self.assertRaises(SourceError):

@@ -36,6 +36,7 @@ class FixLimits(unittest.TestCase):
             "not an object": [],
             "unknown key": {"extra": 1},
             "markers not a list": {"markers": "# noqa"},
+            "no markers at all": {"markers": []},
             "empty marker": {"markers": [""]},
             "marker not a string": {"markers": [3]},
             "marker with a newline": {"markers": ["a\nb"]},

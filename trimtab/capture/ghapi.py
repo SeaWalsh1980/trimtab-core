@@ -51,17 +51,27 @@ def _subprocess_run(argv: list, stdin: str | None) -> subprocess.CompletedProces
     return subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=GH_TIMEOUT_SECONDS)
 
 
-LINK_NEXT = re.compile(r'<([^>]*)>\s*;\s*rel="next"')
+LINK_ENTRY = re.compile(r"<([^>]*)>([^<]*)")
+LINK_REL = re.compile(r'rel\s*=\s*"?([^";,]*)"?')
 
 
 def _next_cursor(link: str | None, what: str) -> str | None:
-    """The `after` cursor of a Link header's rel="next", None when there is no next page."""
+    """The `after` cursor of a Link header's rel="next", None when there is no next page.
+
+    The word `next` anywhere in a header that holds no readable next entry is an error, not an end: a
+    form this reader does not know must not read as the last page."""
     if not link:
         return None
-    found = LINK_NEXT.search(link)
-    if not found:
+    target = None
+    for url, params in LINK_ENTRY.findall(link):
+        rel = LINK_REL.search(params)
+        if rel and "next" in rel.group(1).split():
+            target = url
+    if target is None:
+        if "next" in link:
+            raise SourceError(f"{what} has a Link header this reader cannot place; refusing a partial list")
         return None
-    values = parse_qs(urlsplit(found.group(1)).query).get("after")
+    values = parse_qs(urlsplit(target).query).get("after")
     if not values or not values[0]:
         raise SourceError(f"{what} has a next page with no cursor; refusing to page by number")
     return values[0]
@@ -116,12 +126,15 @@ class GhApi:
         for line in lines[1:]:
             name, colon, value = line.partition(":")
             if colon:
-                headers[name.strip().lower()] = value.strip()
+                key = name.strip().lower()
+                headers[key] = f"{headers[key]}, {value.strip()}" if key in headers else value.strip()
         return headers, body
 
     def cursor_pages(self, path: str, query: Mapping, page_limit: int, per_page: int, what: str) -> list:
         """Every row of a list endpoint that pages by a Link-header cursor (`after=`), at most `page_limit`
         pages; more to read at the limit is an error, never a cut-off list. `page=` is never sent."""
+        if page_limit < 1 or {"page", "after", "per_page"} & set(query):
+            raise SourceError(f"{what}: a cursor read takes a page limit of at least 1 and sets its own paging")
         rows: list = []
         after = None
         for _ in range(page_limit):

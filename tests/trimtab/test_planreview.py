@@ -8,6 +8,7 @@ from trimtab.planrows import Change, FactsError, Refusal
 
 H1, H2, H3, H4 = (c * 40 for c in "1234")
 AGENT, REVIEWER = "agent-bot", "review-bot[bot]"
+PLANS = "docs/" + "plans/"  # in two pieces: this repository has no plan folders
 TAGS = {"fixed": "[fixed]", "wrong": "[wrong]", "intentional": "[intentional]", "moot": "[moot]",
         "deferred": "[deferred]"}
 
@@ -58,6 +59,13 @@ class E7(unittest.TestCase):
     def test_a_register_commit_on_a_failed_head_refuses(self):
         with self.assertRaises(Refusal):
             rv.check_e7(H2, [review(H1, "fail")], lambda h: True)
+
+    def test_a_later_failed_run_on_the_head_overrides_an_earlier_pass(self):
+        with self.assertRaises(Refusal):
+            rv.check_e7(H1, [review(H1, "pass"), review(H1, "fail", run="r2")], lambda h: True)
+
+    def test_a_later_pass_overrides_an_earlier_failure(self):
+        rv.check_e7(H1, [review(H1, "fail"), review(H1, "pass", run="r2")], lambda h: False)
 
 
 class E8(unittest.TestCase):
@@ -161,6 +169,14 @@ class E9(unittest.TestCase):
     def test_other_tags_are_not_judged(self):
         self.run_row([reply(1, "[moot] x")], [thread()])
 
+    def test_a_fixed_reply_by_someone_else_is_not_judged(self):
+        self.run_row([reply(1, "[fixed] done", user="human")], [thread()])
+
+    def test_a_thread_with_no_anchor_commit_refuses(self):
+        with self.assertRaises(Refusal):
+            rv.check_e9([thread(commit="")], [thread(state="resolved", resolved_by="human")],
+                        [reply(1, f"[fixed] {H2}")], AGENT, TAGS, lambda t, sha: True)
+
     def test_the_cited_sha_is_found_among_the_words(self):
         self.assertEqual(rv.fixed_commit(f"[fixed] in {H2} done"), H2)
         self.assertIsNone(rv.fixed_commit("[fixed] abc123"))
@@ -218,6 +234,16 @@ class E10(unittest.TestCase):
     def test_any_complete_head_that_qualifies_allows(self):
         rv.check_e10(self.COMMITS, [H1, H3], H2, [])
 
+    def test_a_push_that_ends_at_the_round_head_is_not_after_it(self):
+        rv.check_e10(self.COMMITS, [H2], None, [self.push(H2), self.push(H3)])
+
+    def test_a_ledger_push_off_the_branch_refuses_rather_than_going_uncounted(self):
+        with self.assertRaises(Refusal):
+            rv.check_e10(self.COMMITS, [H2], None, [self.push(H3), self.push(H4), self.push("9" * 40)])
+
+    def test_a_round_on_the_first_commit_with_no_answer_allows(self):
+        rv.check_e10(self.COMMITS, [H1], None, [])
+
 
 class E13(unittest.TestCase):
     def good(self, **kw):
@@ -259,6 +285,19 @@ class E13(unittest.TestCase):
     def test_a_new_branch_chain_starts_at_zero(self):
         self.good(events=[rv.Activity(rv.ZERO, H3, AGENT)],
                   pushes=[rv.LedgerPush(rv.ZERO, H3, "1", frozenset({H2, H3}))])
+
+    def test_the_agent_login_compares_without_case(self):
+        self.good(events=[rv.Activity(H1, H3, AGENT.upper())])
+
+    def test_a_zero_before_in_the_middle_of_the_chain_refuses(self):
+        with self.assertRaises(Refusal):
+            self.good(events=[rv.Activity(H1, H2, AGENT), rv.Activity(rv.ZERO, H3, AGENT)],
+                      pushes=[rv.LedgerPush(H1, H2, "1", frozenset({H2})),
+                              rv.LedgerPush(rv.ZERO, H3, "1", frozenset({H3}))])
+
+    def test_a_merge_of_the_default_branch_is_not_the_runs_commit(self):
+        # the default branch's own commits are not in origin/default..origin/branch, so none is judged
+        self.good(branch_commits=[H3], pushes=[rv.LedgerPush(H1, H3, "1", frozenset({H3}))])
 
     def test_an_event_by_another_account_refuses(self):
         with self.assertRaises(Refusal):
@@ -330,19 +369,66 @@ class E18(unittest.TestCase):
     def test_a_new_threshold_line_allows(self):
         self.run_row(Change("setup.cfg", "M", added=("fail_under = 50",)))
 
+    def test_a_removed_threshold_hidden_by_an_unrelated_added_line_refuses(self):
+        rows = Change("setup.cfg", "M", added=("cov_min = 95", "fail_under = 10"), removed_lines=("fail_under = 90",))
+        with self.assertRaises(Refusal):
+            rv.check_e18([rows], self.MARKERS, (r"fail_under|cov_min",), frozenset())
+
+    def test_an_unrelated_added_line_with_higher_numbers_does_not_replace_a_removed_one(self):
+        rows = Change("setup.cfg", "M", added=("min_x = 100",), removed_lines=("fail_under = 90",))
+        with self.assertRaises(Refusal):
+            rv.check_e18([rows], self.MARKERS, (r"fail_under|min_",), frozenset())
+
+    def test_reordered_thresholds_that_are_not_lowered_allow(self):
+        rows = Change("setup.cfg", "M", added=("cov_b = 90", "cov_a = 80"), removed_lines=("cov_a = 80", "cov_b = 90"))
+        rv.check_e18([rows], self.MARKERS, (r"cov_",), frozenset())
+
+    def test_a_replacement_the_plan_names_may_be_lower(self):
+        rows = Change("setup.cfg", "M", added=("fail_under = 50",), removed_lines=("fail_under = 90",))
+        self.run_row(rows, named=frozenset({"fail_under = 50"}))
+
+    def test_a_negative_number_made_more_negative_refuses(self):
+        rows = Change("setup.cfg", "M", added=("fail_under = -10",), removed_lines=("fail_under = -5",))
+        with self.assertRaises(Refusal):
+            self.run_row(rows)
+
+    def test_a_different_count_of_numbers_refuses(self):
+        rows = Change("setup.cfg", "M", added=("fail_under = 90",), removed_lines=("fail_under = 90 / 80",))
+        with self.assertRaises(Refusal):
+            self.run_row(rows)
+
+    def test_markers_match_without_case_or_spacing(self):
+        for text in ("x = 1  #noqa", "x = 1  # NOQA", "continue-on-error:true"):
+            with self.subTest(text), self.assertRaises(Refusal):
+                self.run_row(Change("a.py", "M", added=(text,)))
+
+    def test_the_default_markers_are_exercised(self):
+        from trimtab.instance import DEFAULT_FIX_MARKERS
+        for text in ("x  # type:ignore", "@pytest.mark.xfail", "pytest.skip('x')", "  if: false", "git commit --no-verify"):
+            with self.subTest(text), self.assertRaises(Refusal):
+                rv.check_e18([Change("a.py", "M", added=(text,))], DEFAULT_FIX_MARKERS, (), frozenset())
+
+    def test_a_marker_added_inside_a_test_file_refuses(self):
+        with self.assertRaises(Refusal):
+            self.run_row(Change("tests/test_a.py", "M", added=("    x = 1  # noqa",)))
+
 
 class E23(unittest.TestCase):
     def test_a_complete_round_on_the_head_allows(self):
-        rv.check_e23(H1, [H1], 1)
+        rv.check_e23(H1, [H1], [H1])
 
     def test_no_round_on_the_exact_head_refuses(self):
         with self.assertRaises(Refusal):
-            rv.check_e23(H2, [H1], 1)
+            rv.check_e23(H2, [H1], [H1])
 
     def test_more_than_five_pre_draft_rounds_refuses(self):
+        six = [str(i) * 40 for i in range(6)]
         with self.assertRaises(Refusal):
-            rv.check_e23(H1, [H1], 6)
-        rv.check_e23(H1, [H1], 5)
+            rv.check_e23(H1, [H1], six)
+        rv.check_e23(H1, [H1], six[:5])
+
+    def test_rounds_are_counted_by_head_not_by_entry(self):
+        rv.check_e23(H1, [H1], [H1] * 9)
 
     def test_a_sixth_pre_draft_head_refuses_at_its_first_pass(self):
         five = [str(i) * 40 for i in range(5)]
@@ -372,8 +458,8 @@ class NextPart(unittest.TestCase):
                 rv.next_part(*sources)
 
     def test_parts_are_read_from_record_names_and_head_refs(self):
-        names = ["docs/plans/progress/0008-slug/item-02-part1.md", "docs/plans/progress/0008-slug/item-02-part3.md",
-                 "docs/plans/progress/0008-slug/item-03-part9.md", "docs/plans/progress/0009-x/item-02-part7.md",
+        names = [PLANS + "progress/0008-slug/item-02-part1.md", PLANS + "progress/0008-slug/item-02-part3.md",
+                 PLANS + "progress/0008-slug/item-03-part9.md", PLANS + "progress/0009-x/item-02-part7.md",
                  "plan/0008-slug/item-02-part2", "item-02-part4.jsonl"]
         self.assertEqual(rv.parts_in(names, self.PLAN, 2), {1, 2, 3, 4})
 

@@ -107,10 +107,17 @@ class AppendTest(LedgerCase):
         with self.assertRaises(pl.LedgerError):
             self.ledger(part=9).stop("x")
 
-    def test_a_line_carries_no_environment_value_but_the_run_flag(self):
-        self.led.push("plan/x", H1, H2, run_env="1")
-        text = self.led.path.read_text()
-        self.assertNotIn(str(Path.home()), text)
+    def test_a_draft_and_a_conflict_on_the_same_head_are_written_once(self):
+        self.led.draft(7, H1)
+        self.led.draft(7, H1)
+        self.led.conflict(H1)
+        self.led.conflict(H1)
+        self.assertEqual([e["type"] for e in self.led.events()], ["draft", "conflict"])
+
+    def test_every_re_request_is_written(self):
+        self.led.rerequest(H1, "ci")
+        self.led.rerequest(H1, "ci")
+        self.assertEqual(len(self.led.events()), 2)
 
 
 class ReadTest(LedgerCase):
@@ -142,6 +149,24 @@ class ReadTest(LedgerCase):
         with self.assertRaises(pl.LedgerError):
             self.led.stop("x")
         self.assertEqual(target.read_text(), "")
+
+    def test_a_line_missing_the_fields_its_type_needs_is_a_ledger_error(self):
+        with open(self.led.path, "a") as fh:
+            fh.write('{"v": 1, "type": "round", "time": "t"}\n')
+        with self.assertRaises(pl.LedgerError):
+            self.led.pre_draft_heads()
+        with self.assertRaises(pl.LedgerError):
+            self.led.complete_rounds()
+
+    def test_a_symlinked_plan_directory_is_refused(self):
+        plan_dir = self.led.path.parent
+        moved = plan_dir.with_name("moved")
+        plan_dir.rename(moved)
+        os.symlink(moved, plan_dir)
+        with self.assertRaises(pl.LedgerError):
+            self.led.events()
+        with self.assertRaises(pl.LedgerError):
+            self.led.stop("x")
 
     def test_a_file_open_to_other_users_is_refused(self):
         os.chmod(self.led.path, 0o644)

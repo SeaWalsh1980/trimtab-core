@@ -12,6 +12,7 @@ Standard library only, and no import of the fact readers or adapters (ARC-3, ENG
 from __future__ import annotations
 
 import hashlib
+import itertools
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -25,7 +26,7 @@ SEVERITIES = ("critical", "high", "medium", "low")
 MAX_PRE_DRAFT_ROUNDS = 5
 TEST_DEFINITION = re.compile(r"^\s*(?:async\s+def\s+test_|def\s+test_|it\(|test\(|describe\(|func\s+Test|@Test\b)")
 TEST_FILE = re.compile(r"(?:^|/)(?:tests?|__tests__|spec)/|(?:^|/)test_[^/]*$|_test\.[a-z]+$|\.(?:test|spec)\.[a-z]+$")
-NUMBER = re.compile(r"\d+(?:\.\d+)?")
+NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 
 
 @dataclass(frozen=True)
@@ -88,7 +89,7 @@ _REVIEW_LINE = re.compile(r"TRIMTAB-REVIEW v1 run=(?P<run>\S+) head=(?P<head>[0-
                           r"verdict=(?P<verdict>pass|fail|fail-closed)")
 _THREAD_LINE = re.compile(r"TRIMTAB-THREAD v1 run=(?P<run>\S+) id=(?P<id>[0-9]+) "
                           r"severity=(?P<severity>critical|high|medium|low) state=(?P<state>open|resolved) "
-                          r"resolved_by=(?P<by>\S+) path=(?P<path>\S+) line=(?P<line>[0-9]+) "
+                          r"resolved_by=(?P<by>\S+) path=(?P<path>[A-Za-z0-9._/@+-]+) line=(?P<line>[0-9]+) "
                           r"category=(?P<category>[a-z0-9-]+) key=(?P<key>[0-9a-f]{64})")
 
 
@@ -100,8 +101,10 @@ def parse_facts(log: str) -> tuple[Review, list[Thread]]:
     model's output echoed in the log for one, is not at a line's start and is not read (SEC-2.1)."""
     reviews: list[Review] = []
     threads: list[Thread] = []
-    for raw in log.splitlines():
-        line = _STAMP.sub("", raw.rstrip("\r"), count=1)
+    # Split on "\n" only, as Actions logs do: str.splitlines() also splits on U+2028, \x0b, \x0c, \x85 and a
+    # bare \r, so a path holding one could start a forged facts line of its own.
+    for raw in log.split("\n"):
+        line = _STAMP.sub("", raw.removesuffix("\r"), count=1)
         if line.startswith("TRIMTAB-REVIEW"):
             m = _REVIEW_LINE.fullmatch(line)
             if m is None:
@@ -123,7 +126,7 @@ def parse_facts(log: str) -> tuple[Review, list[Thread]]:
 def thread_key(path: str, category: str, line_text: str) -> str:
     """E8's key: SHA-256 of the path, the category and the anchored line with whitespace collapsed."""
     text = " ".join(line_text.split())
-    return hashlib.sha256("\x00".join((path, category, text)).encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"{path}\x00{category}\x00{text}".encode()).hexdigest()
 
 
 def root_id(comment: Comment) -> int:
@@ -150,7 +153,10 @@ def check_e5(comments: Sequence[Comment], threads: Sequence[Thread], review_logi
 def check_e7(head: str, reviews: Sequence[Review], register_after: Callable[[str], bool]) -> None:
     """E7: ready needs an E2 run on the exact head with a `pass`, or a head that differs from a passed head
     only by the register-commit shape (`register_after(reviewed_head)`)."""
-    passed = [r.head for r in reviews if r.verdict == "pass"]
+    latest: dict[str, str] = {}
+    for r in reviews:  # oldest to newest: the latest verdict on a head decides, as in E6
+        latest[r.head] = r.verdict
+    passed = [h for h, verdict in latest.items() if verdict == "pass"]
     if head in passed:
         return
     if any(register_after(h) for h in dict.fromkeys(passed)):
@@ -222,7 +228,7 @@ def check_e9(threads: Sequence[Thread], lines: Sequence[Thread], replies: Sequen
                     or first_word(reply.body) != fixed:
                 continue
             sha = fixed_commit(reply.body)
-            if sha is None or not fix_valid(t, sha):
+            if not t.commit or sha is None or not fix_valid(t, sha):  # no anchor commit: nothing to descend from
                 raise Refusal("E9: a fixed reply does not cite a commit that fixes its finding (ADR 0063 §5)")
             if not thread_closed(lines, t.id, agent):
                 raise Refusal("E9: a fixed finding is not closed by a later review line; a resolution by the "
@@ -250,9 +256,12 @@ def check_e10(commits: Sequence[str], complete_heads: Sequence[str], last_answer
     floor = index.get(last_answer, -1) if last_answer is not None else -1
     if last_answer is not None and last_answer not in index:
         raise Refusal("E10: the commit answering the CI review is not on the branch (ADR 0063 §5)")
+    if any(p.new not in index for p in pushes):
+        raise Refusal("E10: a ledger push is not on the branch, so the pushes after the round cannot be counted "
+                      "(ADR 0063 §5)")
     for h in complete_heads:
         if h in index and index[h] >= floor:
-            after = [p for p in pushes if p.new in index and index[p.new] > index[h]]
+            after = [p for p in pushes if index[p.new] > index[h]]
             if len(after) <= 1:
                 return
     raise Refusal("E10: no complete in-session review round covers the work since the last CI answer, or more "
@@ -276,7 +285,7 @@ def check_e13(branch_commits: Sequence[str], pushes: Sequence[LedgerPush], event
         raise Refusal("E13: the branch has no activity events to chain (ADR 0063 §5)")
     if events[0].before != ZERO and events[0].before != merge_base and not on_default(events[0].before):
         raise Refusal("E13: the activity chain does not start at the merge-base (ADR 0063 §5)")
-    for prev, nxt in zip(events, events[1:]):
+    for prev, nxt in itertools.pairwise(events):
         if prev.after != nxt.before:
             raise Refusal("E13: the activity chain is broken (ADR 0063 §5)")
     if events[-1].after != head:
@@ -295,14 +304,45 @@ def _numbers(line: str) -> list[float]:
     return [float(n) for n in NUMBER.findall(line)]
 
 
+def _skeleton(line: str) -> str:
+    """A threshold line with its numbers masked: two lines with one skeleton set the same limit."""
+    return NUMBER.sub("#", line.strip())
+
+
+def _squash(text: str) -> str:
+    """Case and all whitespace dropped, so `#noqa`, `# NOQA` and `# type:ignore` match their markers."""
+    return "".join(text.split()).lower()
+
+
+def _lowered(old: Sequence[str], new: Sequence[str], named_lines: frozenset[str]) -> bool:
+    """True when a removed threshold line has no replacement with the same skeleton and numbers no lower.
+    A replacement the plan names exactly is accepted whatever its numbers. Each added line replaces one."""
+    pool = list(new)
+    for before in old:
+        for after in pool:
+            if _skeleton(after) != _skeleton(before):
+                continue
+            nb, na = _numbers(before), _numbers(after)
+            if after.strip() in named_lines or (len(nb) == len(na) and all(a >= b for a, b in zip(na, nb))):
+                pool.remove(after)
+                break
+        else:
+            return True
+    return False
+
+
 def check_e18(changes: Sequence[Change], markers: Sequence[str], thresholds: Sequence[str],
               named_lines: frozenset[str]) -> None:
     """E18: a push's own change may not add a marker line, delete a test file or remove more test definitions
-    than it adds, or lower a number on a threshold line, unless the plan's item section names that exact line."""
+    than it adds, or lower a number on a threshold line, unless the plan's item section names that exact line.
+
+    Markers match without regard to case or spacing. A removed threshold line needs a replacement with the same
+    text apart from its numbers, and none of them lower; a line that only goes away refuses too."""
     patterns = [re.compile(p) for p in thresholds]
+    squashed = [_squash(m) for m in markers]
     for c in changes:
         for line in c.added:
-            if any(m in line for m in markers) and line.strip() not in named_lines:
+            if any(m in _squash(line) for m in squashed) and line.strip() not in named_lines:
                 raise Refusal("E18: the push adds a skip or suppression marker the plan does not name "
                               "(ADR 0063 §5)")
         if TEST_FILE.search(c.path):
@@ -315,21 +355,19 @@ def check_e18(changes: Sequence[Change], markers: Sequence[str], thresholds: Seq
         for pat in patterns:
             old = [x for x in c.removed_lines if pat.search(x) and x.strip() not in named_lines]
             new = [x for x in c.added if pat.search(x)]
-            if old and len(new) < len(old):
-                raise Refusal("E18: the push removes a threshold line (ADR 0063 §5)")
-            for before, after in zip(old, new):
-                nb, na = _numbers(before), _numbers(after)
-                if len(nb) != len(na) or any(a < b for a, b in zip(na, nb)):
-                    raise Refusal("E18: the push lowers a number on a threshold line (ADR 0063 §5)")
+            if _lowered(old, new, named_lines):
+                raise Refusal("E18: the push removes or lowers a threshold line the plan does not name "
+                              "(ADR 0063 §5)")
 
 
 # ---- E23 ---------------------------------------------------------------------------------------
 
-def check_e23(head: str, complete_heads: Sequence[str], pre_draft_rounds: int) -> None:
-    """E23: opening a PR from `plan/*` needs a complete round on the exact head and at most five pre-draft rounds."""
+def check_e23(head: str, complete_heads: Sequence[str], pre_draft_heads: Sequence[str]) -> None:
+    """E23: opening a PR from `plan/*` needs a complete round on the exact head and at most five pre-draft rounds
+    (heads that carry a pass recorded before the draft: `Ledger.pre_draft_heads`)."""
     if head not in complete_heads:
         raise Refusal("E23: no complete in-session review round on this exact head (ADR 0063 §5)")
-    if pre_draft_rounds > MAX_PRE_DRAFT_ROUNDS:
+    if len(set(pre_draft_heads)) > MAX_PRE_DRAFT_ROUNDS:
         raise Refusal(f"E23: more than {MAX_PRE_DRAFT_ROUNDS} pre-draft review rounds (ADR 0063 §5)")
 
 
@@ -344,7 +382,8 @@ def check_round_start(head: str, pre_draft_heads: Sequence[str]) -> None:
 
 def parts_in(names: Sequence[str], plan: str, item: int) -> set[int]:
     """The part numbers K in `item-NN-partK` names (a progress record, or a head ref `plan/<plan>/item-NN-partK`)."""
-    found = re.compile(rf"(?:^|/){re.escape(plan)}/item-{item:02d}-part([0-9]+)(?:\.md|\.jsonl)?$|^item-{item:02d}-part([0-9]+)(?:\.md|\.jsonl)$")
+    found = re.compile(rf"(?:^|/){re.escape(plan)}/item-{item:02d}-part([0-9]+)(?:\.md|\.jsonl)?$"
+                       rf"|^item-{item:02d}-part([0-9]+)(?:\.md|\.jsonl)?$")
     out: set[int] = set()
     for name in names:
         m = found.search(name)

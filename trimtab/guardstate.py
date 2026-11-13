@@ -90,13 +90,13 @@ def append(path: Path, text: str, *, create: bool = False) -> None:
     except OSError as err:
         raise GuardStateError(f"a guard-state file cannot be opened for append ({type(err).__name__})") from err
     with os.fdopen(fd, "ab") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)  # before the size is read, so parallel hooks cannot both pass it
         st = os.fstat(fh.fileno())
         if not stat.S_ISREG(st.st_mode) or not private(st):
             raise GuardStateError("a guard-state file is not a private regular file")
         data = text.encode("utf-8")
         if st.st_size + len(data) > MAX_BYTES:
             raise GuardStateError("a guard-state file would pass the size any this base reads")
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
         fh.write(data)
         fh.flush()
         os.fsync(fh.fileno())
