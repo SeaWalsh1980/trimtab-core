@@ -36,13 +36,17 @@ binds is the guard's ledger. A check the run could not read, or a re-run its tok
 is also named here with the next push, if one is made.
 
 The record carries exactly one `## Status` heading, at the start of a line, with exactly one line
-under it, and no carriage return or indented heading anywhere in the file (`trimtab latest-record
+under it, and no stray carriage return anywhere in the file, and no line elsewhere in the file that
+begins with optional whitespace then one to six `#` characters and a blank (`trimtab latest-record
 --next-on-restart`, trimtab-core ADR 0071, reads it exactly as strictly as a plan's `## Items`
-section). A second `## Status` heading anywhere — a quoted or fenced example included — makes that
-command refuse the restart, which is a blocker no later session can clear, because AGW-4 bars
-editing an earlier record. If `## Done` discusses the status line's own format, as this item's own
-record may, write the example inline in backticks on one line or indented four spaces or a tab, never
-as a `##`-prefixed line of its own.
+section, and that last check runs over the whole file, not only the `## Status` section). A second
+`## Status` heading anywhere — a quoted or fenced example included — and an indented heading
+anywhere — including an indented shell or Python comment inside a fenced code block, which this
+reader cannot tell from a heading — both make that command refuse the restart, which is a blocker
+no later session can clear, because AGW-4 bars editing an earlier record. If `## Done` discusses the
+status line's own format, as this item's own record may, write the example only inline in backticks
+within a sentence, never as its own line: not indented (the reader treats an indented `#`-prefixed
+line as a heading, whatever markdown would do with it) and never starting the line with `#`.
 
 ## Register entries
 

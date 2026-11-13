@@ -120,6 +120,12 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
   records.md` now tells the author the constraint (one `## Status` heading, one line under it, no
   stray carriage return or indented heading) and how to discuss the format safely in `## Done`, so a
   new record need not hit this; an existing record that already trips it is fixed by the operator.
+  The indented-heading check cannot tell an indented heading from an indented `#` comment inside a
+  fenced code block, since both are `#`-prefixed lines reading like markdown headings once
+  unindented; it is accepted rather than narrowed, because narrowing it to "looks like a heading"
+  would have to guess, and this reader's whole premise is that it does not guess. A record that
+  quotes code with an indented `#` comment must say so in prose instead, or use a language whose
+  comment marker is not `#`.
 - **An already-merged plan cannot be repaired in place**, and the cost of that is larger than the
   stop itself. `planauth`'s check 3 fails once a plan's text differs from the commit that merged it,
   and `--next-on-restart` runs that check, so adding the heading is what would make the plan
