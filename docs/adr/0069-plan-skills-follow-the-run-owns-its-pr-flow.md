@@ -67,19 +67,21 @@ unmeasured defaults a project may override.
   enforcement check's sources.
 - **The shared unreadable-link rule** now names the same label target as the stop protocol, and
   says the label is authoritative when the record's `## Next` could not be updated. `stops.md`
-  says so too, as a first-row-applies table by where the part is, with the stops that forbid a
-  write. Every stop but an unconfirmed merge leaves a label; the old exemption for a restart that
-  had not reached a branch is gone, since a restart has a record PR to label.
+  says so too, as a first-row-applies table by where the part is, with the stops that have no
+  write and those whose only write is the stop record. Every stop but an unconfirmed merge leaves
+  a label wherever a PR to label can be found; the old exemption for a restart that had not
+  reached a branch is gone, since a restart labels its record PR. The one restart left unlabelled
+  is one that can find no record PR, plan PR or starting PR, and it says so.
 - **Fail closed where the text left a gap:** ready needs a `pass` verdict on the exact head, not
-  only the absence of a CRITICAL or HIGH one; any `fail-closed` verdict is re-requested once; a
+  only the absence of a CRITICAL or HIGH one; only a `fail-closed` verdict that posted no thread
+  is re-requested without a round, as the doctrine's "before reaching any finding" reads, and one
+  that posted threads is handled like a `fail`; a
   review pass that fails twice on one head is a stop; a failed read anywhere in the in-flight table
   is a stop; an infrastructure failure that fails its re-run is an ordinary failing check.
 - **No write without authority:** a failed authorisation check or gate, in any session, and
   in-flight work the run may not build on, forbid every file write; the stop only labels.
   `stops.md` keeps those apart from the stops whose one write is the stop record itself (a
-  secret-scan failure, a stray Bash write). Only a `fail-closed` verdict that posted no thread is
-  re-requested without a round, as the doctrine's "before reaching any finding" reads; one that
-  posted threads is handled like a `fail`. A
+  secret-scan failure, a stray Bash write). A
   ledger the session cannot read counts as none. A label write that fails twice is reported as
   "stopped but unlabelled". An open blocked PR is judged by its label events, not the label's
   presence. A `fail` verdict that leaves nothing to fix, an in-scope finding the fix limits

@@ -55,9 +55,11 @@ OWN_MEANING = {
     "plan-run/references/gate.md": "the gate fails",
     "plan-run/references/restart.md": "no session is a restart",
 }
-# The entry must make each of these links at least once with its meaning.
+# Presence: the entry must link each deciding file at least once (with its meaning), so a run that
+# reads only plan-run/SKILL.md still reaches all four. The check below cannot show this: it only
+# judges links that exist.
 OWN_MEANING_IN = {"plan-run/SKILL.md": tuple(OWN_MEANING)}
-# Every link to these, in any plan skill file, must carry its meaning.
+# Form: every link to a deciding file, in any plan skill file, must carry its meaning.
 EVERY_LINK_NEEDS_MEANING = tuple(OWN_MEANING)
 
 # ADR 0069: each SKILL.md stays at or under this many lines; detail goes to references.
