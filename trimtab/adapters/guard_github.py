@@ -54,6 +54,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from trimtab import planacts, planguard, planrows
+from trimtab.enforcement import guardgate
 
 ALLOW, BLOCK = 0, 2
 DEFAULT_BRANCHES = {"main", "master"}
@@ -417,11 +418,12 @@ def _plan_draft(opts: list[Opt], ctx: Ctx) -> None:
         if plan.plan_run:
             raise planrows.Refusal("the branch a PR is opened from cannot be read here, so E23 cannot be "
                                    "judged; refusing in a plan run (ADR 0063 §5)")
-        ctx.unknown("the branch a PR is opened from cannot be read")
-        return
+        return  # outside a run, E23 governs nothing
     if not planrows.plan_branch(branch):
         return
-    head = _plan_ref(plan.facts.branch_head, branch)
+    head = _act_head(plan, lambda: _plan_ref(plan.facts.branch_head, branch))
+    if head is None and not plan.plan_run:
+        return
     if head is None:
         raise planrows.Refusal("a PR from plan/* is opened on the branch's remote head, which is not there "
                                "yet; refusing (ADR 0063 §5)")
@@ -995,6 +997,18 @@ def _plan_ref(fetch, *args):
         raise _refusal(err) from err
 
 
+def _act_head(plan: planguard.PlanSupport, read):
+    """The branch an act writes, looked up for the plan rows. Outside a plan run a lookup that fails is no
+    plan row's business — E23 and §1a govern runs, and E22 re-checks every server-side row at merge — so it
+    passes; inside one it refuses (ADR 0063 §5, SEC-2.5)."""
+    try:
+        return read()
+    except planrows.Refusal:
+        if plan.plan_run:
+            raise
+        return None
+
+
 def _plan_head(plan: planguard.PlanSupport, number: int, repo: str | None) -> str | None:
     return _plan_ref(plan.facts.pr_head, number, repo)
 
@@ -1132,7 +1146,10 @@ def check_plan_gh(group: str, sub: str, pre: list[Word], tail: list[Word], ctx: 
         head, _, _ = _selected(pre, tail, ISSUE_CLOSE_VALUED, set(), ctx)
         planrows.judge_close(head)
     elif group == "pr" and sub == "ready":
-        head, opts, _ = _selected(pre, tail, PR_READY_VALUED, PR_READY_BOOL, ctx)
+        found = _act_head(plan, lambda: _selected(pre, tail, PR_READY_VALUED, PR_READY_BOOL, ctx))
+        if found is None:
+            return
+        head, opts, _ = found
         if head is None:
             return  # _selected has already refused what it could not read
         if any(o.name == "--undo" and _bool(o) for o in opts):
@@ -1140,7 +1157,10 @@ def check_plan_gh(group: str, sub: str, pre: list[Word], tail: list[Word], ctx: 
         else:
             planacts.ready_mark(plan, head)
     elif group in ("pr", "issue") and sub == "edit":
-        head, opts, _ = _selected(pre, tail, EDIT_VALUED, EDIT_BOOL, ctx)
+        found = _act_head(plan, lambda: _selected(pre, tail, EDIT_VALUED, EDIT_BOOL, ctx))
+        if found is None:
+            return
+        head, opts, _ = found
         if head is None:
             return
         for o in opts:
@@ -1259,18 +1279,18 @@ def check_plan_api(req: Request, ctx: Ctx) -> None:
         if base is not None and planrows.plan_branch(base):
             _ref_write(plan, base, repo=repo)
     elif (m := re.fullmatch(r"issues/([0-9]+)/labels", rest, re.I)) and method in ("POST", "PUT"):
-        head = _plan_head(plan, int(m.group(1)), repo)
+        head = _act_head(plan, lambda: _plan_head(plan, int(m.group(1)), repo))
         if head is not None and planrows.plan_branch(head):
             _labels_of(body_of(req, ctx), ctx, head, plan)
     elif (m := re.fullmatch(r"issues/([0-9]+)/labels/(.+)", rest, re.I)) and method == "DELETE":
-        head = _plan_head(plan, int(m.group(1)), repo)
+        head = _act_head(plan, lambda: _plan_head(plan, int(m.group(1)), repo))
         if head is not None and planrows.plan_branch(head):
             if HOLE in m.group(2):
                 _label_unreadable(plan, head, ctx)
             else:
                 planacts.label_remove(plan, head, unquote(m.group(2)))
     elif (m := re.fullmatch(r"pulls/([0-9]+)/comments", rest, re.I)) and method == "POST":
-        head = _plan_head(plan, int(m.group(1)), repo)
+        head = _act_head(plan, lambda: _plan_head(plan, int(m.group(1)), repo))
         if head is not None and planrows.plan_branch(head):
             body = _get(body_of(req, ctx), "body", ctx, "a reply's body is unreadable")
             if isinstance(body, Unknown) or body is None:
@@ -1283,7 +1303,7 @@ def check_plan_api(req: Request, ctx: Ctx) -> None:
         if isinstance(state, str) and state.strip().lower() == "closed":
             planrows.judge_close(_plan_head(plan, int(m.group(1)), repo))
         if _has_key(body if isinstance(body, dict) else {}, "draft") or isinstance(body, Unknown):
-            head = _plan_head(plan, int(m.group(1)), repo)
+            head = _act_head(plan, lambda: _plan_head(plan, int(m.group(1)), repo))
             if head is not None and planrows.plan_branch(head):
                 draft = _get(body, "draft", ctx, "the PR's draft flag is unreadable")
                 if isinstance(draft, Unknown):
@@ -1464,6 +1484,11 @@ def judge(command: str, ctx: Ctx, parsed: list[list[Word]] | None = None) -> Non
             check_segment(words, sub)
 
 
+# E21: whether the enforcement gate has passed for this session's key (ADR 0063 §3). A module
+# attribute so a test can stand in for it; nothing else sets it.
+GATE_OK = guardgate.holds
+
+
 def decide(payload: dict, plan: planguard.PlanSupport | None = None) -> tuple[int, str]:
     if payload.get("tool_name") not in (None, "Bash"):
         return ALLOW, ""
@@ -1477,8 +1502,19 @@ def decide(payload: dict, plan: planguard.PlanSupport | None = None) -> tuple[in
     cwd_known = isinstance(cwd, str) and cwd.startswith("/") and not any(
         w.text in DIR_CHANGERS for s in parsed for w in s) and not _DIR_CHANGE_TEXT.search(command)
     where = Path(cwd) if isinstance(cwd, str) and cwd else Path("/")
+    support = plan or planguard.PlanSupport(where)
+    # E21: in a run session nothing reaches GitHub until the gate has passed for the current lock, base
+    # and default-branch head. Every command here is one the prefilter read as touching GitHub or a
+    # remote ref, so each is refused while the gate fails — guard-paths refuses the whole shell anyway,
+    # and this is the half that holds if only this hook is registered (ADR 0063 §3).
+    if support.plan_run and not GATE_OK(where):
+        return BLOCK, ("guard-github: blocked: E21: the enforcement gate has not passed for this "
+                       "session's lock, base and default-branch head, so a plan run reaches GitHub with "
+                       "nothing (ADR 0063 §3, AGW-4). A recorder has been started; run "
+                       "`trimtab check-enforcement` to see which row is not shown. Only the operator "
+                       "lifts this, by exporting HOOK_ALLOW_GITHUB=1 before launching claude.")
     try:
-        judge(command, Ctx(where, cwd_known, True, command, plan or planguard.PlanSupport(where),
+        judge(command, Ctx(where, cwd_known, True, command, support,
                            planguard.stability_of(command)), parsed)
     except planrows.Refusal as why:
         return BLOCK, (f"guard-github: blocked: {why}. This is a plan-run rule "

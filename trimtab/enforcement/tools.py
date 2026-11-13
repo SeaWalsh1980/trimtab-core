@@ -228,6 +228,17 @@ class Git:
             return False
         return True
 
+    def ls_remote(self, cwd: Path, url: str, ref: str, timeout: float) -> str:
+        """The SHA a remote ref points at, under `timeout`, read without the object checks: nothing it
+        returns is read as an object. Run it in a directory that is no repository, so only this
+        environment's pinned configuration takes part and no `insteadOf` can answer (ADR 0063 §3)."""
+        out = self._raw(cwd, "ls-remote", "--", url, ref, timeout=timeout).decode("utf-8", "replace")
+        for line in out.split("\n"):
+            sha, _, name = line.partition("\t")
+            if name.strip() == ref and len(sha) == 40:
+                return sha
+        raise ToolError(f"ls-remote named no {ref} for the repository")
+
     def config_get(self, repo: Path, key: str) -> str:
         """One config value, read without the object checks: it names nothing the gate then trusts."""
         return self._raw(repo, "config", "--get", key).decode("utf-8", "replace").strip()

@@ -16,6 +16,7 @@ from unittest import mock
 
 from instance_fixture import make_instance
 from trimtab import planacts, planledger, planscope
+from trimtab.adapters import guard_github
 
 REPO = "owner/proj"
 PLAN = "0008-slug"
@@ -60,6 +61,11 @@ def set_up(plan=PLAN, item=ITEM, part=PART) -> None:
     reader = mock.patch.object(planscope, "read_files",
                                lambda repo, sha, paths: {planscope.plan_files(plan)[0]: PLAN_TEXT})
     reader.start()
+    # E21 is tested on its own (test_plan_gate); here the gate stands passed, so each spelling test
+    # judges the row it is about and no test reads the machine's own enforcement cache.
+    passed = mock.patch.object(guard_github, "GATE_OK", lambda project, *a, **kw: True)
+    passed.start()
+    _state["passed"] = passed
     _state["tmp"], _state["env"], _state["reader"], _state["config"] = tmp, env, reader, config
 
 
@@ -67,7 +73,7 @@ def tear_down() -> None:
     _state["depth"] = max(0, int(_state.get("depth", 0)) - 1)
     if _state["depth"]:
         return
-    for key in ("reader", "env"):
+    for key in ("passed", "reader", "env"):
         if key in _state:
             _state.pop(key).stop()
     if "tmp" in _state:

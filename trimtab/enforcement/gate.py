@@ -562,6 +562,55 @@ def clear_pass(config: Path, repository: str | None = None) -> None:
             continue  # nothing cached under that name
 
 
+LS_REMOTE_SECONDS = 3  # the default-branch head's bound on every guarded call (ADR 0063 §3)
+
+
+def _no_gh(argv, stdin=None):
+    raise GateError("the current key is read without the API")
+
+
+def remote_head(git: tools.Git, repository: str) -> str:
+    """The default branch's head, by `git ls-remote <url> HEAD` under 3 s, with only this environment's
+    pinned configuration: no `insteadOf` of the project's can answer with a stale head (ADR 0063 §3)."""
+    scratch = tools.private_tempdir()
+    try:
+        return git.ls_remote(scratch, f"https://github.com/{repository}.git", "HEAD", LS_REMOTE_SECONDS)
+    except tools.ToolError as err:
+        raise GateError(f"the default-branch head could not be read ({err})") from err
+    finally:
+        tools.remove_tree(scratch)
+
+
+def pinned_key(repository: str, project: Path, instance_root: Path, code: Path, config: Path,
+               git: tools.Git | None = None) -> tuple[str, str, str, str]:
+    """The key a pass must carry to be this session's (ADR 0063 §3): the lock's `trimtab_sha`, the base the
+    instance pins at it, the default-branch head, and the install digest. Three reads, no API call: the
+    head by `ls-remote`, the lock and the instance as git objects, the digest from local files."""
+    if not REPOSITORY.fullmatch(repository) or ".." in repository:
+        raise GateError(f"{repository!r} is not owner/name")
+    reads = _Reads(_no_gh, git)
+    try:
+        head = remote_head(reads.git, repository)
+        lock = _lock(reads, project, head, False)
+        held = _instance(reads, instance_root, lock.trimtab_sha)
+        entries = _entries(reads, code, held.base_sha)
+        hooks = [h for e in entries.values() for h in e.hooks]
+        install = snapshot(code, config, project, instance_root, hooks)
+        return (lock.trimtab_sha, held.base_sha, head, install_digest(install))
+    finally:
+        reads.close()
+
+
+def pass_holds(repository: str, project: Path, instance_root: Path, code: Path, config: Path,
+               git: tools.Git | None = None) -> bool:
+    """Whether the cache holds a pass for the current key. Anything unreadable is no pass (E21 refuses)."""
+    try:
+        return cached_pass(config, repository, pinned_key(repository, project, instance_root, code, config,
+                                                          git))
+    except (GateError, tools.ToolError, OSError, ValueError):
+        return False
+
+
 def cached_pass(config: Path, repository: str, key: tuple[str, str, str, str]) -> bool:
     """Whether a pass is cached for exactly this key under the current epoch. A missing, planted or malformed
     cache, a pass from an earlier epoch, or no epoch at all is no pass."""
