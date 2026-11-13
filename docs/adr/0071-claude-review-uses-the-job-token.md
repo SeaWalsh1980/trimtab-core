@@ -80,6 +80,6 @@ the "Fail closed when no review was posted" step passes, and the job log shows
 
 The workflow comments and failure message that described the skip were corrected after
 this record merged: a PR that edits the workflow runs its own copy of the assertion, the
-prompt and the tool allowlist, so `claude-review` carries no information about such a PR
-either way, and the admin's CODEOWNERS review of the diff is the only gate there. The
-decision above is unchanged.
+prompt and the tool allowlist, so a green `claude-review` on such a PR carries no
+information, while a red one still means no review was posted; the admin's CODEOWNERS
+review of the diff is the only gate there. The decision above is unchanged.

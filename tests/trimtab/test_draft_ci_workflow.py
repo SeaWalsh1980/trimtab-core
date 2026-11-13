@@ -34,7 +34,9 @@ APP_TOKEN_KEY_FRAGMENTS = (
     "private_key",
     "oidc",
 )
-# A step that mints an App token, whatever the token is then passed to.
+# The action that mints an App token here, whatever the token is then passed to. One
+# name, so another minting action would need adding; its App inputs are keys, so the
+# fragments above would catch those.
 APP_TOKEN_ACTION = "create-github-app-token"
 
 
@@ -97,10 +99,10 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
         self.assertIs(self.workflow["concurrency"]["cancel-in-progress"], True)
 
     def test_the_run_that_cancels_does_not_review(self):
-        self.assertEqual(self.workflow["jobs"]["claude-review"]["if"], "github.event.pull_request.draft == false")
+        self.assertEqual(self.workflow["jobs"][REVIEW_JOB]["if"], "github.event.pull_request.draft == false")
 
     def test_the_skipped_job_never_reports_as_the_required_check(self):
-        self.assertEqual(self.workflow["jobs"]["claude-review"]["name"],
+        self.assertEqual(self.workflow["jobs"][REVIEW_JOB]["name"],
                          "${{ github.event.pull_request.draft && 'claude-review (draft, not run)' || 'claude-review' }}")
 
     def test_no_key_names_an_app_token_path(self):
@@ -108,8 +110,8 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
         # an env name that asks for it. Those are keys, so a key naming one fails
         # here, anywhere in the file; prose in the prompt and the messages is free to
         # discuss OIDC. A token smuggled in as a VALUE is out of this test's reach:
-        # the review action's own input is pinned by the two tests below, and a
-        # `run:` step or a local composite action could still mint one unseen.
+        # test_the_review_uses_the_jobs_own_token pins the review action's own input,
+        # but a `run:` step or a local composite action could still mint one unseen.
         keys = mapping_keys(self.workflow)
 
         for fragment in APP_TOKEN_KEY_FRAGMENTS:
@@ -127,7 +129,7 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
                     self.assertNotIn(APP_TOKEN_ACTION, str(step.get("uses", "")))
 
     def test_the_review_uses_the_jobs_own_token(self):
-        steps = self.workflow["jobs"]["claude-review"]["steps"]
+        steps = self.workflow["jobs"][REVIEW_JOB]["steps"]
         action = [s for s in steps if str(s.get("uses", "")).startswith(REVIEW_ACTION_PREFIX)]
 
         self.assertEqual(len(action), 1)
@@ -136,7 +138,7 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
     def test_the_review_token_is_comment_only(self):
         self.assertEqual(self.workflow["permissions"],
                          {"contents": "read", "pull-requests": "write", "issues": "read"})
-        self.assertNotIn("permissions", self.workflow["jobs"]["claude-review"])
+        self.assertNotIn("permissions", self.workflow["jobs"][REVIEW_JOB])
 
 
 if __name__ == "__main__":

@@ -120,5 +120,5 @@ Three measurements shaped the implementation, all on a 140 KB heredoc:
 The first "review alone does not catch it" bullet no longer holds as written: since
 ADR 0071 `claude-review` does not skip a pull request that edits its own workflow.
 CI still does not catch such a change, for a different reason — the PR runs under its
-own copy of the reviewer, so the check carries no information either way. The other two
-reasons, and the decision, stand.
+own copy of the reviewer, so a green check there carries no information, though a red
+one still means no review was posted. The other two reasons, and the decision, stand.
