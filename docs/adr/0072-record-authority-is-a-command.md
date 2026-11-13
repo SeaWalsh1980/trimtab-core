@@ -41,8 +41,9 @@ in `trimtab/planrecordauth.py`.
 - **The PR** is the one listed for the record's commit (`commits/{sha}/pulls`, one page, a full page
   an error) that is merged into the default branch. Zero or several is a named problem. Its own row
   must also be merged, target the default branch, and have the record's commit as its merge commit.
-- **The code gate** reuses `mergeauthority.last_reviews`, `_approves` and `_changes_requested`, so
-  the gate at merge and this check cannot disagree. One rule is added: an approval counts only if
+- **The code gate** reuses `mergeauthority.last_reviews` and the public aliases `review_rows`,
+  `parse_reviews`, `approves`, `changes_requested` and `is_server_id` (kept at the end of that module
+  for this check), so the gate at merge and this check cannot disagree. One rule is added: an approval counts only if
   its `submitted_at` is earlier than the PR's `merged_at`, since a review posted after the merge
   cannot have gated it. A request for changes or a dismissal still counts whenever it came, and an
   approval with no readable time is an error.
