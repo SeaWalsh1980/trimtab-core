@@ -15,7 +15,8 @@ from pathlib import Path
 from trimtab import bump
 from trimtab import config as project_config
 from trimtab import dependabot
-from trimtab import instance, mergeauthority, planauth, planrecord, planscope, propose, roots, routines, scrub, upstream
+from trimtab import (instance, mergeauthority, planauth, planrecord, planrecordauth, planscope, propose, roots, routines,
+                     scrub, upstream)
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
 from trimtab.ids import ID_SHAPE
@@ -1003,6 +1004,34 @@ def cmd_latest_record(args) -> int:
         return 2
 
 
+def cmd_check_record_authorised(args) -> int:
+    problems = planrecordauth.name_problems(args.repository, args.plan)  # before any read: no re-run fixes a typo
+    if problems:
+        return _print_problems(problems)
+    try:
+        loaded = instance.load(_instance(args))
+        problems = mergeauthority.plan_admin_problems(loaded.admin, args.repository)
+        if problems:
+            return _print_problems(problems)
+        who = mergeauthority.accounts(loaded.admin or "", loaded.approver)
+        verdict = planrecordauth.check(args.repo, args.repository, args.plan, who)
+    except (instance.InstanceFileError, mergeauthority.MergeAuthorityError, planrecordauth.RecordAuthError) as err:
+        print(f"error: {err}; nothing is vouched for", file=sys.stderr)
+        return 2
+    except Exception as err:  # noqa: BLE001 - reported; exit 1 would read as a verdict the session doesn't re-run
+        print(f"error: {type(err).__name__} while checking the record; nothing is vouched for", file=sys.stderr)
+        return 2
+    if verdict.problems:
+        _print_problems(verdict.problems)
+        return 3 if verdict.wait else 1
+    if verdict.record is None:
+        print(f"plan {args.plan}: no record; nothing to judge")
+        return 0
+    print(f"{verdict.record}: PR #{verdict.pr} merged by {verdict.merged_by}, approved by {verdict.approved_by} on "
+          f"{verdict.head[:12]}")
+    return 0
+
+
 def cmd_check_plan_scope_job(args) -> int:
     try:
         result = mergeauthority.plan_scope_job_result(args.repository, args.head)
@@ -1400,6 +1429,16 @@ def build_parser() -> argparse.ArgumentParser:
                     help="print the next work (item NN part K, or plan complete) instead of the record")
     lr.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout, fetched (default: .)")
     lr.set_defaults(func=cmd_latest_record)
+
+    ra = sub.add_parser("check-record-authorised", parents=[common],
+                        help="whether the plan's latest progress record was merged in a way that authorises it: one "
+                             "PR, the code gate, and an admin merge or an approver merge meeting every condition "
+                             "(ADR 0072). Exits 0 if so or if there is no record, 1 on named problems, 2 on a failed "
+                             "read, 3 while plan-scope is unfinished. For sessions only")
+    ra.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository the plan is in")
+    ra.add_argument("--plan", required=True, metavar="NAME", help="the plan's name, as its plan/<name>/ branches spell it")
+    ra.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout, fetched (default: .)")
+    ra.set_defaults(func=cmd_check_record_authorised)
 
     pj = sub.add_parser("check-plan-scope-job",
                         help="whether a head's plan-scope jobs are all real and passing, on a ruleset binding the check "

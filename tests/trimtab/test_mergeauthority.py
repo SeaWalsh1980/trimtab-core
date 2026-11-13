@@ -328,8 +328,8 @@ class AgreesWithTheSkill(unittest.TestCase):
 
     def test_the_skills_approver_file_test_names_every_admin_only_pin_and_checker_path(self):
         skill = (ROOT / "skills" / "plan-run" / "references" / "record-authority.md").read_text(encoding="utf-8")
-        start = skill.index("the PR changes neither `.github/`")
-        section = skill[start:skill.index("the `plan-scope` job runs its checker", start)]
+        start = skill.index("- **The merger:**")
+        section = skill[start:skill.index("- **A ruleset changed after the merge**", start)]
         paths = (*mergeauthority.PIN_FILES, *mergeauthority.CHECKER_DIRS, *mergeauthority.CHECKER_FILES, ".github/")
 
         self.assertEqual([p for p in paths if f"`{p}`" not in section], [])
@@ -358,11 +358,11 @@ class AgreesWithTheSkill(unittest.TestCase):
         start = entry.index("### 3. Work out the state")
         state = entry[start:entry.index("### 4. Gate the next work", start)]
         record = (ROOT / "skills" / "plan-run" / "references" / "record-authority.md").read_text(encoding="utf-8")
-        record = record[:record.index("First, whoever merged, the code gate")]
+        record = record[:record.index("What it holds, so a `FAIL` line reads clearly")]
         section = " ".join((state + "\n" + record).split())
 
-        self.assertIn("repos/{owner}/{repo}/commits/<sha>/pulls", section)
-        self.assertIn("Exactly one must remain", section)
+        self.assertIn("trimtab check-record-authorised --repository <owner>/<name> --plan <plan>", section)
+        self.assertIn("finds its PR", section)
         self.assertNotIn("section 2, check 2", section)
         self.assertNotIn("section 2's check 2", section)
 
@@ -2635,21 +2635,23 @@ class PlanScopeJob(unittest.TestCase):
 
     def test_the_skills_merger_test_takes_plan_scope_from_the_command(self):
         skill = (ROOT / "skills" / "plan-run" / "references" / "record-authority.md").read_text(encoding="utf-8")
-        start = skill.index("Then the merger.")
-        section = skill[start:skill.index("the PR changes neither `.github/`", start)]
+        # The command that judges the whole merger runs plan-scope's job check itself (ADR 0072).
+        start = skill.index("## Its PR: the code gate and the merger")
+        section = skill[start:]
 
-        self.assertIn("trimtab check-plan-scope-job --repository", section)
-        self.assertIn("command of its own, with no pipe", " ".join(section.split()))
+        self.assertIn("trimtab check-record-authorised --repository", section)
+        self.assertIn("as a command of its own, with no pipe", " ".join(section.split()))
+        self.assertIn("never a commit status", " ".join(section.split()))
         self.assertNotIn("check-runs", section)
 
     def test_the_skill_allows_one_bounded_re_run(self):
         skill = (ROOT / "skills" / "plan-run" / "references" / "record-authority.md").read_text(encoding="utf-8")
-        start = skill.index("Then the merger.")
-        section = " ".join(skill[start:skill.index("the PR changes neither `.github/`", start)].split())
+        start = skill.index("## Its PR: the code gate and the merger")
+        section = " ".join(skill[start:].split())
 
-        self.assertIn("Exit 3 means that workflow's run has not completed: wait up to ten minutes for it to finish, "
-                      "then run it once more", section)
-        self.assertIn("Exit 2 is a failed read: wait a minute, then run it once more", section)
+        self.assertIn("`plan-scope`'s run on the PR's final head has not finished | Wait up to ten minutes, then "
+                      "run it once more", section)
+        self.assertIn("Run `git fetch origin` once, wait a minute, then run it once more", section)
         self.assertIn("One re-run in all", section)
 
 
