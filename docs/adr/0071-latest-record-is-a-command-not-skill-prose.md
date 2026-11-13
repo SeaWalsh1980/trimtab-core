@@ -38,7 +38,8 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
   three forms, or that names another item or part than the file name, is exit 1.
 - Exit codes follow `check-plan-authorised`: 0 ok, 1 a named problem, 2 a failed read, a stale fetch
   (origin's default branch must be where the server says it is, which is why `--repository` is
-  required), a shallow clone or a grafts file.
+  required), a shallow clone or a grafts file. One difference: a malformed plan name is exit 1
+  here, since no fetch can fix it, where `check-plan-authorised` treats a bad argument as exit 2.
 - The skill runs it as a command of its own with no pipe and acts on its exit code.
 
 ## Options considered
@@ -67,8 +68,15 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
   only makes the command stop or name an item the gate then checks against the plan). When the
   record's item is not the highest the list names and `item + 1` is missing, the answer is a named
   problem ("skips from N to M"), never `plan complete`. Rejected: jumping to the next recognised
-  number, which would run an item out of the plan's order on a list the command half-reads. A plan
-  whose items are written in another shape therefore stops for the operator rather than guessing. A fixed plan format is separate work.
+  number, which would run an item out of the plan's order on a list the command half-reads. Before
+  printing `plan complete` it also scans the plan with a wider pattern (any indent, `Step N`,
+  `Task N`, `N.` under a list marker or heading); a number above the record's item that the strict
+  pattern did not read is a named problem. The accepted cost is the other direction: a nested
+  numbered sub-step above the last item, or a numbered list in the plan's preamble, also stops the
+  run (or, for a preamble list at column 0, can add an item), for the operator to look at. A plan
+  whose items are written in another shape therefore stops for the operator rather than guessing.
+- `plan complete` and the first-run `item 01 part 1` are not authorisation verdicts: the command
+  does not check who merged the plan or a record, and the skill says so. A fixed plan format is separate work.
 - Exit 2 is answered by fetching once and running the command again; a second exit 2 is a blocker.
   This replaces the skill's earlier "a shallow clone is a stop" for the latest-record lookup,
   because the command now detects the cut history itself and a fetch fixes it.

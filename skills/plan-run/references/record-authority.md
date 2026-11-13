@@ -16,14 +16,17 @@ No records yet → it prints `item 01 part 1`. It names no plans-folder path, so
 | Exit | Meaning | What you do |
 |---|---|---|
 | 0 | the line above | Use it. |
-| 1 | a named problem: a malformed record name, a plan name not on the default branch, a record added and since deleted, or (with `--next-on-restart`) an unreadable `## Status` or item list | A blocker: stop and report stderr. |
-| 2 | a failed read, a stale fetch, a shallow clone or a grafts file | Run `git fetch origin` (and `git fetch --unshallow origin` for a shallow clone) once, then run it again. A second exit 2 is a blocker. |
+| 1 | a named problem: a malformed record name, a malformed plan name, a plan (or its declaration) not on the default branch, a record added and since deleted, or (with `--next-on-restart`) a failed authorisation or admin check, an unreadable `## Status`, or an item list that is unreadable, skips an item or has a line that may be a later item | A blocker: stop and report stderr. |
+| 2 | a failed read, a stale fetch, a shallow clone or a grafts file; also an unreadable instance or admin variable, or a `--default-branch` that is not the default | Run `git fetch origin` (and `git fetch --unshallow origin` for a shallow clone) once, then run it again. A second exit 2 is a blocker. |
 
 On a restart whose latest record's `## Next` is `blocked:`, add `--next-on-restart`: it prints the next work, `item NN part K` or `plan complete`, taken only from the record's file name
 and `## Status` line. It also runs the plan authorisation check, so it needs the instance's admin
 login; exit 1 there, or for an unparseable or mismatched `## Status`, is a blocker.
 
-The command makes the lookup repeatable; it enforces nothing. The record's PR is still checked below.
+The command makes the lookup repeatable; it enforces nothing, and exit 0 is not an authorisation
+verdict: it does not check who merged the plan or the record (a first run with no record skips the
+authorisation check entirely). The plan check in plan-run section 2 and the record's PR checks below
+still decide.
 
 ## Its PR: the code gate and the merger
 

@@ -37,6 +37,8 @@ UNFINISHED = re.compile(r"item ([0-9]+) part ([0-9]+) stopped unfinished")
 # A numbered line counts only at column 0: an indented one is a sub-step, not an item.
 PLAN_ITEM = re.compile(r"^(?:[ \t]*(?:#{1,6}[ \t]+|[-*][ \t]+(?:\[.\][ \t]+)?)?(?:\*\*)?item[ \t-]*([0-9]+)\b"
                        r"|([0-9]+)[.)][ \t])", re.IGNORECASE)
+LOOSE_ITEM = re.compile(r"^[ \t]*(?:#{1,6}[ \t]+|[-*][ \t]+(?:\[.\][ \t]+)?)?(?:\*\*)?"
+                        r"(?:(?:item|step|task)[ \t-]*([0-9]+)\b|([0-9]+)[.)\]*][ \t])", re.IGNORECASE)
 MAX_RECORDS = 5000  # record paths git names in one answer; past it, an error rather than a partial list (ENG-6.2)
 
 
@@ -97,10 +99,10 @@ def plan_problems(repo: str, default: str, plan: str) -> tuple[str, ...]:
     and never a mistyped name. Authorisation itself is `check-plan-authorised`'s."""
     if not planauth.PLAN.fullmatch(plan) or ".." in plan:
         return (f"{plan!r} is not a plan name",)
-    held = _git(planscope.present, repo, f"refs/remotes/origin/{default}", [f"{planscope.AUTHORISED}/{plan}.md"])
-    if not held:
-        return (f"{plan} is not a plan on {default}",)
-    return ()
+    files = [f"{planscope.AUTHORISED}/{plan}.md", f"{planscope.AUTHORISED}/{plan}.writes"]
+    held = _git(planscope.present, repo, f"refs/remotes/origin/{default}", files)
+    return tuple(f"{plan} is not a plan on {default}: {f.rsplit('.', 1)[1]} file missing" for f in files
+                 if f not in held)
 
 
 def next_work(repo: str, default: str, record: Latest, plan_text: str) -> tuple[str, tuple[str, ...]]:
@@ -129,6 +131,10 @@ def next_work(repo: str, default: str, record: Latest, plan_text: str) -> tuple[
     higher = max(items)
     if higher > record.item:  # a gap, or a next item written in a shape the pattern misses: never "plan complete"
         return "", (f"the plan's item list skips from item {record.item} to item {higher}",)
+    unread = sorted(n for n in _looks_like_items(plan_text) if n > record.item)
+    if unread:  # a later item in a shape PLAN_ITEM does not accept: stop for the operator rather than end the plan
+        return "", (f"the plan has a line that looks like item {unread[0]} but is not one the item list reads; "
+                    "it may be a later item",)
     return "plan complete", ()
 
 
@@ -161,6 +167,18 @@ def _status_fields(status: str, record: Latest) -> tuple[str | None, str]:
                               f"item {record.item} part {record.part}")
             return "continues", ""
     return None, "## Status is none of the three forms plan-item writes"
+
+
+def _looks_like_items(plan_text: str) -> frozenset[int]:
+    """Numbers on lines that look like an item in a wider range of shapes than PLAN_ITEM reads (any indent,
+    `Step N`, `Task N`, `N.` under a list marker or heading), so that a last item the strict pattern misses is
+    seen. Used only to refuse `plan complete`; it never names work."""
+    found = set()
+    for line in plan_text.splitlines():
+        m = LOOSE_ITEM.match(line)
+        if m:
+            found.add(int(m.group(1) or m.group(2)))
+    return frozenset(found)
 
 
 def plan_items(plan_text: str) -> frozenset[int]:

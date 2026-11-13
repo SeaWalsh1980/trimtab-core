@@ -229,15 +229,38 @@ class NextOnRestart(Records):
     def test_numbered_sub_steps_are_not_items(self):
         self.assertEqual(planrecord.plan_items("1. a\n   1. step\n   2. step\n2. b\n"), frozenset({1, 2}))
 
-    def test_a_record_that_is_not_a_regular_file_is_a_named_problem(self):
-        record = planrecord.Latest(record_path(7, 1), "a" * 40, 7, 1)
+    def test_a_record_that_is_a_symlink_is_a_named_problem(self):
+        tpa.git(self.repo, "switch", "-q", "-c", "link")
+        (self.repo / record_path(1, 1)).parent.mkdir(parents=True, exist_ok=True)
+        os.symlink("../../../../README.md", self.repo / record_path(1, 1))
+        self.commit("symlinked record")
+        tpa.git(self.repo, "switch", "-q", DEFAULT)
+        tpa.git(self.repo, "merge", "-q", "--no-ff", "-m", "Merge link", "link")
+        self.publish()
 
-        work, problems = planrecord.next_work(str(self.repo), DEFAULT, record, PLAN_TEXT)
+        work, problems = planrecord.next_work(str(self.repo), DEFAULT, self.latest(), PLAN_TEXT)
 
         self.assertEqual((work, len(problems)), ("", 1))
+        self.assertIn("not a regular file", problems[0])
 
-    def record_with(self, status):
-        self.merge_record(1, 1, status)
+    def test_a_last_item_in_a_shape_the_list_does_not_read_is_a_named_problem_not_plan_complete(self):
+        for last in ("- [ ] 3. c\n", "## Step 3\n", "Task 3: c\n", "   3. c\n"):
+            with self.subTest(last=last):
+                work, problems = planrecord.next_work(str(self.repo), DEFAULT, self.record_with("item 2 complete", item=2),
+                                                      "1. a\n2. b\n" + last)
+
+                self.assertEqual((work, len(problems)), ("", 1))
+                tpa.git(self.repo, "reset", "-q", "--hard", "HEAD~1")
+                self.publish()
+
+    def test_a_plan_whose_last_item_is_complete_and_read_ends(self):
+        work, problems = planrecord.next_work(str(self.repo), DEFAULT, self.record_with("item 2 complete", item=2),
+                                              "1. a\n2. b\n   1. sub\n   2. sub\n")
+
+        self.assertEqual((work, problems), ("plan complete", ()))
+
+    def record_with(self, status, item=1):
+        self.merge_record(item, 1, status)
         return self.latest()
 
     def test_plan_items_read_headings_checklists_and_numbered_lines(self):
@@ -258,6 +281,27 @@ class Guards(Records):
 
         with mock.patch.object(planrecord, "MAX_RECORDS", 1), self.assertRaisesRegex(PlanRecordError, "partial"):
             self.latest()
+
+    def test_exactly_the_cap_of_records_is_accepted(self):
+        self.merge_branch("many", {record_path(1, p): record_text("item 1 complete") for p in (1, 2)})
+        self.publish()
+
+        with mock.patch.object(planrecord, "MAX_RECORDS", 2):
+            self.assertEqual(self.latest().part, 2)
+
+    def test_a_plan_without_its_declaration_is_a_named_problem(self):
+        self.merge_branch("half", {f"{planscope.AUTHORISED}/0003-half.md": "# p\n"})
+        self.publish()
+
+        self.assertEqual(len(planrecord.plan_problems(str(self.repo), DEFAULT, "0003-half")), 1)
+
+    def test_a_value_error_from_git_output_is_an_error(self):
+        def log_added(*_args):
+            raise ValueError("short field")
+
+        with mock.patch.object(planscope, "log_added", log_added):
+            with self.assertRaisesRegex(PlanRecordError, "could not be parsed"):
+                self.latest()
 
     def test_a_path_before_any_commit_is_an_error(self):
         with mock.patch.object(planscope, "log_added", return_value=f"{record_path(1, 1)}\n"):
