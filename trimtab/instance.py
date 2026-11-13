@@ -22,7 +22,7 @@ COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
 PACK = re.compile(r"^[a-z0-9-]+$")
 LOGIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,38}$")  # a user's: an App's `[bot]` can't match
 APP_LOGIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,33}\[bot\]$")  # an App's name stops at 34 characters
-TOP = {"schema_version", "repo", "base", "guards", "accounts", "enforcement", "secret_scan", "review"}
+TOP = {"schema_version", "repo", "base", "guards", "accounts", "enforcement", "secret_scan", "review", "fix_limits"}
 BASE = {"repo", "sha"}
 GUARDS = {"secrets_packs", "secrets_patterns"}
 ACCOUNTS = {"admin", "agent", "approver"}
@@ -61,6 +61,22 @@ class ReviewConfig:
     tags: MappingProxyType
     review_minutes: int = 60
     watch_hours: int = 24
+FIX_LIMITS = {"markers", "thresholds"}
+FIX_LIST_LIMIT = 200
+FIX_ITEM_LIMIT = 300
+CONTROL = re.compile(r"[\x00-\x1f]")
+# E18's markers when the key is present and names none: the common Python and Actions skip and suppression markers.
+DEFAULT_FIX_MARKERS = ("# noqa", "# type: ignore", "# pragma: no cover", "# nosec", "# pylint: disable",
+                       "# fmt: off", "# fmt: skip", "@pytest.mark.skip", "@unittest.skip",
+                       "continue-on-error: true")
+
+
+@dataclass(frozen=True)
+class FixLimits:
+    """E18: literal markers a `plan/*` change may not add, and patterns for lines whose numbers it may not lower."""
+
+    markers: tuple[str, ...]
+    thresholds: tuple[str, ...]
 
 
 class InstanceFileError(Exception):
@@ -83,6 +99,8 @@ class InstanceFile:
     # ADR 0063 §5: E19's secret-scan Actions job, and the review rows' jobs, login, label and tags.
     secret_scan: JobRef | None = None
     review: ReviewConfig | None = None
+    # ADR 0063 §5 E18: what a `plan/*` push may not add or lower.
+    fix_limits: FixLimits | None = None
 
 
 def _keys(obj: dict, allowed: set[str], where: str) -> None:
@@ -197,6 +215,31 @@ def _review(obj: object) -> ReviewConfig:
                         _bound(obj.get("watch_hours"), "review.watch_hours", 24, 24 * 14))
 
 
+def _strings(value: object, key: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or len(value) > FIX_LIST_LIMIT:
+        raise InstanceFileError(f"{key} must be a list of at most {FIX_LIST_LIMIT} strings")
+    for item in value:
+        if not isinstance(item, str) or not 1 <= len(item) <= FIX_ITEM_LIMIT or CONTROL.search(item):
+            raise InstanceFileError(f"{key}: each entry is 1-{FIX_ITEM_LIMIT} printable characters")
+    if len(set(value)) != len(value):
+        raise InstanceFileError(f"{key} names an entry twice")
+    return tuple(value)
+
+
+def _fix_limits(obj: object) -> FixLimits:
+    if not isinstance(obj, dict):
+        raise InstanceFileError("fix_limits must be an object")
+    _keys(obj, FIX_LIMITS, "fix_limits.")
+    markers = _strings(obj["markers"], "fix_limits.markers") if "markers" in obj else DEFAULT_FIX_MARKERS
+    thresholds = _strings(obj["thresholds"], "fix_limits.thresholds") if "thresholds" in obj else ()
+    for pattern in thresholds:
+        try:
+            re.compile(pattern)
+        except re.error as err:
+            raise InstanceFileError("fix_limits.thresholds: a pattern does not compile") from err
+    return FixLimits(markers, thresholds)
+
+
 def _enforcement(obj: object) -> tuple[str, MappingProxyType]:
     if not isinstance(obj, dict):
         raise InstanceFileError("enforcement must be an object")
@@ -269,6 +312,7 @@ def parse(data: object) -> InstanceFile:
         enforcement_jobs=jobs,
         secret_scan=_job_ref(data["secret_scan"], "secret_scan") if "secret_scan" in data else None,
         review=_review(data["review"]) if "review" in data else None,
+        fix_limits=_fix_limits(data["fix_limits"]) if "fix_limits" in data else None,
     )
 
 

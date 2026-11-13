@@ -7,6 +7,7 @@ the config dir by its physical path (ADR 0029); the residual is the one ADR 0028
 
 from __future__ import annotations
 
+import fcntl
 import os
 import stat
 import tempfile
@@ -73,6 +74,32 @@ def read(path: Path) -> str | None:
         return data.decode("utf-8")
     except UnicodeDecodeError as err:
         raise GuardStateError("a guard-state file is not UTF-8") from err
+
+
+def append(path: Path, text: str, *, create: bool = False) -> None:
+    """Append `text` to a private regular file, locked, never following a link, bounded in size.
+
+    The file must exist unless `create`. A planted link, a file open to others or one past
+    MAX_BYTES raises, so a ledger line is never written where it will not be read back.
+    """
+    flags = os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    if create:
+        flags |= os.O_CREAT
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError as err:
+        raise GuardStateError(f"a guard-state file cannot be opened for append ({type(err).__name__})") from err
+    with os.fdopen(fd, "ab") as fh:
+        st = os.fstat(fh.fileno())
+        if not stat.S_ISREG(st.st_mode) or not private(st):
+            raise GuardStateError("a guard-state file is not a private regular file")
+        data = text.encode("utf-8")
+        if st.st_size + len(data) > MAX_BYTES:
+            raise GuardStateError("a guard-state file would pass the size any this base reads")
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
 
 
 def write(path: Path, text: str) -> None:
