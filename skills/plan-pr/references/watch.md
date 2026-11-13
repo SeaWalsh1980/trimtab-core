@@ -14,7 +14,7 @@ from what your token can read (Actions job records and logs), its review threads
 | Event | Then |
 |---|---|
 | The PR merged | Continue with plan-run/SKILL.md from section 1. This session did the merged work, so its section 7 hands over. |
-| An infrastructure failure: a job that never reached its steps, or one its log shows failed on a runner, network or service error before running the project's own command | Re-run it once; it does not count as a round. If the re-run fails too, take it as a failing check (the rows below). |
+| An infrastructure failure not yet re-run on this head: a job that never reached its steps, or one its log shows failed on a runner, network or service error before running the project's own command | Re-run it once; it does not count as a round. A job already re-run once on this head (its run shows an attempt above 1) skips this row: take it as a failing check (the rows below). |
 | A failing check within the item's scope (it passes on the merge-base; plan-item/references/scope.md; an unreadable merge-base result is a stop) | Return the PR to draft, then fix it as a CI fix round (step 3). Mark it ready again only as step 4 says. |
 | A failing check outside the item's scope | Name it for the operator in a PR comment. A stop; never fix it. |
 | A check you cannot read, or a re-run your token may not trigger | Name it for the operator in a PR comment, and in the progress record with the next push if one is made. Never treat it as passed. Keep watching. |
