@@ -3,7 +3,9 @@
 import contextlib
 import io
 import json
+import os
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import test_mergeauthority as tma
@@ -711,18 +713,70 @@ class Cli(tpa.GitRepository):
 
         self.assertEqual((done.returncode, done.stdout), (2, ""), done.stderr)
 
-    def test_a_plan_scope_run_still_going_exits_3(self):
+    def approver_merge_with_plan_scope(self, scope_job):
+        """An approver-merged record on a plan branch whose every other route condition holds."""
+        sha = self.merge_record(merged_by=APPROVER)
+        scope = tma.plan_scope_answers(jobs=[scope_job])
+        self.answers.update({k: v for k, v in scope.items() if k != tma.REPOSITORY_PATH})
+        self.answers[f"repos/{tpa.REPOSITORY}/pulls/{NUMBER}/files"] = json.dumps([file_row(SOURCE_FILE)])
+        self.answers[f"repos/{tpa.REPOSITORY}/rules/branches/{tpa.DEFAULT}"] = json.dumps(rules())
+        self.answers[ruleset_path()] = json.dumps(ruleset())
+        return sha
+
+    def run_in_process(self, *extra, plan_gate=None):
+        """The real CLI, real git and a scripted gh on PATH, with only the plan-gate reader swapped."""
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        (self.root / "answers.json").write_text(json.dumps(self.answers), encoding="utf-8")
+        gh = bin_dir / "gh"
+        gh.write_text("#!/usr/bin/env python3\nimport json, os, sys\n"
+                      f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+                      "from gh_fake import path_of\n"
+                      "answers = json.load(open(os.environ['FAKE_ANSWERS']))\n"
+                      "path = path_of(sys.argv)\n"
+                      "if path not in answers:\n    sys.exit('gh: Not Found (HTTP 404)')\n"
+                      "print(answers[path])\n", encoding="utf-8")
+        gh.chmod(0o755)
         argv = ["check-record-authorised", "--repository", tpa.REPOSITORY, "--plan", tpr.PLAN, "--repo",
-                str(self.repo)]
-        waiting = planrecordauth.Verdict(("approver merge: still running",), wait=True)
-
-        with mock.patch.dict("os.environ", {"TRIMTAB_INSTANCE": str(self.inst)}), \
-                mock.patch.object(mergeauthority, "plan_admin_problems", return_value=()), \
-                mock.patch.object(planrecordauth, "check", return_value=waiting), \
-                contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()) as out:
+                str(self.repo), *extra]
+        env = {"TRIMTAB_INSTANCE": str(self.inst), "FAKE_ANSWERS": str(self.root / "answers.json"),
+               "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict("os.environ", env), mock.patch.object(planrecordauth, "PLAN_GATE", plan_gate), \
+                contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
             code = cli.main(argv)
+        return code, out.getvalue(), err.getvalue()
 
-        self.assertEqual((code, out.getvalue()), (3, ""))
+    def test_a_plan_scope_run_still_going_exits_3(self):
+        self.approver_merge_with_plan_scope(tma.plan_scope_job(status="in_progress", conclusion=None))
+
+        code, out, err = self.run_in_process(plan_gate=lambda repository, head: PlanScopeResult((), wait=False))
+
+        self.assertEqual((code, out, "has not completed" in err), (3, "", True), err)
+
+    def test_an_approver_merge_meeting_every_condition_exits_0_once_plan_gate_passes(self):
+        self.approver_merge_with_plan_scope(tma.plan_scope_job())
+
+        code, out, err = self.run_in_process(plan_gate=lambda repository, head: PlanScopeResult((), wait=False))
+
+        self.assertEqual((code, f"merged by {APPROVER}" in out), (0, True), err)
+
+    def test_an_approver_merge_exits_1_while_the_base_ships_no_plan_gate_job(self):
+        self.approver_merge_with_plan_scope(tma.plan_scope_job())
+
+        code, out, err = self.run_in_process()
+
+        self.assertEqual((code, out, "plan-gate" in err), (1, "", True), err)
+
+    def test_an_instance_naming_a_malformed_approver_exits_2(self):
+        path = self.inst / "instance.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        path.write_text(json.dumps({**data, "accounts": {"admin": tpa.ADMIN, "approver": tpa.ADMIN}}),
+                        encoding="utf-8")
+
+        done = self.run_cli()
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""), done.stderr)
 
     def test_an_unexpected_failure_exits_2_not_1(self):
         argv = ["check-record-authorised", "--repository", tpa.REPOSITORY, "--plan", tpr.PLAN, "--repo",

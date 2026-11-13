@@ -43,6 +43,9 @@ RULESET_LIMIT = 50  # rulesets read for their times; far past any real repositor
 PLAN_GATE_JOB = "plan-gate"
 
 PlanGateRead = Callable[[str, str], mergeauthority.PlanScopeResult]  # (repository, head) -> result
+# The reader of the base's server-side plan-gate job. None until the base ships that job (ADR 0063 section 7,
+# ADR 0072): then every approver merge fails on that one line. The CLI passes this; a test swaps it.
+PLAN_GATE: PlanGateRead | None = None
 
 
 class RecordAuthError(Exception):
@@ -188,6 +191,7 @@ def _approver_problems(api: GhApi, repository: str, default: str, plan: str, rec
         if gate.wait:
             problems.append(f"the {PLAN_GATE_JOB} job on the final head has not completed")
         problems += gate.problems
+    problems = list(dict.fromkeys(problems))  # two reads may name one failure in the same words
     return [f"approver merge: {p}" if not p.startswith("approver merge:") else p for p in problems], waiting
 
 
@@ -243,7 +247,9 @@ def _ruleset_problems(api: GhApi, repository: str, default: str, pull: _Pull) ->
                 raise RecordAuthError(f"{what} returned unexpected JSON")
             ids.add(ruleset)
     if not ids:
-        return []  # plan_scope_job_result names the missing requirement
+        # The same words as plan_scope_job_result's, which `_approver_problems` merges; this test never leans on
+        # that one to refuse.
+        return [f"the default branch's ruleset does not require {mergeauthority.CHECK_NAME} bound to GitHub Actions"]
     if len(ids) > RULESET_LIMIT:
         raise RecordAuthError(f"more than {RULESET_LIMIT} rulesets require {mergeauthority.CHECK_NAME}; "
                               "refusing a partial list")

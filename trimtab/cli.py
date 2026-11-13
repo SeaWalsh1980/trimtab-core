@@ -1014,7 +1014,8 @@ def cmd_check_record_authorised(args) -> int:
         if problems:
             return _print_problems(problems)
         who = mergeauthority.accounts(loaded.admin or "", loaded.approver)
-        verdict = planrecordauth.check(args.repo, args.repository, args.plan, who)
+        verdict = planrecordauth.check(args.repo, args.repository, args.plan, who,
+                                       plan_gate=planrecordauth.PLAN_GATE)
     except (instance.InstanceFileError, mergeauthority.MergeAuthorityError, planrecordauth.RecordAuthError) as err:
         print(f"error: {err}; nothing is vouched for", file=sys.stderr)
         return 2

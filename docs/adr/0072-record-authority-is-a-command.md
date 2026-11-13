@@ -106,7 +106,8 @@ in `trimtab/planrecordauth.py`.
   merge-commit test. Plan item PRs are merged with a merge commit or a squash, so this is a false
   stop the admin clears, never a pass.
 - Exit 3 cannot occur while `plan-gate` is unshipped, since that line is always a second problem on
-  the approver path. It is tested through the `judge` seam and the CLI's mapping.
+  the approver path. It is tested through the real CLI by swapping `planrecordauth.PLAN_GATE`, the one
+  seam where the base's `plan-gate` reader will be set once that job ships.
 - The check reads the server over several calls, not one snapshot. A review or ruleset changed
   between its reads is not detected; a session re-runs it at the start of every run, so the next run
   sees the change.
