@@ -27,7 +27,10 @@ It reads the plan's items from one `## Items` section: top-level `N. ` lines num
 order, with an item's wrapped text or sub-steps indented under it (a sub-step by four spaces or a
 tab; a numbered line indented less is refused), and nothing else in the section: the section ends
 only at the next `## ` heading or the end of the file, so a `###` heading, a rule, a fence or a
-table row inside it is refused by name.
+table row inside it is refused by name. Both restart cases read that section: a continuing part is
+printed only once the section names its item, so an unreadable section stops the restart either way.
+The record's own `## Status` is read the same way: one heading at the start of a line, and a second
+one — a quoted example included — is refused rather than guessed between.
 Nothing outside the section is read. `plan complete` means the record's item is the section's last.
 A plan without that section is exit 1, which is a blocker on the restart path: report it rather than
 work out the next item by hand (trimtab-core ADR 0071).

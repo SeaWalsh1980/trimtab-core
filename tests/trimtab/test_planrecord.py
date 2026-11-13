@@ -10,7 +10,8 @@ from unittest import mock
 
 import test_planauth as tpa
 from gh_fake import FakeGh
-from trimtab import cli, planrecord, planscope
+from trimtab import cli, planauth, planrecord, planscope
+from trimtab.capture.sources import GhApi
 from trimtab.planrecord import PlanRecordError
 
 PLAN = "0002-items"
@@ -192,6 +193,35 @@ class NextOnRestart(Records):
                 tpa.git(self.repo, "reset", "-q", "--hard", "HEAD~1")
                 self.publish()
 
+    def test_a_records_status_heading_is_read_as_strictly_as_the_plans(self):
+        """The record's prose is the least trusted input here: a status the rendered record does not show must
+        not decide the next work."""
+        bodies = {
+            "a heading only a form feed opens": "## Done\nx\x0c## Status\x0citem 1 complete\n",
+            "an indented heading": "## Done\nx\n\n  ## Status\n  item 1 complete\n",
+            "a fenced example above the real one": "## Done\n```\n## Status\nitem 1 part 1 complete; item "
+                                                   "continues\n```\n\n## Status\nitem 1 complete\n",
+            "a carriage return inside a line": "## Done\nx\n\n## Status\r item 1 complete\n",
+        }
+        for name, body in bodies.items():
+            with self.subTest(name=name):
+                self.merge_branch("status-shape", {record_path(1, 1): body})
+                self.publish()
+
+                work, problems = planrecord.next_work(str(self.repo), self.tip_of(), self.latest(), PLAN_TEXT)
+
+                self.assertEqual((work, len(problems)), ("", 1))
+                tpa.git(self.repo, "reset", "-q", "--hard", "HEAD~1")
+                tpa.git(self.repo, "branch", "-q", "-D", "status-shape")
+                self.publish()
+
+    def test_a_crlf_record_still_reads_its_status(self):
+        self.merge_branch("crlf", {record_path(1, 1): "## Done\r\nx\r\n\r\n## Status\r\nitem 1 complete\r\n"})
+        self.publish()
+
+        self.assertEqual(planrecord.next_work(str(self.repo), self.tip_of(), self.latest(), PLAN_TEXT),
+                         ("item 02 part 1", ()))
+
     def test_a_record_with_no_status_section_is_a_named_problem(self):
         self.merge_branch("nostatus", {record_path(1, 1): "## Done\nonly\n"})
         self.publish()
@@ -315,6 +345,41 @@ class NextOnRestart(Records):
 
                 self.assertEqual(items, (1, 2))
 
+    def test_a_bare_carriage_return_inside_a_line_is_a_named_problem(self):
+        """Markdown reads it as a line ending, so the item after it would be invisible here."""
+        items, problems = planrecord.plan_items("## Items\n\n1. a\n2. b\r3. hidden\n")
+
+        self.assertEqual((items, len(problems)), ((), 1))
+        self.assertIn("carriage return", problems[0])
+
+    def test_an_empty_numbered_marker_indented_shallowly_is_a_named_problem(self):
+        items, problems = planrecord.plan_items("## Items\n\n1. a\n2. b\n   3.\n")
+
+        self.assertEqual((items, len(problems)), ((), 1))
+        self.assertIn("less than 4 spaces", problems[0])
+
+    def test_an_indented_heading_in_the_section_is_a_named_problem(self):
+        items, problems = planrecord.plan_items("## Items\n\n1. a\n  ## Notes\n2. b\n")
+
+        self.assertEqual((items, len(problems)), ((), 1))
+        self.assertIn("indented heading", problems[0])
+
+    def test_a_tab_indented_sub_step_is_read_as_a_sub_step(self):
+        self.assertEqual(planrecord.plan_items("## Items\n\n1. a\n\t3. step\n2. b\n"), ((1, 2), ()))
+
+    def test_a_continuing_part_of_an_item_the_plan_does_not_name_is_a_named_problem(self):
+        work, problems = self.work_after(self.record_with("item 9 part 1 complete; item continues", item=9),
+                                         PLAN_TEXT)
+
+        self.assertEqual((work, len(problems)), ("", 1))
+        self.assertIn("not item 9", problems[0])
+
+    def test_a_continuing_part_is_refused_when_the_items_section_cannot_be_read(self):
+        work, problems = self.work_after(self.record_with("item 1 part 1 complete; item continues"),
+                                         "# plan with no items section\n")
+
+        self.assertEqual((work, len(problems)), ("", 1))
+
     def test_text_outside_the_section_is_never_read(self):
         text = "# plan\n\n## Context\n\n3. not an item\n\n## Items\n\n1. a\n2. b\n\n## Notes\n\n4. nor this\n"
 
@@ -432,6 +497,18 @@ class ReadFailures(Records):
 
         self.assertEqual(gh.calls, [])
 
+    def test_each_planauth_wrapper_refuses_an_unvalidated_repository_on_its_own(self):
+        """Either wrapper may be called directly, so each guards its own REST path."""
+        for call in (lambda api: planauth.default_branch(api, "owner/name/../../other/repo"),
+                     lambda api: planauth.fetched_tip(str(self.repo), api, "owner/name/../../other", DEFAULT)):
+            with self.subTest(call=call):
+                gh = FakeGh(self.answers)
+
+                with self.assertRaisesRegex(planauth.PlanAuthError, "is not owner/name"):
+                    call(GhApi(gh))
+
+                self.assertEqual(gh.calls, [])
+
     def test_a_stale_fetch_is_an_error(self):
         self.answers[tpa.BRANCH_PATH] = json.dumps({"name": DEFAULT, "commit": {"sha": "f" * 40}})
 
@@ -502,6 +579,15 @@ class Cli(tpa.Cli):
         done = self.cli(command=("latest-record",), plan="0099-typo")
 
         self.assertEqual((done.returncode, done.stdout, "not a plan" in done.stderr), (1, "", True), done.stderr)
+
+    def test_a_malformed_plan_name_exits_1_even_when_the_fetch_is_stale(self):
+        """The name is checked before any read: no fetch fixes a typo, so it must not read as exit 2."""
+        self.answers[tpa.BRANCH_PATH] = json.dumps({"name": DEFAULT, "commit": {"sha": "f" * 40}})
+
+        done = self.cli(command=("latest-record",), plan="../etc/passwd")
+
+        self.assertEqual((done.returncode, done.stdout, "is not a plan name" in done.stderr), (1, "", True),
+                         done.stderr)
 
     def test_a_default_branch_override_that_is_not_the_default_exits_2(self):
         done = self.run_cli("--default-branch", "feature")

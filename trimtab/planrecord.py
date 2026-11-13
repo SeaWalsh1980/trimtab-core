@@ -36,12 +36,14 @@ UNFINISHED = re.compile(r"item ([0-9]+) part ([0-9]+) stopped unfinished")
 # The plan's item list: one `## Items` section of top-level `N. ` lines, numbered 1..n (ADR 0071).
 # Nothing outside the section is read, and a section holding anything else is a named problem, never a guess.
 ITEMS_HEADING = re.compile(r"##[ \t]+Items[ \t]*", re.IGNORECASE)
+STATUS_HEADING = re.compile(r"##[ \t]+Status[ \t]*", re.IGNORECASE)
 SECTION_HEADING = re.compile(r"##[ \t]+\S")
 ITEM_LINE = re.compile(r"([0-9]+)\.[ \t]+\S.*")
 # An indented numbered line: ambiguous, since markdown reads one indented less than four spaces as an item of
 # the same list, so a sub-step must be indented four spaces or a tab and anything shallower is refused.
-SUB_ITEM = re.compile(r"([ \t]*)([0-9]+)[.)][ \t]")
+SUB_ITEM = re.compile(r"([ \t]*)([0-9]+)[.)]([ \t]|$)")
 SUB_INDENT = 4
+INDENTED_HEADING = re.compile(r"[ \t]+#{1,6}[ \t]")
 MAX_RECORDS = 5000  # record paths git names in one answer; past it, an error rather than a partial list (ENG-6.2)
 
 
@@ -131,36 +133,53 @@ def next_work(repo: str, tip: str, record: Latest, plan_text: str) -> tuple[str,
     text = _git(planscope.read_files, repo, tip, [record.path])[record.path]
     if text is None:
         return "", (f"{record.path} is not a regular file on {tip[:12]}",)
-    status = _status(text)
+    status, why = _status(text)
     if status is None:
-        return "", (f"{record.path} has no ## Status line",)
+        return "", (f"{record.path} {why}",)
     kind, why = _status_fields(status, record)
     if kind is None:
         return "", (f"{record.path}: {why}",)
-    if kind == "continues":
-        return f"item {record.item:02d} part {record.part + 1}", ()
+    # The plan's items are read on both paths: a part of an item the plan does not name is no more work than a
+    # next item it does not name, and an unreadable section must not pass as either.
     items, problems = plan_items(plan_text)
     if problems:
         return "", problems
     if record.item not in items:
         return "", (f"the plan's ## Items section names items 1 to {items[-1]}, not item {record.item}",)
+    if kind == "continues":
+        return f"item {record.item:02d} part {record.part + 1}", ()
     if record.item == items[-1]:  # the numbers are 1..n, so the last item is the only end of the plan
         return "plan complete", ()
     return f"item {record.item + 1:02d} part 1", ()
 
 
-def _status(text: str) -> str | None:
-    """The first non-blank line under `## Status`, without surrounding backticks, or None."""
-    lines = text.splitlines()
-    for i, line in enumerate(lines):
-        if line.strip() == "## Status":
-            for following in lines[i + 1:]:
-                if following.startswith("## "):
-                    return None
-                if following.strip():
-                    return following.strip().strip("`").strip()
-            return None
-    return None
+def _status(text: str) -> tuple[str | None, str]:
+    """The one line under the record's `## Status`, without surrounding backticks: (line, "") or (None, why).
+
+    Read exactly as strictly as the plan's `## Items` section, and for the same reason: the record's prose is
+    the least trusted input here, and a status the rendered record does not show must not decide the next
+    work. So the heading counts only at the start of a line, a second one is refused rather than ignored, and
+    the text is split on newlines alone."""
+    lines = _lines(text)
+    if any("\r" in line for line in lines):
+        return None, "holds a carriage return inside a line; markdown would read it as a line ending"
+    heads = [i for i, line in enumerate(lines) if STATUS_HEADING.fullmatch(line)]
+    if not heads:
+        return None, "has no ## Status heading"
+    if len(heads) > 1:  # a quoted or fenced example counts: the reader cannot tell which the author meant
+        return None, f"has {len(heads)} ## Status headings, not one"
+    for following in lines[heads[0] + 1:]:
+        if SECTION_HEADING.match(following):
+            break
+        if following.strip():
+            return following.strip().strip("`").strip(), ""
+    return None, "has no line under its ## Status heading"
+
+
+def _lines(text: str) -> list[str]:
+    """Lines split on newlines alone, with a trailing CR removed. str.splitlines would also break on \x0b,
+    \x0c and \x85, which markdown does not, so a line only one of those begins could read as content."""
+    return [line.removesuffix("\r") for line in text.split("\n")]
 
 
 def _status_fields(status: str, record: Latest) -> tuple[str | None, str]:
@@ -190,10 +209,13 @@ def plan_items(plan_text: str) -> tuple[tuple[int, ...], tuple[str, ...]]:
     all, so nothing outside the section can add or hide an item.
 
     A numbered line indented less than four spaces is refused rather than read as a sub-step, because markdown
-    reads it as an item of the same list: it is the one shape that could hide a later item."""
-    # Split on newlines alone: str.splitlines would also break on \x0b, \x0c and \x85, which markdown does not,
-    # and a line only one of those separators begins could read as an item.
-    lines = [line.removesuffix("\r") for line in plan_text.split("\n")]
+    reads it as an item of the same list: it is the one shape that could hide a later item. So is an indented
+    heading, which markdown may read as ending the section."""
+    lines = _lines(plan_text)
+    # A bare CR is a line ending to markdown but not to the split above, so a line holding one could carry an
+    # item this reads as text. Refuse rather than decide which of the two readings is the author's.
+    if any("\r" in line for line in lines):
+        return (), ("the plan holds a carriage return inside a line; markdown would read it as a line ending",)
     heads = [i for i, line in enumerate(lines) if ITEMS_HEADING.fullmatch(line)]
     if not heads:
         return (), ("the plan has no ## Items section",)
@@ -213,6 +235,8 @@ def plan_items(plan_text: str) -> tuple[tuple[int, ...], tuple[str, ...]]:
                 return (), (f"the plan's ## Items section indents a numbered line, {sub.group(2)}., by less than "
                             f"{SUB_INDENT} spaces: indent a sub-step by {SUB_INDENT} or write it as an item at "
                             "the start of the line",)
+            if INDENTED_HEADING.match(line):  # markdown may read it as ending the section, this does not
+                return (), (f"the plan's ## Items section holds an indented heading: {line.strip()[:60]!r}",)
             continue  # an item's own wrapped text or sub-step
         m = ITEM_LINE.fullmatch(line)
         if m is None:

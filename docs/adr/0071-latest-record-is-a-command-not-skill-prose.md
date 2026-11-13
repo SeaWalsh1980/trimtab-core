@@ -49,10 +49,27 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
   start of a line or at the end of the file, so any other unindented non-item line inside it — a
   `###` heading, a `#` title, a `---` rule, a code fence, a table row — is refused by name rather
   than read as content or as the section's end; a `## Items` line inside a code fence counts as a
-  second heading and is refused too. The heading itself is matched without case (`## items` reads),
-  allowing trailing blanks, and lines are split on newlines alone with a trailing `\r` stripped, so
-  a CRLF plan reads normally instead of reporting a missing section. Each of those refusals is loud,
-  and the ones a real plan might hit are pinned by tests.
+  second heading and is refused too, as is a heading indented inside the section, which markdown may
+  read as ending it. The heading itself is matched without case (`## items` reads), allowing trailing
+  blanks, and lines are split on newlines alone with a trailing `\r` stripped, so a CRLF plan reads
+  normally instead of reporting a missing section; a carriage return left *inside* a line is refused,
+  because markdown reads it as a line ending and an item after it would be invisible here. That one
+  check reads the whole plan rather than the section alone, which is the single exception to "nothing
+  outside the section is read": a carriage return before the heading can hide a second `## Items`
+  line, so the file has to be sound before the section can be located at all. Each of
+  those refusals is loud, and the ones a real plan might hit are pinned by tests.
+- The record's `## Status` is read exactly as strictly as the plan's `## Items`, and for the same
+  reason: it is the least trusted input on the one path whose output becomes a run's next work. The
+  heading counts only at the start of a line, matched without case and allowing trailing blanks; a
+  second `## Status` heading — including one quoted in a code fence, which a record about this change
+  might well carry — is refused by name rather than letting the first win; the text is split on
+  newlines alone, and a carriage return inside a line is refused. One helper does the splitting for
+  both readers so they cannot drift apart again.
+- Both restart paths read the item list, not only the item-complete one. `item NN part K complete;
+  item continues` and `stopped unfinished` print part K+1 only once the section names item NN, so a
+  part of an item the plan does not have, or a plan whose section cannot be read, is refused rather
+  than answered. The alternative — trusting the record alone, since the record proves the item ran —
+  was rejected: it let the command print work for an item no authorised plan contains.
 - Exit codes follow `check-plan-authorised`: 0 ok, 1 a named problem, 2 a failed read, a stale fetch
   (origin's default branch must be where the server says it is, which is why `--repository` is
   required), a shallow clone or a grafts file. One difference: a malformed plan name is exit 1
