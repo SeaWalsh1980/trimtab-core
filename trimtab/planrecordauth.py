@@ -35,6 +35,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from trimtab import mergeauthority, planauth, planrecord, planscope
+from trimtab.capture.ghapi import default_run
 from trimtab.capture.sources import GhApi, Run, SourceError
 
 PULLS_LIMIT = planauth.PULLS_LIMIT  # PRs one commit belongs to: one page; past it, an error
@@ -50,6 +51,27 @@ PLAN_GATE: PlanGateRead | None = None
 
 class RecordAuthError(Exception):
     """git or gh cannot answer, so no record is vouched for."""
+
+
+class _Memo:
+    """A runner that answers each GET once, so every read of one endpoint in a check (the repository, the rules)
+    is the same answer and costs one call. Anything else, a write or one with a body, goes straight through."""
+
+    def __init__(self, run: Run | None):
+        self._run = run or default_run
+        self._seen: dict[tuple, object] = {}
+
+    def __call__(self, argv, stdin):
+        if stdin is not None or "GET" not in argv:
+            return self._run(argv, stdin)
+        key = tuple(argv)
+        if key not in self._seen:
+            self._seen[key] = self._run(argv, stdin)
+        return self._seen[key]
+
+
+def _memo(run: Run | None) -> Run:
+    return run if isinstance(run, _Memo) else _Memo(run)
 
 
 @dataclass(frozen=True)
@@ -84,6 +106,7 @@ def check(repo: str, repository: str, plan: str, who: mergeauthority.Accounts, r
     problems = name_problems(repository, plan)
     if problems:
         return Verdict(problems)
+    run = _memo(run)
     try:
         fetched = planrecord.fetched(repo, repository, run=run)
         problems = planrecord.plan_problems(repo, fetched.tip, plan)
@@ -98,9 +121,7 @@ def check(repo: str, repository: str, plan: str, who: mergeauthority.Accounts, r
         # it, judged by the base the PR merged into, the record commit's first parent on the default branch.
         base = planscope.commit(repo, f"{record.commit}^1")
         checker_in_tree = mergeauthority.CHECKER_MARK in planscope.present(repo, base, [mergeauthority.CHECKER_MARK])
-    except planrecord.PlanRecordError as err:
-        raise RecordAuthError(str(err)) from err
-    except planscope.PlanScopeError as err:
+    except (planrecord.PlanRecordError, planscope.PlanScopeError) as err:
         raise RecordAuthError(str(err)) from err
     return judge(repository, fetched.default, plan, record, who, checker_in_tree, run, plan_gate)
 
@@ -112,6 +133,7 @@ def judge(repository: str, default: str, plan: str, record: planrecord.Latest, w
     _check_names(repository, plan)
     if record.path is None or record.commit is None or not planauth.SHA.fullmatch(record.commit):
         raise RecordAuthError("no record commit to judge")
+    run = _memo(run)
     api = GhApi(run)
     found = _merged_pr(api, repository, default, record.commit)
     if isinstance(found, str):
@@ -124,15 +146,18 @@ def judge(repository: str, default: str, plan: str, record: planrecord.Latest, w
     rows = _ma(mergeauthority.review_rows, api, repository, pull.number)
     reviews = _ma(mergeauthority.parse_reviews, rows)
     late = _late_approvals(rows, pull.merged_at)
+    names = {who.admin.casefold(), who.approver.casefold()} - {""}
+    # Only an approval that would have counted is worth naming as the reason there is none.
+    mattered = any(r.id in late and r.login.casefold() in names and r.commit_id == pull.head for r in reviews)
     reviews = [r for r in reviews if r.id not in late]  # a request for changes or a dismissal still counts
     last = mergeauthority.last_reviews(reviews, (who.admin, who.approver))
     problems = [f"code gate: {p}" for p in mergeauthority.changes_requested(who, last)]
     approved = [login for login in (who.admin, who.approver)
                 if login and mergeauthority.approves(last.get(login.casefold()), pull.head)]
     if not approved:
-        names = f"{who.admin} or {who.approver}" if who.approver else who.admin
-        why = "; an approval submitted at or after the merge does not count" if late else ""
-        problems.append(f"code gate: no approval from {names} on PR #{pull.number}'s final head "
+        who_named = f"{who.admin} or {who.approver}" if who.approver else who.admin
+        why = "; an approval submitted after the merge does not count" if mattered else ""
+        problems.append(f"code gate: no approval from {who_named} on PR #{pull.number}'s final head "
                         f"{pull.head[:12]}{why}")
 
     wait = False
@@ -147,13 +172,17 @@ def judge(repository: str, default: str, plan: str, record: planrecord.Latest, w
             f"{who.admin} (the instance names no approver)"
         problems.append(f"PR #{pull.number} was merged by {pull.merged_by or 'a deleted account'}, not {named}")
     if problems:
-        only_wait = wait and problems == [_WAITING]
+        # The unshipped plan-gate line is always there until the base ships the job, and no wait can clear it, so
+        # it alone must not turn a plan-scope run still going into exit 1: the retry is what shows the rest.
+        only_wait = wait and [p for p in problems if p != _NO_GATE] == [_WAITING]
         return Verdict(tuple(problems), wait=only_wait, record=record.path, pr=pull.number,
                        merged_by=pull.merged_by, head=pull.head)
     return Verdict((), record=record.path, pr=pull.number, merged_by=pull.merged_by, approved_by=approved[0],
                    head=pull.head)
 
 
+_NO_GATE = (f"approver merge: the pinned base ships no {PLAN_GATE_JOB} job (trimtab-core ADR 0063 section 7), so no "
+            "approver merge counts yet; only the admin's removal of plan:blocked accepts it")
 _WAITING = (f"approver merge: {mergeauthority.PLAN_SCOPE_WORKFLOW}'s run or a {mergeauthority.CHECK_NAME} job on "
             "the final head has not completed; retry once it finishes")
 
@@ -184,8 +213,7 @@ def _approver_problems(api: GhApi, repository: str, default: str, plan: str, rec
     problems += _ruleset_problems(api, repository, default, pull)
 
     if plan_gate is None:
-        problems.append(f"the pinned base ships no {PLAN_GATE_JOB} job (trimtab-core ADR 0063 section 7), so no "
-                        "approver merge counts yet; only the admin's removal of plan:blocked accepts it")
+        problems.append(_NO_GATE)
     else:
         gate = plan_gate(repository, pull.head)
         if gate.wait:
@@ -291,8 +319,10 @@ def _merged_pr(api: GhApi, repository: str, default: str, sha: str) -> int | str
 
 
 def _late_approvals(rows: list, merged_at: str) -> frozenset[int]:
-    """Ids of the approvals submitted at or after the merge: a merge cannot be code-gated by a review that came
-    later. An approval with no readable time is an error, never counted as early."""
+    """Ids of the approvals submitted after the merge: a merge cannot be code-gated by a review that came later.
+    GitHub's times have one-second resolution and the approver approves and merges back to back, so an approval
+    in the merge's own second counts (accepted: it cannot be told from one a moment before). An approval with no
+    readable time is an error, never counted as early."""
     late = set()
     for row in rows:
         if row.get("state") != "APPROVED":
@@ -300,7 +330,7 @@ def _late_approvals(rows: list, merged_at: str) -> frozenset[int]:
         at = row.get("submitted_at")
         if not (isinstance(at, str) and mergeauthority.TIME.fullmatch(at)):
             raise RecordAuthError("gh api pulls reviews returned unexpected JSON")
-        if at >= merged_at:
+        if at > merged_at:
             late.add(row["id"])
     return frozenset(late)
 

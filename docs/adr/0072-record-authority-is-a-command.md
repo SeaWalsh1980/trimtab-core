@@ -44,8 +44,12 @@ in `trimtab/planrecordauth.py`.
 - **The code gate** reuses `mergeauthority.last_reviews` and the public aliases `review_rows`,
   `parse_reviews`, `approves`, `changes_requested` and `is_server_id` (kept at the end of that module
   for this check), so the gate at merge and this check cannot disagree. One rule is added: an approval counts only if
-  its `submitted_at` is earlier than the PR's `merged_at`, since a review posted after the merge
-  cannot have gated it. A request for changes or a dismissal still counts whenever it came, and an
+  its `submitted_at` is not later than the PR's `merged_at`, since a review posted after the merge
+  cannot have gated it. Times have one-second resolution and the approver approves and merges back
+  to back, so an approval in the merge's own second counts: that cannot be told from one a moment
+  before, and refusing it would stop properly gated merges. The accepted cost is that an approval
+  posted in the same second after the merge also counts, which takes a trusted account acting
+  within that second. A request for changes or a dismissal still counts whenever it came, and an
   approval with no readable time is an error.
 - **The merger.** The admin: pass with the code gate. The approver: every one of the following is
   judged and every failure named. The head is `plan/<plan>/<record's item-NN-partK>`; the head is in
@@ -106,9 +110,13 @@ in `trimtab/planrecordauth.py`.
 - A rebase merge of several commits, where the record was added before the last one, fails the
   merge-commit test. Plan item PRs are merged with a merge commit or a squash, so this is a false
   stop the admin clears, never a pass.
-- Exit 3 cannot occur while `plan-gate` is unshipped, since that line is always a second problem on
-  the approver path. It is tested through the real CLI by swapping `planrecordauth.PLAN_GATE`, the one
-  seam where the base's `plan-gate` reader will be set once that job ships.
+- Exit 3 ignores the unshipped-`plan-gate` line: while the job is unshipped that line is on every
+  approver merge and no wait clears it, so counting it would make exit 3 unreachable and turn a
+  plan-scope run still going into a stop. The re-run after the wait shows the rest. Once the job
+  ships, its own wait is a named problem and exits 1. All of it is tested through the real CLI;
+  `planrecordauth.PLAN_GATE` is the one seam where the base's `plan-gate` reader will be set.
+- Every GET is answered once per check (a memo over the `gh` runner), so the repository and the
+  rules are one answer for every read of them, and cost one call.
 - The check reads the server over several calls, not one snapshot. A review or ruleset changed
   between its reads is not detected; a session re-runs it at the start of every run, so the next run
   sees the change.

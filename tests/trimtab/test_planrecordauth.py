@@ -196,12 +196,22 @@ class CodeGate(unittest.TestCase):
         verdict = judge(answers(reviews=[review(ADMIN, at=AFTER_MERGE)]))
 
         self.assertEqual(len(verdict.problems), 1)
-        self.assertIn("submitted at or after the merge", verdict.problems[0])
+        self.assertIn("submitted after the merge", verdict.problems[0])
 
-    def test_an_approval_in_the_merges_own_second_does_not_count(self):
+    def test_an_approval_in_the_merges_own_second_counts(self):
+        """Times have one-second resolution and the approver approves then merges back to back (ADR 0072)."""
         verdict = judge(answers(reviews=[review(ADMIN, at=MERGED_AT)]))
 
-        self.assertIn("code gate: no approval", verdict.problems[0])
+        self.assertEqual(verdict.problems, ())
+
+    def test_a_late_approval_is_not_blamed_when_the_approval_that_is_missing_was_never_eligible(self):
+        late_stranger = review(STRANGER, at=AFTER_MERGE)
+        stale = review(ADMIN, commit=EARLIER, id=2)
+
+        verdict = judge(answers(reviews=[late_stranger, stale]))
+
+        self.assertEqual(len(verdict.problems), 1)
+        self.assertNotIn("after the merge", verdict.problems[0])
 
     def test_an_earlier_approval_stands_beside_a_later_one(self):
         verdict = judge(answers(reviews=[review(ADMIN, id=1), review(ADMIN, id=2, at=AFTER_MERGE)]))
@@ -366,6 +376,13 @@ class ApproverMerge(unittest.TestCase):
 
         self.assertEqual((verdict.wait, len(verdict.problems)), (True, 1))
 
+    def test_the_unshipped_plan_gate_line_alone_does_not_turn_a_wait_into_a_failure(self):
+        scope = tma.plan_scope_answers(jobs=[tma.plan_scope_job(status="in_progress", conclusion=None)])
+
+        verdict = judge(approver_merge(scope=scope))
+
+        self.assertEqual((verdict.wait, len(verdict.problems)), (True, 2))
+
     def test_a_plan_scope_run_still_going_beside_another_failure_is_not_a_wait(self):
         scope = tma.plan_scope_answers(jobs=[tma.plan_scope_job(status="in_progress", conclusion=None)])
 
@@ -423,6 +440,14 @@ class ApproverMerge(unittest.TestCase):
         verdict = judge(found)
 
         self.assertEqual(len(verdict.problems), 4, verdict.problems)  # head, files, ruleset, plan-gate
+
+    def test_each_endpoint_is_read_once_per_check(self):
+        gh = FakeGh(approver_merge())
+
+        judge(gh=gh, plan_gate=PASSING_GATE)
+
+        reads = [path_of(argv) for argv in gh.argvs()]
+        self.assertEqual((reads.count(tma.REPOSITORY_PATH), reads.count(RULES_PATH)), (1, 1))
 
     def test_an_admin_merge_reads_none_of_the_route(self):
         gh = FakeGh(answers())
@@ -753,6 +778,13 @@ class Cli(tpa.GitRepository):
         code, out, err = self.run_in_process(plan_gate=lambda repository, head: PlanScopeResult((), wait=False))
 
         self.assertEqual((code, out, "has not completed" in err), (3, "", True), err)
+
+    def test_a_plan_scope_run_still_going_exits_3_while_the_base_ships_no_plan_gate_job(self):
+        self.approver_merge_with_plan_scope(tma.plan_scope_job(status="in_progress", conclusion=None))
+
+        code, out, err = self.run_in_process()
+
+        self.assertEqual((code, out), (3, ""), err)
 
     def test_an_approver_merge_meeting_every_condition_exits_0_once_plan_gate_passes(self):
         self.approver_merge_with_plan_scope(tma.plan_scope_job())

@@ -72,8 +72,8 @@ What it holds, so a `FAIL` line reads clearly:
   in the last one, fails here).
 - **The code gate**, whoever merged: the approver's and the admin's last review each, ignoring
   `COMMENTED` ones (a `DISMISSED` last review means no review, never an earlier one), shows at least
-  one `APPROVED` on the PR's final head, submitted before the merge (an approval at or after it does
-  not count), and neither is `CHANGES_REQUESTED`.
+  one `APPROVED` on the PR's final head, not submitted after the merge (an approval later than the
+  merge's second does not count), and neither is `CHANGES_REQUESTED`.
 - **The merger:** the admin's merge counts with the code gate. The approver's counts only when, as
   well, the head is `plan/<plan>/item-NN-partK` for this plan and this record, in this repository,
   against the default branch; every `plan-scope` job on the final head, every attempt, is a finished,
@@ -89,7 +89,8 @@ What it holds, so a `FAIL` line reads clearly:
   for an unrelated edit, and holds the plan until the admin acts, though the merge was sound.
   Accepted: the API keeps no history of a ruleset's rules.
 - **`plan-gate`:** the base ships no `plan-gate` job yet, so until it does every approver merge exits
-  1 on that line alone, and the admin's removal of `plan:blocked` accepts it.
+  1 on that line alone, and the admin's removal of `plan:blocked` accepts it. That line alone does not
+  stop exit 3: a `plan-scope` run still going exits 3, and the re-run then shows the rest.
 
 One condition stays a hand check, for an approver merge the command passed: the `plan-scope` job
 runs its checker from the PR's base commit, never from the PR's own tree, so a PR cannot change what
