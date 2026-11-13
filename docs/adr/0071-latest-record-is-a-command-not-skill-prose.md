@@ -53,10 +53,11 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
   read as ending it. The heading itself is matched without case (`## items` reads), allowing trailing
   blanks, and lines are split on newlines alone with a trailing `\r` stripped, so a CRLF plan reads
   normally instead of reporting a missing section; a carriage return left *inside* a line is refused,
-  because markdown reads it as a line ending and an item after it would be invisible here. That one
-  check reads the whole plan rather than the section alone, which is the single exception to "nothing
-  outside the section is read": a carriage return before the heading can hide a second `## Items`
-  line, so the file has to be sound before the section can be located at all. Each of
+  because markdown reads it as a line ending and an item after it would be invisible here. That
+  check reads the whole plan rather than the section alone, as do the prefixed, indented and decoy
+  heading checks below, which together are the exceptions to "nothing outside the section is read":
+  a carriage return before the heading can hide a second `## Items` line, so the file has to be
+  sound before the section can be located at all. Each of
   those refusals is loud, and the ones a real plan might hit are pinned by tests.
 - The record's `## Status` is read exactly as strictly as the plan's `## Items`, and for the same
   reason: it is the least trusted input on the one path whose output becomes a run's next work. The
@@ -65,7 +66,7 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
   counted as a second heading rather than passed over; a second `## Status` heading — including one quoted in a code fence, which a record about this change
   might well carry — is refused by name rather than letting the first win; the text is split on
   newlines alone, and a carriage return inside a line is refused (a CRLF file still reads: only a
-  CR that is not part of a CRLF ending is refused). An indented heading anywhere in
+  CR that is not the last character of its line is refused). An indented heading anywhere in
   the record is refused too, since markdown may read it as a `## Status` this reader does not see;
   and a second non-blank line under the heading is refused, since the reader cannot tell which line
   is the status. The `## Status` section ends only at a `## ` heading, so a `###` or `#` line after
@@ -91,9 +92,9 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
   deliberately broad rather than a list of the prefixes markdown renders as a heading: which
   prefixes do is not this reader's to decide, and a miss is a silent early end, where an over-refusal
   is a named stop. The accepted cost is the over-refusal of any such line that is not meant as a
-  heading, a hash followed by a blank after a marker. A marker with no space after it (`-## x`), a
-  hash with no blank after it (`- #123 fixed`) and a marker with no heading after it are plain text
-  and still read. Rejected: refusing only the blockquote and bullet forms, which leaves `1.` and
+  heading, a hash followed by a blank after a marker. A list marker with no space after it
+  (`-## x`), a hash with no blank after it (`- #123 fixed`) and a marker with no heading after it
+  are plain text and still read; a blockquote marker needs no space, so `>## x` is refused. Rejected: refusing only the blockquote and bullet forms, which leaves `1.` and
   `N)` and every nesting as the next review round's finding, as the whitelisted plan patterns were.
 - Both restart paths read the item list, not only the item-complete one. `item NN part K complete;
   item continues` and `stopped unfinished` print part K+1 only once the section names item NN, so a
