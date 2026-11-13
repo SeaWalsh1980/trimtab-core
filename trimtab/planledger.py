@@ -46,6 +46,26 @@ def _sha(value: str, what: str) -> str:
     return value
 
 
+def parts_of(config: Path, repo: str, plan: str) -> tuple[str, ...]:
+    """The ledger file names this machine holds for a plan, which §6 reads for the highest part number.
+
+    A plan with no directory holds no parts; a directory that is there but not private, or unreadable,
+    raises, since a part it hides would make a new part look free (SEC-2.5)."""
+    key = hashlib.sha256(repo.encode("utf-8")).hexdigest()
+    try:
+        folder = guardstate.directory(config, SUBDIR, key, plan, create=False)
+    except guardstate.GuardStateError as err:
+        try:
+            os.lstat(Path(config) / guardstate.ROOT / SUBDIR / key / plan)
+        except FileNotFoundError:
+            return ()  # nothing there at all, not even a link
+        raise LedgerError(str(err)) from err
+    try:
+        return tuple(sorted(p.name for p in folder.iterdir()))
+    except OSError as err:
+        raise LedgerError(f"the plan's ledger directory cannot be listed ({err.__class__.__name__})") from err
+
+
 class Ledger:
     """One part's ledger. `clock` returns an RFC 3339 time with offset (TST-4)."""
 

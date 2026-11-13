@@ -9,13 +9,14 @@ import shlex
 import subprocess
 import sys
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from pathlib import Path
 
 from trimtab import bump
 from trimtab import config as project_config
 from trimtab import dependabot
-from trimtab import guardstate, instance, mergeauthority, planauth, planchecks, planguard, planledger
+from trimtab import guardstate, instance, mergeauthority, planacts, planauth, planchecks, planguard
+from trimtab import planledger
 from trimtab import planscope, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
@@ -1001,52 +1002,13 @@ def cmd_check_enforcement(args) -> int:
 # Each reports only: the ledger is the hook's to write (§1). Exit 0 allows, 1 refuses, 2 is a failed
 # read, which refuses too wherever a guard asks.
 
-def _plan_part(branch: str):
-    """The plan, item and part a `plan/*` branch names, or None where it names none."""
-    found = planscope.plan_of(f"refs/heads/{branch}")
-    if found.ref is not planscope.Ref.PLAN:
-        return None
-    item, _, part = found.item.removeprefix("item-").partition("-part")
-    return found.plan, int(item), int(part)
-
 
 def _plan_context(args, facts=None) -> planchecks.Context:
-    """One part's context: the branch's plan and part, the real facts, the part's ledger, the instance's
-    review keys, and E18's limits read from the plan at the merge-base."""
-    repo = Path(args.repo)
-    named = _plan_part(args.branch)
-    if named is None:
-        raise planchecks.FactsError(f"{args.branch!r} is not plan/<plan>/item-NN-partK")
-    plan, item, part = named
-    found = facts or planguard.build_facts(repo)
-    try:
-        inst = instance.load(_instance(args))
-    except (roots.InstanceError, instance.InstanceFileError) as err:
-        raise planchecks.FactsError(f"the instance file could not be read ({err})") from err
-    if inst.review is None:
-        raise planchecks.FactsError("the instance names no review key, so the review rows are not shown")
-    ledger = planledger.Ledger(guardstate.config_dir(), found.repository(), plan, item, part,
-                               clock=_now)
-    return planchecks.Context(repo=repo, repository=found.repository(), branch=args.branch, plan=plan,
-                              item=item, part=part, facts=found, ledger=ledger, agent=inst.agent,
-                              review_login=inst.review.login, tags=dict(inst.review.tags),
-                              limits=_plan_limits(repo, found, args.branch, inst, item))
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def _plan_limits(repo: Path, facts, branch: str, inst, item: int):
-    """E18's limits: the instance's `fix_limits`, and the lines the plan's item section names, read from
-    the authorised plan at the merge-base — the tree an admin merged, never the working copy."""
-    if inst.fix_limits is None:
-        return None  # E18 is not shown, so `planchecks.push` refuses every push
-    plan_path = planscope.plan_files(_plan_part(branch)[0])[0]
-    text = planscope.read_files(str(repo), facts.merge_base(branch), [plan_path]).get(plan_path)
-    if text is None:
-        raise planchecks.FactsError("the authorised plan could not be read at the merge-base")
-    return planchecks.limits_of(inst.fix_limits, text, item)
+    """One part's context, built as the guards build it (`planacts.context`): the branch's plan and part,
+    the real facts, the part's ledger, the instance's review keys, and E18's limits from the plan."""
+    found = facts or planguard.build_facts(Path(args.repo))
+    return planacts.context(Path(args.repo), found, args.branch,
+                            instance_root=getattr(args, "instance", None))
 
 
 def _plan_exit(name: str, verdict: planchecks.Verdict) -> int:

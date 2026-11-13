@@ -235,6 +235,54 @@ class Pushes(Base):
             self.act("pushed", FakeFacts(commit_of=H2), source="HEAD")
 
 
+class NextPart(Base):
+    """§6: a new part's ledger starts only for the part one past the highest the three sources name."""
+
+    def facts(self, **kw):
+        return FakeFacts(**{"changes": (), "commit_of": H2, "branch_head": None, "open_pr": None, **kw})
+
+    def part3(self, **kw):
+        return self.act("pushed", self.facts(**kw), branch=f"plan/{PLAN}/item-02-part3", source="HEAD")
+
+    def test_the_part_after_the_highest_progress_record_may_start(self):
+        self.part3(progress_names=(f"docs/plans/progress/{PLAN}/item-02-part2.md",))
+
+        self.assertEqual([e["type"] for e in planledger.Ledger(
+            self.config, "owner/proj", PLAN, 2, 3, clock=planacts.now).events()], ["push"])
+
+    def test_a_part_the_records_already_passed_refuses(self):
+        with self.assertRaisesRegex(planrows.Refusal, "§6"):
+            self.part3(progress_names=(f"docs/plans/progress/{PLAN}/item-02-part3.md",))
+
+    def test_a_head_ref_of_a_closed_pr_counts(self):
+        with self.assertRaisesRegex(planrows.Refusal, "§6"):
+            self.part3(pr_head_refs=(f"plan/{PLAN}/item-02-part4",))
+
+    def test_this_machines_own_ledgers_count(self):
+        self.ledger(item=2, part=3)  # the highest part this machine holds, so the next one is 4, not 5
+
+        with self.assertRaisesRegex(planrows.Refusal, "§6"):
+            self.act("pushed", self.facts(), branch=f"plan/{PLAN}/item-02-part5", source="HEAD")
+
+        self.assertIsNone(self.act("pushed", self.facts(), branch=f"plan/{PLAN}/item-02-part4",
+                                   source="HEAD"))
+
+    def test_a_source_that_cannot_be_read_refuses_a_new_part(self):
+        with self.assertRaisesRegex(planrows.Refusal, "§6"):
+            self.part3(raises="progress_names")
+
+    def test_the_parts_a_plan_holds_are_listed_from_the_ledger_directory(self):
+        self.ledger(item=2, part=1)
+        self.ledger(item=3, part=2)
+
+        got = planledger.parts_of(self.config, "owner/proj", PLAN)
+
+        self.assertEqual(got, ("item-02-part1.jsonl", "item-03-part2.jsonl"))
+
+    def test_a_plan_with_no_directory_holds_no_parts(self):
+        self.assertEqual(planledger.parts_of(self.config, "owner/proj", "0009-other"), ())
+
+
 class Rounds(Base):
     def test_a_recorded_pass_lands_in_the_ledger(self):
         ledger = self.ledger()

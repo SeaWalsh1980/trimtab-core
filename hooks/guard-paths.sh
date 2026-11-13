@@ -76,7 +76,8 @@ parse() {
              | if test("[\n\r]") then error("line break in the target path") else . end),
            ((.tool_input.command // "") | gsub("\n"; " ")),
            ((.tool_name // "") | gsub("\n"; " ")),
-           ((.session_id // "") | tostring | gsub("[\n\r]"; " "))'
+           ((.session_id // "") | tostring | gsub("[\n\r]"; " ")),
+           ((.hook_event_name // "") | tostring | gsub("[\n\r]"; " "))'
   elif command -v python3 >/dev/null 2>&1; then
     # -I: isolated, so a json.py in the working directory (the repository
     # under work) or a PYTHON* variable cannot stand in for the standard library.
@@ -95,6 +96,8 @@ print((ti.get("command") or "").replace("\n", " "))
 print((d.get("tool_name") or "").replace("\n", " "))
 sid = d.get("session_id")
 print(str(sid).replace("\n", " ").replace("\r", " ") if sid is not None else "")
+event = d.get("hook_event_name")
+print(str(event).replace("\n", " ").replace("\r", " ") if event is not None else "")
 '
   else
     return 1
@@ -121,6 +124,7 @@ file=${parsed%%$'\n'*}
 cmd=""
 tool=""
 sid=""
+event=""
 if [[ "$parsed" == *$'\n'* ]]; then
   rest=${parsed#*$'\n'}
   cmd=${rest%%$'\n'*}
@@ -129,10 +133,52 @@ if [[ "$parsed" == *$'\n'* ]]; then
     # The session id, read only by the session-mode check, follows tool_name.
     if [[ "$tool" == *$'\n'* ]]; then
       sid=${tool#*$'\n'}
+      # The hook's event name, read only by the review recorder, follows the session id.
+      if [[ "$sid" == *$'\n'* ]]; then
+        event=${sid#*$'\n'}
+        event=${event%%$'\n'*}
+      fi
       sid=${sid%%$'\n'*}
     fi
     tool=${tool%%$'\n'*}
   fi
+fi
+
+# ---- E11: the review recorder (ADR 0063 §5) ----------------------------
+# A Skill call that runs trimtab-review, security-review or code-review on a
+# plan/* branch is one review pass of a round: PostToolUse appends it to the
+# part's ledger, naming the checkout's HEAD, and PreToolUse refuses a sixth
+# pre-draft round (E23). A pass run any other way records nothing, so it
+# counts for nothing.
+#
+# It is a branch of this guard rather than a hook of its own because the
+# enforcement manifest's "Guard" owner names only guard-paths.sh and
+# guard-github.sh, so a new hook file could never show its row (ADR 0063 §2).
+# Registering this hook for the Skill tool is the operator's control change
+# (ADR 0011); until that lands this branch never runs.
+#
+# A Skill call carries no path and no command, so nothing below this point
+# applies to it either way.
+if [[ "$tool" == "Skill" && ( "$event" == "PreToolUse" || "$event" == "PostToolUse" ) ]]; then
+  gp_block() { echo "guard-paths: blocked: $1" >&2; exit 2; }
+  command -v python3 >/dev/null 2>&1 || gp_block "python3 is not available, so a review round cannot be recorded"
+  # -P exists only from 3.11, so the probe is also the version check.
+  python3 -P -I -S -c '' >/dev/null 2>&1 || gp_block "python3 3.11 or later is not available"
+  gp_here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+  [[ -r "$gp_here/run_module.py" ]] || gp_block "hooks/run_module.py is missing"
+  # -I -S -B as guard-github runs its adapter: no working directory, no
+  # site-packages, no PYTHON* variables, no bytecode beside the package.
+  # A hook that outlives its 10 s timeout fails open, so the adapter stops
+  # itself at 6 s and `timeout` kills it at 7 s if that did not happen.
+  gp_deadline=()
+  command -v timeout >/dev/null 2>&1 && gp_deadline=(timeout -k 1 7)
+  ${gp_deadline[@]+"${gp_deadline[@]}"} python3 -I -S -B "$gp_here/run_module.py" "$gp_here/.." \
+    trimtab.adapters.plan_review_record <<<"$payload"
+  gp_rc=$?
+  [[ $gp_rc -eq 0 ]] && exit 0
+  # The adapter printed its reason; any other non-zero is a fault, and blocks.
+  [[ $gp_rc -eq 2 ]] || echo "guard-paths: blocked: the review recorder failed (exit $gp_rc)" >&2
+  exit 2
 fi
 
 deny() {

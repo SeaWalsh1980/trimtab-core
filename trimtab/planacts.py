@@ -80,11 +80,12 @@ def context(repo: Path, facts, branch: str, *, instance_root: Path | None = None
     found = inst if inst is not None else load_instance(instance_root)
     if found is None or found.review is None:
         raise FactsError("the instance names no review key, so the review rows are not shown")
-    ledger = planledger.Ledger(config or config_dir(), facts.repository(), plan, item, part, clock=now)
+    where = Path(config or config_dir())
+    ledger = planledger.Ledger(where, facts.repository(), plan, item, part, clock=now)
     return planchecks.Context(repo=Path(repo), repository=facts.repository(), branch=branch, plan=plan,
                               item=item, part=part, facts=facts, ledger=ledger, agent=found.agent,
                               review_login=found.review.login, tags=dict(found.review.tags),
-                              rerequest_label=found.review.rerequest_label,
+                              rerequest_label=found.review.rerequest_label, ledger_config=where,
                               limits=limits_for(Path(repo), facts, branch, found, item) if limits else None)
 
 
@@ -214,15 +215,39 @@ def pushed(support, branch: str, source: str | None, **kw) -> None:
     ctx.ledger.push(branch, old, new, run_env="1" if support.plan_run else "")
 
 
-def round_recorded(support, branch: str, head: str, pass_name: str, *, before_draft: bool, **kw) -> None:
-    """E11: one review pass completed on `head`. A sixth pre-draft round refuses (E23)."""
+def round_recorded(support, branch: str, head: str, pass_name: str, *, before_draft: bool | None = None,
+                   **kw) -> None:
+    """E11: one review pass completed on `head`. A sixth pre-draft round refuses (E23).
+
+    A round is pre-draft when the branch has no open PR yet: a server fact, so a session cannot make a
+    round count as pre-draft by writing anything."""
     if not planrows.plan_branch(branch):
         return
     ctx = _ctx(support, branch, limits=False, **kw)
     _start(ctx, ctx.facts.branch_head(branch) or ZERO)
-    if before_draft:
+    first = _before_draft(ctx) if before_draft is None else before_draft
+    if first:
         _refuse(planchecks.round_start(ctx, head), ctx)
-    ctx.ledger.round(head, pass_name, before_draft=before_draft)
+    ctx.ledger.round(head, pass_name, before_draft=first)
+
+
+def round_starting(support, branch: str, head: str, **kw) -> None:
+    """E23: a sixth pre-draft round refuses at its first pass's PreToolUse, before the pass runs."""
+    if not planrows.plan_branch(branch):
+        return
+    ctx = _ctx(support, branch, limits=False, **kw)
+    if not ctx.ledger.exists():
+        return  # the part's first pass starts the ledger when it completes, so there is nothing to count
+    if _before_draft(ctx):
+        _refuse(planchecks.round_start(ctx, head), ctx)
+
+
+def _before_draft(ctx: planchecks.Context) -> bool:
+    try:
+        return ctx.facts.open_pr(ctx.branch) is None
+    except FactsError as err:
+        raise Refusal(f"whether the part's PR is open cannot be read ({err}), so a round cannot be "
+                      "counted; refusing (ADR 0063 §5)") from err
 
 
 def draft_opened(support, branch: str, head: str, **kw) -> None:
@@ -258,11 +283,31 @@ def _rerequest_label(ctx: planchecks.Context) -> str:
 
 def _start(ctx: planchecks.Context, remote_head: str) -> None:
     """Start the part's ledger where it may be started: never for a part whose branch is already on the
-    remote, since a fresh ledger would vouch for pushes it never saw (§1)."""
+    remote, since a fresh ledger would vouch for pushes it never saw (§1), and never for a part that is
+    not K+1 (§6)."""
     try:
+        if not ctx.ledger.exists():
+            _is_next_part(ctx)
         ctx.ledger.start(remote_branch_exists=remote_head != ZERO)
     except planledger.LedgerError as err:
         raise Refusal(f"the part has no ledger and none may be started ({err}); refusing (ADR 0063 §1)") from err
+
+
+def _is_next_part(ctx: planchecks.Context) -> None:
+    """§6: a new part is one past the highest over the progress records on the default branch, the head
+    refs of every PR, and this machine's ledgers. A failed read of any source refuses a new part."""
+    try:
+        records = planreview.parts_in(ctx.facts.progress_names(ctx.plan), ctx.plan, ctx.item)
+        refs = planreview.parts_in(ctx.facts.pr_head_refs(), ctx.plan, ctx.item)
+        held = planreview.parts_in(planledger.parts_of(ctx.ledger_config, ctx.repository, ctx.plan),
+                                   ctx.plan, ctx.item)
+        expected = planreview.next_part(records, refs, held)
+    except (FactsError, planledger.LedgerError) as err:
+        raise Refusal(f"the highest part of item {ctx.item:02d} could not be read ({err}); a new part is "
+                      "refused (ADR 0063 §6)") from err
+    if ctx.part != expected:
+        raise Refusal(f"§6: part {ctx.part} of item {ctx.item:02d} is not the next one, which is "
+                      f"{expected}; refusing (ADR 0063 §6)")
 
 
 def _source_sha(ctx: planchecks.Context, source: str | None) -> str:

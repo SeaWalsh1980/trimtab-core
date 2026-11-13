@@ -163,6 +163,11 @@ class PlanSupport:
         found = self.push_ref(cwd)
         return found[1] if found else None
 
+    def head_sha(self, cwd: Path | None = None) -> str | None:
+        """The checkout's `HEAD` commit, which an E11 round entry names (ADR 0063 §5)."""
+        found = self._run(cwd or self.cwd, "rev-parse", "--verify", "--end-of-options", "HEAD^{commit}")
+        return found if found and len(found) == 40 and all(c in "0123456789abcdef" for c in found) else None
+
     def head_branch(self, cwd: Path | None = None) -> str | None:
         """The checked-out branch, which a `HEAD` refspec writes under the same name."""
         return self._run(cwd or self.cwd, "symbolic-ref", "--short", "-q", "HEAD")

@@ -342,6 +342,48 @@ class RemovedLines(unittest.TestCase):
         self.assertEqual(got["setup.cfg"].added, ("fail_under = 50",))
 
 
+class PartSources(unittest.TestCase):
+    """§6's two server-side sources: the progress records on the default branch, and every PR's head ref."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.tmp)])
+        isolate_git(self, self.tmp)
+        self.repo = self.tmp / "repo"
+        self.repo.mkdir()
+        git(self.repo, "init", "-q", "-b", "main")
+        folder = self.repo / "docs" / "plans" / "progress" / "0008-slug"
+        folder.mkdir(parents=True)
+        self.base = commit(self.repo, "docs/plans/progress/0008-slug/item-02-part2.md", "## Done\n")
+        git(self.repo, "update-ref", "refs/remotes/origin/main", self.base)
+        self.git = tools.Git(environ={"HOME": str(self.tmp)})
+
+    def facts(self, answers=None):
+        fake = FakeGh({k: json.dumps(v) for k, v in (answers or {}).items()},
+                      default=json.dumps({"default_branch": "main"}))
+        return planfacts.GitHubFacts(REPO, GhApi(fake), self.git, self.repo, INSTANCE)
+
+    def test_the_progress_records_on_the_default_branch_are_listed(self):
+        got = self.facts().progress_names("0008-slug")
+
+        self.assertEqual(got, ("docs/plans/progress/0008-slug/item-02-part2.md",))
+
+    def test_a_plan_with_no_records_lists_nothing(self):
+        self.assertEqual(self.facts().progress_names("0009-other"), ())
+
+    def test_every_prs_head_ref_is_read_whatever_its_state(self):
+        rows = [{"head": {"ref": BRANCH}}, {"head": {"ref": "feature/x"}}]
+        f = self.facts({f"repos/{REPO}/pulls": rows})
+
+        self.assertEqual(f.pr_head_refs(), (BRANCH, "feature/x"))
+
+    def test_an_unexpected_shape_refuses(self):
+        f = self.facts({f"repos/{REPO}/pulls": [{"head": {}}]})
+
+        with self.assertRaises(FactsError):
+            f.pr_head_refs()
+
+
 class FixValidity(unittest.TestCase):
     """E9: a cited commit descends from the thread's commit, is on the branch, and changes a line in its hunk."""
 

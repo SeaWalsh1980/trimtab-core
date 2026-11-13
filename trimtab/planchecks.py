@@ -52,6 +52,7 @@ class Context:
     tags: Mapping[str, str]
     limits: Limits | None = None
     rerequest_label: str = ""  # the instance's label, which a re-request is spelt with (§4)
+    ledger_config: Path | None = None  # the config directory the part's ledger lives under (§1, §6)
 
 
 @dataclass(frozen=True)

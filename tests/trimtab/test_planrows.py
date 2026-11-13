@@ -62,6 +62,14 @@ class FakeFacts(Facts):
         self._read("merge_base")
         return H5
 
+    def progress_names(self, plan):
+        self._read("progress_names")
+        return ()
+
+    def pr_head_refs(self):
+        self._read("pr_head_refs")
+        return ()
+
     def pushes(self, branch):
         self._read("pushes")
         return self._pushes

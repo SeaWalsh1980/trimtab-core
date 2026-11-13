@@ -51,10 +51,11 @@ class FakeFacts:
             "push_commits": {}, "last_answer": None, "on_default": (), "outside_diff": True,
             "fix_valid": True, "changes": (), "register_answer": False, "conflicted": False,
             "commit_of": H2, "pr_heads": {7: BRANCH}, "local_plan_branches": (),
+            "progress_names": (), "pr_head_refs": (),
             "default_branch": "main", "failing_heads": set(), "facts_run_heads": set(), "pushes": [],
         }
-        self.values.update(kw)
         self.raises = kw.pop("raises", None)
+        self.values.update(kw)
 
     def _value(self, name):
         if self.raises == name:
@@ -87,6 +88,8 @@ class FakeFacts:
     def pr_head(self, number, repo): return self._value("pr_heads").get(number)
     def pr_base(self, number, repo): return "main"
     def local_plan_branches(self): return self._value("local_plan_branches")
+    def progress_names(self, plan): return self._value("progress_names")
+    def pr_head_refs(self): return self._value("pr_head_refs")
     def repository(self): return REPO
 
 

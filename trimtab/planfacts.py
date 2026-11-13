@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from trimtab import actions, planreview
+from trimtab import actions, planreview, planscope
 from trimtab.actions import ActionsError, Job
 from trimtab.capture.ghapi import GhApi, NotFound, SourceError
 from trimtab.enforcement.tools import Git, ToolError
@@ -43,6 +43,7 @@ EVENT_PAGES = 20  # pages of them one read follows through the Link cursor; past
 RUN_LIMIT = 500  # workflow runs on one branch, every page
 FILE_LIMIT = 2000  # changed paths one diff reads
 COMMENT_LIMIT = 2000  # review comments one PR reads; past it, an error
+PR_LIMIT = 2000  # pull requests in one repository, every state (§6's part numbers)
 MERGEABLE_WAITS = 3  # GitHub computes `mergeable` lazily: a null is asked again
 HUNK = re.compile(r"^@@ -(?P<old>[0-9]+)(,(?P<old_count>[0-9]+))? \+(?P<new>[0-9]+)(,(?P<new_count>[0-9]+))? @@")
 
@@ -484,6 +485,30 @@ class GitHubFacts(Facts):
         old, new = self._hunks("show", "-U0", "--first-parent", "--format=", "--no-ext-diff", "--no-textconv",
                                "--no-color", "--no-renames", "--end-of-options", sha, "--", thread.path)
         return any(start <= thread.line <= end for start, end in (*old, *new))
+
+    def progress_names(self, plan: str) -> tuple[str, ...]:
+        """The plan's progress-record paths on the default branch, which §6 reads for the highest part."""
+        folder = f"{planscope.PLANS_DIR}/progress/{plan}/"
+        out = self._text("ls-tree", "-r", "--name-only", "--end-of-options",
+                         f"origin/{self.default_branch()}", "--", folder)
+        return tuple(name for name in out.split("\n") if name)
+
+    def pr_head_refs(self) -> tuple[str, ...]:
+        """The head ref of every PR in the repository, open or closed (§6: a closed PR keeps its branch name
+        where a branch-activity event has expired)."""
+        try:
+            rows = self._api.all_pages(f"repos/{self.repo}/pulls", {"state": "all"}, PR_LIMIT,
+                                       "gh api pulls (every state)")
+        except SourceError as err:
+            raise FactsError("the repository's pull requests could not be read") from err
+        out = []
+        for row in rows:
+            head = row.get("head") if isinstance(row, dict) else None
+            ref = head.get("ref") if isinstance(head, dict) else None
+            if not isinstance(ref, str):
+                raise FactsError("gh api pulls returned unexpected JSON")
+            out.append(ref)
+        return tuple(out)
 
     def last_answer(self, branch: str) -> str | None:
         """The last commit answering a CI review or a failing check (E10): the head a push whose `before` was
