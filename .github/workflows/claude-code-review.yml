@@ -24,7 +24,6 @@ permissions:
   contents: read
   pull-requests: write
   issues: read
-  id-token: write
 
 # One review per PR — collapses a rapid opened → ready_for_review pair into a
 # single run.
@@ -81,6 +80,9 @@ jobs:
         uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The job's own token, bounded by the permissions above, instead of
+          # the Claude GitHub App's token from an OIDC exchange (ADR 0071).
+          github_token: ${{ github.token }}
           # Post a tracking/summary comment and update it as the review runs, so
           # every reviewed PR gets a visible review even when it is clean.
           track_progress: true

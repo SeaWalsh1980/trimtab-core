@@ -63,6 +63,25 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
         self.assertEqual(self.workflow["jobs"]["claude-review"]["name"],
                          "${{ github.event.pull_request.draft && 'claude-review (draft, not run)' || 'claude-review' }}")
 
+    def test_the_review_job_requests_no_oidc_token(self):
+        # Without id-token the action cannot exchange for the Claude App's token (ADR 0071).
+        job = self.workflow["jobs"]["claude-review"]
+
+        self.assertNotIn("id-token", self.workflow.get("permissions", {}))
+        self.assertNotIn("id-token", job.get("permissions", {}))
+
+    def test_the_review_uses_the_jobs_own_token(self):
+        steps = self.workflow["jobs"]["claude-review"]["steps"]
+        action = [s for s in steps if str(s.get("uses", "")).startswith("anthropics/claude-code-action@")]
+
+        self.assertEqual(len(action), 1)
+        self.assertEqual(action[0]["with"]["github_token"], "${{ github.token }}")
+
+    def test_the_review_token_is_comment_only(self):
+        self.assertEqual(self.workflow["permissions"],
+                         {"contents": "read", "pull-requests": "write", "issues": "read"})
+        self.assertNotIn("permissions", self.workflow["jobs"]["claude-review"])
+
 
 if __name__ == "__main__":
     unittest.main()
