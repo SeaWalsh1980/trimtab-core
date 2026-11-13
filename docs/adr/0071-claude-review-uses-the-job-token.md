@@ -4,9 +4,12 @@
 
 Proposed. This changes a SEC-7 control: the workflow that runs `claude-review`
 (`.github/workflows/claude-code-review.yml`). The operator authorised the change in chat
-("Start 9c" of the 2026-11-12 repo protection-gaps plan). `claude-review` does not review
-the PR that carries it, because it edits its own workflow, so a human reviews the diff and
-the admin merges with the bypass.
+("Start 9c" of the 2026-11-12 repo protection-gaps plan). `claude-review` cannot be
+relied on to review the PR that carries it. Its skip for workflow-editing PRs lived in the
+App token exchange, which this PR's own copy of the workflow no longer makes, so on ready
+it will probably run under this PR's own prompt and tools. A green result is then a
+self-review, not a substitute for the human review of the diff the admin does before
+merging (CODEOWNERS `*`).
 
 ## Context
 
@@ -57,7 +60,10 @@ the token. No change to the assertion.
   own copy of the workflow, so a PR could change the prompt or `--allowedTools` and be
   reviewed under its own terms. The blast radius is now bounded by the job token
   (comment-only), and a PR that edits `.github/workflows/` still needs the admin's
-  review under CODEOWNERS. The workflow's existing comments about the skip describe the
+  review under CODEOWNERS. ADR 0069's consequence "a PR that edits the workflow still goes
+  unreviewed by CI and still fails the check" no longer holds: such a PR can now go green.
+  This was never a forgery barrier (the PR could always rewrite the assertion step in the
+  same file); what changed is that the honest default flipped from red to green. The workflow's existing comments about the skip describe the
   old behaviour; they are left unchanged here and are a follow-up.
 - `issues: read` is kept. GitHub allows PR-conversation comments with `pull-requests:
   write`. If the first post-merge run is denied (403) on the tracking comment, the
