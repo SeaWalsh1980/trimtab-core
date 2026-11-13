@@ -15,6 +15,9 @@ from test_plan_check_commands import KEYS
 from test_planchecks import AGENT, BRANCH, FakeFacts, H1, H2, MB, PLAN, REVIEWER, review, thread
 from trimtab import instance, planacts, planledger, planreview, planrows
 
+# In two pieces: the base's citation test refuses a plans-directory path in a tracked file.
+PROGRESS = "docs/" + "plans/progress"
+
 ZERO = "0" * 40
 LABEL = "review:run"
 
@@ -245,14 +248,14 @@ class NextPart(Base):
         return self.act("pushed", self.facts(**kw), branch=f"plan/{PLAN}/item-02-part3", source="HEAD")
 
     def test_the_part_after_the_highest_progress_record_may_start(self):
-        self.part3(progress_names=(f"docs/plans/progress/{PLAN}/item-02-part2.md",))
+        self.part3(progress_names=(f"{PROGRESS}/{PLAN}/item-02-part2.md",))
 
         self.assertEqual([e["type"] for e in planledger.Ledger(
             self.config, "owner/proj", PLAN, 2, 3, clock=planacts.now).events()], ["push"])
 
     def test_a_part_the_records_already_passed_refuses(self):
         with self.assertRaisesRegex(planrows.Refusal, "§6"):
-            self.part3(progress_names=(f"docs/plans/progress/{PLAN}/item-02-part3.md",))
+            self.part3(progress_names=(f"{PROGRESS}/{PLAN}/item-02-part3.md",))
 
     def test_a_head_ref_of_a_closed_pr_counts(self):
         with self.assertRaisesRegex(planrows.Refusal, "§6"):

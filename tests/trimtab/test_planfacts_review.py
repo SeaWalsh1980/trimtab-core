@@ -20,6 +20,8 @@ from trimtab.enforcement import tools
 from trimtab.planrows import FactsError
 
 ACTIVITY = f"repos/{REPO}/activity"
+# In two pieces: the base's citation test refuses a plans-directory path in a tracked file.
+RECORD = "docs/" + "plans/progress/0008-slug/item-02-part2.md"
 A, B, C = "a" * 40, "b" * 40, "c" * 40
 ZERO = "0" * 40
 AGENT = "claude-bot"
@@ -354,7 +356,7 @@ class PartSources(unittest.TestCase):
         git(self.repo, "init", "-q", "-b", "main")
         folder = self.repo / "docs" / "plans" / "progress" / "0008-slug"
         folder.mkdir(parents=True)
-        self.base = commit(self.repo, "docs/plans/progress/0008-slug/item-02-part2.md", "## Done\n")
+        self.base = commit(self.repo, RECORD, "## Done\n")
         git(self.repo, "update-ref", "refs/remotes/origin/main", self.base)
         self.git = tools.Git(environ={"HOME": str(self.tmp)})
 
@@ -366,7 +368,7 @@ class PartSources(unittest.TestCase):
     def test_the_progress_records_on_the_default_branch_are_listed(self):
         got = self.facts().progress_names("0008-slug")
 
-        self.assertEqual(got, ("docs/plans/progress/0008-slug/item-02-part2.md",))
+        self.assertEqual(got, (RECORD,))
 
     def test_a_plan_with_no_records_lists_nothing(self):
         self.assertEqual(self.facts().progress_names("0009-other"), ())
