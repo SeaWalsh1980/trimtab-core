@@ -178,16 +178,28 @@ jobs:
               then (last | .type == "result" and .subtype == "success" and .is_error == false)
               else false end' "$EXEC_FILE" 2>/dev/null) || result_ok=false
           fi
+          # `gh api --paginate --jq` runs the filter once per page, so a count
+          # taken inside jq is one number per page and a PR with more than 30
+          # comments yields several lines. Emit one id per match and count the
+          # lines here, so the count is a single integer across all pages.
           finished=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-            --jq '[.[] | select(.created_at >= env.SINCE) | select(.user.type == "Bot")
+            --jq '.[] | select(.created_at >= env.SINCE) | select(.user.type == "Bot")
                    | select(.body | contains(env.RUN_URL))
                    | select(.body | startswith("**Claude finished "))
-                   | select(.body | contains("Claude Code is working") | not)] | length')
+                   | select(.body | contains("Claude Code is working") | not)
+                   | .id' | wc -l | tr -d '[:space:]')
+          case "$finished" in
+            ''|*[!0-9]*)
+              echo "::error::Could not count this run's finished tracking" \
+                   "comments (got a non-integer), so this PR has NOT been reviewed."
+              exit 1
+              ;;
+          esac
           echo "execution file present: $exec_present," \
                "final result success: $result_ok," \
                "action conclusion: ${CONCLUSION:-none}," \
                "finished tracking comments for this run: $finished"
-          if [ "$result_ok" != "true" ] || [ "${finished:-0}" -lt 1 ]; then
+          if [ "$result_ok" != "true" ] || [ "$finished" -lt 1 ]; then
             echo "::error::This run produced no successful review result and" \
                  "finished tracking comment, so this PR has NOT been reviewed. If" \
                  "this PR edits .github/workflows/claude-code-review.yml (the" \
