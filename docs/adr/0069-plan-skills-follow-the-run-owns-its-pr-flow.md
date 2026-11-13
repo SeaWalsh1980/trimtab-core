@@ -114,11 +114,14 @@ unmeasured defaults a project may override.
 - Until ADR 0063's guards and the consuming project's rows land, check 4 fails and no plan runs,
   by design. Several skill steps cite refusals (E5–E23) that do not exist yet; a run never reaches
   them while check 4 fails.
-- **Open question for the guard PR:** E23 as ADR 0063 states it refuses a draft unless the ledger
-  holds a complete round on the exact head, but every round's outcome is written to the record, so
-  the head moves after the last round. plan-item says the draft's head is the last reviewed head
-  plus at most the one record-and-register commit, mirroring the ready exception; E23's guard must
-  allow that commit, or every draft is refused (a stop, never routed around).
+- **Open question, for the instance:** E23 refuses a draft unless the ledger holds a complete round
+  on the exact head, but the doctrine also writes every round's outcome to the record, so the head
+  moves after the last round. plan-item asks for the last reviewed head plus at most one
+  record-and-register commit, mirroring the ready exception, and says that until the row changes,
+  E23 refuses it, which is a stop. This base may only tighten a row, so the fix needs a new instance
+  decision record that edits the rule's E-row sentence: narrow E23 to allow a record-only commit of
+  E7's shape, or drop "before the draft" for the last round's line. Until then, every draft is
+  refused once E23 lands.
 - The ruleset `updated_at` test still stops a run after any ruleset edit following an approver
   merge; the skill now says so. A `check-record-authorised` command may narrow it later.
 - Consumers adopt the change only when their pin moves to a base that carries it.
