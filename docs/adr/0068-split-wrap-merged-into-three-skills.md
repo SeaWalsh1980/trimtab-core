@@ -11,7 +11,7 @@ stand as written: the procedures they changed now live under the new names. Wher
 changes to `wrap-merged` (sizing parts to one session, the watch step), they land in the `plan-*`
 skills.
 
-Amended by [ADR 0069](0069-plan-skills-follow-the-run-owns-its-pr-flow.md): the skills' behaviour
+Amended by [ADR 0070](0070-plan-skills-follow-the-run-owns-its-pr-flow.md): the skills' behaviour
 now follows the flow where a run owns its PR to merge.
 
 ## Context

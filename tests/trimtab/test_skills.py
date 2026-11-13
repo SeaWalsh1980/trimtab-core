@@ -1,4 +1,4 @@
-"""The plan skills point at each other by path (ADRs 0068, 0069).
+"""The plan skills point at each other by path (ADRs 0068, 0070).
 
 Every path must name a file that exists (no `..`, and an anchor must name a heading), every
 reference must be reachable from a SKILL.md, each SKILL.md must carry the shared rule for a linked
@@ -62,7 +62,7 @@ OWN_MEANING_IN = {"plan-run/SKILL.md": tuple(OWN_MEANING)}
 # Form: every link to a deciding file, in any plan skill file, must carry its meaning.
 EVERY_LINK_NEEDS_MEANING = tuple(OWN_MEANING)
 
-# ADR 0069: each SKILL.md stays at or under this many lines; detail goes to references.
+# ADR 0070: each SKILL.md stays at or under this many lines; detail goes to references.
 MAX_ENTRY_LINES = 180
 
 # More links than this means the scan is reading the files; the real count is about forty.
@@ -415,7 +415,7 @@ class PlanSkillLinks(unittest.TestCase):
                           if t != file_type(rel(f)) and ROOT_LINE_FOR[t].search(read(rel(f)))], [])
 
     def test_each_skill_entry_stays_within_its_line_budget(self):
-        """ADR 0069: detail goes to references, so an entry stays short enough to read whole."""
+        """ADR 0070: detail goes to references, so an entry stays short enough to read whole."""
         self.assertEqual([e for e in ENTRIES if len(read(e).splitlines()) > MAX_ENTRY_LINES], [])
 
     def test_the_shared_rule_sits_above_each_entrys_first_link(self):

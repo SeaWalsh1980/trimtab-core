@@ -373,7 +373,7 @@ class AgreesWithTheSkill(unittest.TestCase):
         self.assertEqual([verb for verb in ("git ls-tree", "git log", "git diff", "gh api") if verb in section], [])
 
     def test_the_skills_in_flight_test_names_where_the_agents_login_comes_from(self):
-        # The in-flight test moved to its own reference (ADR 0069).
+        # The in-flight test moved to its own reference (ADR 0070).
         skill = (ROOT / "skills" / "plan-run" / "references" / "in-flight.md").read_text(encoding="utf-8")
         start = skill.index("## Resumed or not")
         section = skill[start:skill.index("## \"Only the plan run's own in-scope pushes\"", start)]

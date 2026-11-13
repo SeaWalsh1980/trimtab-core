@@ -3,7 +3,7 @@
 Paths such as `plan-run/SKILL.md` are relative to the skills directory, two levels above this file.
 
 Step 5 of plan-item/SKILL.md (the rounds before the draft), and the one round after each CI fix in
-plan-pr/SKILL.md (trimtab-core ADRs 0060, 0062, 0069; the counts are the doctrine record's, the
+plan-pr/SKILL.md (trimtab-core ADRs 0060, 0062, 0070; the counts are the doctrine record's, the
 instance's decision record that trimtab-core ADR 0063 designs against).
 
 ## A round
