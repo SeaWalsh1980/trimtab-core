@@ -114,6 +114,28 @@ class AppendTest(LedgerCase):
         self.led.conflict(H1)
         self.assertEqual([e["type"] for e in self.led.events()], ["draft", "conflict"])
 
+    def test_a_push_that_deletes_the_ref_is_refused_and_a_new_branch_may_start_at_zero(self):
+        with self.assertRaises(pl.LedgerError):
+            self.led.push("plan/x", H1, "0" * 40, run_env="1")
+        self.led.push("plan/x", "0" * 40, H1, run_env="1")
+        self.assertEqual(len(self.led.events()), 1)
+
+    def test_a_made_up_pass_or_head_in_a_line_is_a_ledger_error(self):
+        for body in (f'"type": "round", "pass": "x", "head": "{H1}", "before_draft": true',
+                     '"type": "round", "pass": "code-review", "head": "h", "before_draft": true'):
+            with self.subTest(body):
+                self.led.path.write_text("")
+                with open(self.led.path, "a") as fh:
+                    fh.write('{"v": 1, "time": "t", ' + body + "}\n")
+                with self.assertRaises(pl.LedgerError):
+                    self.led.events()
+
+    def test_a_pr_number_that_is_a_bool_is_a_ledger_error(self):
+        with open(self.led.path, "a") as fh:
+            fh.write(f'{{"v": 1, "type": "draft", "time": "t", "pr": true, "head": "{H1}"}}\n')
+        with self.assertRaises(pl.LedgerError):
+            self.led.events()
+
     def test_every_re_request_is_written(self):
         self.led.rerequest(H1, "ci")
         self.led.rerequest(H1, "ci")

@@ -92,6 +92,16 @@ class CursorPagesTest(unittest.TestCase):
         gh = FakeGh({ACTIVITY: [raw, reply([2])]})
         self.assertEqual(GhApi(gh).cursor_pages(ACTIVITY, {}, page_limit=3, per_page=2, what="activity"), [1, 2])
 
+    def test_a_last_page_whose_urls_say_next_in_a_repository_name_is_the_last_page(self):
+        link = '<https://api.github.com/repos/o/nextjs-shop/activity?before=b0>; rel="prev"'
+        gh = FakeGh({ACTIVITY: [reply([1], link=link)]})
+        self.assertEqual(GhApi(gh).cursor_pages(ACTIVITY, {}, page_limit=3, per_page=2, what="activity"), [1])
+
+    def test_an_upper_case_rel_is_followed(self):
+        link = '<https://api.github.com/repos/o/r/activity?after=c9>; rel="Next"'
+        gh = FakeGh({ACTIVITY: [reply([1], link=link), reply([2])]})
+        self.assertEqual(GhApi(gh).cursor_pages(ACTIVITY, {}, page_limit=3, per_page=2, what="activity"), [1, 2])
+
     def test_a_page_limit_below_one_or_a_caller_set_cursor_is_an_error(self):
         gh = FakeGh({ACTIVITY: reply([])})
         for kwargs in ({"query": {}, "page_limit": 0}, {"query": {"page": 2}, "page_limit": 2},

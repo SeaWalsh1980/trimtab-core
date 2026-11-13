@@ -69,7 +69,7 @@ CONTROL = re.compile(r"[\x00-\x1f]")
 DEFAULT_FIX_MARKERS = ("# noqa", "# type: ignore", "# pragma: no cover", "# nosec", "# pylint: disable",
                        "# pyright: ignore", "# mypy: ignore", "# fmt: off", "# fmt: skip", "@pytest.mark.skip",
                        "@pytest.mark.xfail", "pytest.skip(", "pytest.xfail(", "@unittest.skip",
-                       "continue-on-error: true", "if: false", "--no-verify")
+                       "continue-on-error: true", "continue-on-error: ${{ true }}", "if: false", "--no-verify")
 
 
 @dataclass(frozen=True)
@@ -234,6 +234,8 @@ def _fix_limits(obj: object) -> FixLimits:
     markers = _strings(obj["markers"], "fix_limits.markers") if "markers" in obj else DEFAULT_FIX_MARKERS
     if not markers:  # an empty list would switch the marker check off; omit the key to take the defaults
         raise InstanceFileError("fix_limits.markers must name at least one marker, or be left out for the defaults")
+    if any(not "".join(m.split()) for m in markers):  # E18 matches without spacing, so a blank would match every line
+        raise InstanceFileError("fix_limits.markers: a marker needs a character other than whitespace")
     thresholds = _strings(obj["thresholds"], "fix_limits.thresholds") if "thresholds" in obj else ()
     for pattern in thresholds:
         try:

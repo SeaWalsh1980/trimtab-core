@@ -877,7 +877,29 @@ each decision function replaced by one that allows, at least one of its tests fa
   headers joined, `rel` anywhere in an entry); a header that says `next` in a form this reader cannot place is
   an error, as is a page limit below 1 or a caller-set `page`, `after` or `per_page`.
 
+**Review round 2 (three passes) changed these in 2a.**
+- **E18's number reading:** a hyphen is a minus only after a non-word character (`ubuntu-22.04` is a name and
+  a number); a decimal (one dot) compares as a number and a dotted version (two or more dots) part by part;
+  removals are matched strictest first, to the lowest replacement that still holds, named replacements last,
+  so the diff's order does not matter. A binary change to a test file, or to a path a threshold pattern
+  matches, refuses, because git shows no lines for it. `conftest.py` and `tests.py` are test files.
+- **E9** passes when any one fixed reply cites a valid commit, so a corrected reply can follow a bad one.
+- **The E3 parser** refuses a resolved thread with no resolver, an open one with a resolver, and a thread id
+  twice in one run.
+- **The ledger** refuses a line whose `head`, `old` or `new` is not a full SHA or whose `pass` is not one of
+  the three, a bool as a PR number, and a push to the zero SHA; `start` creates the file exclusively.
+  `guardstate.append` waits for the lock at most about two seconds and raises `GuardStateError` for every
+  `OSError`, so a hook never meets an untyped error or a lock held for good.
+- **Link headers:** `rel` is case-insensitive, and `next` is looked for outside the `<url>` parts, so a
+  repository named `nextjs-x` does not turn its last page into an error.
+
 **Residuals recorded here (not fixed in PR 166 or 2a); E22 bounds the shell-spelling ones.**
+- E18 judges "lowers a number", so a threshold where a lower number is stricter (`max-complexity`), and a
+  threshold line that is only added, are not caught; `fix_limits.thresholds` should name higher-is-stricter
+  limits. A binary change to a file that is neither a test nor path-matched is not judged. `elif: false`
+  matches the `if: false` marker (a false refusal, named lines fix it). E18 with no `fix_limits` key is "not
+  shown", which 2b's wiring must keep as a refusal. In 2b, `Ledger.push`'s `commits` for an `old` of zeros
+  must be bounded by the merge-base.
 - A `fix_limits.thresholds` pattern is the admin's and is only compiled; a catastrophic pattern would stall
   the hook, which fails closed at the 6 s deadline. `Thread.commit` is not in the E3 line, so 2b fills it
   from the review comment before E9 can pass. The `once` de-duplication reads outside the lock, so two

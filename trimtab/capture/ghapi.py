@@ -52,6 +52,7 @@ def _subprocess_run(argv: list, stdin: str | None) -> subprocess.CompletedProces
 
 
 LINK_ENTRY = re.compile(r"<([^>]*)>([^<]*)")
+LINK_URL = re.compile(r"<[^>]*>")
 LINK_REL = re.compile(r'rel\s*=\s*"?([^";,]*)"?')
 
 
@@ -65,10 +66,12 @@ def _next_cursor(link: str | None, what: str) -> str | None:
     target = None
     for url, params in LINK_ENTRY.findall(link):
         rel = LINK_REL.search(params)
-        if rel and "next" in rel.group(1).split():
+        if rel and "next" in rel.group(1).casefold().split():
             target = url
     if target is None:
-        if "next" in link:
+        # `next` outside every <url> (a rel in a form not read), never inside one: a repository named `nextjs-x`
+        # must not make the last page an error.
+        if "next" in LINK_URL.sub("", link).casefold():
             raise SourceError(f"{what} has a Link header this reader cannot place; refusing a partial list")
         return None
     values = parse_qs(urlsplit(target).query).get("after")

@@ -22,6 +22,23 @@ class Append(unittest.TestCase):
         self.assertEqual(self.path.read_text(), "a\nb\n")
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
 
+    def test_create_refuses_a_file_planted_before_it(self):
+        self.path.write_text("planted\n")
+        os.chmod(self.path, 0o600)
+        with self.assertRaises(guardstate.GuardStateError):
+            guardstate.append(self.path, "a\n", create=True)
+        self.assertEqual(self.path.read_text(), "planted\n")
+
+    def test_a_lock_held_by_another_process_is_a_typed_error_not_a_hang(self):
+        import fcntl
+        from unittest import mock
+        self.path.write_text("")
+        os.chmod(self.path, 0o600)
+        with open(self.path, "ab") as holder:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+            with mock.patch.object(guardstate, "LOCK_TRIES", 3), self.assertRaises(guardstate.GuardStateError):
+                guardstate.append(self.path, "a\n")
+
     def test_a_missing_file_is_refused_without_create(self):
         with self.assertRaises(guardstate.GuardStateError):
             guardstate.append(self.path, "a\n")

@@ -23,6 +23,7 @@ SUBDIR = "plan-runs"
 PASSES = ("trimtab-review", "security-review", "code-review")
 EVENT_TYPES = ("push", "round", "draft", "rerequest", "stop", "conflict")
 SHA = re.compile(r"[0-9a-f]{40}")
+ZERO = "0" * 40
 # The fields each event type must carry, so a reader indexing one never meets a KeyError.
 FIELDS = {
     "push": {"branch": str, "old": str, "new": str, "run": str},
@@ -110,8 +111,11 @@ class Ledger:
             if not isinstance(ev, dict) or ev.get("v") != VERSION or ev.get("type") not in EVENT_TYPES \
                     or not isinstance(ev.get("time"), str):
                 raise LedgerError("a ledger line has an unknown shape or version")
-            if not all(isinstance(ev.get(f), kind) for f, kind in FIELDS[ev["type"]].items()):
+            if not all(type(ev.get(f)) is kind for f, kind in FIELDS[ev["type"]].items()):  # a bool is not a PR number
                 raise LedgerError("a ledger line is missing a field its type needs")
+            if any(not SHA.fullmatch(ev[f]) for f in ("head", "old", "new") if f in ev) \
+                    or ("pass" in ev and ev["pass"] not in PASSES):
+                raise LedgerError("a ledger line holds a value its field cannot")
             out.append(ev)
         return out
 
@@ -127,6 +131,8 @@ class Ledger:
             raise LedgerError(str(err)) from err
 
     def push(self, branch: str, old: str, new: str, *, run_env: str) -> None:
+        if new == ZERO:  # a delete is not a push this ledger vouches for; `old` is all zeros for a new branch
+            raise LedgerError("a push to the zero SHA deletes the ref")
         self._append({"type": "push", "branch": branch, "old": _sha(old, "old"), "new": _sha(new, "new"),
                       "run": run_env})
 

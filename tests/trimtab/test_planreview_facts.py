@@ -77,6 +77,18 @@ class Parse(unittest.TestCase):
         with self.assertRaises(FactsError):
             rv.parse_facts(REVIEW + "\n" + line)
 
+    def test_a_resolved_thread_must_name_its_resolver_and_an_open_one_must_not(self):
+        resolved = THREAD.replace("state=open", "state=resolved")
+        with self.assertRaises(FactsError):
+            rv.parse_facts(REVIEW + "\n" + resolved)
+        rv.parse_facts(REVIEW + "\n" + resolved.replace("resolved_by=-", "resolved_by=human"))
+        with self.assertRaises(FactsError):
+            rv.parse_facts(REVIEW + "\n" + THREAD.replace("resolved_by=-", "resolved_by=human"))
+
+    def test_the_same_thread_id_twice_in_one_run_fails(self):
+        with self.assertRaises(FactsError):
+            rv.parse_facts("\n".join([REVIEW, THREAD, THREAD]))
+
     def test_a_path_outside_the_safe_characters_fails(self):
         with self.assertRaises(FactsError):
             rv.parse_facts(REVIEW + "\n" + THREAD.replace("src/a.py", "src/é.py"))

@@ -25,8 +25,8 @@ HIGH_OR_ABOVE = ("critical", "high")
 SEVERITIES = ("critical", "high", "medium", "low")
 MAX_PRE_DRAFT_ROUNDS = 5
 TEST_DEFINITION = re.compile(r"^\s*(?:async\s+def\s+test_|def\s+test_|it\(|test\(|describe\(|func\s+Test|@Test\b)")
-TEST_FILE = re.compile(r"(?:^|/)(?:tests?|__tests__|spec)/|(?:^|/)test_[^/]*$|_test\.[a-z]+$|\.(?:test|spec)\.[a-z]+$")
-NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+TEST_FILE = re.compile(r"(?:^|/)(?:tests?|__tests__|spec)/|(?:^|/)(?:test_[^/]*|tests\.py|conftest\.py)$|_test\.[a-z]+$|\.(?:test|spec)\.[a-z]+$")
+NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)*|\d+(?:\.\d+)*")  # a hyphen is a sign only after a non-word
 
 
 @dataclass(frozen=True)
@@ -118,6 +118,10 @@ def parse_facts(log: str) -> tuple[Review, list[Thread]]:
                                   int(m["line"]), m["category"], m["key"]))
     if len(reviews) != 1:
         raise FactsError("the facts log must hold exactly one TRIMTAB-REVIEW line")
+    if len({t.id for t in threads}) != len(threads):
+        raise FactsError("a thread id appears twice in one run's facts")
+    if any((t.state == "resolved") == (t.resolved_by == "-") for t in threads):
+        raise FactsError("a resolved thread must name who resolved it, and an open one must not")
     if any(t.run != reviews[0].run for t in threads):
         raise FactsError("a TRIMTAB-THREAD line names another run than the review line")
     return reviews[0], threads
@@ -223,16 +227,16 @@ def check_e9(threads: Sequence[Thread], lines: Sequence[Thread], replies: Sequen
     branch, changes a line in its hunk), and the thread is closed by a later E3 line, not by the agent."""
     fixed = tags["fixed"]
     for t in threads:
-        for reply in replies:
-            if reply.in_reply_to != t.id or reply.user.casefold() != agent.casefold() \
-                    or first_word(reply.body) != fixed:
-                continue
-            sha = fixed_commit(reply.body)
-            if not t.commit or sha is None or not fix_valid(t, sha):  # no anchor commit: nothing to descend from
-                raise Refusal("E9: a fixed reply does not cite a commit that fixes its finding (ADR 0063 §5)")
-            if not thread_closed(lines, t.id, agent):
-                raise Refusal("E9: a fixed finding is not closed by a later review line; a resolution by the "
-                              "agent does not count (ADR 0063 §5)")
+        claims = [r for r in replies if r.in_reply_to == t.id and r.user.casefold() == agent.casefold()
+                  and first_word(r.body) == fixed]
+        if not claims:
+            continue
+        # One valid citation is enough: a corrected reply may follow a bad one. No anchor commit: nothing to descend from.
+        if not t.commit or not any((sha := fixed_commit(r.body)) is not None and fix_valid(t, sha) for r in claims):
+            raise Refusal("E9: a fixed reply does not cite a commit that fixes its finding (ADR 0063 §5)")
+        if not thread_closed(lines, t.id, agent):
+            raise Refusal("E9: a fixed finding is not closed by a later review line; a resolution by the "
+                          "agent does not count (ADR 0063 §5)")
 
 
 # ---- E6, E10 -----------------------------------------------------------------------------------
@@ -300,8 +304,16 @@ def check_e13(branch_commits: Sequence[str], pushes: Sequence[LedgerPush], event
 
 # ---- E18 ---------------------------------------------------------------------------------------
 
-def _numbers(line: str) -> list[float]:
-    return [float(n) for n in NUMBER.findall(line)]
+def _number(text: str) -> tuple[float, ...]:
+    """A number as a tuple that compares as it reads: a decimal (one dot) as one float, a dotted version
+    (`3.9.1`) as its integer parts, so `3.10` is above `3.9` only where it is written with two dots."""
+    if text.count(".") >= 2:
+        return tuple(float(int(p)) for p in text.lstrip("-").split("."))
+    return (float(text),)
+
+
+def _numbers(line: str) -> list[tuple[float, ...]]:
+    return [_number(n) for n in NUMBER.findall(line)]
 
 
 def _skeleton(line: str) -> str:
@@ -316,13 +328,16 @@ def _squash(text: str) -> str:
 
 def _lowered(old: Sequence[str], new: Sequence[str], named_lines: frozenset[str]) -> bool:
     """True when a removed threshold line has no replacement with the same skeleton and numbers no lower.
-    A replacement the plan names exactly is accepted whatever its numbers. Each added line replaces one."""
-    pool = list(new)
-    for before in old:
+    A replacement the plan names exactly is accepted whatever its numbers, and its key text must still match.
+    Each added line replaces one. Strictest removals are matched first, each to the lowest replacement that
+    still holds it, with named replacements kept for last, so the answer does not depend on the order of the diff."""
+    pool = sorted(new, key=lambda x: (x.strip() in named_lines, _numbers(x)))
+    for before in sorted(old, key=_numbers, reverse=True):
+        nb = _numbers(before)
         for after in pool:
             if _skeleton(after) != _skeleton(before):
                 continue
-            nb, na = _numbers(before), _numbers(after)
+            na = _numbers(after)
             if after.strip() in named_lines or (len(nb) == len(na) and all(a >= b for a, b in zip(na, nb))):
                 pool.remove(after)
                 break
@@ -341,6 +356,10 @@ def check_e18(changes: Sequence[Change], markers: Sequence[str], thresholds: Seq
     patterns = [re.compile(p) for p in thresholds]
     squashed = [_squash(m) for m in markers]
     for c in changes:
+        if c.binary and (TEST_FILE.search(c.path) or any(p.search(c.path) for p in patterns)):
+            # git shows no lines for it (a `.gitattributes` entry can make a test file binary), so it cannot be judged
+            raise Refusal("E18: the push changes a test or threshold file that git shows as binary, which cannot "
+                          "be judged (ADR 0063 §5)")
         for line in c.added:
             if any(m in _squash(line) for m in squashed) and line.strip() not in named_lines:
                 raise Refusal("E18: the push adds a skip or suppression marker the plan does not name "

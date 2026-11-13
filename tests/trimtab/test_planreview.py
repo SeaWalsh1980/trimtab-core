@@ -169,6 +169,11 @@ class E9(unittest.TestCase):
     def test_other_tags_are_not_judged(self):
         self.run_row([reply(1, "[moot] x")], [thread()])
 
+    def test_a_corrected_fixed_reply_after_a_bad_one_passes(self):
+        self.run_row([reply(1, "[fixed] no sha", id=100), reply(1, f"[fixed] {H2}", id=101)],
+                     [thread(state="resolved", resolved_by="human")],
+                     valid=lambda t, sha: sha == H2)
+
     def test_a_fixed_reply_by_someone_else_is_not_judged(self):
         self.run_row([reply(1, "[fixed] done", user="human")], [thread()])
 
@@ -396,6 +401,42 @@ class E18(unittest.TestCase):
         rows = Change("setup.cfg", "M", added=("fail_under = 90",), removed_lines=("fail_under = 90 / 80",))
         with self.assertRaises(Refusal):
             self.run_row(rows)
+
+    def test_a_binary_test_file_cannot_be_judged_and_refuses(self):
+        with self.assertRaises(Refusal):
+            self.run_row(Change("tests/test_a.py", "M", binary=True))
+        with self.assertRaises(Refusal):
+            self.run_row(Change("conftest.py", "M", binary=True))
+
+    def test_a_binary_file_the_threshold_patterns_govern_refuses_and_others_pass(self):
+        with self.assertRaises(Refusal):
+            rv.check_e18([Change("fail_under.dat", "M", binary=True)], self.MARKERS, (r"fail_under",), frozenset())
+        self.run_row(Change("logo.png", "A", binary=True))
+
+    def test_a_hyphen_before_a_digit_is_part_of_the_word_not_a_minus(self):
+        down = Change("ci.yml", "M", added=("runs-on: ubuntu-20.04",), removed_lines=("runs-on: ubuntu-22.04",))
+        up = Change("ci.yml", "M", added=("runs-on: ubuntu-24.04",), removed_lines=("runs-on: ubuntu-22.04",))
+        with self.assertRaises(Refusal):
+            rv.check_e18([down], self.MARKERS, (r"runs-on",), frozenset())
+        rv.check_e18([up], self.MARKERS, (r"runs-on",), frozenset())
+
+    def test_swapped_thresholds_that_lower_nothing_allow_in_any_diff_order(self):
+        for added in (("a = 90", "a = 80"), ("a = 80", "a = 90")):
+            with self.subTest(added):
+                rv.check_e18([Change("s.cfg", "M", added=added, removed_lines=("a = 80", "a = 90"))],
+                             self.MARKERS, (r"^a = ",), frozenset())
+
+    def test_dotted_versions_compare_part_by_part(self):
+        up = Change("s.cfg", "M", added=("py = 3.10.0",), removed_lines=("py = 3.9.1",))
+        down = Change("s.cfg", "M", added=("py = 3.9.0",), removed_lines=("py = 3.9.1",))
+        rv.check_e18([up], self.MARKERS, (r"^py = ",), frozenset())
+        with self.assertRaises(Refusal):
+            rv.check_e18([down], self.MARKERS, (r"^py = ",), frozenset())
+
+    def test_a_decimal_threshold_compares_as_a_number(self):
+        down = Change("s.cfg", "M", added=("ratio = 0.25",), removed_lines=("ratio = 0.5",))
+        with self.assertRaises(Refusal):
+            rv.check_e18([down], self.MARKERS, (r"^ratio",), frozenset())
 
     def test_markers_match_without_case_or_spacing(self):
         for text in ("x = 1  #noqa", "x = 1  # NOQA", "continue-on-error:true"):
