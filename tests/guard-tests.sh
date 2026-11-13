@@ -1767,13 +1767,14 @@ done
 
 echo "== guard-security =="
 # An agent must not change a security control on its own initiative. Evidence:
-# a PR that edits the reviewer's workflow runs under its own copy of it, so
-# `claude-review` on such a PR is a self-review and not an independent check
-# (ADR 0071; before it, the action skipped such a PR and still reported success,
-# so the edit passed a required check unreviewed). Either way CI does not catch
-# it. Reads must stay allowed: the friction belongs on changing a control, not
-# on looking at one. See
-# docs/adr/0011-guard-security-blocks-changes-to-security-controls.md.
+# a PR that edits the reviewer's workflow runs under its own copy of it, so a
+# green `claude-review` there carries no information (ADR 0071; before it, the
+# action skipped such a PR and still reported success, so the edit passed a
+# required check unreviewed). Either way CI does not catch it. Reads must stay
+# allowed: the friction belongs on changing a control, not on looking at one.
+# See docs/adr/0011-guard-security-blocks-changes-to-security-controls.md,
+# whose first "review alone does not catch it" bullet ADR 0071 has since
+# overtaken; its note records that.
 SG=guard-security.sh
 
 # -- file tools, one case per control class ------------------------------

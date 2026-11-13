@@ -114,3 +114,11 @@ Three measurements shaped the implementation, all on a 140 KB heredoc:
   (ADR 0002), and treated as a control by policy elsewhere.
 - The guard test matrix covers it with 68 cases in `tests/guard-tests.sh` at
   the time of writing.
+
+## Note
+
+The first "review alone does not catch it" bullet no longer holds as written: since
+ADR 0071 `claude-review` does not skip a pull request that edits its own workflow.
+CI still does not catch such a change, for a different reason — the PR runs under its
+own copy of the reviewer, so the check carries no information either way. The other two
+reasons, and the decision, stand.

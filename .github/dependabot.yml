@@ -8,10 +8,12 @@
 # else. Text after the version leaves the comment stale while the SHA still
 # moves.
 #
-# Every action here is used by claude-code-review.yml, so claude-review
-# skips these PRs (claude-code-action does not review a PR that edits its
-# own workflow, and still reports success). The operator reviews and merges
-# each one.
+# Every action here is used by claude-code-review.yml, so each of these PRs
+# edits that workflow and is reviewed under its OWN copy of the reviewer
+# (ADR 0071; before it the action skipped such a PR and still reported
+# success). So expect the check to run, and read it asymmetrically: green
+# proves nothing there, red still means no review was posted. The operator
+# reviews and merges each one.
 #
 # Grouping: minor and patch bumps arrive in one weekly PR; a major bump
 # (claude-code-action v1 -> v2, say) arrives on its own, so it can be

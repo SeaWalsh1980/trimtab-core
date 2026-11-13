@@ -16,17 +16,23 @@ REVIEW_WORKFLOW = "claude-code-review.yml"
 REVIEW_JOB = "claude-review"
 REVIEW_ACTION_PREFIX = "anthropics/claude-code-action@"
 JOB_TOKEN = "${{ github.token }}"
-# Every key through which a workflow can ask for the Claude App's token again: the
-# OIDC permission in either spelling, the review action's own App inputs, and the
-# credentials an App-token action takes.
-APP_TOKEN_KEYS = (
+# Fragments of a key name through which a workflow asks for the Claude App's token
+# again: the OIDC permission, the request variables the exchange reads, the review
+# action's own App inputs, and the credentials an App-token action takes. Matched as
+# substrings of a key, so an env name such as ACTIONS_ID_TOKEN_REQUEST_URL is caught
+# too, in either spelling.
+APP_TOKEN_KEY_FRAGMENTS = (
     "id-token",
     "id_token",
-    "use_app_token",
-    "app_id",
+    "app-token",
+    "app_token",
     "app-id",
+    "app_id",
     "client-id",
+    "client_id",
     "private-key",
+    "private_key",
+    "oidc",
 )
 # A step that mints an App token, whatever the token is then passed to.
 APP_TOKEN_ACTION = "create-github-app-token"
@@ -97,26 +103,28 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
         self.assertEqual(self.workflow["jobs"]["claude-review"]["name"],
                          "${{ github.event.pull_request.draft && 'claude-review (draft, not run)' || 'claude-review' }}")
 
-    def test_the_review_job_requests_no_oidc_token(self):
-        # Without id-token the action cannot exchange for the Claude App's token (ADR 0071).
-        job = self.workflow["jobs"]["claude-review"]
-
-        self.assertNotIn("id-token", self.workflow.get("permissions", {}))
-        self.assertNotIn("id-token", job.get("permissions", {}))
-
-    def test_no_step_re_adds_an_app_token_path(self):
-        # Restoring the Claude App's token (ADR 0071) takes an OIDC permission, an
-        # App input on the review action, or a step that mints an App token. Any of
-        # the three, anywhere in the file, fails here.
+    def test_no_key_names_an_app_token_path(self):
+        # Restoring the Claude App's token (ADR 0071) means a permission, an input or
+        # an env name that asks for it. Those are keys, so a key naming one fails
+        # here, anywhere in the file; prose in the prompt and the messages is free to
+        # discuss OIDC. A token smuggled in as a VALUE is out of this test's reach:
+        # the review action's own input is pinned by the two tests below, and a
+        # `run:` step or a local composite action could still mint one unseen.
         keys = mapping_keys(self.workflow)
 
-        for key in APP_TOKEN_KEYS:
-            with self.subTest(key=key):
-                self.assertNotIn(key, keys, f"{key} is back in {REVIEW_WORKFLOW}")
+        for fragment in APP_TOKEN_KEY_FRAGMENTS:
+            with self.subTest(fragment=fragment):
+                named = [key for key in keys if fragment in key]
+
+                self.assertEqual(named, [], f"{REVIEW_WORKFLOW} names {named}")
 
     def test_no_step_mints_an_app_token(self):
-        for step in self.workflow["jobs"][REVIEW_JOB]["steps"]:
-            self.assertNotIn(APP_TOKEN_ACTION, str(step.get("uses", "")))
+        # Every job, not just the reviewer's: a second job could mint the token and
+        # pass it on.
+        for name, job in self.workflow["jobs"].items():
+            for step in job.get("steps", []):
+                with self.subTest(job=name, step=step.get("name", step.get("uses"))):
+                    self.assertNotIn(APP_TOKEN_ACTION, str(step.get("uses", "")))
 
     def test_the_review_uses_the_jobs_own_token(self):
         steps = self.workflow["jobs"]["claude-review"]["steps"]
