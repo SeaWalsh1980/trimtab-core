@@ -30,7 +30,8 @@ only at the next `## ` heading or the end of the file, so a `###` heading, a rul
 table row inside it is refused by name. Both restart cases read that section: a continuing part is
 printed only once the section names its item, so an unreadable section stops the restart either way.
 The record's own `## Status` is read the same way: one heading at the start of a line, and a second
-one — a quoted example included — is refused rather than guessed between.
+one — a quoted example or an indented heading included — is refused rather than guessed between;
+a second line under the heading is refused too.
 Nothing outside the section is read. `plan complete` means the record's item is the section's last.
 A plan without that section is exit 1, which is a blocker on the restart path: report it rather than
 work out the next item by hand (trimtab-core ADR 0071).

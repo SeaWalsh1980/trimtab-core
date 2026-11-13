@@ -215,6 +215,50 @@ class NextOnRestart(Records):
                 tpa.git(self.repo, "branch", "-q", "-D", "status-shape")
                 self.publish()
 
+    def test_a_status_heading_is_accepted_in_the_same_forms_as_the_plans(self):
+        for heading in ("## Status", "## status", "##\tStatus", "## Status   "):
+            with self.subTest(heading=heading):
+                self.merge_branch("status-form", {record_path(1, 1): f"## Done\nx\n\n{heading}\nitem 1 complete\n"})
+                self.publish()
+
+                work, problems = planrecord.next_work(str(self.repo), self.tip_of(), self.latest(), PLAN_TEXT)
+
+                self.assertEqual((work, problems), ("item 02 part 1", ()))
+                tpa.git(self.repo, "reset", "-q", "--hard", "HEAD~1")
+                tpa.git(self.repo, "branch", "-q", "-D", "status-form")
+                self.publish()
+
+    def test_a_lower_case_decoy_heading_counts_as_a_second_status_heading(self):
+        """Matching without case is the refusing choice here: a decoy is counted, not ignored."""
+        self.merge_branch("decoy", {record_path(1, 1): "## status\nitem 1 part 1 complete; item continues\n\n"
+                                                       "## Status\nitem 1 complete\n"})
+        self.publish()
+
+        work, problems = planrecord.next_work(str(self.repo), self.tip_of(), self.latest(), PLAN_TEXT)
+
+        self.assertEqual((work, len(problems)), ("", 1))
+        self.assertIn("2 ## Status headings", problems[0])
+
+    def test_an_indented_heading_anywhere_in_the_record_is_a_named_problem(self):
+        """Markdown may read it as a ## Status this does not see."""
+        self.merge_branch("indented", {record_path(1, 1): "## Done\nx\n  ## Status\n\n## Status\nitem 1 complete\n"})
+        self.publish()
+
+        work, problems = planrecord.next_work(str(self.repo), self.tip_of(), self.latest(), PLAN_TEXT)
+
+        self.assertEqual((work, len(problems)), ("", 1))
+        self.assertIn("indented heading", problems[0])
+
+    def test_a_second_line_under_status_is_a_named_problem(self):
+        self.merge_branch("twoline", {record_path(1, 1): "## Done\nx\n\n## Status\nitem 1 complete\nitem 2 "
+                                                         "complete\n"})
+        self.publish()
+
+        work, problems = planrecord.next_work(str(self.repo), self.tip_of(), self.latest(), PLAN_TEXT)
+
+        self.assertEqual((work, len(problems)), ("", 1))
+        self.assertIn("more than one line", problems[0])
+
     def test_a_crlf_record_still_reads_its_status(self):
         self.merge_branch("crlf", {record_path(1, 1): "## Done\r\nx\r\n\r\n## Status\r\nitem 1 complete\r\n"})
         self.publish()

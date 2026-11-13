@@ -35,6 +35,15 @@ reviewed, what it fixed, and the entries it wrote. The lines are the run's accou
 binds is the guard's ledger. A check the run could not read, or a re-run its token may not trigger,
 is also named here with the next push, if one is made.
 
+The record carries exactly one `## Status` heading, at the start of a line, with exactly one line
+under it, and no carriage return or indented heading anywhere in the file (`trimtab latest-record
+--next-on-restart`, trimtab-core ADR 0071, reads it exactly as strictly as a plan's `## Items`
+section). A second `## Status` heading anywhere — a quoted or fenced example included — makes that
+command refuse the restart, which is a blocker no later session can clear, because AGW-4 bars
+editing an earlier record. If `## Done` discusses the status line's own format, as this item's own
+record may, write the example inline in backticks on one line or indented four spaces or a tab, never
+as a `##`-prefixed line of its own.
+
 ## Register entries
 
 Record anything you found but did not do as new files in `<plans>/unauthorised/<plan>/`, one per

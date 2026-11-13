@@ -60,11 +60,14 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
   those refusals is loud, and the ones a real plan might hit are pinned by tests.
 - The record's `## Status` is read exactly as strictly as the plan's `## Items`, and for the same
   reason: it is the least trusted input on the one path whose output becomes a run's next work. The
-  heading counts only at the start of a line, matched without case and allowing trailing blanks; a
-  second `## Status` heading — including one quoted in a code fence, which a record about this change
+  heading counts only at the start of a line, matched without case and allowing trailing blanks — for
+  the record, matching without case is itself the refusing choice, since a lower-case decoy is then
+  counted as a second heading rather than passed over; a second `## Status` heading — including one quoted in a code fence, which a record about this change
   might well carry — is refused by name rather than letting the first win; the text is split on
-  newlines alone, and a carriage return inside a line is refused. One helper does the splitting for
-  both readers so they cannot drift apart again.
+  newlines alone, and a carriage return inside a line is refused. An indented heading anywhere in
+  the record is refused too, since markdown may read it as a `## Status` this reader does not see;
+  and a second non-blank line under the heading is refused, since the reader cannot tell which line
+  is the status. One helper does the splitting for both readers so they cannot drift apart again.
 - Both restart paths read the item list, not only the item-complete one. `item NN part K complete;
   item continues` and `stopped unfinished` print part K+1 only once the section names item NN, so a
   part of an item the plan does not have, or a plan whose section cannot be read, is refused rather
@@ -111,6 +114,12 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
   today, none of which has one. The instance's rule for an authorised plan should state the format,
   so a plan that lacks it fails when it is written rather than at a restart; until it does, this
   record is the only statement of the format.
+- **A record that trips the `## Status` refusal cannot be repaired in place either**, and for the
+  same reason as the plan: AGW-4 bars editing an earlier progress record, so the stop falls on the
+  restart path and is the operator's to clear, not a later session's. `skills/plan-item/references/
+  records.md` now tells the author the constraint (one `## Status` heading, one line under it, no
+  stray carriage return or indented heading) and how to discuss the format safely in `## Done`, so a
+  new record need not hit this; an existing record that already trips it is fixed by the operator.
 - **An already-merged plan cannot be repaired in place**, and the cost of that is larger than the
   stop itself. `planauth`'s check 3 fails once a plan's text differs from the commit that merged it,
   and `--next-on-restart` runs that check, so adding the heading is what would make the plan

@@ -164,16 +164,23 @@ def _status(text: str) -> tuple[str | None, str]:
     if any("\r" in line for line in lines):
         return None, "holds a carriage return inside a line; markdown would read it as a line ending"
     heads = [i for i, line in enumerate(lines) if STATUS_HEADING.fullmatch(line)]
+    if any(INDENTED_HEADING.match(line) for line in lines):  # markdown may read it as a heading; this does not
+        return None, "holds an indented heading, which markdown may read as a ## Status this does not see"
     if not heads:
         return None, "has no ## Status heading"
     if len(heads) > 1:  # a quoted or fenced example counts: the reader cannot tell which the author meant
         return None, f"has {len(heads)} ## Status headings, not one"
+    found = None
     for following in lines[heads[0] + 1:]:
         if SECTION_HEADING.match(following):
             break
         if following.strip():
-            return following.strip().strip("`").strip(), ""
-    return None, "has no line under its ## Status heading"
+            if found is not None:  # a second line under the heading: which one is the status is not this
+                return None, "has more than one line under its ## Status heading"
+            found = following.strip().strip("`").strip()
+    if found is None:
+        return None, "has no line under its ## Status heading"
+    return found, ""
 
 
 def _lines(text: str) -> list[str]:
