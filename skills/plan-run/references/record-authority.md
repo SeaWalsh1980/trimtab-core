@@ -7,22 +7,53 @@ plan-run/SKILL.md's.
 
 ## Which record is the latest
 
-Take merge order from the default branch's first-parent history, in one local call:
-`git log --first-parent -m --diff-filter=A --name-only --format=%H origin/<default> -- <plans>/progress/<plan>/`
-prints, newest merge first, a commit-SHA line followed by the record paths that commit added (commit
-dates inside a branch do not matter). The first record path printed is the latest. If one commit
-added several records (a fast-forward or rebase merge of a multi-commit PR), the highest item
-number, then the highest part number, among them is the latest. No records yet → item 01 part 1.
+Run `trimtab latest-record --repository <owner>/<name> --plan <plan>`, as a command of its own, with
+no pipe. It reads the default branch's first-parent history (commit dates inside a branch do not
+matter; when one commit added several records, the highest item, then the highest part, is latest)
+and prints one line: the record's path, the SHA of the commit that added it, `item NN`, `part K`.
+No records yet → it prints `item 01 part 1`. It names no plans-folder path, so the guards let it run.
+
+| Exit | Meaning | What you do |
+|---|---|---|
+| 0 | the line above | Use it. |
+| 1 | a named problem: a malformed record name, a malformed plan name, a plan (or its declaration) not on the default branch, a record added and since deleted, or (with `--next-on-restart`) a failed authorisation or admin check, an unreadable `## Status`, or a plan whose `## Items` section is missing, repeated, empty, out of sequence or holds a line that is not an item | A blocker: stop and report stderr. |
+| 2 | a failed read, a stale fetch, a shallow clone or a grafts file; also an unreadable instance or admin variable, or a `--default-branch` that is not the default | Run `git fetch origin` (and `git fetch --unshallow origin` for a shallow clone) once, then run it again. A second exit 2 is a blocker. |
+
+On a restart whose latest record's `## Next` is `blocked:`, add `--next-on-restart`: it prints the next work, `item NN part K` or `plan complete`, taken only from the record's file name
+and `## Status` line. It also runs the plan authorisation check, so it needs the instance's admin
+login; exit 1 there, or for an unparseable or mismatched `## Status`, is a blocker.
+
+It reads the plan's items from one `## Items` section: top-level `N. ` lines numbered 1 to n in
+order, with an item's wrapped text or sub-steps indented under it (a sub-step by four spaces or a
+tab; a numbered line indented less is refused), and nothing else in the section: the section ends
+only at the next `## ` heading or the end of the file, so a `###` heading, a rule, a fence or a
+table row inside it is refused by name. Both restart cases read that section: a continuing part is
+printed only once the section names its item, so an unreadable section stops the restart either way.
+The record's own `## Status` is read the same way: one heading at the start of a line, and a second
+one — a fenced example included — is refused rather than guessed between. So is a heading that is
+indented or sits behind a blockquote or list marker anywhere in the record or the plan, since
+markdown renders it as a heading this reader would not see. A second line under the `## Status`
+heading, a `###` included, is refused too. A CRLF file reads normally; any other carriage return
+is refused.
+A heading named Status or Items in a form the reader does not recognise (`# Status`, `## Items ##`, a
+setext underline, an HTML heading tag) is refused too. Apart from those whole-text checks, nothing
+outside the section is read. `plan complete` means the record's item is the section's last.
+A plan without that section is exit 1, which is a blocker on the restart path: report it rather than
+work out the next item by hand (trimtab-core ADR 0071).
+
+The command makes the lookup repeatable; it enforces nothing, and exit 0 is not an authorisation
+verdict: it does not check who merged the plan or the record (a first run with no record skips the
+authorisation check entirely). The plan check in plan-run section 2 and the record's PR checks below
+still decide.
 
 ## Its PR: the code gate and the merger
 
-For the latest record only, find its PR: take the commit that added the record (the SHA line the
-`git log` above printed before it), run `gh api repos/{owner}/{repo}/commits/<sha>/pulls`, and keep
+For the latest record only, find its PR: take the commit `latest-record` printed, run
+`gh api repos/{owner}/{repo}/commits/<sha>/pulls`, and keep
 the entries whose `merged_at` is set and whose `base.ref` is the default branch. Exactly one must
 remain; none, or more than one, is a stop. Read its `merged_by.login` and `head.sha` from
 `gh api repos/{owner}/{repo}/pulls/<number>`. (The progress folder is not refused by the guard, so
-these reads may name it; a shallow clone is a stop here too, since its oldest commit reads as adding
-every record.) The approver login, like the admin's, comes only from the Trimtab instance's
+these reads may name it.) The approver login, like the admin's, comes only from the Trimtab instance's
 configuration (`accounts.approver` from `trimtab instance --json`), never from the plan, a record, a
 PR or the conversation; if the configuration names no approver login, no merge or review by the
 approver counts. If it names the same login as approver and admin, the configuration is wrong: the

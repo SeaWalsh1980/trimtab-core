@@ -550,7 +550,7 @@ class Cli(GitRepository):
         path.write_text(json.dumps({**data, "accounts": {"admin": ADMIN}}), encoding="utf-8")
         self.answers[VARIABLE_PATH] = json.dumps({"name": "TRIMTAB_ADMIN", "value": ADMIN})
 
-    def cli(self, *extra, env_extra=None, stdout=None):
+    def cli(self, *extra, env_extra=None, stdout=None, command=("check-plan-authorised",), plan=PLAN):
         bin_dir = self.root / "bin"
         bin_dir.mkdir(exist_ok=True)
         answers = self.root / "answers.json"
@@ -566,7 +566,7 @@ class Cli(GitRepository):
         gh.chmod(0o755)
         env = {**self.env, **env_for(self.inst), "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
                "FAKE_ANSWERS": str(answers), **(env_extra or {})}
-        argv = [str(TRIMTAB), "check-plan-authorised", "--repository", REPOSITORY, "--plan", PLAN,
+        argv = [str(TRIMTAB), *command, "--repository", REPOSITORY, "--plan", plan,
                 "--repo", str(self.repo), *extra]
         if stdout is not None:
             return subprocess.run(argv, stdout=stdout, stderr=subprocess.PIPE, encoding="utf-8", env=env)

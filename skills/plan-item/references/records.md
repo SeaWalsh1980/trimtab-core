@@ -35,6 +35,31 @@ reviewed, what it fixed, and the entries it wrote. The lines are the run's accou
 binds is the guard's ledger. A check the run could not read, or a re-run its token may not trigger,
 is also named here with the next push, if one is made.
 
+The record carries exactly one `## Status` heading, at the start of a line, with exactly one line
+under it, directly followed by `## Next` (the section ends only at a `## ` heading, so any other
+non-blank line before it, a `###` heading included, counts as a second line and is refused).
+`trimtab latest-record --next-on-restart` (trimtab-core ADR 0071) reads the record exactly as
+strictly as a plan's `## Items` section, and refuses it when any of these hold anywhere in the file:
+
+- a second `## Status` heading, a fenced example included (the heading is matched without case, so
+  a fenced `## status` counts too);
+- a heading named Status in a form the reader does not recognise: `# Status`, `### Status`,
+  `## Status ##`, `## *Status*`, the word `Status` alone (in emphasis, or behind a `>` blockquote
+  marker) over a `---` or `===` underline, or any HTML heading tag (`<h1` to `<h6`);
+- a carriage return that is not the last character of its line (a CRLF file reads normally);
+- a line that begins with one or more spaces or tabs, then one to six `#` characters, then a space
+  or tab, including an indented `#` comment inside a fenced code block, which the reader cannot tell
+  from a heading;
+- a line where one to six `#` characters and a space or tab come after a blockquote marker (`>`,
+  nested included) or a list marker (`-`, `*`, `+`, `N.`, `N)`), with any indentation: `> ## Status`
+  and `- ## Status` are refused, because markdown renders them as headings.
+
+The template's own unindented `# <plan>` title and its `## Done`, `## Status` and `## Next` headings
+are expected and are none of these. A refusal is a blocker no later session can clear, because AGW-4
+bars editing an earlier record. If `## Done` discusses the status line's own format, as this item's
+own record may, write the example only inline in backticks within a sentence, never as its own line:
+not indented, not behind a blockquote or list marker, and not starting the line with `#`.
+
 ## Register entries
 
 Record anything you found but did not do as new files in `<plans>/unauthorised/<plan>/`, one per

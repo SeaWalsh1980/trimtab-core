@@ -49,8 +49,7 @@ class Authorisation:
 
 def check(repo: str, repository: str, plan: str, admin: str, run: Run | None = None) -> Authorisation:
     """Whether `plan` is authorised in `repository`, whose checkout `repo` has fetched its default branch."""
-    if not REPOSITORY.fullmatch(repository) or ".." in repository:
-        raise PlanAuthError(f"{repository!r} is not owner/name")
+    _check_repository(repository)
     if not PLAN.fullmatch(plan) or ".." in plan:
         raise PlanAuthError(f"{plan!r} is not a plan name")
     if not admin:
@@ -96,6 +95,24 @@ def check(repo: str, repository: str, plan: str, admin: str, run: Run | None = N
     if edited:
         return Authorisation(tuple(f"check 3: {f} changed after PR #{number} merged it" for f in edited))
     return Authorisation((), number, merge, texts[files[1]], texts[files[0]])
+
+
+def default_branch(api: GhApi, repository: str) -> str:
+    """The default branch the server reports (for planrecord). Checks the repository's shape first: it is
+    interpolated into a REST path, and `check`'s own guard is why that is safe in this module."""
+    _check_repository(repository)
+    return _default_branch(api, repository)
+
+
+def fetched_tip(repo: str, api: GhApi, repository: str, default: str) -> str:
+    """origin's default branch as fetched, once it matches the server (for planrecord)."""
+    _check_repository(repository)
+    return _fetched_tip(repo, api, repository, default)
+
+
+def _check_repository(repository: str) -> None:
+    if not REPOSITORY.fullmatch(repository) or ".." in repository:
+        raise PlanAuthError(f"{repository!r} is not owner/name")
 
 
 def _merged_by_admin(api: GhApi, repository: str, default: str, added: str, admin: str) -> tuple[int, str] | str:
