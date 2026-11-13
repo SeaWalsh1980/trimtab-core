@@ -41,8 +41,12 @@ non-blank line before it, a `###` heading included, counts as a second line and 
 `trimtab latest-record --next-on-restart` (trimtab-core ADR 0071) reads the record exactly as
 strictly as a plan's `## Items` section, and refuses it when any of these hold anywhere in the file:
 
-- a second `## Status` heading, a fenced example included;
-- a carriage return that is not part of a CRLF line ending (a CRLF file reads normally);
+- a second `## Status` heading, a fenced example included (the heading is matched without case, so
+  a fenced `## status` counts too);
+- a heading named Status in a form the reader does not recognise: `# Status`, `### Status`,
+  `## Status ##`, `## *Status*`, the word `Status` alone (in emphasis, or behind a `>` blockquote
+  marker) over a `---` or `===` underline, or any HTML heading tag (`<h1` to `<h6`);
+- a carriage return that is not the last character of its line (a CRLF file reads normally);
 - a line that begins with one or more spaces or tabs, then one to six `#` characters, then a space
   or tab, including an indented `#` comment inside a fenced code block, which the reader cannot tell
   from a heading;

@@ -49,7 +49,7 @@ INDENTED_HEADING = re.compile(r"[ \t]+#{1,6}[ \t]")
 # Which prefixes render as a heading is not this reader's to decide, so every one is refused.
 PREFIXED_HEADING = re.compile(r"[ \t]*(?:(?:>|[-*+][ \t]|[0-9]+[.)][ \t])[ \t]*)+#{1,6}[ \t]")
 # The other ways markdown renders a heading: an HTML heading tag, and a setext underline (`-` or `=` under a line).
-HTML_HEADING = re.compile(r"<h[1-6][\s>/]", re.IGNORECASE)
+HTML_HEADING = re.compile(r"<h[1-6]", re.IGNORECASE)  # whatever follows: a tag may break across lines
 SETEXT_UNDERLINE = re.compile(r"[ ]{0,3}(?:-+|=+)[ \t]*")
 MAX_RECORDS = 5000  # record paths git names in one answer; past it, an error rather than a partial list (ENG-6.2)
 
@@ -203,15 +203,19 @@ def _hidden_heading(lines: list[str], word: str) -> str | None:
     ahead of the real heading, or after its section ends, would show a reviewer a different answer from the
     one printed. A shape cannot be proved absent, so each is refused by name. (The indented and the
     blockquote- or list-prefixed forms are refused by their own checks.)"""
-    atx = re.compile(rf"#{{1,6}}[ \t]+{word}([ \t]+#+)?[ \t]*", re.IGNORECASE)
+    # The word may sit in emphasis (`## *Status*`, `## **Items**`), which renders as the word.
+    atx = re.compile(rf"#{{1,6}}[ \t]+[*_]*{word}[*_]*([ \t]+#+)?[ \t]*", re.IGNORECASE)
     exact = re.compile(rf"##[ \t]+{word}[ \t]*", re.IGNORECASE)
     for i, line in enumerate(lines):
         if HTML_HEADING.search(line):
             return "holds an HTML heading tag, which markdown renders as a heading this reader does not read"
         if atx.fullmatch(line) and not exact.fullmatch(line):
             return f"holds a `{line.strip()}` heading, a form of ## {word} this reader does not recognise"
-        if (line.strip().casefold() == word.casefold() and i + 1 < len(lines)
-                and SETEXT_UNDERLINE.fullmatch(lines[i + 1])):
+        # A setext heading, also behind a blockquote marker: strip the quote markers from the line and from
+        # its underline before comparing.
+        text = line.lstrip(" \t>").strip().strip("*_")
+        under = lines[i + 1].lstrip(" \t>") if i + 1 < len(lines) else ""
+        if text.casefold() == word.casefold() and SETEXT_UNDERLINE.fullmatch(under):
             return f"holds a `{word}` line over an underline, which markdown renders as a heading"
     return None
 

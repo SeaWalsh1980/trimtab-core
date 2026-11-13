@@ -74,8 +74,12 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
   so they cannot drift apart again.
 - A heading named `Status` (record) or `Items` (plan) in any form this reader does not recognise
   is refused in both readers, over the whole text: another ATX level (`# Status`, `### Items`), a
-  closing sequence (`## Status ##`), a setext heading (the word alone over a `---` or `===`
-  underline), or an HTML heading tag (`<h1>` to `<h6>`). A second one of these ahead of the real
+  closing sequence (`## Status ##`), emphasis around the word (`## *Status*`), a setext heading
+  (the word alone, in emphasis or behind a blockquote marker, over a `---` or `===` underline), or
+  an HTML heading tag (`<h1` to `<h6`, whatever follows, since a tag may break across lines). An
+  entity-encoded word (`Stat&#117;s`) and a fence or `<!--` comment that swallows the only heading
+  are not refused: both are accepted residuals, since neither is shown to change the printed answer
+  and a record whose text is visible in the admin's review diff cannot hide them. A second one of these ahead of the real
   heading, or after its section ends, would show a reviewer a different answer from the one
   printed. An indented `## Items` outside the section is refused too, as the record reader already
   refused an indented heading anywhere. These whole-text checks (carriage return, prefixed,

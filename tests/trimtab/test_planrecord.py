@@ -301,6 +301,20 @@ class NextOnRestart(Records):
                 tpa.git(self.repo, "branch", "-q", "-D", "decoy-form")
                 self.publish()
 
+    def test_a_status_decoy_in_emphasis_behind_a_quote_or_in_a_broken_tag_is_refused(self):
+        for decoy in ("## *Status*", "## **Status**", "> Status\n> ---", "**Status**\n===", "<h3\n>Status</h3>"):
+            with self.subTest(decoy=decoy):
+                self.merge_branch("decoy-quote", {record_path(1, 1): f"## Done\n{decoy}\nitem 1 complete\n\n"
+                                                                     "## Status\nitem 1 part 1 stopped unfinished\n"})
+                self.publish()
+
+                work, problems = planrecord.next_work(str(self.repo), self.tip_of(), self.latest(), PLAN_TEXT)
+
+                self.assertEqual((work, len(problems)), ("", 1))
+                tpa.git(self.repo, "reset", "-q", "--hard", "HEAD~1")
+                tpa.git(self.repo, "branch", "-q", "-D", "decoy-quote")
+                self.publish()
+
     def test_plain_words_status_in_prose_are_still_read(self):
         body = "## Done\nStatus updates are in the log. The status of the work is fine.\n\n## Status\nitem 1 complete\n"
         self.merge_branch("prose", {record_path(1, 1): body})
@@ -436,6 +450,23 @@ class NextOnRestart(Records):
 
                 self.assertEqual((items, len(problems)), ((), 1))
                 self.assertRegex(problems[0], r"heading|underline")
+
+    def test_a_decoy_in_emphasis_behind_a_quote_or_in_a_broken_tag_is_refused(self):
+        """Each renders as an Items heading: emphasis around the word, a setext heading inside a blockquote, an
+        HTML heading tag split across lines, and a tag followed by anything."""
+        for decoy in ("## *Items*", "## **Items**", "## _Items_ ##", "> Items\n> ---", ">Items\n>===", "> > Items\n> > ---",
+                      "**Items**\n---", "<h2\n>Items</h2>", "<h2>Items", "<h1"):
+            with self.subTest(decoy=decoy):
+                items, problems = planrecord.plan_items(f"{decoy}\n\n## Items\n\n1. a\n2. b\n")
+
+                self.assertEqual((items, len(problems)), ((), 1))
+                self.assertRegex(problems[0], r"heading|underline")
+
+    def test_a_quoted_or_emphasised_word_that_is_not_a_heading_is_still_read(self):
+        """The word in a quote or in emphasis is prose unless a heading marker or an underline makes it one."""
+        text = "> Items are listed below\n> Items\n> and more\n**Items** and *Items*\n\n## Items\n\n1. a\n2. b\n"
+
+        self.assertEqual(planrecord.plan_items(text), ((1, 2), ()))
 
     def test_such_a_decoy_after_the_real_section_is_refused_too(self):
         items, problems = planrecord.plan_items("## Items\n\n1. a\n\n## Notes ##\n\n### Items\n")
