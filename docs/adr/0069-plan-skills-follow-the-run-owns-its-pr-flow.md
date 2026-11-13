@@ -77,7 +77,9 @@ unmeasured defaults a project may override.
 - **No write without authority:** a failed authorisation check or gate, in any session, and
   in-flight work the run may not build on, forbid every file write; the stop only labels.
   `stops.md` keeps those apart from the stops whose one write is the stop record itself (a
-  secret-scan failure, a stray Bash write). A
+  secret-scan failure, a stray Bash write). Only a `fail-closed` verdict that posted no thread is
+  re-requested without a round, as the doctrine's "before reaching any finding" reads; one that
+  posted threads is handled like a `fail`. A
   ledger the session cannot read counts as none. A label write that fails twice is reported as
   "stopped but unlabelled". An open blocked PR is judged by its label events, not the label's
   presence. A `fail` verdict that leaves nothing to fix, an in-scope finding the fix limits
@@ -131,4 +133,4 @@ unmeasured defaults a project may override.
 ## Measurements
 
 None. The line counts after the change: `plan-run/SKILL.md` 174, `plan-item/SKILL.md` 109,
-`plan-pr/SKILL.md` 117.
+`plan-pr/SKILL.md` 122.

@@ -14,7 +14,7 @@ reviewed PR). Then, by where the part is; take the first row that applies:
 | Where the part is | Record | Labels |
 |---|---|---|
 | The merge was not confirmed (section 1) | No file write. | None: that stop reports only. |
-| One of the "Stops with no write" | No file write. | `plan:blocked` on the open item PR if there is one, otherwise on the record PR; remove `plan:continue` from it. |
+| One of the "Stops with no write" | No file write. | `plan:blocked` on the open item PR if the run opened it or may resume it, otherwise (no PR, or a fork or foreign PR the run may not build on) on the record PR; remove `plan:continue` from it. |
 | No branch pushed yet: any stop before the part's first push (sections 2–4, or plan-item step 1) | No file write. | `plan:blocked` on the record PR (below), through `gh api` if `gh pr` is blocked; remove `plan:continue` from it. |
 | Work began on a `plan/…` branch, its draft has not opened, and this session may write to it | Commit the progress record on the branch, with `## Status` saying whether this part finished (`stopped unfinished` if not) and `## Next` reading `blocked: <reason>`, and push it, within the limits of "Stops with a limited write" where one applies. | The same merged PR as the row above: `plan:blocked` on, `plan:continue` off. |
 | The item's PR is open | As the row above, pushed to the PR's branch (returning the PR to draft first if it is ready). | `plan:blocked` on the PR; remove any `plan:continue` from it. The labels always follow the final `## Next`. |

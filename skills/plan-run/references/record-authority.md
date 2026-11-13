@@ -63,7 +63,9 @@ ADR 0043).
   server (E22: `plan-gate`, trimtab-core ADR 0063 §7) passed on the PR's final head, read from job
   records the same way as `plan-scope`: every attempt finished and passed, from the pinned workflow
   path and the `pull_request` event. A pinned base that names no such job, or a job that did not
-  pass or cannot be read, fails this test, so only an admin merge counts then;
+  pass or cannot be read, fails this test, so only an admin merge counts then. Until the base ships
+  the `plan-gate` template and the project adopts it, this test fails for every approver merge:
+  each one stops the next session, and the admin's removal of `plan:blocked` accepts it;
 - the PR changes neither `.github/` nor the code the `plan-scope` check runs
   (`gh api repos/{owner}/{repo}/pulls/<n>/files --paginate`): no file's `filename`, nor for a rename
   its `previous_filename`, is under `.github/`, is either root file that can pin the checker,

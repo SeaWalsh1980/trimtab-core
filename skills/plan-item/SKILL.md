@@ -98,7 +98,7 @@ the draft, every thread, ready, and the watch to merge are plan-pr/SKILL.md.
 | The work cannot be finished, or cannot reach a clean point (step 1) | this skill |
 | It needs work outside its scope, a write a hook refuses, or the authorised plan changed | step 3 |
 | A stray Bash write, or a secret-scan failure | step 3 and plan-item/references/scope.md |
-| A CRITICAL or HIGH after the fifth in-session round, or out of scope in any round | step 5 |
+| A CRITICAL or HIGH after the fifth in-session round, or out of scope in any round; an in-scope finding the fix limits forbid fixing, in any round | step 5 and plan-item/references/scope.md |
 | A stop named in the CI review, CI fix, ready or watch steps, or the CI fix-round limit reached | plan-pr/SKILL.md |
 | You can already see the next work would fail the gate in section 4 | plan-run/SKILL.md |
 

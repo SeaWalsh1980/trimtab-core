@@ -40,12 +40,17 @@ Opening the draft starts the CI review. Wait for its verdict and threads, within
 project's instruction file names, or 60 minutes per review where it names none. Which review counts,
 how to read it, and what a verdict means: plan-pr/references/ci-review.md.
 
+Take the first row that applies:
+
 | What arrives within the bound | Then |
 |---|---|
-| A readable verdict on the current head | Step 2. |
-| A verdict that failed closed (`fail-closed`), whatever findings it carries | Request it again once, through the named mechanism (step 3). That is not a round. A second on the same head is a stop. |
 | No CI review of the current head, or no readable verdict | A stop. |
-| A `fail` verdict that, once every thread has its reply (step 2), leaves nothing to fix within scope | A stop: ready needs `pass`, and a re-request needs a new head. |
+| A `fail-closed` verdict on the current head that posted no thread | Request it again once, through the named mechanism (step 3). That is not a round. A second on the same head is a stop. |
+| A `fail-closed` verdict that posted threads | Step 2, and handle it like a `fail`: its threads open a CI fix round as usual. |
+| Any other readable verdict on the current head | Step 2. |
+
+After step 2: a `fail` verdict that leaves nothing to fix within scope is a stop, since ready needs
+`pass` and a re-request needs a new head.
 
 ## 2. Reply to every thread
 
