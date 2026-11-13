@@ -51,6 +51,7 @@ class Context:
     review_login: str
     tags: Mapping[str, str]
     limits: Limits | None = None
+    rerequest_label: str = ""  # the instance's label, which a re-request is spelt with (§4)
 
 
 @dataclass(frozen=True)

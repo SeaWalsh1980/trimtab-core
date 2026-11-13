@@ -8,8 +8,17 @@ from pathlib import Path
 
 from test_guard_github_plan import CONFIG_REF, HEAD_REF, ON_MAIN, ON_PLAN, ORIGIN, PUSH_REF, NoFacts, decide
 from test_planrows import BRANCH, DRAFT, H1, FakeFacts
+import plan_fixture
 from trimtab import planguard, planrows
 from trimtab.adapters import guard_github
+
+
+def setUpModule():
+    plan_fixture.set_up()
+
+
+def tearDownModule():
+    plan_fixture.tear_down()
 
 PLAN = {**ON_PLAN}
 REPO = "repos/owner/proj"
@@ -145,8 +154,14 @@ class AllWithForce(Cases):
             with self.subTest(opt):
                 self.refused(f"git push --all {opt} origin", "E1", facts=FakeFacts(local=(BRANCH,), pr_state=DRAFT, head=H1))
 
-    def test_all_without_force_still_passes(self):
-        self.allowed("git push --all origin", facts=FakeFacts(local=(BRANCH,), pr_state=DRAFT, head=H1))
+    def test_all_is_refused_once_a_local_plan_branch_exists(self):
+        # ADR 0063 §1: a broad write names refs this reading cannot list one by one, so no ledger entry
+        # could cover them and E13 would read the branch as holding work no run sent. 2b tightened this.
+        self.refused("git push --all origin", "ledger",
+                     facts=FakeFacts(local=(BRANCH,), pr_state=DRAFT, head=H1))
+
+    def test_all_still_passes_where_no_local_plan_branch_exists(self):
+        self.allowed("git push --all origin", facts=FakeFacts(local=(), pr_state=DRAFT, head=H1))
 
 
 class DynamicFirstWord(Cases):

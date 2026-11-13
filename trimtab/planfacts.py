@@ -310,6 +310,10 @@ class GitHubFacts(Facts):
         except SourceError as err:
             raise FactsError("the facts job's log could not be read") from err
 
+    def commit_of(self, rev: str) -> str:
+        """The commit a revision names, as a SHA: the ledger records a push by its commits, never by a name."""
+        return self._commit(rev)
+
     def default_branch(self) -> str:
         if self._default is None:
             data = self._json(f"repos/{self.repo}", "gh api repo")

@@ -9,10 +9,19 @@ from test_guard_github_plan import CONFIG_REF, HEAD_REF, ON_MAIN, PUSH_REF, NoFa
 from test_guard_github_plan_bypasses import REPO, Cases, config, with_config
 from test_planfacts import INSTANCE, gh_404
 from test_planrows import BRANCH, DRAFT, H1, FakeFacts
+import plan_fixture
 from trimtab import planfacts, planguard
 from trimtab.capture.ghapi import GhApi
 from trimtab.enforcement import tools
 from trimtab.planrows import FactsError
+
+
+def setUpModule():
+    plan_fixture.set_up()
+
+
+def tearDownModule():
+    plan_fixture.tear_down()
 
 
 class GraphqlLookingRoute(Cases):

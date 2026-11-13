@@ -50,6 +50,7 @@ class FakeFacts:
             "tree_of": {MB: "m" * 40}, "line_text": {}, "branch_commits": (), "activity": (),
             "push_commits": {}, "last_answer": None, "on_default": (), "outside_diff": True,
             "fix_valid": True, "changes": (), "register_answer": False, "conflicted": False,
+            "commit_of": H2, "pr_heads": {7: BRANCH}, "local_plan_branches": (),
             "default_branch": "main", "failing_heads": set(), "facts_run_heads": set(), "pushes": [],
         }
         self.values.update(kw)
@@ -82,6 +83,10 @@ class FakeFacts:
     def failing_heads(self, branch): return self._value("failing_heads")
     def facts_run_heads(self, branch): return self._value("facts_run_heads")
     def pushes(self, branch): return self._value("pushes")
+    def commit_of(self, rev): return self._value("commit_of")
+    def pr_head(self, number, repo): return self._value("pr_heads").get(number)
+    def pr_base(self, number, repo): return "main"
+    def local_plan_branches(self): return self._value("local_plan_branches")
     def repository(self): return REPO
 
 

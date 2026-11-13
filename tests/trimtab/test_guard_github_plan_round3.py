@@ -15,10 +15,19 @@ from test_guard_github_plan_bypasses import REPO, Cases, with_config
 from test_planfacts import INSTANCE
 from test_planrows import BRANCH, DRAFT, H1, FakeFacts
 from test_scrub import isolate_git
+import plan_fixture
 from trimtab import planfacts, planguard, planrows
 from trimtab.capture.ghapi import GhApi
 from trimtab.enforcement import tools
 from trimtab.planrows import Change, FactsError
+
+
+def setUpModule():
+    plan_fixture.set_up()
+
+
+def tearDownModule():
+    plan_fixture.tear_down()
 
 PLANS = "docs/" + "plans/"
 RECORD = PLANS + "progress/0008-slug/item-02-part1.md"

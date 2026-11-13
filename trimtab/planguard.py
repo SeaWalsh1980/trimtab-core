@@ -262,7 +262,7 @@ def _steering(found: planrows.PushRead, config: Mapping[str, list[str]], support
 
 
 def judge_push(args: Sequence[tuple[str, bool]], support: PlanSupport, cwd: Path | None,
-               stable: Stability = STABLE) -> str | None:
+               stable: Stability = STABLE, record=None) -> str | None:
     """Judge `git push <args>` run in `cwd` (None: not known, so nothing resolves). `stable` says what an earlier
     part of the same command changes about what the push resolves. Returns why it cannot be read, or None;
     raises planrows.Refusal."""
@@ -292,6 +292,20 @@ def judge_push(args: Sequence[tuple[str, bool]], support: PlanSupport, cwd: Path
     if found.broad:
         planrows.judge_broad(found.broad, plan_run=support.plan_run, facts=facts, force=found.force,
                              delete=found.delete)
+        if record is not None and _plan_branches(facts):
+            # A broad write names refs this reading cannot list one by one, so the ledger could not record
+            # which it wrote, and E13 would read the branch as holding work no run sent (ADR 0063 §1).
+            raise planrows.Refusal("a broad write (--all, --mirror, --prune) that touches a plan/* branch "
+                                   "cannot be recorded in the ledger; name the branch (ADR 0063 §1)")
     for write in found.writes:
         planrows.judge_write(write, plan_run=support.plan_run, facts=facts)
+        if record is not None:
+            record(support, write.branch, write.source)
     return None
+
+
+def _plan_branches(facts: Facts) -> bool:
+    try:
+        return bool(facts.local_plan_branches())
+    except FactsError as err:
+        raise planrows.Refusal(f"the local plan/* branches are unreadable ({err}); refusing") from err

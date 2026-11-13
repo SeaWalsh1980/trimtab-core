@@ -54,6 +54,14 @@ class FakeFacts(Facts):
         self._read("changes")
         return self._changes
 
+    def commit_of(self, rev):
+        self._read("commit_of")
+        return self.head or H1
+
+    def merge_base(self, branch):
+        self._read("merge_base")
+        return H5
+
     def pushes(self, branch):
         self._read("pushes")
         return self._pushes
