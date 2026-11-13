@@ -38,11 +38,21 @@ UNFINISHED = re.compile(r"item ([0-9]+) part ([0-9]+) stopped unfinished")
 ITEMS_HEADING = re.compile(r"##[ \t]+Items[ \t]*", re.IGNORECASE)
 SECTION_HEADING = re.compile(r"##[ \t]+\S")
 ITEM_LINE = re.compile(r"([0-9]+)\.[ \t]+\S.*")
+# An indented numbered line: ambiguous, since markdown reads one indented less than four spaces as an item of
+# the same list, so a sub-step must be indented four spaces or a tab and anything shallower is refused.
+SUB_ITEM = re.compile(r"([ \t]*)([0-9]+)[.)][ \t]")
+SUB_INDENT = 4
 MAX_RECORDS = 5000  # record paths git names in one answer; past it, an error rather than a partial list (ENG-6.2)
 
 
 class PlanRecordError(Exception):
     """git or gh cannot answer, so no record is named."""
+
+
+@dataclass(frozen=True)
+class Fetched:
+    default: str  # the default branch's name, for messages
+    tip: str  # the commit origin holds for it, which every read names
 
 
 @dataclass(frozen=True)
@@ -54,11 +64,11 @@ class Latest:
     problems: tuple[str, ...] = ()
 
 
-def latest(repo: str, plan: str, default: str) -> Latest:
-    """The latest record on origin/<default>, or item 1 part 1 when it holds none. Assumes the fetch is current
-    and the history whole; `fetched` checks both."""
+def latest(repo: str, tip: str, plan: str) -> Latest:
+    """The latest record in `tip`'s first-parent history, or item 1 part 1 when it holds none. `tip` is the
+    commit `fetched` resolved and checked, never a ref: a fetch landing mid-read must not change the answer."""
     folder = f"{planscope.PLANS_DIR}/progress/{plan}/"
-    out = _git(planscope.log_added, repo, f"refs/remotes/origin/{default}", folder)
+    out = _git(planscope.log_added, repo, tip, folder)
     # Newest merge first: a SHA line, then the paths that commit added, then a blank line.
     groups: list[tuple[str, list[str]]] = []
     named = 0
@@ -87,32 +97,40 @@ def latest(repo: str, plan: str, default: str) -> Latest:
             return Latest(None, sha, 0, 0, tuple(problems))
         item, part, path = max(found)
         # Only additions are listed, so a record deleted or moved since is still "latest" there.
-        if path not in _git(planscope.present, repo, f"refs/remotes/origin/{default}", [path]):
-            return Latest(None, sha, 0, 0, (f"{path} was added by {sha[:12]} but is not on {default}",))
+        if path not in _git(planscope.present, repo, tip, [path]):
+            return Latest(None, sha, 0, 0, (f"{path} was added by {sha[:12]} but is not on {tip[:12]}",))
         return Latest(path, sha, item, part)
     return Latest(None, None, 1, 1)
 
 
-def plan_problems(repo: str, default: str, plan: str) -> tuple[str, ...]:
-    """Why `plan` is not a plan on the fetched default branch, so that "no record yet" means a plan not started
-    and never a mistyped name. Authorisation itself is `check-plan-authorised`'s."""
+def name_problems(plan: str) -> tuple[str, ...]:
+    """Why `plan` is not a plan name at all. Checked before any read, since no fetch can fix a typo."""
     if not planauth.PLAN.fullmatch(plan) or ".." in plan:
         return (f"{plan!r} is not a plan name",)
+    return ()
+
+
+def plan_problems(repo: str, tip: str, plan: str) -> tuple[str, ...]:
+    """Why `plan` is not a plan in the checked commit, so that "no record yet" means a plan not started and
+    never a mistyped name. Authorisation itself is `check-plan-authorised`'s."""
+    problems = name_problems(plan)
+    if problems:
+        return problems
     files = [f"{planscope.AUTHORISED}/{plan}.md", f"{planscope.AUTHORISED}/{plan}.writes"]
-    held = _git(planscope.present, repo, f"refs/remotes/origin/{default}", files)
-    return tuple(f"{plan} is not a plan on {default}: {f.rsplit('.', 1)[1]} file missing" for f in files
+    held = _git(planscope.present, repo, tip, files)
+    return tuple(f"{plan} is not a plan on {tip[:12]}: {f.rsplit('.', 1)[1]} file missing" for f in files
                  if f not in held)
 
 
-def next_work(repo: str, default: str, record: Latest, plan_text: str) -> tuple[str, tuple[str, ...]]:
+def next_work(repo: str, tip: str, record: Latest, plan_text: str) -> tuple[str, tuple[str, ...]]:
     """What a restart does after `record`: (`item NN part K` | `plan complete`, problems). Taken only from the
-    record's file name and its `## Status` line; the plan's text supplies the item list and nothing else."""
+    record's file name and its `## Status` line; the plan's text supplies the item list and nothing else.
+    `tip` is the commit `fetched` checked, as in `latest`."""
     if record.path is None:
         return "item 01 part 1", ()
-    tip = f"refs/remotes/origin/{default}"
     text = _git(planscope.read_files, repo, tip, [record.path])[record.path]
     if text is None:
-        return "", (f"{record.path} is not a regular file on {default}",)
+        return "", (f"{record.path} is not a regular file on {tip[:12]}",)
     status = _status(text)
     if status is None:
         return "", (f"{record.path} has no ## Status line",)
@@ -169,8 +187,13 @@ def plan_items(plan_text: str) -> tuple[tuple[int, ...], tuple[str, ...]]:
     file, and every non-blank line in it is either a top-level item `N. <text>`, numbered from 1 with no gap,
     no repeat and no reordering, or a line indented under one (an item's own wrapped text or sub-steps). Any
     other line, and a missing or repeated heading, is a named problem: the plan is not read as a todo list at
-    all, so nothing outside the section can add or hide an item."""
-    lines = plan_text.splitlines()
+    all, so nothing outside the section can add or hide an item.
+
+    A numbered line indented less than four spaces is refused rather than read as a sub-step, because markdown
+    reads it as an item of the same list: it is the one shape that could hide a later item."""
+    # Split on newlines alone: str.splitlines would also break on \x0b, \x0c and \x85, which markdown does not,
+    # and a line only one of those separators begins could read as an item.
+    lines = [line.removesuffix("\r") for line in plan_text.split("\n")]
     heads = [i for i, line in enumerate(lines) if ITEMS_HEADING.fullmatch(line)]
     if not heads:
         return (), ("the plan has no ## Items section",)
@@ -185,6 +208,11 @@ def plan_items(plan_text: str) -> tuple[tuple[int, ...], tuple[str, ...]]:
         if line[:1] in (" ", "\t"):
             if not found:  # indented text before any item: the section's shape is not one this reads
                 return (), ("the plan's ## Items section opens with an indented line, not item 1",)
+            sub = SUB_ITEM.match(line)
+            if sub and len(sub.group(1).expandtabs(SUB_INDENT)) < SUB_INDENT:
+                return (), (f"the plan's ## Items section indents a numbered line, {sub.group(2)}., by less than "
+                            f"{SUB_INDENT} spaces: indent a sub-step by {SUB_INDENT} or write it as an item at "
+                            "the start of the line",)
             continue  # an item's own wrapped text or sub-step
         m = ITEM_LINE.fullmatch(line)
         if m is None:
@@ -198,20 +226,22 @@ def plan_items(plan_text: str) -> tuple[tuple[int, ...], tuple[str, ...]]:
     return tuple(found), ()
 
 
-def fetched(repo: str, repository: str, default: str | None = None, run: Run | None = None) -> str:
-    """The default branch's name, once origin's copy is whole and is where the server says the branch is."""
+def fetched(repo: str, repository: str, default: str | None = None, run: Run | None = None) -> Fetched:
+    """The default branch's name and the commit origin holds for it, once that copy is whole and is where the
+    server says the branch is. Every later read names the commit, never the ref, so a fetch landing in between
+    cannot slip a different history under the answer (as `planauth.check` pins its own tip)."""
     api = GhApi(run)
     try:
         name = planauth.default_branch(api, repository)
         if default and default != name:
             raise PlanRecordError(f"{default} is not {repository}'s default branch ({name})")
-        planauth.fetched_tip(repo, api, repository, name)
+        tip = planauth.fetched_tip(repo, api, repository, name)
     except planauth.PlanAuthError as err:
         raise PlanRecordError(str(err)) from err
     cut = _git(planscope.history_cut, repo)
     if cut:
         raise PlanRecordError(cut)
-    return name
+    return Fetched(name, tip)
 
 
 def _git(read, *args):

@@ -965,11 +965,14 @@ def cmd_check_plan_authorised(args) -> int:
 
 def cmd_latest_record(args) -> int:
     try:
-        default = planrecord.fetched(args.repo, args.repository, args.default_branch)
-        problems = planrecord.plan_problems(args.repo, default, args.plan)
+        problems = planrecord.name_problems(args.plan)  # before any read: no fetch fixes a typo
         if problems:
             return _print_problems(problems)
-        record = planrecord.latest(args.repo, args.plan, default)
+        fetched = planrecord.fetched(args.repo, args.repository, args.default_branch)
+        problems = planrecord.plan_problems(args.repo, fetched.tip, args.plan)
+        if problems:
+            return _print_problems(problems)
+        record = planrecord.latest(args.repo, fetched.tip, args.plan)
         if record.problems:
             return _print_problems(record.problems)
         if not args.next_on_restart:
@@ -986,7 +989,7 @@ def cmd_latest_record(args) -> int:
             if result.problems:
                 return _print_problems(result.problems)
             text = result.plan_text or ""
-        work, problems = planrecord.next_work(args.repo, default, record, text)
+        work, problems = planrecord.next_work(args.repo, fetched.tip, record, text)
         if problems:
             return _print_problems(problems)
         print(work)

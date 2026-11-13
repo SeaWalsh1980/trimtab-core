@@ -43,6 +43,16 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
   never items). A missing or repeated heading, an empty section, a line that is neither, or a number
   out of sequence is a named problem (exit 1). `plan complete` is printed only when the record's
   item is the section's last item.
+- A sub-step is indented four spaces or a tab. A numbered line indented less, which markdown reads
+  as an item of the same list, is a named problem rather than wrapped text: it is the one shape that
+  could hide a later item and so end a plan early. The section ends only at a `## ` heading at the
+  start of a line or at the end of the file, so any other unindented non-item line inside it — a
+  `###` heading, a `#` title, a `---` rule, a code fence, a table row — is refused by name rather
+  than read as content or as the section's end; a `## Items` line inside a code fence counts as a
+  second heading and is refused too. The heading itself is matched without case (`## items` reads),
+  allowing trailing blanks, and lines are split on newlines alone with a trailing `\r` stripped, so
+  a CRLF plan reads normally instead of reporting a missing section. Each of those refusals is loud,
+  and the ones a real plan might hit are pinned by tests.
 - Exit codes follow `check-plan-authorised`: 0 ok, 1 a named problem, 2 a failed read, a stale fetch
   (origin's default branch must be where the server says it is, which is why `--repository` is
   required), a shallow clone or a grafts file. One difference: a malformed plan name is exit 1
@@ -84,6 +94,17 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
   today, none of which has one. The instance's rule for an authorised plan should state the format,
   so a plan that lacks it fails when it is written rather than at a restart; until it does, this
   record is the only statement of the format.
+- **An already-merged plan cannot be repaired in place**, and the cost of that is larger than the
+  stop itself. `planauth`'s check 3 fails once a plan's text differs from the commit that merged it,
+  and `--next-on-restart` runs that check, so adding the heading is what would make the plan
+  unauthorised; the agent may not edit a plan at all. The compliant route is a new plan file and
+  declaration under a new `NNNN-<slug>`, admin-merged, with the old plan marked superseded. Because
+  the progress folder is keyed on the plan's name, the new plan's lookup finds no record and returns
+  `item 01 part 1`, so a half-finished plan restarts at item 1 unless the operator carries its
+  records across by hand. This project accepts that: no plan is mid-flight today, and the restart
+  path is the only one affected. A plan that is mid-flight when the format lands is the operator's
+  to migrate, and they will find the stop before any work is redone, because the command refuses
+  rather than guessing.
 - Text outside the section is never read, so a numbered list in the plan's preamble can no longer
   add an item, and a sub-step indented under an item can no longer stop a finished plan. Those two
   errors, which the earlier pattern had, are closed rather than narrowed.

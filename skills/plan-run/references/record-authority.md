@@ -24,7 +24,10 @@ and `## Status` line. It also runs the plan authorisation check, so it needs the
 login; exit 1 there, or for an unparseable or mismatched `## Status`, is a blocker.
 
 It reads the plan's items from one `## Items` section: top-level `N. ` lines numbered 1 to n in
-order, with an item's wrapped text or sub-steps indented under it, and nothing else in the section.
+order, with an item's wrapped text or sub-steps indented under it (a sub-step by four spaces or a
+tab; a numbered line indented less is refused), and nothing else in the section: the section ends
+only at the next `## ` heading or the end of the file, so a `###` heading, a rule, a fence or a
+table row inside it is refused by name.
 Nothing outside the section is read. `plan complete` means the record's item is the section's last.
 A plan without that section is exit 1, which is a blocker on the restart path: report it rather than
 work out the next item by hand (trimtab-core ADR 0071).
