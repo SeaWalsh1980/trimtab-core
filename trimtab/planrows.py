@@ -64,6 +64,7 @@ class PushRead:
     bare: bool = False  # no refspec was given, so configuration chooses what is pushed
     colonless: bool = False  # a refspec had no `:dst`, so `remote.<r>.push` can map it elsewhere
     head_ref: bool = False  # a destination was taken from HEAD, so the checked-out branch decides it
+    dry: bool = False  # `--dry-run` / `-n`: it writes nothing, so a ledger entry for it would vouch for nothing
 
 
 @dataclass(frozen=True)
@@ -119,13 +120,13 @@ _LONG = {
     "follow-tags": "flag", "no-follow-tags": "flag", "signed": "optional", "no-signed": "flag",
     "atomic": "flag", "no-atomic": "flag", "push-option": "valued", "receive-pack": "valued",
     "exec": "valued", "repo": "repo", "force-with-lease": "force-optional", "no-force-with-lease": "flag",
-    "force-if-includes": "force", "no-force-if-includes": "flag", "force": "force", "dry-run": "flag",
+    "force-if-includes": "force", "no-force-if-includes": "flag", "force": "force", "dry-run": "dry",
     "porcelain": "flag", "thin": "flag", "no-thin": "flag", "quiet": "flag", "verbose": "flag",
     "progress": "flag", "no-progress": "flag", "recurse-submodules": "valued", "no-recurse-submodules": "flag",
     "verify": "flag", "no-verify": "flag", "ipv4": "flag", "ipv6": "flag", "set-upstream": "flag",
     "no-set-upstream": "flag", "help": "flag",
 }
-_SHORT_FLAGS = set("nvqu46")
+_SHORT_FLAGS = set("vqu46")  # `n` is --dry-run, which is read above, not a flag to pass over
 
 
 def normalise(value) -> str | None:
@@ -158,7 +159,7 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
     `current` names the branch a bare push resolves to (git rev-parse --symbolic-full-name @{push}) and
     `head` the one a `HEAD` refspec does (the checked-out branch; `current` when not given). None, or any
     word the shell builds, makes the reading unreadable, which refuses."""
-    force = delete = tags = False
+    force = delete = tags = dry = False
     broad: str | None = None
     has_repo = False
     repo_value: str | None = None
@@ -201,10 +202,14 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
                 broad = broad if broad == "mirror" else "prune"
             elif kind == "all":
                 broad = broad or "all"
+            elif kind == "dry":
+                dry = True
             continue
         letters = text[1:]
         for pos, ch in enumerate(letters):
-            if ch == "f":
+            if ch == "n":
+                dry = True
+            elif ch == "f":
                 force = True
             elif ch == "d":
                 delete = True
@@ -272,7 +277,7 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
     if maybe_option:  # an unquoted expansion splits into words: options, or refspecs of its own (`:plan/x`)
         return PushRead(unreadable="a remote built by the shell may be options or refspecs")
     return PushRead(writes=tuple(writes), broad=broad, remote=remote, bare=not refspecs, colonless=colonless,
-                    head_ref=head_ref)
+                    head_ref=head_ref, dry=dry)
 
 
 # ---- the diff shapes ---------------------------------------------------------------------
@@ -296,6 +301,13 @@ def progress_only(changes: Sequence[Change], branch: str) -> bool:
         return False
     record = _record_path(m)
     return all(c.path == record and c.status in ("A", "M") and not c.binary for c in changes)
+
+
+def register_file(path: str, branch: str) -> bool:
+    """Whether a path is a register entry of this branch's own item and part (E7's added files)."""
+    m = _item(branch)
+    return bool(m) and path.startswith(_register_dir(m)) \
+        and bool(REGISTER_FILE.fullmatch(posixpath.basename(path)))
 
 
 def register_shape(changes: Sequence[Change], branch: str) -> bool:
@@ -375,10 +387,17 @@ def counted_heads(pushes: Iterable[Push], *, failing: set[str], facts: set[str],
     return {h for h in answered if (h in failing or h in facts) and h not in register_only}
 
 
-def check_e12(branch: str, head: str, facts: Facts, pr: PrState | None, register: Callable[[], bool]) -> None:
-    """E12: a push that would make the fourth CI-fix round is refused."""
+def check_e12(branch: str, head: str, facts: Facts, pr: PrState | None, register: Callable[[], bool],
+              conflicted_heads: frozenset[str] = frozenset()) -> None:
+    """E12: a push that would make the fourth CI-fix round is refused.
+
+    `conflicted_heads` holds the heads a ledger `conflict` event records (ADR 0063 §5a): a head that
+    conflicted with the default branch counts as a round, and the ledger is the only record of one
+    past the push that answered it. Empty, as it is for a caller with no ledger, the count is the
+    server-side one Amendment 1 shipped, which is weaker by conflict-only rounds."""
     pushes = list(facts.pushes(branch))
-    failing, reviewed = set(facts.failing_heads(branch)), set(facts.facts_run_heads(branch))
+    failing = set(facts.failing_heads(branch)) | set(conflicted_heads)
+    reviewed = set(facts.facts_run_heads(branch))
     candidates = {p.before for p in pushes} & (failing | reviewed)
     register_only = {h for h in candidates
                      if all(facts.register_answer(branch, p.before, p.after) for p in pushes if p.before == h)}

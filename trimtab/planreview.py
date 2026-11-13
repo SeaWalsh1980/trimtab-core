@@ -72,6 +72,7 @@ class Activity:
     before: str
     after: str
     actor: str
+    when: str = ""  # the event's RFC 3339 time, which E12 compares with the PR's opening
 
 
 @dataclass(frozen=True)
@@ -182,6 +183,8 @@ def deferral_allowed(thread: Thread, *, outside_diff: bool, merge_base_keys: fro
 def accepted_reply(thread: Thread, replies: Sequence[Comment], agent: str, tags: dict[str, str],
                    deferral_ok: Callable[[Thread], bool]) -> str | None:
     """The tag name of the first acceptable agent reply to the thread, else None."""
+    if len({v for v in tags.values()}) != len(tags):
+        raise FactsError("two outcome tags in the instance are the same word, so a reply cannot be placed")
     by_tag = {v: k for k, v in tags.items()}
     for reply in replies:
         if reply.in_reply_to != thread.id or reply.user.casefold() != agent.casefold():
@@ -304,12 +307,18 @@ def check_e13(branch_commits: Sequence[str], pushes: Sequence[LedgerPush], event
 
 # ---- E18 ---------------------------------------------------------------------------------------
 
-def _number(text: str) -> tuple[float, ...]:
+def _number(text: str) -> tuple[float | int, ...]:
     """A number as a tuple that compares as it reads: a decimal (one dot) as one float, a dotted version
-    (`3.9.1`) as its integer parts, so `3.10` is above `3.9` only where it is written with two dots."""
+    (`3.9.1`) as its integer parts, so `3.10` is above `3.9` only where it is written with two dots.
+
+    A version's parts stay integers: `float()` on a part of 309 digits or more raises `OverflowError`,
+    which is not a refusal this row could report."""
     if text.count(".") >= 2:
-        return tuple(float(int(p)) for p in text.lstrip("-").split("."))
-    return (float(text),)
+        return tuple(int(p) for p in text.lstrip("-").split("."))
+    try:
+        return (float(text),)
+    except (ValueError, OverflowError) as err:
+        raise FactsError("a threshold line holds a number this reader cannot compare") from err
 
 
 def _numbers(line: str) -> list[tuple[float, ...]]:
@@ -398,6 +407,56 @@ def check_round_start(head: str, pre_draft_heads: Sequence[str]) -> None:
 
 
 # ---- K+1 ---------------------------------------------------------------------------------------
+
+_ITEM_HEADING = re.compile(r"^(?P<hashes>#{1,6})\s*(?:item\s*)?0*(?P<item>[0-9]+)\b", re.I)
+_ITEM_ENTRY = re.compile(r"^(?P<indent>\s*)(?:[-*+]\s+)?(?:\[[ xX]\]\s+)?0*(?P<item>[0-9]+)[.)]\s")
+_CODE_SPAN = re.compile(r"`([^`\n]+)`")
+
+
+def _item_section(text: str, item: int) -> list[str]:
+    """The lines of the authorised plan that belong to item `item`: its numbered entry and the lines
+    indented under it, or its heading and the lines under it. An item the plan does not hold is no lines,
+    which names nothing, so E18 refuses more rather than less."""
+    lines = text.split("\n")
+    for n, line in enumerate(lines):
+        heading = _ITEM_HEADING.match(line)
+        entry = None if heading else _ITEM_ENTRY.match(line)
+        if heading is not None and int(heading["item"]) == item:
+            level = len(heading["hashes"])
+            rest = []
+            for later in lines[n + 1:]:
+                found = _ITEM_HEADING.match(later)
+                if found is not None and len(found["hashes"]) <= level:
+                    break
+                rest.append(later)
+            return [line, *rest]
+        if entry is not None and int(entry["item"]) == item:
+            indent = len(entry["indent"])
+            rest = []
+            for later in lines[n + 1:]:
+                if _ITEM_HEADING.match(later):
+                    break
+                found = _ITEM_ENTRY.match(later)
+                if found is not None and len(found["indent"]) <= indent:
+                    break
+                rest.append(later)
+            return [line, *rest]
+    return []
+
+
+def named_lines(text: str, item: int) -> frozenset[str]:
+    """E18's exception: the exact marker and threshold lines the plan's item section names.
+
+    Every non-empty line of the section counts (a fenced code block's lines among them), and so does the
+    content of each inline code span, which is how a line is named inside a sentence."""
+    out: set[str] = set()
+    for line in _item_section(text, item):
+        stripped = line.strip()
+        if stripped:
+            out.add(stripped)
+        out.update(span.strip() for span in _CODE_SPAN.findall(line) if span.strip())
+    return frozenset(out)
+
 
 def parts_in(names: Sequence[str], plan: str, item: int) -> set[int]:
     """The part numbers K in `item-NN-partK` names (a progress record, or a head ref `plan/<plan>/item-NN-partK`)."""

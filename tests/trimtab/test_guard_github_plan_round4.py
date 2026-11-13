@@ -7,7 +7,16 @@ import unittest
 from test_guard_github_plan import CONFIG_REF, HEAD_REF, ON_MAIN, PUSH_REF, NoFacts
 from test_guard_github_plan_bypasses import REPO, Cases, config, with_config
 from test_planrows import BRANCH, DRAFT, H1, FakeFacts
+import plan_fixture
 from trimtab import planguard
+
+
+def setUpModule():
+    plan_fixture.set_up()
+
+
+def tearDownModule():
+    plan_fixture.tear_down()
 
 PLAN_UPSTREAM = f"refs/heads/{BRANCH}"
 

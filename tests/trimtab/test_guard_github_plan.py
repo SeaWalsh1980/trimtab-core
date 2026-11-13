@@ -8,9 +8,18 @@ import unittest
 from pathlib import Path
 
 from test_planrows import BRANCH, DRAFT, H1, READY, FakeFacts
+import plan_fixture
 from trimtab import planguard
 from trimtab.adapters import guard_github
 from trimtab.enforcement.tools import ToolError
+
+
+def setUpModule():
+    plan_fixture.set_up()
+
+
+def tearDownModule():
+    plan_fixture.tear_down()
 
 CWD = "/work"
 OTHER = "plan/0009-other/item-01-part1"
@@ -207,7 +216,10 @@ class Rest(Cases):
 
     def test_update_branch_of_a_plan_pr(self):
         facts = FakeFacts(pr_state=DRAFT, head=H1, heads={7: BRANCH})
-        self.assertEqual(self.api("PUT", "repos/owner/proj/pulls/7/update-branch", facts=facts)[0], guard_github.ALLOW)
+        # A sourceless write carries no commit, so the ledger could not record it and E13 could never
+        # resume the branch: 2b refuses it in a run as well (ADR 0063 §1).
+        code, msg = self.api("PUT", "repos/owner/proj/pulls/7/update-branch", facts=facts)
+        self.assertEqual((code, "ledger" in msg), (guard_github.BLOCK, True))
         code, msg = self.api("PUT", "repos/owner/proj/pulls/7/update-branch", run=False, facts=facts)
         self.assertIn("E14", msg)
 
@@ -257,7 +269,7 @@ class GhCommands(Cases):
 
     def test_pr_update_branch_is_a_plan_write(self):
         self.refused("gh pr update-branch 7", "E14", run=False, facts=self.facts())
-        self.allowed("gh pr update-branch 7", facts=self.facts())
+        self.refused("gh pr update-branch 7", "ledger", facts=self.facts())  # sourceless: see Rest above
         self.allowed("gh pr update-branch 8", run=False, facts=self.facts())
 
     def test_issue_close_of_a_plan_pr(self):
@@ -293,7 +305,8 @@ class Graphql(Cases):
 
 class TheExistingRulesStandAlone(Cases):
     def test_a_draft_pr_still_opens(self):
-        self.allowed("gh pr create --draft --title t", facts=NoFacts())
+        # From a branch that is not a plan part: E23 then reads nothing (ADR 0063 §5).
+        self.allowed("gh pr create --draft --title t", facts=NoFacts(), git=ON_MAIN)
 
     def test_an_approving_review_still_refuses(self):
         code, msg = decide("gh pr review 7 --approve", facts=NoFacts())

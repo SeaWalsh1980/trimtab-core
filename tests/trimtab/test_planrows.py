@@ -54,6 +54,42 @@ class FakeFacts(Facts):
         self._read("changes")
         return self._changes
 
+    def commit_of(self, rev):
+        self._read("commit_of")
+        return self.head or H1
+
+    def merge_base(self, branch):
+        self._read("merge_base")
+        return H5
+
+    def merge_base_of(self, rev):
+        self._read("merge_base")
+        return H5
+
+    def branch_sha(self, branch):
+        self._read("branch_sha")
+        return self.head or H1
+
+    def parents(self, rev):
+        self._read("parents")
+        return (H5,)
+
+    def change_from(self, base, source):
+        self._read("changes")
+        return self._changes
+
+    def facts_runs_for(self, head):
+        self._read("facts_runs_for")
+        return []
+
+    def progress_names(self, plan):
+        self._read("progress_names")
+        return ()
+
+    def pr_head_refs(self):
+        self._read("pr_head_refs")
+        return ()
+
     def pushes(self, branch):
         self._read("pushes")
         return self._pushes
