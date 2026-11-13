@@ -402,6 +402,90 @@ class ApproverMerge(unittest.TestCase):
         self.assertEqual({path_of(argv) for argv in gh.argvs()}, {PULLS_PATH, PULL_PATH, REVIEWS_PATH})
 
 
+class RouteEdges(unittest.TestCase):
+    """The fail-closed branches of the approver route and of `judge`'s own inputs."""
+
+    def approver(self, **changes):
+        return judge(approver_merge(**changes), plan_gate=PASSING_GATE)
+
+    def test_a_record_with_no_commit_or_a_bad_commit_is_an_error(self):
+        for record in (planrecord.Latest(None, None, 1, 1), planrecord.Latest(RECORD_PATH, "abc", 1, 1)):
+            with self.subTest(record=record):
+                with self.assertRaises(RecordAuthError):
+                    judge(record=record)
+
+    def test_a_plan_gate_job_still_running_is_a_named_problem_not_a_wait(self):
+        def running(repository, head):
+            return PlanScopeResult(("the plan-gate job is queued",), wait=True)
+
+        verdict = judge(approver_merge(), plan_gate=running)
+
+        self.assertEqual((verdict.wait, len(verdict.problems)), (False, 2))
+        self.assertIn("plan-gate job on the final head has not completed", verdict.problems[0])
+
+    def test_more_admin_only_paths_than_are_shown_are_counted(self):
+        names = [f".github/workflows/w{i}.yml" for i in range(planrecordauth.mergeauthority.SHOWN_PATHS + 2)]
+
+        verdict = self.approver(files=[file_row(n) for n in names])
+
+        self.assertIn("and 2 more", verdict.problems[0])
+
+    def test_a_failed_files_read_is_an_error(self):
+        found = approver_merge()
+        del found[FILES_PATH]
+
+        with self.assertRaises(RecordAuthError):
+            judge(found, plan_gate=PASSING_GATE)
+
+    def test_a_previous_filename_of_the_wrong_shape_is_an_error(self):
+        with self.assertRaises(RecordAuthError):
+            self.approver(files=[{"filename": "a.md", "previous_filename": 7}])
+
+    def test_a_failed_rules_read_is_an_error(self):
+        found = approver_merge()
+        del found[RULES_PATH]
+
+        with self.assertRaises(RecordAuthError):
+            judge(found, plan_gate=PASSING_GATE)
+
+    def test_a_rule_row_of_the_wrong_shape_is_an_error(self):
+        for rows in (["x"], [{"type": 7}],
+                     [{"type": "required_status_checks", "parameters": {"required_status_checks": "no"}}],
+                     [{"type": "required_status_checks", "parameters": {"required_status_checks": [
+                         {"context": "plan-scope", "integration_id": 15368}]}, "ruleset_id": "7"}]):
+            with self.subTest(rows=rows):
+                with self.assertRaises(RecordAuthError):
+                    self.approver(rule_rows=rows)
+
+    def test_a_failed_ruleset_read_is_an_error(self):
+        found = approver_merge()
+        del found[ruleset_path()]
+
+        with self.assertRaises(RecordAuthError):
+            judge(found, plan_gate=PASSING_GATE)
+
+    def test_more_rulesets_than_the_bound_is_an_error(self):
+        count = planrecordauth.RULESET_LIMIT + 1
+        rows = [row for n in range(1, count + 1) for row in rules(n)]
+
+        with self.assertRaises(RecordAuthError):
+            self.approver(rule_rows=rows, rulesets={n: ruleset(id=n) for n in range(1, count + 1)})
+
+    def test_a_failed_review_read_is_an_error(self):
+        found = answers()
+        del found[REVIEWS_PATH]
+
+        with self.assertRaises(RecordAuthError):
+            judge(found)
+
+    def test_a_failed_plan_scope_read_is_an_error(self):
+        found = approver_merge()
+        del found[tma.ACTIONS_RUNS_PATH]
+
+        with self.assertRaises(RecordAuthError):
+            judge(found, plan_gate=PASSING_GATE)
+
+
 class FailedReads(unittest.TestCase):
     def test_a_failed_gh_read_is_an_error(self):
         with self.assertRaises(RecordAuthError):
@@ -470,6 +554,38 @@ class Wiring(tpr.Records):
         verdict = self.check(plan="../x", gh=gh)
 
         self.assertEqual((len(verdict.problems), gh.calls), (1, []))
+
+    def test_a_record_name_that_is_not_item_part_is_a_named_problem(self):
+        self.merge_branch("odd", {f"{tpr.FOLDER}/notes.md": "x\n"})
+        self.publish()
+
+        verdict = self.check()
+
+        self.assertIn("notes.md", verdict.problems[0])
+
+    def test_a_stale_fetch_is_an_error(self):
+        late = self.merge_branch("late", {"README.md": "changed\n"})  # the server moves; origin's copy does not
+        self.answers[f"repos/{tpa.REPOSITORY}/branches/{tpa.DEFAULT}"] = json.dumps(
+            {"name": tpa.DEFAULT, "commit": {"sha": late}})
+
+        with self.assertRaises(RecordAuthError):
+            self.check()
+
+    def test_a_plan_scope_run_still_going_is_a_wait_through_check(self):
+        sha = self.merge_record(1, 1)
+        self.record_pr(sha, merged_by=APPROVER)
+        scope = tma.plan_scope_answers(jobs=[tma.plan_scope_job(status="in_progress", conclusion=None)])
+        self.answers.update({k: v for k, v in scope.items() if k != tma.REPOSITORY_PATH})
+        self.answers[f"repos/{tpa.REPOSITORY}/rules/branches/{tpa.DEFAULT}"] = json.dumps(rules())
+        self.answers[ruleset_path()] = json.dumps(ruleset())
+
+        def gate(repository, head):
+            return PlanScopeResult((), wait=False)
+
+        verdict = planrecordauth.check(str(self.repo), tpa.REPOSITORY, tpr.PLAN, Accounts(tpa.ADMIN, APPROVER),
+                                       FakeGh(self.answers), gate)
+
+        self.assertEqual((verdict.wait, len(verdict.problems)), (True, 1), verdict.problems)
 
     def test_a_plan_not_on_the_default_branch_is_a_named_problem(self):
         verdict = self.check(plan="0099-missing")
