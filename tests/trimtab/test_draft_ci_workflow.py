@@ -12,15 +12,44 @@ import yaml
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
 
+REVIEW_WORKFLOW = "claude-code-review.yml"
+REVIEW_JOB = "claude-review"
 REVIEW_ACTION_PREFIX = "anthropics/claude-code-action@"
 JOB_TOKEN = "${{ github.token }}"
-# The inputs and permission through which the action reaches the App-token exchange.
-OIDC_MARKERS = ("id-token", "use_app_token", "app_id", "app-id", "oidc")
+# Every key through which a workflow can ask for the Claude App's token again: the
+# OIDC permission in either spelling, the review action's own App inputs, and the
+# credentials an App-token action takes.
+APP_TOKEN_KEYS = (
+    "id-token",
+    "id_token",
+    "use_app_token",
+    "app_id",
+    "app-id",
+    "client-id",
+    "private-key",
+)
+# A step that mints an App token, whatever the token is then passed to.
+APP_TOKEN_ACTION = "create-github-app-token"
 
 
 def load(name: str) -> dict:
     # PyYAML reads the bare key `on` as True.
     return yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
+
+
+def mapping_keys(node) -> list:
+    """Every mapping key in a parsed workflow, lowercased.
+
+    Keys only: the prompt and the messages are free to name OIDC in prose.
+    """
+    if isinstance(node, dict):
+        keys = [str(key).lower() for key in node]
+        for value in node.values():
+            keys += mapping_keys(value)
+        return keys
+    if isinstance(node, list):
+        return [key for item in node for key in mapping_keys(item)]
+    return []
 
 
 class CiWorkflowTest(unittest.TestCase):
@@ -55,7 +84,7 @@ class CiWorkflowTest(unittest.TestCase):
 
 class ClaudeReviewWorkflowTest(unittest.TestCase):
     def setUp(self):
-        self.workflow = load("claude-code-review.yml")
+        self.workflow = load(REVIEW_WORKFLOW)
 
     def test_returning_to_draft_cancels_a_review_in_progress(self):
         self.assertIn("converted_to_draft", self.workflow[True]["pull_request"]["types"])
@@ -75,14 +104,19 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
         self.assertNotIn("id-token", self.workflow.get("permissions", {}))
         self.assertNotIn("id-token", job.get("permissions", {}))
 
-    def test_no_step_re_adds_an_oidc_path(self):
-        # Restoring the Claude App's token (ADR 0071) needs an OIDC permission or an
-        # action input that asks for one; either, in any step or permission block,
-        # fails here. Comments are not parsed, so prose may still name them.
-        rendered = yaml.safe_dump(self.workflow).lower()
+    def test_no_step_re_adds_an_app_token_path(self):
+        # Restoring the Claude App's token (ADR 0071) takes an OIDC permission, an
+        # App input on the review action, or a step that mints an App token. Any of
+        # the three, anywhere in the file, fails here.
+        keys = mapping_keys(self.workflow)
 
-        for marker in OIDC_MARKERS:
-            self.assertNotIn(marker, rendered)
+        for key in APP_TOKEN_KEYS:
+            with self.subTest(key=key):
+                self.assertNotIn(key, keys, f"{key} is back in {REVIEW_WORKFLOW}")
+
+    def test_no_step_mints_an_app_token(self):
+        for step in self.workflow["jobs"][REVIEW_JOB]["steps"]:
+            self.assertNotIn(APP_TOKEN_ACTION, str(step.get("uses", "")))
 
     def test_the_review_uses_the_jobs_own_token(self):
         steps = self.workflow["jobs"]["claude-review"]["steps"]

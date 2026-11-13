@@ -140,9 +140,12 @@ jobs:
       #   * the action could skip itself when this PR's copy of the workflow
       #     differed from the default branch's (its anti-tampering check, which
       #     rode on the App-token exchange). This job uses its own token now
-      #     (ADR 0071), so that skip is gone: a PR that edits this file runs ITS
-      #     OWN copy of this workflow, and a green `claude-review` on it is a
-      #     self-review. The admin's CODEOWNERS review of the diff is the gate;
+      #     (ADR 0071), so that skip is gone, and a PR that edits this file runs
+      #     ITS OWN copy of everything here - this assertion, the prompt and
+      #     `--allowedTools` included. On such a PR the check carries no
+      #     information either way: the same diff can weaken or delete it, so
+      #     green is not evidence that any review happened. The admin's
+      #     CODEOWNERS review of the diff is the only gate there;
       #   * a denied posting permission loses the findings but exits clean;
       #   * the one-shot session can end early and freeze the tracking comment.
       #
@@ -204,11 +207,13 @@ jobs:
                "finished tracking comments for this run: $finished"
           if [ "$result_ok" != "true" ] || [ "$finished" -lt 1 ]; then
             echo "::error::This run produced no successful review result and" \
-                 "finished tracking comment, so this PR has NOT been reviewed. If" \
-                 "this PR edits .github/workflows/claude-code-review.yml, it ran" \
-                 "its own copy of this workflow, so even a pass would be a" \
-                 "self-review; the admin's CODEOWNERS review is the gate." \
-                 "Check the step log for denied tool permissions or an early" \
-                 "exit."
+                 "finished tracking comment, so this PR has NOT been reviewed." \
+                 "The action no longer skips any PR, so this is a real failure" \
+                 "and not an expected one: check the step log for denied tool" \
+                 "permissions, an early exit, or a tracking comment frozen at" \
+                 "running. A PR that edits this workflow ran its own copy of" \
+                 "this step, so on one of those neither a failure nor a pass is" \
+                 "evidence about the review, and the admin's CODEOWNERS review" \
+                 "of the diff is the only gate."
             exit 1
           fi

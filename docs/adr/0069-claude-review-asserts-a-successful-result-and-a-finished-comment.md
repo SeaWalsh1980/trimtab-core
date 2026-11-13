@@ -70,5 +70,8 @@ defect and needs the same fix upstream.
 ## Note
 
 Superseded in part by ADR 0071: its consequence that a PR editing the workflow "still
-goes unreviewed by CI and still fails the check" no longer holds. Such a PR now runs its
-own copy and can go green, as a self-review; the admin's CODEOWNERS review is the gate.
+goes unreviewed by CI and still fails the check" no longer holds. Such a PR runs its own
+copy of this assertion, of the prompt and of `--allowedTools`, so the check carries no
+information about it either way — green is not evidence that a review happened, and the
+same diff could weaken or delete the assertion. The admin's CODEOWNERS review of the diff
+is the only gate there.
