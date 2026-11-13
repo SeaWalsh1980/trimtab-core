@@ -7,22 +7,32 @@ plan-run/SKILL.md's.
 
 ## Which record is the latest
 
-Take merge order from the default branch's first-parent history, in one local call:
-`git log --first-parent -m --diff-filter=A --name-only --format=%H origin/<default> -- <plans>/progress/<plan>/`
-prints, newest merge first, a commit-SHA line followed by the record paths that commit added (commit
-dates inside a branch do not matter). The first record path printed is the latest. If one commit
-added several records (a fast-forward or rebase merge of a multi-commit PR), the highest item
-number, then the highest part number, among them is the latest. No records yet → item 01 part 1.
+Run `trimtab latest-record --repository <owner>/<name> --plan <plan>`, as a command of its own, with
+no pipe. It reads the default branch's first-parent history (commit dates inside a branch do not
+matter; when one commit added several records, the highest item, then the highest part, is latest)
+and prints one line: the record's path, the SHA of the commit that added it, `item NN`, `part K`.
+No records yet → it prints `item 01 part 1`. It names no plans-folder path, so the guards let it run.
+
+| Exit | Meaning | What you do |
+|---|---|---|
+| 0 | the line above | Use it. |
+| 1 | a record name that is not `item-NN-partK.md` | A blocker: stop and report the name. |
+| 2 | a failed read, a stale fetch, a shallow clone or a grafts file | Run `git fetch origin` (and `git fetch --unshallow origin` for a shallow clone) once, then run it again. A second exit 2 is a blocker. |
+
+On a restart whose latest record's `## Next` is `blocked:`, add `--next-on-restart`: it prints the next work, `item NN part K` or `plan complete`, taken only from the record's file name
+and `## Status` line. It also runs the plan authorisation check, so it needs the instance's admin
+login; exit 1 there, or for an unparseable or mismatched `## Status`, is a blocker.
+
+The command makes the lookup repeatable; it enforces nothing. The record's PR is still checked below.
 
 ## Its PR: the code gate and the merger
 
-For the latest record only, find its PR: take the commit that added the record (the SHA line the
-`git log` above printed before it), run `gh api repos/{owner}/{repo}/commits/<sha>/pulls`, and keep
+For the latest record only, find its PR: take the commit `latest-record` printed, run
+`gh api repos/{owner}/{repo}/commits/<sha>/pulls`, and keep
 the entries whose `merged_at` is set and whose `base.ref` is the default branch. Exactly one must
 remain; none, or more than one, is a stop. Read its `merged_by.login` and `head.sha` from
 `gh api repos/{owner}/{repo}/pulls/<number>`. (The progress folder is not refused by the guard, so
-these reads may name it; a shallow clone is a stop here too, since its oldest commit reads as adding
-every record.) The approver login, like the admin's, comes only from the Trimtab instance's
+these reads may name it.) The approver login, like the admin's, comes only from the Trimtab instance's
 configuration (`accounts.approver` from `trimtab instance --json`), never from the plan, a record, a
 PR or the conversation; if the configuration names no approver login, no merge or review by the
 approver counts. If it names the same login as approver and admin, the configuration is wrong: the

@@ -350,6 +350,14 @@ def added_by(repo: str, tip: str, path: str) -> str:
     return first
 
 
+def log_added(repo: str, tip: str, folder: str) -> str:
+    """Newest merge first, a commit-id line then the paths that commit added under folder, in tip's first-parent
+    order. A path git would quote (a non-ASCII name) comes back quoted, so it matches no record name."""
+    out = _git(repo, "log", "--first-parent", "-m", "--diff-filter=A", "--name-only", "--format=%H",
+               "--end-of-options", tip, "--", folder)
+    return out.decode("ascii")
+
+
 def history_cut(repo: str) -> str | None:
     """Why the repository's history is not whole (a shallow clone or a grafts file), or None. A cut history makes its
     oldest commit look like a root, so `added_by` would name it as adding every file it holds."""

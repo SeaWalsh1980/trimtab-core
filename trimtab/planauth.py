@@ -98,6 +98,16 @@ def check(repo: str, repository: str, plan: str, admin: str, run: Run | None = N
     return Authorisation((), number, merge, texts[files[1]], texts[files[0]])
 
 
+def default_branch(api: GhApi, repository: str) -> str:
+    """The default branch the server reports (for planrecord)."""
+    return _default_branch(api, repository)
+
+
+def fetched_tip(repo: str, api: GhApi, repository: str, default: str) -> str:
+    """origin's default branch as fetched, once it matches the server (for planrecord)."""
+    return _fetched_tip(repo, api, repository, default)
+
+
 def _merged_by_admin(api: GhApi, repository: str, default: str, added: str, admin: str) -> tuple[int, str] | str:
     """The (PR, merge commit) of the PR the adding commit belongs to, when the admin merged it; otherwise why not."""
     rows = _json(api, f"repos/{repository}/commits/{added}/pulls", "gh api commit pulls",
