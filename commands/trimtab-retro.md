@@ -102,13 +102,21 @@ counts, and they are read only while inside the `--ingest-weeks` floor.
 
 ## 2. claude-review findings (a fourth reviewer)
 
-For each PR recorded in step 1, read the review bot's comments. It posts as
-`claude[bot]`, as issue comments (observed on a live PR), and may add review
-or inline comments:
+For each PR recorded in step 1, read the review bot's comments. Which login
+posts them depends on the repository's token (core ADR 0071): `claude[bot]`
+when `claude-review` runs on the Claude App's token, `github-actions[bot]` when
+it runs on the job's own `github.token`. Read both. It posts as issue comments
+(observed on a live PR), and may add review or inline comments. Every other
+workflow's comments also post as `github-actions[bot]`, so keep one of that
+login's comments only when it is the review's tracking comment, whose body
+starts `**Claude finished ` (core ADR 0069). Review and inline comments
+carry no such marker; count them only under `claude[bot]`, and say that a
+`github-actions[bot]` reviewer's inline comments are not counted:
 
 ```bash
 for kind in issues/<n>/comments pulls/<n>/reviews pulls/<n>/comments; do
-  gh api "repos/$REPO/$kind" --jq '.[] | select(.user.login == "claude[bot]") | .body'
+  gh api "repos/$REPO/$kind" --jq '.[] | select(.user.login == "claude[bot]"
+    or (.user.login == "github-actions[bot]" and (.body | startswith("**Claude finished ")))) | .body'
 done
 ```
 
