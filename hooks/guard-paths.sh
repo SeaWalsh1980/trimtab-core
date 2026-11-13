@@ -755,13 +755,17 @@ case "$tool" in
     if [[ "$sm_mode" == autonomous ]]; then
       command -v python3 >/dev/null 2>&1 || deny "python3 is not available, so the enforcement gate cannot be read (fail closed; ADR 0063 §3)" "$gp_where"
       python3 -P -I -S -c '' >/dev/null 2>&1 || deny "python3 3.11 or later is not available, so the enforcement gate cannot be read (fail closed)" "$gp_where"
-      gp_runner="$hl_here/run_module.py"
+      # The package root is this file's real directory's parent, as the E11 branch and guard-github.sh
+      # take it: `$hl_here/..` is a logical path, which is no package root when this file alone is linked.
+      gp_real=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")") || gp_real=""
+      [[ -n "$gp_real" ]] || deny "the hook's own directory cannot be resolved, so the enforcement gate cannot be read (fail closed)" "$gp_where"
+      gp_runner="$gp_real/run_module.py"
       [[ -r "$gp_runner" ]] || deny "hooks/run_module.py is missing, so the enforcement gate cannot be read (fail closed)" "$gp_where"
       # -X pycache_prefix: a planted __pycache__ beside the package is never loaded (ADR 0063 §2).
       gp_bound=()
       command -v timeout >/dev/null 2>&1 && gp_bound=(timeout -k 1 9)
       ${gp_bound[@]+"${gp_bound[@]}"} python3 -I -S -B -X pycache_prefix=/dev/null/trimtab \
-        "$gp_runner" "$hl_here/.." trimtab.adapters.plan_gate <<<"$payload"
+        "$gp_runner" "$gp_real/.." trimtab.adapters.plan_gate <<<"$payload"
       gp_rc=$?
       if (( gp_rc != 0 )); then
         # The adapter printed its reason; any other non-zero is a fault, and blocks.

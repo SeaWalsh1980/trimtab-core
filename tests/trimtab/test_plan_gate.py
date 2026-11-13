@@ -48,6 +48,17 @@ class ReportsOnly(unittest.TestCase):
             with self.subTest(command):
                 self.assertTrue(plan_gate.reports_only(command, self.code))
 
+    def test_only_the_subcommands_own_options_and_their_values_may_follow(self):
+        for tail in ("--server", "--repository owner/proj", "--repo . --server", "--instance /x",
+                     "--repository=owner/proj"):
+            with self.subTest(tail):
+                self.assertTrue(plan_gate.reports_only(f"{self.installed} check-enforcement {tail}", self.code))
+        for tail in ("extra", "--bogus", "--repo", "--repo --server", "--server extra", "-x",
+                     "--repository a b"):
+            with self.subTest(tail):
+                self.assertFalse(plan_gate.reports_only(f"{self.installed} check-enforcement {tail}",
+                                                        self.code))
+
     def test_another_binary_of_the_same_name_is_not(self):
         with tempfile.TemporaryDirectory() as tmp:
             planted = Path(tmp) / "trimtab"
@@ -309,6 +320,45 @@ class TheRecorderStart(unittest.TestCase):
         self.assertEqual(len(started), 1)
         self.assertIn(guardgate.MODULE, started[0])
 
+    def test_the_start_lock_is_held_for_the_recorders_life_so_a_second_is_not_started(self):
+        # The child inherits the lock, so a refused call that arrives while it still runs finds it held
+        # (the lock used to be released the moment the child was spawned, so each refused call started
+        # another recorder; review round 3). Closing the child's copy frees it again.
+        import fcntl
+        children = []
+
+        class Child:
+            def __init__(self, argv, **kw):
+                children.append([os.dup(fd) for fd in kw["pass_fds"]])
+
+        with mock.patch.object(guardgate.subprocess, "Popen", Child):
+            first = guardgate.start_recorder(self.tmp)
+            second = guardgate.start_recorder(self.tmp)
+
+        self.assertEqual((first, second, len(children)), (True, False, 1))
+        directory = guardstate.directory(self.tmp, *gate.CACHE_PARTS, create=False)
+        probe = os.open(directory / guardgate.START_LOCK, os.O_RDWR)
+        self.addCleanup(os.close, probe)
+        with self.assertRaises(OSError):
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)  # held by the child's copy
+        for fd in children[0]:
+            os.close(fd)
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)  # the child is gone: free again
+
+    def test_a_recorder_that_cannot_be_spawned_leaves_no_lock_behind(self):
+        import fcntl
+
+        def broken(argv, **kw):
+            raise OSError("no such interpreter")
+
+        with mock.patch.object(guardgate.subprocess, "Popen", broken):
+            self.assertFalse(guardgate.start_recorder(self.tmp))
+
+        directory = guardstate.directory(self.tmp, *gate.CACHE_PARTS, create=False)
+        probe = os.open(directory / guardgate.START_LOCK, os.O_RDWR)
+        self.addCleanup(os.close, probe)
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
     def test_a_start_the_lock_refuses_starts_nothing(self):
         import fcntl
 
@@ -446,6 +496,10 @@ class TheKey(unittest.TestCase):
 class LsRemote(unittest.TestCase):
     """`Git.ls_remote` reads the SHA of one ref from the command's output, or fails (ADR 0063 §3)."""
 
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.tmp)])
+
     def git(self, out, code=0):
         git = tools.Git.__new__(tools.Git)
         git._binary, git._env, git._timeout = "/bin/true", {}, 1
@@ -472,7 +526,7 @@ class LsRemote(unittest.TestCase):
             binary = "/usr/bin/gh"
             env = {"GH_CONFIG_DIR": "/tmp/empty", "GH_HOST": "github.com", "GH_TOKEN": "x"}
 
-        git.ls_remote(Path("/work"), "https://example.invalid/x.git", "HEAD", 1, Auth())
+        git.ls_remote(self.tmp, "https://example.invalid/x.git", "HEAD", 1, Auth())
 
         listing = [args for _, args in calls if "ls-remote" in args][0]
         self.assertIn("credential.helper=!/usr/bin/gh auth git-credential", listing)
@@ -483,14 +537,14 @@ class LsRemote(unittest.TestCase):
         # (review round 2). A bare repository made for the read is found first, with an empty config.
         git, calls = self.recording()
 
-        git.ls_remote(Path("/work"), "https://example.invalid/x.git", "HEAD", 1)
+        git.ls_remote(self.tmp, "https://example.invalid/x.git", "HEAD", 1)
 
         made = [args for _, args in calls if "init" in args]
         listing = [(cwd, args) for cwd, args in calls if "ls-remote" in args][0]
         self.assertEqual(len(made), 1)
         self.assertIn("--bare", made[0])
-        self.assertEqual(listing[0], Path("/work") / "ls-remote.git")
-        self.assertEqual(made[0][-1], str(Path("/work") / "ls-remote.git"))
+        self.assertEqual(listing[0], self.tmp / "ls-remote.git")
+        self.assertEqual(made[0][-1], str(self.tmp / "ls-remote.git"))
 
     def test_a_failed_init_is_a_failed_read(self):
         git = tools.Git.__new__(tools.Git)
@@ -502,24 +556,37 @@ class LsRemote(unittest.TestCase):
         git._raw = raw
 
         with self.assertRaises(tools.ToolError):
-            git.ls_remote(Path("/work"), "https://example.invalid/x.git", "HEAD", 1)
+            git.ls_remote(self.tmp, "https://example.invalid/x.git", "HEAD", 1)
 
     def test_the_named_refs_sha_is_returned(self):
         out = f"{'a' * 40}\tHEAD\n{'b' * 40}\trefs/heads/main\n"
 
-        self.assertEqual(self.git(out).ls_remote(Path("/"), "https://example.invalid/x.git", "HEAD", 1),
+        self.assertEqual(self.git(out).ls_remote(self.tmp, "https://example.invalid/x.git", "HEAD", 1),
                          "a" * 40)
 
     def test_another_refs_line_is_not_taken_for_it(self):
         out = f"{'b' * 40}\trefs/heads/main\n"
 
         with self.assertRaises(tools.ToolError):
-            self.git(out).ls_remote(Path("/"), "https://example.invalid/x.git", "HEAD", 1)
+            self.git(out).ls_remote(self.tmp, "https://example.invalid/x.git", "HEAD", 1)
 
     def test_a_short_or_absent_sha_is_a_failure(self):
         for out in ("", "\n", "deadbeef\tHEAD\n", "\tHEAD\n", f"{'a' * 40} HEAD\n"):
             with self.subTest(out=out), self.assertRaises(tools.ToolError):
-                self.git(out).ls_remote(Path("/"), "https://example.invalid/x.git", "HEAD", 1)
+                self.git(out).ls_remote(self.tmp, "https://example.invalid/x.git", "HEAD", 1)
+
+
+    def test_a_probe_directory_that_already_exists_is_a_failed_read_not_reused(self):
+        # A same-uid process could plant `ls-remote.git/config` between the temp dir's creation and the
+        # init, and `git init` on an existing directory keeps that config; creating it exclusively makes
+        # the planted case fail closed (review round 3).
+        (self.tmp / "ls-remote.git").mkdir()
+        git, calls = self.recording()
+
+        with self.assertRaises(tools.ToolError):
+            git.ls_remote(self.tmp, "https://example.invalid/x.git", "HEAD", 1)
+
+        self.assertEqual(calls, [])
 
 
 class TheHookBranch(unittest.TestCase):

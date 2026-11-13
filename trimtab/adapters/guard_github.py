@@ -421,6 +421,18 @@ def _plan_draft(opts: list[Opt], ctx: Ctx) -> None:
         return  # outside a run, E23 governs nothing
     if not planrows.plan_branch(branch):
         return
+    # A label attached at creation emits `labeled` and starts a CI review, so the re-request label here is a
+    # re-request. No PR is open yet, so E6 and E10 have nothing to judge and `label_add` refuses it; a label
+    # the guard cannot read might be that label (review round 3).
+    for o in opts:
+        if o.name not in ("-l", "--label"):
+            continue
+        if o.value is None or o.value.dynamic:
+            _label_unreadable(plan, branch, ctx)
+            continue
+        for name in o.value.text.split(","):
+            if name.strip():
+                planacts.label_add(plan, branch, name.strip())
     _plan_draft_branch(plan, branch, ctx)
 
 
@@ -972,8 +984,11 @@ _UPDATE_PR_MUTATION = re.compile(r"(?<![A-Za-z0-9_])updatePullRequest(?![A-Za-z0
 # (E5-E10, §1a) rests on every one of them. Outside a run it is no plan row's business and passes.
 _CREATE_PR_MUTATION = re.compile(r"(?<![A-Za-z0-9_])createPullRequest(?![A-Za-z0-9_])", re.I)
 _RUN_ID_MUTATION = re.compile(r"(?<![A-Za-z0-9_])(?:markPullRequestReadyForReview|convertPullRequestToDraft"
-                              r"|addLabelsToLabelable|removeLabelsFromLabelable|addPullRequestReviewThread"
-                              r"(?:Reply)?|addPullRequestReview)(?![A-Za-z0-9_])", re.I)
+                              r"|addLabelsToLabelable|removeLabelsFromLabelable|clearLabelsFromLabelable"
+                              r"|addPullRequestReviewThread(?:Reply)?|addPullRequestReview(?:Comment)?"
+                              r"|submitPullRequestReview|updatePullRequestReviewComment"
+                              r"|updatePullRequestReview)(?![A-Za-z0-9_])", re.I)
+_LABEL_ARG = re.compile(r"(?<![A-Za-z0-9_])labelIds(?![A-Za-z0-9_])", re.I)
 _STATE_ARG = re.compile(r"(?<![A-Za-z0-9_])state\s*:|\$state(?![A-Za-z0-9_])", re.I)
 # The routes check_plan_api reads: a ref, contents, a merge, a rename, a PR's branch update or merge, a PR close.
 _PLAN_ROUTE = re.compile(r"(?:contents(?:/|$)|git/refs|merges$|branches/.+/rename$|pulls/[^/]+/(?:update-branch|merge)$"
@@ -1356,6 +1371,13 @@ def check_plan_api(req: Request, ctx: Ctx) -> None:
                     planacts.ready_mark(plan, head)
                 else:
                     planacts.undraft(plan, head)
+        if _has_key(body if isinstance(body, dict) else {}, "labels"):
+            # A `labels` field REPLACES every label: a removal §1a does not allow, then additions that can
+            # include the re-request label (review round 3).
+            head = _act_head(plan, lambda: _plan_head(plan, int(m.group(1)), repo))
+            if head is not None and planrows.plan_branch(head):
+                planacts.label_remove(plan, head, planacts.ALL_LABELS)
+                _labels_of(body, ctx, head, plan)
 
 
 def _labels_of(body, ctx: Ctx, head: str, plan: planguard.PlanSupport) -> None:
@@ -1394,6 +1416,10 @@ def check_plan_graphql(query: str, text: str, unknown: bool, ctx: Ctx, variables
         skeleton = _skeleton(query)  # strings and comments removed: a word in a PR body is not an argument
         if unknown or _STATE_ARG.search(skeleton) or _has_key(variables, "state"):
             planrows.check_e16(planrows.PLAN_PREFIX)  # a state argument can close the PR
+        if ctx.plan.in_run(ctx.cwd) and (_LABEL_ARG.search(skeleton) or _has_key(variables, "labelIds")):
+            raise planrows.Refusal("a GraphQL updatePullRequest that sets label ids writes labels by IDs this "
+                                   "guard cannot read, the re-request label among them; refusing in a plan "
+                                   "run (ADR 0063 §5)")
     if _BRANCH_WRITE_MUTATION.search(query):
         if unknown:
             ctx.unknown("the ref or commit mutation's variables are unreadable")
@@ -1545,7 +1571,9 @@ def decide(payload: dict, plan: planguard.PlanSupport | None = None) -> tuple[in
     parsed = segments(command)
     cwd_known = isinstance(cwd, str) and cwd.startswith("/") and not any(
         w.text in DIR_CHANGERS for s in parsed for w in s) and not _DIR_CHANGE_TEXT.search(command)
-    where = Path(cwd) if isinstance(cwd, str) and cwd else Path("/")
+    # No usable payload directory: the process's own, as guard-paths takes $PWD, so the two guards judge the
+    # same checkout. "/" is no repository, and would leave the branch signal blind (review round 3).
+    where = Path(cwd) if isinstance(cwd, str) and cwd.startswith("/") else Path(os.getcwd())
     sid = payload.get("session_id")
     support = plan or planguard.PlanSupport(where, session_id=sid if isinstance(sid, str) else None)
     # E21: in a run session nothing reaches GitHub until the gate has passed for the current lock, base

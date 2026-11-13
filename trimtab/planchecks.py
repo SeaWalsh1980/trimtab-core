@@ -103,10 +103,19 @@ def _pr(ctx: Context) -> planrows.PrState:
 
 
 def _ledger_pushes(ctx: Context, merge_base: str) -> list[planreview.LedgerPush]:
-    """The ledger's pushes, oldest first, each with the commits it introduced (§5, Amendment 2)."""
+    """The ledger's pushes that landed, oldest first, each with the commits it introduced (§5, Amendment 2).
+
+    The ledger entry is written before the push runs (the guard is a PreToolUse hook), so a push the user
+    denied, the server rejected or the network dropped leaves an entry the server never saw. An entry whose
+    new head is on neither the branch nor the default branch never landed and is dropped here; every entry
+    that did land still has to match a server event exactly (E13) and still counts as a push after the round
+    (E10), so dropping the others loosens nothing a push could have done (review round 3)."""
+    on_branch = set(ctx.facts.branch_commits(ctx.branch))
     out = []
     for event in ctx.ledger.events():
         if event["type"] != "push":
+            continue
+        if event["new"] not in on_branch and not ctx.facts.on_default(event["new"]):
             continue
         commits = ctx.facts.push_commits(event["old"], event["new"], merge_base)
         out.append(planreview.LedgerPush(event["old"], event["new"], event["run"], frozenset(commits)))

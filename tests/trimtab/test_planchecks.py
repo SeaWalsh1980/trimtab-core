@@ -319,6 +319,17 @@ class RerequestCheck(Base):
         self.ledger.rerequest(H1, "fail-closed")
         self.assertIn("E6", planchecks.rerequest(ctx, H1).refusal)
 
+    def test_a_recorded_push_that_never_landed_is_not_counted_as_one_after_the_round(self):
+        self.round(H1, before_draft=False)
+        self.ledger.push(BRANCH, MB, H1, run_env="1")
+        self.ledger.push(BRANCH, H1, H2, run_env="1")  # never landed
+        facts = FakeFacts(runs=[], branch_commits=(H1,),
+                          push_commits={(MB, H1): frozenset({H1}), (H1, H2): frozenset({H2})})
+
+        got = planchecks.rerequest(self.context(facts), "d" * 40)
+
+        self.assertEqual((got.refusal, got.unreadable), (None, None))
+
     def test_no_complete_round_since_the_last_ci_answer_refuses(self):
         self.ledger.push(BRANCH, MB, H1, run_env="1")
         facts = FakeFacts(runs=[], branch_commits=(H1,), push_commits={(MB, H1): frozenset({H1})})
@@ -449,6 +460,25 @@ class ResumeCheck(Base):
         self.ledger.push(BRANCH, ZERO, H1, run_env="")
 
         got = planchecks.resume(self.context(self.facts()), H1, scope_ok=True)
+
+        self.assertIn("E13", got.refusal)
+
+    def test_a_push_the_ledger_recorded_but_that_never_landed_does_not_strand_the_part(self):
+        # The entry is written before the push runs; a denied prompt, a rejected push or the network
+        # leaves one the server never saw, and E13's pair equality used to refuse every later write.
+        self.ledger.push(BRANCH, ZERO, H2, run_env="1")  # recorded, never landed: H2 is not on the branch
+        self.ledger.push(BRANCH, ZERO, H1, run_env="1")
+
+        got = planchecks.resume(self.context(self.facts(push_commits={(ZERO, H1): frozenset({H1}),
+                                                                      (ZERO, H2): frozenset({H2})})),
+                                H1, scope_ok=True)
+
+        self.assertEqual((got.refusal, got.unreadable), (None, None))
+
+    def test_a_push_that_landed_still_has_to_match_an_event(self):
+        self.ledger.push(BRANCH, ZERO, H1, run_env="1")
+
+        got = planchecks.resume(self.context(self.facts(activity=())), H1, scope_ok=True)
 
         self.assertIn("E13", got.refusal)
 

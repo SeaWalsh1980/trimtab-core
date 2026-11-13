@@ -91,11 +91,12 @@ def start_recorder(project: Path, environ: Mapping[str, str] = os.environ) -> bo
                          0o600)
     except (guardstate.GuardStateError, OSError):
         return False
+    started = False
     try:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            return False  # another guarded call is starting one right now
+            return False  # another guarded call started one, and its recorder still holds this lock
         if recorder_running(config):
             return False  # one is already running: it holds the cache lock for its whole run
         runner = roots.code_root() / "hooks" / RUNNER
@@ -104,16 +105,22 @@ def start_recorder(project: Path, environ: Mapping[str, str] = os.environ) -> bo
         argv = [tools.trusted("python3"), "-I", "-S", "-B", "-X", "pycache_prefix=/dev/null/trimtab",
                 str(runner), str(roots.code_root()), MODULE, str(project)]
         with open(os.devnull, "wb") as quiet:
+            # The child inherits the lock and holds it for its life, so a refused call that arrives while it
+            # runs finds the lock taken. Released here the moment the child was spawned, it said nothing
+            # about the child and every refused call started another recorder (review round 3).
             subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=quiet, stderr=quiet,
-                             start_new_session=True, cwd=str(project), env=dict(environ))
+                             start_new_session=True, cwd=str(project), env=dict(environ),
+                             pass_fds=(handle,))
+        started = True
         return True
     except (OSError, tools.ToolError, ValueError):
         return False
     finally:
         try:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+            if not started:
+                fcntl.flock(handle, fcntl.LOCK_UN)  # nothing took the lock over: release it
         finally:
-            os.close(handle)
+            os.close(handle)  # on success only this process's copy; the child's keeps the lock
 
 
 def main(argv: list[str]) -> int:

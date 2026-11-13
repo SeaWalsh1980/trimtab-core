@@ -52,8 +52,8 @@ def limits_for(repo: Path, facts, branch: str, inst, item: int, at: str) -> plan
     """E18's limits: the instance's `fix_limits`, and the lines the plan's item section names, read from
     the authorised plan at the merge-base of `at` — the tree an admin merged, never the working copy.
 
-    `at` is `origin/<branch>` once the branch is on the remote, and the commit being sent for the write
-    that creates it, which has no `origin/<branch>` to take a merge-base from."""
+    `at` is the server-verified tip of the branch once it is on the remote (`BRANCH_TIP`), and the commit
+    being sent for the write that creates it, which has no remote branch to take a merge-base from."""
     if inst is None or inst.fix_limits is None:
         return None  # E18 is not shown, so no push is allowed
     named = part_of(branch)
@@ -210,17 +210,20 @@ def reply(support, branch: str, body: str, **kw) -> None:
     _with_ledger(ctx, "a reply opening with the fixed or deferral tag" if first else "an untagged reply")
 
 
-def pushed(support, branch: str, source: str | None, **kw) -> None:
+def pushed(support, branch: str, source: str | None, *, facts=None, cwd: Path | None = None, **kw) -> None:
     """A `plan/*` ref write guard-github has already judged for E14-E17, E19 and E12's server count: E18
     and E12's ledger conflicts, then the ledger's own record of it (E13, E14)."""
     if not planrows.plan_branch(branch):
         return
+    # The checkout the write was judged in, which `-C` can make another one: its facts, its directory and
+    # its HEAD are the ones the commit sent and E18's diff must come from (review round 3).
+    found, where = facts or support.facts, Path(cwd) if cwd else support.cwd
     try:
-        old = support.facts.branch_head(branch) or ZERO
-        new = _commit_sent(support.facts, source)
+        old = found.branch_head(branch) or ZERO
+        new = _commit_sent(found, source)
         # The plan is read at the merge-base of what the branch holds. Before the branch is on the
         # remote there is no `origin/<branch>`, so that is the merge-base of the commit being sent.
-        ctx = _ctx(support, branch, limits_at=BRANCH_TIP if old != ZERO else new, **kw)
+        ctx = context(where, found, branch, limits_at=BRANCH_TIP if old != ZERO else new, **kw)
     except FactsError as err:
         raise Refusal(f"a plan/* write cannot be judged ({err}); refusing (ADR 0063 §5)") from err
     _start(ctx, old)
@@ -230,26 +233,24 @@ def pushed(support, branch: str, source: str | None, **kw) -> None:
 
 def resume_ok(support, branch: str, **kw) -> None:
     """E13: the plan-run layer refuses every write on a branch whose resume check has not passed for its
-    head. The verdict is recorded against that head, so the check runs once per head rather than on every
-    write, and a push makes the record stale by itself (Amendment 3)."""
+    head, and reads the check on every write.
+
+    No verdict is kept. An entry that said "E13 passed for this head" would be one more line the session's
+    own account can write (ADR 0028's accepted residual), and it would then stand in for the whole check:
+    the chain of events by the agent, the ledger pairs and the scope of the diff (review round 3). A branch
+    that is not on the remote has no history to vouch for, so it needs no ledger yet: nothing starts a
+    part's ledger before its first push or review pass, and a run has to be able to edit files first."""
     if not planrows.plan_branch(branch):
         return
     try:
         ctx = _ctx(support, branch, **kw)
-    except FactsError as err:
-        raise Refusal(f"a write on a plan/* branch cannot be judged ({err}); refusing (ADR 0063 §5)") from err
-    _with_ledger(ctx, "a write on the branch")
-    try:
         head = ctx.facts.branch_head(branch)
     except FactsError as err:
-        raise Refusal(f"the branch's head cannot be read ({err}), so E13 cannot pass; refusing "
-                      "(ADR 0063 §5)") from err
+        raise Refusal(f"a write on a plan/* branch cannot be judged ({err}); refusing (ADR 0063 §5)") from err
     if head is None:
-        return  # the branch is not on the remote yet: there is no history to vouch for
-    if ctx.ledger.resumed(head):
         return
+    _with_ledger(ctx, "a write on the branch")
     _refuse(planchecks.resume(ctx, head, scope_ok=_scope_ok(ctx, head)), ctx)
-    ctx.ledger.resume(branch, head)
 
 
 def _scope_ok(ctx: planchecks.Context, head: str) -> bool:

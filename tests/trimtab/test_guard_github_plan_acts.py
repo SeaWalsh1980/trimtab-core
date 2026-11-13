@@ -186,6 +186,51 @@ class MoreSpellings(Acts):
             with self.subTest(expansion):
                 self.refused(f"gh alias set x '{expansion}'", "alias")
 
+    def test_the_rerequest_label_in_a_patch_of_the_issue_or_pull_reaches_e6_and_e10(self):
+        facts = answered_facts(runs=[], branch_commits=())
+        for route in ("issues", "pulls"):
+            with self.subTest(route):
+                self.refused(f"gh api -X PATCH repos/owner/proj/{route}/7 -f labels[]=review:run", "E10",
+                             facts=facts)
+
+    def test_a_patch_that_replaces_the_labels_is_a_removal_too(self):
+        self.allowed("gh api -X PATCH repos/owner/proj/issues/7 -f labels[]=needs-work")
+
+    def test_a_patch_whose_labels_the_guard_cannot_read_refuses(self):
+        self.refused("gh api -X PATCH repos/owner/proj/issues/7 -f labels[]=$L", "re-request")
+
+    def test_graphql_mutations_that_clear_labels_or_edit_review_comments_refuse_in_a_run(self):
+        for mutation in ("clearLabelsFromLabelable", "updatePullRequestReviewComment",
+                         "submitPullRequestReview", "addPullRequestReviewComment"):
+            with self.subTest(mutation):
+                self.refused(f"gh api graphql -f query='mutation {{ {mutation}(input: {{x: 1}})"
+                             " { clientMutationId } }'", "ID this guard cannot read")
+
+    def test_an_update_pull_request_mutation_carrying_label_ids_refuses_in_a_run(self):
+        self.refused("gh api graphql -f query='mutation { updatePullRequest(input: {pullRequestId: \"x\", "
+                     "labelIds: [\"y\"]}) { clientMutationId } }'", "label")
+
+    def test_the_rerequest_label_given_when_a_pr_is_created_refuses(self):
+        # A label attached at creation emits `labeled`, which starts a CI review, so it is a re-request;
+        # no PR is open yet, so E6 and E10 have nothing to judge and the label refuses (review round 3).
+        for command in ("gh pr create --draft --title t --body b --label review:run",
+                        "gh pr create --draft --title t --body b -l other,review:run",
+                        "gh pr create --draft --title t --body b --label=review:run"):
+            with self.subTest(command):
+                self.refused(command, "open PR", facts=answered_facts(open_pr=None))
+
+    def test_another_label_given_at_creation_is_no_row_of_ours(self):
+        from trimtab import planledger
+        ledger = plan_fixture.ledger()
+        for name in planledger.PASSES:
+            ledger.round(H2, name, before_draft=True)
+
+        self.allowed("gh pr create --draft --title t --body b --label needs-work",
+                     facts=answered_facts(branch_head=H2))
+
+    def test_a_label_the_guard_cannot_read_at_creation_refuses(self):
+        self.refused("gh pr create --draft --title t --body b --label $L", "re-request")
+
     def test_a_quoted_configuration_assignment_refuses_a_push(self):
         self.refused('export G"IT_CONFIG_COUNT"=1; git push origin feature/x', "configuration")
 

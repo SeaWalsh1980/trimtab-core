@@ -58,6 +58,16 @@ class LazyFacts(Facts):
             self._real = self._build(self._cwd)
         return self._real
 
+    def __getattr__(self, name: str):
+        """Every reader the plan checks call that the base `Facts` does not declare is delegated too.
+
+        `planacts` and `planchecks` call more than thirty readers on `ctx.facts`, and a wrapper that names
+        only the ones the write rows use raised AttributeError in production while every test, which
+        injects a fake, passed (review round 3). A name the real facts do not have is still an error."""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._facts(), name)
+
     def open_pr(self, branch: str) -> PrState | None: return self._facts().open_pr(branch)
     def branch_head(self, branch: str) -> str | None: return self._facts().branch_head(branch)
     def secret_scan(self, head: str, branch: str) -> str: return self._facts().secret_scan(head, branch)
@@ -134,7 +144,7 @@ class PlanSupport:
         self.cwd = cwd
         self.plan_run = environ.get(RUN_FLAG) == "1"
         self.session_id = session_id
-        self._in_run: bool | None = None
+        self._in_run: dict[str, bool] = {}
         self._injected = facts is not None
         self.facts: Facts = facts or LazyFacts(cwd)
         self._by_dir: dict[str, Facts] = {str(cwd): self.facts}
@@ -173,8 +183,13 @@ class PlanSupport:
         return found if found and len(found) == 40 and all(c in "0123456789abcdef" for c in found) else None
 
     def head_branch(self, cwd: Path | None = None) -> str | None:
-        """The checked-out branch, which a `HEAD` refspec writes under the same name."""
-        return self._run(cwd or self.cwd, "symbolic-ref", "--short", "-q", "HEAD")
+        """The checked-out branch, which a `HEAD` refspec writes under the same name.
+
+        `--short` prints `heads/<name>` when a tag has the branch's name, which would hide a `plan/*` branch
+        behind a prefix the plan rows do not strip; the classifier reads the full ref for the same reason
+        (hooks/session-mode.sh), so the prefix is removed here (review round 3)."""
+        found = self._run(cwd or self.cwd, "symbolic-ref", "--short", "-q", "HEAD")
+        return found.removeprefix("heads/") if found else found
 
     def in_run(self, cwd: Path | None = None) -> bool:
         """Whether this session is an autonomous plan run, by the classifier's three signals (ADR 0041):
@@ -185,12 +200,15 @@ class PlanSupport:
         them or to neither. A git that cannot be read inside a repository counts as a run, never as
         interactive: `tools.Git` refuses a shallow clone, alternates or a partial clone, and a session must
         not be able to make itself interactive to one guard by breaking those reads."""
-        if self._in_run is None:
-            self._in_run = self.plan_run or self._on_plan_branch(cwd or self.cwd) or self._recorded()
-        return self._in_run
+        where = cwd or self.cwd
+        if self.plan_run:
+            return True
+        if str(where) not in self._in_run:  # per directory: `git -C other` is another checkout
+            self._in_run[str(where)] = self._on_plan_branch(where) or self._recorded()
+        return self._in_run[str(where)]
 
     def _on_plan_branch(self, cwd: Path) -> bool:
-        branch = self._run(cwd, "symbolic-ref", "--short", "-q", "HEAD")
+        branch = self.head_branch(cwd)
         if branch is not None:
             return branch.casefold().startswith(planrows.PLAN_PREFIX)
         if self._run(cwd, "rev-parse", "--git-dir") is not None:
@@ -362,7 +380,8 @@ def judge_push(args: Sequence[tuple[str, bool]], support: PlanSupport, cwd: Path
     for write in found.writes:
         planrows.judge_write(write, plan_run=support.plan_run, facts=facts)
         if record is not None:
-            record(support, write.branch, write.source)
+            # With the facts and the directory the write was judged in, which `-C` can make another checkout.
+            record(support, write.branch, write.source, facts=facts, cwd=cwd)
     return None
 
 

@@ -137,6 +137,33 @@ class Commands(unittest.TestCase):
 
         self.assertEqual((refused, "E18" in err, allowed), (1, True, 0))
 
+    def test_the_push_check_reads_the_plan_at_the_verified_tip_or_the_commit_sent(self):
+        # A bare `origin/<branch>` is a name a session can move; the verified tip is not (round 3).
+        asked = []
+        real = cli.planacts.limits_for
+
+        def spy(repo, facts, branch, inst, item, at):
+            asked.append(at)
+            return real(repo, facts, branch, inst, item, at)
+
+        self.ledger()
+        facts = FakeFacts(branch_head=H1)
+        with mock.patch.object(cli.planacts, "limits_for", spy):
+            self.main(["plan-push-check", "--repo", str(self.tmp), "--branch", BRANCH, "--old", MB,
+                       "--new", H1], facts=facts)
+            self.main(["plan-push-check", "--repo", str(self.tmp), "--branch", BRANCH, "--old", "0" * 40,
+                       "--new", H1], facts=facts)
+
+        self.assertEqual(asked, [H1, H1])  # the tip FakeFacts.branch_sha answers, then the commit sent
+
+    def test_a_tip_the_server_does_not_confirm_is_a_failed_read(self):
+        self.ledger()
+
+        code, _, err = self.main(["plan-push-check", "--repo", str(self.tmp), "--branch", BRANCH,
+                                  "--old", MB, "--new", H1], facts=FakeFacts(raises="branch_head"))
+
+        self.assertEqual(code, 2)
+
     def test_a_plan_that_cannot_be_read_at_the_merge_base_is_a_failed_read(self):
         self.ledger()
         out, err = io.StringIO(), io.StringIO()

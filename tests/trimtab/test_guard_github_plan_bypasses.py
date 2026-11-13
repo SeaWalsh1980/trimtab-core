@@ -157,9 +157,10 @@ class AllWithForce(Cases):
                 self.refused(f"git push --all {opt} origin", "E1", facts=FakeFacts(local=(BRANCH,), pr_state=DRAFT, head=H1))
 
     def test_a_dry_run_is_judged_like_any_push_and_never_recorded(self):
-        # It writes nothing, so no ledger entry may vouch for it; every row still reads it, so a dry
-        # run of a push the rows would refuse is refused too (E14 here, with no plan run).
-        for opt in ("-n", "--dry-run"):
+        # It writes nothing, so no ledger entry may vouch for it; the rows that read the push still judge
+        # it, so a dry run of a push they would refuse is refused too (E14 here, with no plan run).
+        # Bundled short options are read letter by letter, whichever side `n` falls on.
+        for opt in ("-n", "--dry-run", "-nv", "-vn"):
             with self.subTest(opt):
                 self.refused(f"git push {opt} origin {BRANCH}", "E14", run=False,
                              facts=FakeFacts(pr_state=DRAFT, head=H1))
@@ -176,12 +177,31 @@ class AllWithForce(Cases):
                                             facts=Facts(pr_state=DRAFT, head=H1),
                                             git=lambda cwd, *a: ON_PLAN[a])
             planguard.judge_push([(w, False) for w in args], support, Path("/work"),
-                                 record=lambda sup, branch, source: seen.append(branch))
+                                 record=lambda sup, branch, source, **kw: seen.append(branch))
             return seen
 
         self.assertEqual(judged(["origin", BRANCH]), [BRANCH])
         self.assertEqual(judged(["--dry-run", "origin", BRANCH]), [])
         self.assertEqual(judged(["-n", "origin", BRANCH]), [])
+
+    def test_a_write_is_recorded_against_the_checkout_it_was_judged_in(self):
+        # With `-C`, the rows read that checkout, so the ledger entry and E18's diff must too, not the
+        # hook's own directory (review round 3).
+        from pathlib import Path
+        from test_planrows import FakeFacts as Facts
+        from trimtab import planguard
+
+        other = Facts(pr_state=DRAFT, head=H1)
+        seen = []
+        support = planguard.PlanSupport(Path("/work"), environ={"TRIMTAB_PLAN_RUN": "1"},
+                                        facts=Facts(pr_state=DRAFT, head=H1),
+                                        git=lambda cwd, *a: ON_PLAN[a])
+        support.facts_for = lambda cwd: other  # the checkout the command runs in has facts of its own
+
+        planguard.judge_push([("origin", False), (BRANCH, False)], support, Path("/elsewhere"),
+                             record=lambda sup, branch, source, facts=None, cwd=None: seen.append((facts, cwd)))
+
+        self.assertEqual(seen, [(other, Path("/elsewhere"))])
 
     def test_a_dry_run_of_another_branch_still_passes(self):
         for opt in ("-n", "--dry-run"):

@@ -390,7 +390,8 @@ class NextPart(Base):
 
 
 class ResumeOnWrite(Base):
-    """E13 through `resume_ok`: once per head, recorded against it, and a failed read refuses."""
+    """E13 through `resume_ok`, read on every write: no verdict is kept anywhere a session can write, and a
+    failed read refuses (review round 3)."""
 
     def facts(self, **kw):
         events = (planreview.Activity(MB, H1, AGENT, "2026-11-12T11:00:00Z"),)
@@ -407,30 +408,33 @@ class ResumeOnWrite(Base):
         finally:
             planacts.planscope.check = scope
 
-    def test_a_branch_whose_history_the_ledger_vouches_for_passes_and_is_recorded(self):
+    def test_a_branch_whose_history_the_ledger_vouches_for_passes(self):
         ledger = self.ledger()
         ledger.push(BRANCH, MB, H1, run_env="1")
 
+        self.assertIsNone(self.act_resume(self.facts()))
+
+    def test_a_pass_is_not_remembered_so_the_next_write_is_judged_afresh(self):
+        # A kept verdict would be one more line the session's account can write, which would then vouch
+        # for any history; E13 is read again on each write instead.
+        ledger = self.ledger()
+        ledger.push(BRANCH, MB, H1, run_env="1")
         self.act_resume(self.facts())
 
-        self.assertEqual([(e["type"], e["head"]) for e in ledger.events() if e["type"] == "resume"],
-                         [("resume", H1)])
+        with self.assertRaisesRegex(planrows.Refusal, "unreadable"):
+            self.act_resume(FakeFacts(raises="activity", branch_commits=(H1,), merge_base=MB))
 
-    def test_a_recorded_head_is_not_read_again(self):
-        ledger = self.ledger()
-        ledger.resume(BRANCH, H1)
+        self.assertEqual([e["type"] for e in ledger.events()], ["push"])
 
-        self.act_resume(FakeFacts(raises="activity"))  # no read of the chain: the head is recorded
+    def test_no_entry_in_the_ledger_can_stand_in_for_the_check(self):
+        # The ledger no longer has an entry type that means "E13 passed".
+        self.assertNotIn("resume", planledger.EVENT_TYPES)
 
-        self.assertEqual(len([e for e in ledger.events() if e["type"] == "resume"]), 1)
-
-    def test_a_chain_the_ledger_does_not_cover_refuses_and_records_nothing(self):
-        ledger = self.ledger()
+    def test_a_chain_the_ledger_does_not_cover_refuses(self):
+        self.ledger()
 
         with self.assertRaisesRegex(planrows.Refusal, "E13"):
             self.act_resume(self.facts())
-
-        self.assertEqual([e for e in ledger.events() if e["type"] == "resume"], [])
 
     def test_a_diff_outside_the_plans_scope_refuses(self):
         ledger = self.ledger()
@@ -444,6 +448,11 @@ class ResumeOnWrite(Base):
 
         self.assertIsNone(self.act_resume(self.facts(branch_head=None)))
 
+    def test_a_branch_not_on_the_remote_needs_no_ledger_yet_so_the_run_can_start_work(self):
+        # Nothing starts a part's ledger before its first push or review pass, and a run must be able to
+        # edit files first: with no remote branch there is no history for E13 to vouch for (round 3).
+        self.assertIsNone(self.act_resume(self.facts(branch_head=None)))
+
     def test_a_part_with_no_ledger_refuses_the_write(self):
         with self.assertRaisesRegex(planrows.Refusal, "§1"):
             self.act_resume(self.facts())
@@ -451,7 +460,7 @@ class ResumeOnWrite(Base):
     def test_a_head_that_cannot_be_read_refuses(self):
         self.ledger()
 
-        with self.assertRaisesRegex(planrows.Refusal, "E13"):
+        with self.assertRaisesRegex(planrows.Refusal, "cannot be judged"):
             self.act_resume(self.facts(raises="branch_head"))
 
 

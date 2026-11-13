@@ -35,6 +35,8 @@ GATED_TOOLS = (*WRITE_TOOLS, "Bash", "Skill")
 # name the installed `bin/trimtab` by a path that resolves to it — a bare name would take whatever the
 # session's PATH finds, and a basename match would run any file a run called `trimtab`.
 REPORT_SUB = "check-enforcement"
+REPORT_VALUED = {"--repository", "--repo", "--instance"}  # the subcommand's options that take a value
+REPORT_OPTIONS = REPORT_VALUED | {"--server"}
 MESSAGE = ("E21: the enforcement gate has not passed for this session's lock, base and default-branch "
            "head, so a plan run writes nothing (ADR 0063 §3, AGW-4). The only command left is the "
            "installed bin/trimtab named by its path, with `check-enforcement`, which says which row is "
@@ -68,10 +70,23 @@ def reports_only(command: str, where: Path | None = None) -> bool:
             return False
     except OSError:
         return False
-    # Only this subcommand's own options may follow, never another command: a separator or a word that
-    # could start one makes it more than a report.
-    return all(w.startswith("-") or "=" in w or not re.search(r"[;&|`$<>()]", w) for w in words[2:]) and \
-        not re.search(r"[;&|`$<>()\n]", command)
+    # Only this subcommand's own options, and the value of each that takes one, may follow: a separator, a
+    # word that could start another command or an option the subcommand does not have makes it more than
+    # a report.
+    if re.search(r"[;&|`$<>()\n]", command):
+        return False
+    expecting_value = False
+    for word in words[2:]:
+        if word.startswith("-"):
+            name, has_value, _ = word.partition("=")
+            if name not in REPORT_OPTIONS or expecting_value:
+                return False
+            expecting_value = name in REPORT_VALUED and not has_value
+        elif expecting_value:
+            expecting_value = False
+        else:
+            return False
+    return not expecting_value
 
 
 def decide(payload: dict, holds=None, resume=planacts.resume_ok) -> tuple[int, str]:

@@ -230,8 +230,9 @@ class Git:
 
     def ls_remote(self, cwd: Path, url: str, ref: str, timeout: float, auth: "GhAuth | None" = None) -> str:
         """The SHA a remote ref points at, under `timeout`, read without the object checks: nothing it
-        returns is read as an object. Run it in a directory that is no repository, so only this
-        environment's pinned configuration takes part and no `insteadOf` can answer (ADR 0063 §3).
+        returns is read as an object. It runs in a bare repository made here inside `cwd`, so only
+        this environment's pinned configuration takes part and no `insteadOf` of a repository above can
+        answer (ADR 0063 §3, review round 2). `cwd` must be a private directory of the caller's own.
 
         With `auth`, the clean fetch's pinned gh credential helper applies, so a private repository
         answers; without it the read is anonymous and a private repository fails closed."""
@@ -247,6 +248,10 @@ class Git:
         # repository above it. A bare repository made here is found first and holds no configuration but
         # what the pins give (the same shape `fetch_clean` uses).
         probe = Path(cwd) / "ls-remote.git"
+        try:
+            os.mkdir(probe, 0o700)  # exclusively: `git init` on an existing directory keeps a planted config
+        except OSError as err:
+            raise ToolError(f"the ls-remote probe directory could not be made ({type(err).__name__})") from err
         self._raw(Path(cwd), "init", "-q", "--bare", str(probe), env=env)
         out = self._raw(probe, *pins, "ls-remote", "--", url, ref, env=env,
                         timeout=timeout).decode("utf-8", "replace")

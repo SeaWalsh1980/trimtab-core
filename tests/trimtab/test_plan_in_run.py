@@ -94,6 +94,86 @@ class InRun(unittest.TestCase):
 
         self.assertFalse(sup.in_run())
 
+    def test_a_tag_with_the_branchs_name_does_not_hide_the_plan_branch(self):
+        # With a tag `plan/x` beside the branch, `symbolic-ref --short` prints `heads/plan/x`, which the
+        # classifier avoids by reading the full ref. A session could otherwise make itself interactive to
+        # guard-github alone with `git tag plan/x; git switch plan/x` (review round 3).
+        self.assertTrue(self.support({HEAD_REF: "heads/plan/0008-slug/item-02-part1\n", GIT_DIR: ".git\n"}).in_run())
+
+    def test_head_branch_names_the_branch_whatever_a_tag_does_to_the_short_form(self):
+        sup = self.support({HEAD_REF: "heads/plan/0008-slug/item-02-part1\n"})
+
+        self.assertEqual(sup.head_branch(self.tmp), BRANCH)
+
+    def test_a_session_id_of_a_plain_token_reads_its_own_record_at_the_length_limit(self):
+        long_id = "a" * 128
+        self.record(long_id)
+
+        self.assertTrue(self.support({HEAD_REF: "main\n", GIT_DIR: ".git\n"}, sid=long_id).in_run())
+        self.assertFalse(self.support({HEAD_REF: "main\n", GIT_DIR: ".git\n"}, sid="a" * 129).in_run())
+
+    def test_an_id_that_is_not_a_token_is_no_record_even_when_a_file_is_named_for_it(self):
+        bad = "has space"
+        self.records.mkdir(parents=True, mode=0o700)
+        (self.records / hashlib.sha256(bad.encode()).hexdigest()).write_text("")
+
+        self.assertFalse(self.support({HEAD_REF: "main\n", GIT_DIR: ".git\n"}, sid=bad).in_run())
+
+    def test_a_dangling_link_at_the_record_counts_as_recorded(self):
+        self.records.mkdir(parents=True, mode=0o700)
+        (self.records / hashlib.sha256(SID.encode()).hexdigest()).symlink_to(self.tmp / "nowhere")
+
+        self.assertTrue(self.support({HEAD_REF: "main\n", GIT_DIR: ".git\n"}).in_run())
+
+    def test_without_a_config_dir_the_record_is_read_under_home(self):
+        home = self.tmp / "home"
+        folder = home / ".claude" / "guard-state" / "session-mode"
+        folder.mkdir(parents=True, mode=0o700)
+        (folder / hashlib.sha256(SID.encode()).hexdigest()).write_text("")
+        sup = planguard.PlanSupport(self.tmp, environ={"HOME": str(home)}, facts=object(),
+                                    git=git_answering({HEAD_REF: "main\n", GIT_DIR: ".git\n"}), session_id=SID)
+
+        self.assertTrue(sup.in_run())
+
+    def test_a_different_directory_is_asked_afresh(self):
+        # `git -C other` runs in another checkout, so the first answer must not stand for it.
+        branches = {"here": "main\n", "there": f"{BRANCH}\n"}
+
+        def git(cwd, *args):
+            if args == HEAD_REF:
+                return branches[Path(cwd).name]
+            return ".git\n"
+
+        sup = planguard.PlanSupport(self.tmp / "here", environ={"CLAUDE_CONFIG_DIR": str(self.config)},
+                                    facts=object(), git=git, session_id=SID)
+
+        self.assertFalse(sup.in_run(self.tmp / "here"))
+        self.assertTrue(sup.in_run(self.tmp / "there"))
+
+    def test_guard_github_hands_the_payloads_session_id_to_the_support_it_builds(self):
+        # Without the id `_recorded` is always False in production, and the sticky signal is lost.
+        from trimtab.adapters import guard_github
+
+        seen = []
+        real = planguard.PlanSupport
+
+        class Spy(real):
+            def __init__(self, *a, **kw):
+                seen.append(kw.get("session_id"))
+                super().__init__(*a, **kw)
+
+        original = guard_github.planguard.PlanSupport
+        guard_github.planguard.PlanSupport = Spy
+        try:
+            guard_github.decide({"tool_name": "Bash", "tool_input": {"command": "echo hi"},
+                                 "cwd": str(self.tmp), "session_id": SID})
+            guard_github.decide({"tool_name": "Bash", "tool_input": {"command": "echo hi"},
+                                 "cwd": str(self.tmp), "session_id": 7})
+        finally:
+            guard_github.planguard.PlanSupport = original
+
+        self.assertEqual(seen, [SID, None])
+
     def test_the_answer_is_read_once(self):
         calls = []
 
