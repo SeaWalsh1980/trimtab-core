@@ -150,9 +150,17 @@ class GitConfigSteering(Cases):
 
 class AllWithForce(Cases):
     def test_force_and_delete_carry_into_each_branch(self):
-        for opt in ("-f", "--force", "--force-with-lease", "-nf", "--delete"):
+        # `-n` is no longer a flag to pass over: a dry run writes nothing the ledger could record, so it
+        # is unreadable before any row is reached (ADR 0063 §1, Amendment 3).
+        for opt in ("-f", "--force", "--force-with-lease", "-qf", "--delete"):
             with self.subTest(opt):
                 self.refused(f"git push --all {opt} origin", "E1", facts=FakeFacts(local=(BRANCH,), pr_state=DRAFT, head=H1))
+
+    def test_a_dry_run_is_unreadable_rather_than_judged(self):
+        for opt in ("-n", "--dry-run"):
+            with self.subTest(opt):
+                self.refused(f"git push {opt} origin {BRANCH}", "dry run",
+                             facts=FakeFacts(local=(BRANCH,), pr_state=DRAFT, head=H1))
 
     def test_all_is_refused_once_a_local_plan_branch_exists(self):
         # ADR 0063 §1: a broad write names refs this reading cannot list one by one, so no ledger entry

@@ -38,6 +38,18 @@ def pass_name(skill: object) -> str | None:
     return word if word in planledger.PASSES else None
 
 
+def failed(payload: dict) -> bool:
+    """Whether the call's own result says the pass did not complete.
+
+    A pass that errored is no round: E11 exists to show that the pass actually ran. The harness does not
+    promise a shape here, so only an answer that says error is read as one, and a call with no result is
+    recorded as before — named as a residual in ADR 0063 Amendment 3."""
+    answer = payload.get("tool_response")
+    if isinstance(answer, dict):
+        return bool(answer.get("is_error") or answer.get("isError") or answer.get("error"))
+    return False
+
+
 def decide(payload: dict, support=None) -> tuple[int, str]:
     """(exit code, message) for one Skill call. A call on no plan part reads nothing and allows."""
     if payload.get("tool_name") != "Skill" or payload.get("hook_event_name") not in EVENTS:
@@ -45,13 +57,22 @@ def decide(payload: dict, support=None) -> tuple[int, str]:
     name = pass_name((payload.get("tool_input") or {}).get("skill"))
     if name is None:
         return ALLOW, ""
+    if payload["hook_event_name"] == "PostToolUse" and failed(payload):
+        return ALLOW, ""  # the pass did not complete, so it is no round
     cwd = payload.get("cwd")
     if not isinstance(cwd, str) or not cwd.startswith("/"):
         return BLOCK, "guard-paths: blocked: a review pass whose checkout cannot be read (fail closed)"
     where = Path(cwd)
     found = support or planguard.PlanSupport(where)
     branch = found.head_branch(where)
-    if branch is None or not planrows.plan_branch(branch):
+    if branch is None:
+        # None is both "no repository here" and "git failed or HEAD is detached". The second must not
+        # read as "no plan part": a round the guard cannot place is a refusal (SEC-2.5).
+        if not found.in_repository(where):
+            return ALLOW, ""
+        return BLOCK, ("guard-paths: blocked: a review pass whose branch cannot be read cannot be "
+                       "counted, so E11 and E23 could not hold (ADR 0063 §5)")
+    if not planrows.plan_branch(branch):
         return ALLOW, ""  # not a plan part: E11 counts nothing and reads nothing
     head = found.head_sha(where)
     if head is None:

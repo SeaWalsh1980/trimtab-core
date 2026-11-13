@@ -1003,12 +1003,13 @@ def cmd_check_enforcement(args) -> int:
 # read, which refuses too wherever a guard asks.
 
 
-def _plan_context(args, facts=None) -> planchecks.Context:
+def _plan_context(args, facts=None, limits_at: str | None = None) -> planchecks.Context:
     """One part's context, built as the guards build it (`planacts.context`): the branch's plan and part,
-    the real facts, the part's ledger, the instance's review keys, and E18's limits from the plan."""
+    the real facts, the part's ledger, the instance's review keys, and, for the push check, E18's limits
+    read from the authorised plan at `limits_at`'s merge-base."""
     found = facts or planguard.build_facts(Path(args.repo))
     return planacts.context(Path(args.repo), found, args.branch,
-                            instance_root=getattr(args, "instance", None))
+                            instance_root=getattr(args, "instance", None), limits_at=limits_at)
 
 
 def _plan_exit(name: str, verdict: planchecks.Verdict) -> int:
@@ -1022,9 +1023,9 @@ def _plan_exit(name: str, verdict: planchecks.Verdict) -> int:
     return 0
 
 
-def _plan_check(args, name: str, call) -> int:
+def _plan_check(args, name: str, call, limits_at: str | None = None) -> int:
     try:
-        return _plan_exit(name, call(_plan_context(args)))
+        return _plan_exit(name, call(_plan_context(args, limits_at=limits_at)))
     except (planchecks.FactsError, planledger.LedgerError, planscope.PlanScopeError) as err:
         print(f"error: {err}; nothing is vouched for", file=sys.stderr)
         return 2
@@ -1039,8 +1040,13 @@ def cmd_plan_rerequest_check(args) -> int:
 
 
 def cmd_plan_push_check(args) -> int:
+    # Before the branch is on the remote there is no `origin/<branch>` to take the plan's merge-base
+    # from, so the commit being sent stands in, as it does in the guard (ADR 0063 §5).
+    creating = set(args.old) == {"0"}
+    at = (args.source or args.new) if creating else f"origin/{args.branch}"
     return _plan_check(args, "plan-push-check",
-                       lambda ctx: planchecks.push(ctx, old=args.old, new=args.new, source=args.source))
+                       lambda ctx: planchecks.push(ctx, old=args.old, new=args.new, source=args.source),
+                       limits_at=at)
 
 
 def cmd_plan_resume_check(args) -> int:

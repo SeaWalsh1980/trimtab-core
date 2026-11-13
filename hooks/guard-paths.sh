@@ -153,42 +153,6 @@ if [[ "$parsed" == *$'\n'* ]]; then
   fi
 fi
 
-# ---- E11: the review recorder (ADR 0063 §5) ----------------------------
-# A Skill call that runs trimtab-review, security-review or code-review on a
-# plan/* branch is one review pass of a round: PostToolUse appends it to the
-# part's ledger, naming the checkout's HEAD, and PreToolUse refuses a sixth
-# pre-draft round (E23). A pass run any other way records nothing, so it
-# counts for nothing.
-#
-# It is a branch of this guard rather than a hook of its own because the
-# enforcement manifest's "Guard" owner names only guard-paths.sh and
-# guard-github.sh, so a new hook file could never show its row (ADR 0063 §2).
-# Registering this hook for the Skill tool is the operator's control change
-# (ADR 0011); until that lands this branch never runs.
-#
-# A Skill call carries no path and no command, so nothing below this point
-# applies to it either way.
-if [[ "$tool" == "Skill" && ( "$event" == "PreToolUse" || "$event" == "PostToolUse" ) ]]; then
-  gp_block() { echo "guard-paths: blocked: $1" >&2; exit 2; }
-  command -v python3 >/dev/null 2>&1 || gp_block "python3 is not available, so a review round cannot be recorded"
-  # -P exists only from 3.11, so the probe is also the version check.
-  python3 -P -I -S -c '' >/dev/null 2>&1 || gp_block "python3 3.11 or later is not available"
-  gp_here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
-  [[ -r "$gp_here/run_module.py" ]] || gp_block "hooks/run_module.py is missing"
-  # -I -S -B as guard-github runs its adapter: no working directory, no
-  # site-packages, no PYTHON* variables, no bytecode beside the package.
-  # A hook that outlives its 10 s timeout fails open, so the adapter stops
-  # itself at 6 s and `timeout` kills it at 7 s if that did not happen.
-  gp_deadline=()
-  command -v timeout >/dev/null 2>&1 && gp_deadline=(timeout -k 1 7)
-  ${gp_deadline[@]+"${gp_deadline[@]}"} python3 -I -S -B "$gp_here/run_module.py" "$gp_here/.." \
-    trimtab.adapters.plan_review_record <<<"$payload"
-  gp_rc=$?
-  [[ $gp_rc -eq 0 ]] && exit 0
-  # The adapter printed its reason; any other non-zero is a fault, and blocks.
-  [[ $gp_rc -eq 2 ]] || echo "guard-paths: blocked: the review recorder failed (exit $gp_rc)" >&2
-  exit 2
-fi
 
 deny() {
   cat >&2 <<EOF
@@ -766,20 +730,26 @@ hl_here="${BASH_SOURCE[0]%/*}"
 # ---- E21: the guards obey the gate (ADR 0063 §3) -----------------------
 # In a run session, unless the enforcement cache holds a pass for the current
 # key, this guard refuses every Edit, Write, MultiEdit and NotebookEdit, and
-# every Bash command except `trimtab check-enforcement` as the whole command:
-# a shell can write any file, so the only command left while the gate fails is
-# the one that reports on it. A guard that finds no pass starts the recorder
-# (at most one at a time), so a merge to the default branch mid-run costs a
-# short wait, not a stop. guard-github has the other half.
+# every Bash command except the installed `trimtab check-enforcement` as the
+# whole command: a shell can write any file, so the only command left while the
+# gate fails is the one that reports on it. A guard that finds no pass starts
+# the recorder (at most one at a time), so a merge to the default branch
+# mid-run costs a short wait, not a stop. guard-github has the other half.
 #
-# It is not lifted by HOOK_ALLOW_HARNESS: that override is for harness
-# development in an interactive session, and a run is always narrower.
-# HOOK_ALLOW_PATHS=1 (the operator's, exported before launch) exits at the top
-# of this file and so lifts this too.
+# A Skill call is judged here too, ahead of the review recorder below: a run
+# whose gate has not passed mints no review round either. That is tighter than
+# E21's own list, which names the write tools and Bash (ADR 0063 Amendment 3).
+#
+# HOOK_ALLOW_HARNESS=1 lifts it, as it lifts the allowlist and the plan-scope
+# layers below (ADR 0041): the operator exports it before launch to develop the
+# harness, and an override is the operator's decision, never the agent's
+# (ConfigInspection 2). The server-side re-check of E22 still binds a run's PR
+# at merge. HOOK_ALLOW_PATHS=1 exits at the top of this file and lifts it too.
 case "$tool" in
-  Edit|Write|MultiEdit|NotebookEdit|Bash)
+  Edit|Write|MultiEdit|NotebookEdit|Bash|Skill)
     gp_where="$cwd"
     [[ -n "$gp_where" ]] || gp_where="$PWD"
+    if (( hl_on )); then
     (( hl_sm_ok )) || deny "the session-mode classifier (hooks/session-mode.sh) is missing, so the enforcement gate cannot be judged (fail closed; ADR 0063 §3)" "$gp_where"
     sm_classify "$gp_where" "$sid"
     if [[ "$sm_mode" == autonomous ]]; then
@@ -799,8 +769,47 @@ case "$tool" in
         exit 2
       fi
     fi
+    fi
     ;;
 esac
+
+# ---- E11: the review recorder (ADR 0063 §5) ----------------------------
+# A Skill call that runs trimtab-review, security-review or code-review on a
+# plan/* branch is one review pass of a round: PostToolUse appends it to the
+# part's ledger, naming the checkout's HEAD, and PreToolUse refuses a sixth
+# pre-draft round (E23). A pass run any other way records nothing, so it
+# counts for nothing.
+#
+# It is a branch of this guard rather than a hook of its own because the
+# enforcement manifest's "Guard" owner names only guard-paths.sh and
+# guard-github.sh, so a new hook file could never show its row (ADR 0063 §2).
+# Registering this hook for the Skill tool is the operator's control change
+# (ADR 0011); until that lands this branch never runs.
+#
+# A Skill call carries no path and no command, so nothing below this point
+# applies to it either way.
+if [[ "$tool" == "Skill" && ( "$event" == "PreToolUse" || "$event" == "PostToolUse" ) ]]; then
+  gp_block() { echo "guard-paths: blocked: $1" >&2; exit 2; }
+  command -v python3 >/dev/null 2>&1 || gp_block "python3 is not available, so a review round cannot be recorded"
+  # -P exists only from 3.11, so the probe is also the version check.
+  python3 -P -I -S -c '' >/dev/null 2>&1 || gp_block "python3 3.11 or later is not available"
+  gp_here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+  [[ -r "$gp_here/run_module.py" ]] || gp_block "hooks/run_module.py is missing"
+  # -I -S -B as guard-github runs its adapter: no working directory, no
+  # site-packages, no PYTHON* variables, no bytecode beside the package.
+  # A hook that outlives its 10 s timeout fails open, so the adapter stops
+  # itself at 6 s and `timeout` kills it at 7 s if that did not happen.
+  gp_deadline=()
+  command -v timeout >/dev/null 2>&1 && gp_deadline=(timeout -k 1 7)
+  # -X pycache_prefix: a planted __pycache__ beside the package is never loaded (ADR 0063 §2).
+  ${gp_deadline[@]+"${gp_deadline[@]}"} python3 -I -S -B -X pycache_prefix=/dev/null/trimtab \
+    "$gp_here/run_module.py" "$gp_here/.." trimtab.adapters.plan_review_record <<<"$payload"
+  gp_rc=$?
+  [[ $gp_rc -eq 0 ]] && exit 0
+  # The adapter printed its reason; any other non-zero is a fault, and blocks.
+  [[ $gp_rc -eq 2 ]] || echo "guard-paths: blocked: the review recorder failed (exit $gp_rc)" >&2
+  exit 2
+fi
 
 hl_root=""
 hl_find_root() {   # $1 = a normalised absolute path; sets hl_root or ""

@@ -131,6 +131,7 @@ class PlanSupport:
                  git: tools.Git | None = None):
         self.cwd = cwd
         self.plan_run = environ.get(RUN_FLAG) == "1"
+        self._on_plan: bool | None = None
         self._injected = facts is not None
         self.facts: Facts = facts or LazyFacts(cwd)
         self._by_dir: dict[str, Facts] = {str(cwd): self.facts}
@@ -171,6 +172,24 @@ class PlanSupport:
     def head_branch(self, cwd: Path | None = None) -> str | None:
         """The checked-out branch, which a `HEAD` refspec writes under the same name."""
         return self._run(cwd or self.cwd, "symbolic-ref", "--short", "-q", "HEAD")
+
+    def in_run(self, cwd: Path | None = None) -> bool:
+        """Whether this session is an autonomous plan run, by the signals the session-mode classifier uses
+        that a guard can read here: `TRIMTAB_PLAN_RUN=1`, or a checked-out `plan/*` branch (ADR 0041).
+
+        guard-paths asks the classifier itself; guard-github asks this, so a session on a `plan/*` branch
+        launched without the flag is a run to both of them and not only to one (SEC-2.5)."""
+        if self.plan_run:
+            return True
+        if self._on_plan is None:
+            branch = self.head_branch(cwd or self.cwd)
+            self._on_plan = bool(branch and branch.casefold().startswith(planrows.PLAN_PREFIX))
+        return self._on_plan
+
+    def in_repository(self, cwd: Path) -> bool:
+        """Whether `cwd` is inside a git repository at all. A guard that could not read the branch tells
+        "there is no repository here" (nothing to judge) from "git failed" (a refusal) with this."""
+        return self._is_repository(cwd)
 
     def _is_repository(self, cwd: Path) -> bool:
         if self._git is not None:  # an injected git answers for itself

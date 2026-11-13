@@ -14,12 +14,12 @@ Standard library only: the hooks run Python with `-I -S` (ENG-3).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from trimtab import planledger, planreview, planrows
-from trimtab.planrows import FactsError, Refusal
+from trimtab.planrows import Change, FactsError, Refusal
 
 
 @dataclass(frozen=True)
@@ -124,7 +124,10 @@ def ready(ctx: Context, head: str) -> Verdict:
         runs = list(ctx.facts.facts_runs(ctx.branch, pr.number))
         reviews = [r for r, _ in runs]
         lines = [t for _, threads in runs for t in threads]
-        threads = runs[-1][1] if runs else []
+        # Every thread any run listed, each as its latest line has it: a thread an earlier run opened and
+        # the latest run leaves out is still a thread that needs an answer (E8, E9).
+        current = {t.id: t for _, threads in runs for t in threads}
+        threads = [t for _, t in sorted(current.items())]
         comments = list(ctx.facts.review_comments(pr.number))
 
         try:
@@ -132,11 +135,15 @@ def ready(ctx: Context, head: str) -> Verdict:
         except Refusal:
             notes.stop = "E5: the review posted a comment its facts job did not list"
             raise
-        planreview.check_e7(head, reviews, lambda h: ctx.facts.register_answer(ctx.branch, h, head))
+        planreview.check_e7(head, reviews, lambda h: _register_answer(ctx, h, head, threads, agent))
 
         merge_base = ctx.facts.merge_base(ctx.branch)
         base_tree = ctx.facts.tree_of(merge_base)
-        base_keys = frozenset(t.key for r, threads_of in runs if r.tree == base_tree for t in threads_of)
+        # A review whose tree is the merge-base's ran on the default branch, not on this part's branch, so
+        # its facts are read by commit as well as from the branch's own runs (E8).
+        base_runs = [*runs, *ctx.facts.facts_runs_for(merge_base)]
+        base_keys = frozenset(t.key for r, threads_of in base_runs if r.tree == base_tree
+                              for t in threads_of)
 
         def deferral_ok(thread: planreview.Thread) -> bool:
             # The key is recomputed here at the merge-base and compared with the facts job's (E8).
@@ -191,28 +198,69 @@ def push(ctx: Context, *, old: str, new: str, source: str | None = None) -> Verd
     def body() -> None:
         pr = ctx.facts.open_pr(ctx.branch)
         remote = ctx.facts.branch_head(ctx.branch)
-        if remote is None:
-            return  # the branch is not on the remote yet: no head to answer, nothing to count
-        if pr is not None and ctx.facts.conflicted(pr.number):
-            notes.conflicted = remote  # §5a: the head this push answers conflicted with the default branch
         if ctx.limits is None:
             raise Refusal("E18: the instance names no fix_limits, so the row is not shown and no push is "
                           "allowed (ADR 0063 §5)")
-        changes = ctx.facts.changes(ctx.branch, source or new, remote)
+        sent = source or new
+        if remote is None:
+            # The push creates the branch, so its own change is its diff from the merge-base with the
+            # default branch. E18 judges it; E12 counts nothing, since there is no head it answers.
+            planreview.check_e18(ctx.facts.change_from(ctx.facts.merge_base_of(sent), sent),
+                                 ctx.limits.markers, ctx.limits.thresholds, ctx.limits.named_lines)
+            return
+        if pr is not None and ctx.facts.conflicted(pr.number):
+            notes.conflicted = remote  # §5a: the head this push answers conflicted with the default branch
+        changes = _own_change(ctx, remote, sent)
         planreview.check_e18(changes, ctx.limits.markers, ctx.limits.thresholds, ctx.limits.named_lines)
 
         conflicts = {e["head"] for e in ctx.ledger.events() if e["type"] == "conflict"}
         if notes.conflicted:
             conflicts.add(notes.conflicted)
         try:
+            # E7's register-commit shape is judged on the push's plain diff from the remote head, never on
+            # §5a's narrowed change: a merge of the default branch is no register commit.
             planrows.check_e12(ctx.branch, remote, ctx.facts, pr,
-                               lambda: planrows.register_shape(changes, ctx.branch),
+                               lambda: planrows.register_shape(ctx.facts.changes(ctx.branch, sent, remote),
+                                                               ctx.branch),
                                conflicted_heads=frozenset(conflicts))
         except Refusal:
             notes.stop = "E12: the part has used its CI-fix rounds"
             raise
 
     return _verdict(body, notes)
+
+
+def _register_answer(ctx: Context, reviewed: str, head: str, threads: Sequence[planreview.Thread],
+                     agent: str) -> bool:
+    """E7's alternative: the head differs from a reviewed one only by the register-commit shape, **and**
+    every register file it adds is named in an E3-listed thread's deferral reply.
+
+    Without that second clause a run could commit any content as a register entry and have ready accept
+    a head no review ever saw (ADR 0063 §5, E7)."""
+    if not ctx.facts.register_answer(ctx.branch, reviewed, head):
+        return False
+    changes = ctx.facts.changes(ctx.branch, head, reviewed)
+    added = [c.path for c in changes if c.status == "A" and planrows.register_file(c.path, ctx.branch)]
+    if not added:
+        return False  # the shape holds only for a push that adds register entries
+    deferral = ctx.tags.get("deferred", "")
+    listed = {t.id for t in threads}
+    replies = [c.body for c in ctx.facts.review_comments(ctx.facts.open_pr(ctx.branch).number)
+               if c.user.casefold() == agent.casefold() and c.in_reply_to in listed
+               and deferral and planreview.first_word(c.body) == deferral]
+    return all(any(path in body for body in replies) for path in added)
+
+
+def _own_change(ctx: Context, remote: str, sent: str) -> Sequence[Change]:
+    """The push's own change (E18): its diff from the remote head, except for a merge of the default
+    branch, where it is the merge commit's diff from the default-branch parent, so main's own changes are
+    never judged as the run's (ADR 0063 §5a)."""
+    parents = ctx.facts.parents(sent)
+    if len(parents) > 1:
+        from_default = [p for p in parents if ctx.facts.on_default(p)]
+        if from_default:
+            return ctx.facts.change_from(from_default[-1], sent)
+    return ctx.facts.changes(ctx.branch, sent, remote)
 
 
 # ---- resuming a branch: E13 --------------------------------------------------------------------

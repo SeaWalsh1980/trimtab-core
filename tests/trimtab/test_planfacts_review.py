@@ -47,6 +47,17 @@ def event(before, after, stamp, actor=AGENT, kind="push"):
 EVENTS = [event(A, B, "2026-11-12T12:00:00Z"), event(ZERO, A, "2026-11-12T11:00:00Z")]
 
 
+def server_answers(default_sha, branch_sha=None, branch=BRANCH, extra=None):
+    """What the server says about the refs a git-side reader checks its local ones against (ADR 0063 §5):
+    the default branch's head, and the part's branch head."""
+    out = {f"repos/{REPO}": {"default_branch": "main"},
+           f"repos/{REPO}/branches/main": {"commit": {"sha": default_sha}}}
+    if branch_sha is not None:
+        out[f"repos/{REPO}/git/ref/heads/{branch}"] = {"object": {"sha": branch_sha}}
+    out.update(extra or {})
+    return out
+
+
 class ActivityEvents(unittest.TestCase):
     """E13's chain: every event of the branch, oldest to newest, each with its actor (Amendment 1)."""
 
@@ -191,8 +202,24 @@ class FactsRuns(unittest.TestCase):
         with self.assertRaises(FactsError):
             facts(self.answers).facts_runs(BRANCH, 7)
 
-    def test_a_run_whose_facts_job_is_not_a_pass_refuses(self):
-        self.answers[f"repos/{REPO}/actions/runs/42/jobs"]["jobs"][0]["conclusion"] = "failure"
+    def test_a_run_whose_latest_attempt_did_not_pass_holds_no_facts(self):
+        # A superseded or cancelled run is the common case, and refusing on it would stop the part for
+        # good; a head with no readable facts still refuses at the row that needs them.
+        self.answers[f"repos/{REPO}/actions/runs/42/jobs"]["jobs"][0]["conclusion"] = "cancelled"
+
+        self.assertEqual(facts(self.answers).facts_runs(BRANCH, 7), [])
+
+    def test_a_later_attempt_of_the_facts_job_decides(self):
+        jobs = self.answers[f"repos/{REPO}/actions/runs/42/jobs"]["jobs"]
+        failed = {**jobs[0], "conclusion": "failure"}
+        self.answers[f"repos/{REPO}/actions/runs/42/jobs"]["jobs"] = [failed, jobs[0]]
+
+        got = facts(self.answers).facts_runs(BRANCH, 7)
+
+        self.assertEqual([(r.head, r.verdict) for r, _ in got], [(B, "pass")])
+
+    def test_a_run_with_no_job_of_that_name_refuses(self):
+        self.answers[f"repos/{REPO}/actions/runs/42/jobs"]["jobs"][0]["name"] = "other"
 
         with self.assertRaises(FactsError):
             facts(self.answers).facts_runs(BRANCH, 7)
@@ -234,8 +261,8 @@ class GitReaders(unittest.TestCase):
         self.git = tools.Git(environ={"HOME": str(self.tmp)})
 
     def facts(self, answers=None):
-        fake = FakeGh({k: json.dumps(v) for k, v in (answers or {}).items()},
-                      default=json.dumps({"default_branch": "main"}))
+        answers = server_answers(self.base, self.second, extra=answers)
+        fake = FakeGh({k: json.dumps(v) for k, v in answers.items()}, default=json.dumps({}))
         out = planfacts.GitHubFacts(REPO, GhApi(fake), self.git, self.repo, INSTANCE)
         out.fake = fake
         return out
@@ -279,6 +306,26 @@ class GitReaders(unittest.TestCase):
 
         self.assertTrue(f.on_default(self.base))
         self.assertFalse(f.on_default(self.second))
+
+    def test_a_local_ref_the_server_does_not_agree_with_refuses(self):
+        # Nothing refuses a session's own `git update-ref`, so a ref read without this check would be a
+        # fact the agent can write (ADR 0063 §5).
+        git(self.repo, "update-ref", "refs/remotes/origin/main", self.second)
+
+        with self.assertRaisesRegex(FactsError, "server"):
+            self.facts().merge_base(BRANCH)
+
+    def test_a_branch_ref_the_server_does_not_agree_with_refuses(self):
+        git(self.repo, "update-ref", f"refs/remotes/origin/{BRANCH}", self.first)
+
+        with self.assertRaisesRegex(FactsError, "server"):
+            self.facts().branch_commits(BRANCH)
+
+    def test_a_default_head_the_server_cannot_name_refuses(self):
+        f = self.facts({f"repos/{REPO}/branches/main": {"commit": {}}})
+
+        with self.assertRaises(FactsError):
+            f.merge_base(BRANCH)
 
     def test_a_failed_git_read_refuses(self):
         f = self.facts()
@@ -361,8 +408,8 @@ class PartSources(unittest.TestCase):
         self.git = tools.Git(environ={"HOME": str(self.tmp)})
 
     def facts(self, answers=None):
-        fake = FakeGh({k: json.dumps(v) for k, v in (answers or {}).items()},
-                      default=json.dumps({"default_branch": "main"}))
+        answers = server_answers(self.base, extra=answers)
+        fake = FakeGh({k: json.dumps(v) for k, v in answers.items()}, default=json.dumps({}))
         return planfacts.GitHubFacts(REPO, GhApi(fake), self.git, self.repo, INSTANCE)
 
     def test_the_progress_records_on_the_default_branch_are_listed(self):
@@ -404,7 +451,8 @@ class FixValidity(unittest.TestCase):
         self.other = commit(self.repo, "src/b.py", "z\n")
         git(self.repo, "update-ref", f"refs/remotes/origin/{BRANCH}", self.other)
         self.git = tools.Git(environ={"HOME": str(self.tmp)})
-        fake = FakeGh({}, default=json.dumps({"default_branch": "main"}))
+        answers = server_answers(self.base, self.other)
+        fake = FakeGh({k: json.dumps(v) for k, v in answers.items()}, default=json.dumps({}))
         self.f = planfacts.GitHubFacts(REPO, GhApi(fake), self.git, self.repo, INSTANCE)
 
     def thread(self, line=2, path="src/a.py", commit_sha=None):

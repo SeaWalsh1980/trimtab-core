@@ -1039,3 +1039,99 @@ is still unmeasured.
 - **A session that runs a review pass outside the Skill tool records nothing**, as E11 intends, so a
   round run any other way does not count — and a session that cannot reach gh cannot record one
   either, which is a stop rather than an uncounted round.
+
+**Review round 1 (three passes) changed these.** The passes found 5 CRITICAL, 24 HIGH, 11 MEDIUM and 9
+LOW between them, de-duplicated; everything in 2b's own scope is fixed here, and what is left is named
+under the residuals below.
+
+- **Nothing rests on a ref the session can write.** `origin/<default>` and `origin/<branch>` are checked
+  against the heads the server reports before any merge-base, tree, diff, plan-text or ancestry read
+  (`planfacts.default_sha`, `branch_sha`). A local ref the server does not agree with is a failed read,
+  so a `git update-ref` cannot move the merge-base — which would have moved E8's keys and
+  `outside_diff`, emptied E13's commit list and let the plan text name any marker.
+- **A part's first push is judged, and possible.** The merge-base of a branch that is not yet on the
+  remote is taken from the commit being sent, so E18's limits can be read at all (the plan was read at
+  `origin/<branch>`, which does not exist then: every part's first push refused), and E18 now judges
+  that push, where it had returned an allow before any row (E12 still counts nothing: there is no head
+  it answers).
+- **§5a's exception is implemented.** For a merge of the default branch, E18 judges the merge commit's
+  diff from its default-branch parent, so a threshold `main` itself lowered is not the run's change.
+  E7's register-commit shape is still read on the plain diff from the remote head.
+- **E8's deferral can be accepted.** The facts of a review whose `tree` is the merge-base's are read by
+  commit (`facts_runs_for`), because such a review runs on the default branch and never on the part's
+  branch; before this `base_keys` was always empty, so no deferral could ever pass.
+- **E7's alternative carries its naming clause.** Every register file the head adds must be named in an
+  E3-listed thread's deferral reply, not merely have the register-commit shape; without it a run could
+  commit any content as a register entry and have ready accept a head no review saw.
+- **Every thread any run listed is answered.** The ready mark reads the latest line per thread id across
+  runs, so a thread an earlier run opened and the latest run leaves out still needs its reply.
+- **E21's key no longer needs objects the checkout may not hold.** The lock and the pinned base come
+  from the pass itself; the head (by `ls-remote`) and the install digest are rebuilt and the whole key is
+  compared. Both are files of the default branch, so they change only when its head does, and that head
+  is read. Reading them as objects made the gate unopenable after a merge mid-run, since the run may use
+  no command that could fetch.
+- **The one command E21 leaves open is the installed `bin/trimtab`**, named by a path that resolves to
+  it. A basename match accepted any file a run had called `trimtab`, which is arbitrary code in the one
+  place the row allows none.
+- **guard-github reads a run as guard-paths does**: the flag, or a checked-out `plan/*` branch
+  (ADR 0041's signals). A session on a plan branch without the flag was a run to one guard and not the
+  other, so its acts went ungated.
+- **A review pass is gated and weighed.** The E21 branch covers the Skill tool too, ahead of the
+  recorder, so a run whose gate has not passed mints no round; and a pass whose own result says it
+  errored records none.
+- **Spellings now read:** a PR opened by `POST …/pulls` or the GraphQL `createPullRequest` (E23), the
+  `…/comments/{id}/replies` route and an edit of a review comment (§1a), a review posted on the PR, a
+  REST label replacement or clear (both are removals §1a does not allow), `gh issue` in the fail-closed
+  lists, an alias that stops at a plan act, a quoted git-configuration assignment that steers a push,
+  and a dry run — which writes nothing the ledger could record, so it is unreadable rather than judged.
+- **One flake is no longer a permanent stop.** The latest attempt of each job decides, for the
+  secret-scan job and the facts job, and a facts run whose latest attempt did not pass (a superseded or
+  cancelled run) holds no facts rather than failing the read.
+- **The recorder's "at most one"** is the recorder's own lock, probed rather than a lock the guard took
+  and released, and the guard says on stderr whether it started one.
+- **`ls-remote` carries the clean fetch's pinned credential helper**, so a private project answers it.
+- **Smaller fixes.** A write is recorded once per `(branch, old, new, run)`, so a command that also runs
+  quoted text cannot record it twice and break E13's pair equality; `parts_of` raises rather than
+  reading "no parts" when a level above the plan is not private; an item or part that is a bool is
+  refused; a version's parts compare as integers (`float()` overflows past 308 digits); two outcome tags
+  that share a word refuse rather than letting one reply read as another; `_head` turns a failed read
+  into the row's refusal; the branch a PR is opened from is read as `gh` reads it (the branch's merge
+  ref); and two unused option tables are gone.
+- **Tests.** Each test takes a part of its own, so none reads another's rounds (a random method order
+  now passes over four seeds); E13's refusal is driven through the real act rather than a recording
+  stand-in; the hook tests build their environment instead of copying the developer's; and the key,
+  `ls_remote`, both adapters' entry points, the fail-closed arms and every new spelling have cases.
+
+**Residuals added.**
+
+- **§1's residual list grows by E13.** The Consequences above say a forged ledger buys at most E10, E11
+  and E23; the `resume` entry adds E13's verdict for one head to that list. E22 cannot recheck it either,
+  since it rests on the ledger. The alternative — reading E13 on every guarded write — costs a GitHub
+  read per call against the hook's 6 s budget, and was rejected on that ground.
+- **A round whose result the harness does not report still counts.** Only a `tool_response` that says
+  error stops a round being recorded; a payload with no result records as before, so a pass that failed
+  silently counts. The harness promises no shape here.
+- **The activity reader does not read `activity_type`.** Every row it feeds fails closed on a shape it
+  does not know, but E13's meaning would change silently if GitHub added a type.
+- **A refusal can still quote git's stderr** in one place (`_refusal`), so a message may echo an argument
+  of the command; no token, header or environment value reaches a refusal, a log or a ledger line.
+- **E12's and E17's register-shape exception is unchanged.** Only E7's gained the naming clause, because
+  E12 and E17 ask whether a push is register-shaped, not whether it answers a thread.
+- **`gh pr create --label` and `POST …/issues` with labels** attach a label without reaching E6 or E10,
+  since a label given at creation is not a label write this guard reads.
+
+Two of round 1's fixes were settled by the guard suite's own pinned cases, and are choices in their own
+right:
+
+- **`HOOK_ALLOW_HARNESS=1` lifts E21's guard-paths half**, as it lifts the allowlist and plan-scope
+  layers (ADR 0041). The first reading here refused in a run whatever the operator exported, on the
+  ground that a run is always narrower; the suite's case "the operator export lifts a run too" pins the
+  opposite, and an override is the operator's decision, never the agent's (CFG-2). E22's server-side
+  re-check still binds the run's PR at merge. Rejected: ignoring the export, which would also leave the
+  harness undevelopable inside a run.
+- **The acts 2b added refuse an unreadable route only in a run.** A `{owner}`/`{repo}` placeholder or a
+  query string on a label, reply, review or PR-create route is a refusal in a plan run, where those rows
+  govern, and no plan row's business outside one — the same rule as every other act's lookup. The routes
+  Amendment 1 shipped (a ref, contents, a merge, a rename, a PR close) keep their unconditional
+  refusals. Rejected: refusing them in every session, which would have turned the suite's pinned
+  interactive reply from an allow into a block for a row that governs runs.

@@ -28,7 +28,8 @@ def tearDownModule():
 
 
 class Support:
-    def __init__(self, facts, branch=BRANCH, head=H1, plan_run=True):
+    def __init__(self, facts, branch=None, head=H1, plan_run=True):
+        branch = branch or BRANCH
         self.facts, self.cwd, self.plan_run = facts, Path(CWD), plan_run
         self._branch, self._head = branch, head
 
@@ -58,11 +59,20 @@ class PassName(unittest.TestCase):
 
 
 class Recorder(unittest.TestCase):
+    def setUp(self):
+        # A part of this test's own: `plan_fixture`'s ledger is one file per process, and tests that
+        # share it read each other's rounds (TST-1 forbids order dependence).
+        self.branch, self._ledger = plan_fixture.own_part(self)
+
     def ledger(self):
-        return plan_fixture.ledger()
+        return self._ledger
+
+    def support(self, facts, **kw):
+        kw.setdefault("branch", self.branch)
+        return Support(facts, **kw)
 
     def test_a_completed_pass_on_a_plan_branch_is_recorded_with_the_checkouts_head(self):
-        code, _ = recorder.decide(payload(), Support(FakeFacts(open_pr=None)))
+        code, _ = recorder.decide(payload(), self.support(FakeFacts(open_pr=None)))
 
         self.assertEqual(code, ALLOW)
         self.assertEqual([(e["type"], e["head"], e["pass"], e["before_draft"])
@@ -70,50 +80,69 @@ class Recorder(unittest.TestCase):
                          [("round", H1, "code-review", True)])
 
     def test_a_round_after_the_pr_opened_is_not_a_pre_draft_round(self):
-        code, _ = recorder.decide(payload(skill="security-review"), Support(FakeFacts()))
+        code, _ = recorder.decide(payload(skill="security-review"), self.support(FakeFacts()))
 
         self.assertEqual(code, ALLOW)
         self.assertEqual([e["before_draft"] for e in self.ledger().events()
                           if e["type"] == "round" and e["pass"] == "security-review"][-1:], [False])
 
+    def test_a_pass_whose_own_result_says_it_errored_records_no_round(self):
+        before = len(self.ledger().events())
+
+        for answer in ({"is_error": True}, {"isError": True}, {"error": "boom"}):
+            with self.subTest(answer=answer):
+                load = {**payload(), "tool_response": answer}
+
+                code, _ = recorder.decide(load, self.support(FakeFacts(open_pr=None)))
+
+                self.assertEqual((code, len(self.ledger().events())), (ALLOW, before))
+
+    def test_a_result_that_says_nothing_about_an_error_still_records(self):
+        load = {**payload(), "tool_response": {"content": "done"}}
+
+        code, _ = recorder.decide(load, self.support(FakeFacts(open_pr=None)))
+
+        self.assertEqual(code, ALLOW)
+        self.assertTrue([e for e in self.ledger().events() if e["type"] == "round"])
+
     def test_a_pass_on_another_branch_records_nothing(self):
         before = len(self.ledger().events())
 
-        code, _ = recorder.decide(payload(), Support(FakeFacts(), branch="feat/x"))
+        code, _ = recorder.decide(payload(), self.support(FakeFacts(), branch="feat/x"))
 
         self.assertEqual((code, len(self.ledger().events())), (ALLOW, before))
 
     def test_a_call_that_is_not_a_review_pass_reads_nothing(self):
         for load in (payload(skill="ship"), payload(tool="Bash"), payload(event="SessionStart")):
             with self.subTest(load=load):
-                self.assertEqual(recorder.decide(load, Support(FakeFacts()))[0], ALLOW)
+                self.assertEqual(recorder.decide(load, self.support(FakeFacts()))[0], ALLOW)
 
     def test_a_checkout_the_recorder_cannot_read_blocks(self):
-        code, message = recorder.decide(payload(cwd="relative"), Support(FakeFacts()))
+        code, message = recorder.decide(payload(cwd="relative"), self.support(FakeFacts()))
 
         self.assertEqual(code, BLOCK)
         self.assertIn("checkout", message)
 
     def test_a_head_that_cannot_be_read_blocks(self):
-        code, message = recorder.decide(payload(), Support(FakeFacts(), head=None))
+        code, message = recorder.decide(payload(), self.support(FakeFacts(), head=None))
 
         self.assertEqual(code, BLOCK)
         self.assertIn("E11", message)
 
     def test_a_failed_fact_read_blocks_rather_than_recording_a_round(self):
-        code, message = recorder.decide(payload(), Support(FakeFacts(raises="open_pr")))
+        code, message = recorder.decide(payload(), self.support(FakeFacts(raises="open_pr")))
 
         self.assertEqual(code, BLOCK)
         self.assertIn("ADR 0063", message)
 
     def test_a_sixth_pre_draft_round_refuses_at_its_first_pass(self):
-        ledger = plan_fixture.ledger(part=plan_fixture.PART)
+        ledger = self.ledger()
         for n in range(5):
             ledger.round(f"{n}" * 40, "code-review", before_draft=True)
 
         # A head of its own, so this test does not read a round another test recorded.
         code, message = recorder.decide(payload(event="PreToolUse"),
-                                        Support(FakeFacts(open_pr=None), head="9" * 40))
+                                        self.support(FakeFacts(open_pr=None), head="9" * 40))
 
         self.assertEqual(code, BLOCK)
         self.assertIn("E23", message)

@@ -21,29 +21,52 @@ import signal
 import sys
 from pathlib import Path
 
-from trimtab import planacts, planguard, planledger, planrows
+from trimtab import planacts, planguard, planledger, planrows, roots
 from trimtab.enforcement import guardgate
 
 ALLOW, BLOCK = 0, 2
 DEADLINE = 8  # seconds, inside the hook's own 10: the ls-remote alone is bounded at 3 (ADR 0063 §3)
 WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+# A Skill call writes no file, but a review round recorded while the gate fails would count for E10,
+# E11 and E23, so a run needs the pass for one too: tighter than the row's own list (Amendment 3).
+GATED_TOOLS = (*WRITE_TOOLS, "Bash", "Skill")
 # The one command a run may make while the gate fails: `trimtab check-enforcement`, as the whole
-# command. Its own options are allowed; anything else in the command text is not.
-REPORT = re.compile(r"(?:\S*/)?(?:bin/)?trimtab$")
+# command. Its own options are allowed; anything else in the command text is not. The first word must
+# name the installed `bin/trimtab` by a path that resolves to it — a bare name would take whatever the
+# session's PATH finds, and a basename match would run any file a run called `trimtab`.
 REPORT_SUB = "check-enforcement"
 MESSAGE = ("E21: the enforcement gate has not passed for this session's lock, base and default-branch "
-           "head, so a plan run writes nothing (ADR 0063 §3, AGW-4). A recorder has been started; run "
-           "`trimtab check-enforcement` to see which row is not shown. Do not look for another route — "
-           "only the operator lifts this, by exporting HOOK_ALLOW_PATHS=1 before launching claude.")
+           "head, so a plan run writes nothing (ADR 0063 §3, AGW-4). The only command left is the "
+           "installed bin/trimtab named by its path, with `check-enforcement`, which says which row is "
+           "not shown. Do not look for another route — only the operator lifts this, by exporting "
+           "HOOK_ALLOW_PATHS=1 before launching claude.")
 
 
-def reports_only(command: str) -> bool:
-    """Whether a Bash command is `trimtab check-enforcement` and nothing else."""
+def installed_report(where: Path) -> Path | None:
+    """The `bin/trimtab` of the pinned base this checkout's guards run from, resolved, or None."""
+    try:
+        found = (roots.code_root() / "bin" / "trimtab").resolve()
+    except (roots.InstanceError, OSError):
+        return None
+    return found if found.is_file() else None
+
+
+def reports_only(command: str, where: Path | None = None) -> bool:
+    """Whether a Bash command is the installed `trimtab check-enforcement` and nothing else."""
     try:
         words = shlex.split(command)
     except ValueError:
         return False
-    if len(words) < 2 or not REPORT.fullmatch(words[0]) or words[1] != REPORT_SUB:
+    if len(words) < 2 or words[1] != REPORT_SUB:
+        return False
+    installed = installed_report(where or Path.cwd())
+    if installed is None:
+        return False  # nothing to compare the command against: no command is the report (fail closed)
+    try:
+        named = Path(words[0]) if Path(words[0]).is_absolute() else (where or Path.cwd()) / words[0]
+        if named.resolve() != installed:
+            return False
+    except OSError:
         return False
     # Only this subcommand's own options may follow, never another command: a separator or a word that
     # could start one makes it more than a report.
@@ -51,16 +74,21 @@ def reports_only(command: str) -> bool:
         not re.search(r"[;&|`$<>()\n]", command)
 
 
-def decide(payload: dict, holds=guardgate.holds, resume=planacts.resume_ok) -> tuple[int, str]:
-    """(exit code, message) for one call in a run session. The caller decides the session is a run."""
+def decide(payload: dict, holds=None, resume=planacts.resume_ok) -> tuple[int, str]:
+    """(exit code, message) for one call in a run session. The caller decides the session is a run.
+
+    `holds` is resolved at the call, so both guards' halves of E21 rest on the one decision function the
+    enforcement manifest names (`guardgate.holds`)."""
+    holds = holds or guardgate.holds
     tool = payload.get("tool_name")
     command = (payload.get("tool_input") or {}).get("command")
-    if tool not in (*WRITE_TOOLS, "Bash"):
+    if tool not in GATED_TOOLS:
         return ALLOW, ""
     if tool == "Bash":
         if not isinstance(command, str):
             return BLOCK, "guard-paths: blocked: a Bash command that is not a string, in a plan run"
-        if reports_only(command):
+        here = payload.get("cwd")
+        if reports_only(command, Path(here) if isinstance(here, str) and here.startswith("/") else None):
             return ALLOW, ""
     cwd = payload.get("cwd")
     where = Path(cwd) if isinstance(cwd, str) and cwd.startswith("/") else None
@@ -68,6 +96,8 @@ def decide(payload: dict, holds=guardgate.holds, resume=planacts.resume_ok) -> t
         return BLOCK, "guard-paths: blocked: a call in a plan run whose checkout cannot be read"
     if not holds(where):
         return BLOCK, f"BLOCKED by guard-paths: {MESSAGE}"
+    if tool == "Skill":
+        return ALLOW, ""  # it writes no file, so E13's resume check has nothing to judge for it
     return _resume(where, resume)
 
 
@@ -75,11 +105,16 @@ def _resume(where: Path, resume) -> tuple[int, str]:
     """E13: a write on a `plan/*` branch needs the resume check passed for the branch's head
     (ADR 0063 §5). The branch comes from the checkout, so a call in another repository reads nothing."""
     support = planguard.PlanSupport(where)
-    try:
-        branch = support.head_branch(where)
-    except Exception as err:  # noqa: BLE001 - a checkout this guard cannot read is a refusal
-        return BLOCK, f"BLOCKED by guard-paths: the checkout's branch cannot be read ({type(err).__name__})"
-    if branch is None or not planrows.plan_branch(branch):
+    branch = support.head_branch(where)
+    if branch is None:
+        # `head_branch` answers None both for "no repository here" and for a git that failed or a
+        # detached HEAD, and the second must not read as "no plan branch, nothing to judge": in a run
+        # a checkout whose branch cannot be read is a refusal (SEC-2.5).
+        if not support.in_repository(where):
+            return ALLOW, ""
+        return BLOCK, ("BLOCKED by guard-paths: the checkout's branch cannot be read, so E13 cannot be "
+                       "judged; a plan run writes nothing until it can (ADR 0063 §5)")
+    if not planrows.plan_branch(branch):
         return ALLOW, ""
     try:
         resume(support, branch)

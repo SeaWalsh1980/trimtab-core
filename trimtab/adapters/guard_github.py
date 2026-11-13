@@ -411,18 +411,23 @@ def _plan_draft(opts: list[Opt], ctx: Ctx) -> None:
     if named:
         branch = named[-1].value.text.rpartition(":")[2]
     elif ctx.cwd_known:
-        branch = _plan_ref(plan.head_branch, ctx.cwd)
+        branch = _plan_ref(plan.pr_branch, ctx.cwd)  # as gh resolves it: the branch's merge ref, else it
     else:
         branch = None
     if branch is None:
-        if plan.plan_run:
+        if plan.in_run(ctx.cwd):
             raise planrows.Refusal("the branch a PR is opened from cannot be read here, so E23 cannot be "
                                    "judged; refusing in a plan run (ADR 0063 §5)")
         return  # outside a run, E23 governs nothing
     if not planrows.plan_branch(branch):
         return
+    _plan_draft_branch(plan, branch, ctx)
+
+
+def _plan_draft_branch(plan: planguard.PlanSupport, branch: str, ctx: Ctx) -> None:
+    """E23 for a PR opened from `branch`, however the command spells the opening."""
     head = _act_head(plan, lambda: _plan_ref(plan.facts.branch_head, branch))
-    if head is None and not plan.plan_run:
+    if head is None and not plan.in_run(ctx.cwd):
         return
     if head is None:
         raise planrows.Refusal("a PR from plan/* is opened on the branch's remote head, which is not there "
@@ -462,7 +467,7 @@ def check_gh(args: list[Word], ctx: Ctx) -> None:
     if sub is None:
         return
     if sub.dynamic:
-        if group.text in ("pr", "repo", "alias", "run", "workflow"):
+        if group.text in ("pr", "issue", "repo", "alias", "run", "workflow"):
             ctx.unknown("the gh command is a shell expansion")
         return
     if group.text in ("pr", "issue"):
@@ -512,9 +517,14 @@ def _alias_stops_short(words: list[str]) -> bool:
         if not words[i].startswith("-"):
             named.append(words[i])
         i += 1
-    if named[:2] in (["pr", "review"], ["repo", "sync"]):
+    # A plan act is decided by the PR the later call selects, or by the label it names, so an alias that
+    # stops at the subcommand hides it (ADR 0063 §5, §1a).
+    plan_acts = (["pr", "ready"], ["pr", "edit"], ["pr", "close"], ["pr", "merge"],
+                 ["pr", "update-branch"], ["pr", "comment"], ["issue", "edit"], ["issue", "close"],
+                 ["issue", "comment"])
+    if named[:2] in (["pr", "review"], ["repo", "sync"], *plan_acts):
         return True
-    return len(named) == 1 and named[0] in ("api", "pr", "repo", "run", "workflow")
+    return len(named) == 1 and named[0] in ("api", "pr", "issue", "repo", "run", "workflow")
 
 
 # ---- gh api ------------------------------------------------------------------------------
@@ -948,9 +958,6 @@ EDIT_VALUED = {"-R", "--repo", "--add-assignee", "--remove-assignee", "--add-lab
                "--add-project", "--remove-project", "--add-reviewer", "--remove-reviewer", "-b", "--body",
                "-F", "--body-file", "-B", "--base", "-m", "--milestone", "-t", "--title"}
 EDIT_BOOL = {"--remove-milestone"}
-COMMENT_VALUED = {"-R", "--repo", "-b", "--body", "-F", "--body-file"}
-COMMENT_BOOL = {"--edit-last", "-e", "--editor", "-w", "--web", "--create-if-none", "--delete",
-                "--delete-last", "--yes"}
 _PR_URL = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([0-9]+)(?:[/?#].*)?", re.I)
 GH_ENV_REPO = re.compile(r"(?<![A-Za-z0-9_])GH_(?:REPO|HOST)=")
 GH_PLACEHOLDER = re.compile(r"\{(?:owner|repo|branch)\}")  # gh expands these from the current checkout
@@ -963,13 +970,19 @@ _UPDATE_PR_MUTATION = re.compile(r"(?<![A-Za-z0-9_])updatePullRequest(?![A-Za-z0
 # A mutation that marks a PR ready, returns it to draft, writes a label or replies to a review thread. Each
 # names the PR or the thread by an ID this guard cannot read, so in a run session it is refused: a plan row
 # (E5-E10, §1a) rests on every one of them. Outside a run it is no plan row's business and passes.
+_CREATE_PR_MUTATION = re.compile(r"(?<![A-Za-z0-9_])createPullRequest(?![A-Za-z0-9_])", re.I)
 _RUN_ID_MUTATION = re.compile(r"(?<![A-Za-z0-9_])(?:markPullRequestReadyForReview|convertPullRequestToDraft"
                               r"|addLabelsToLabelable|removeLabelsFromLabelable|addPullRequestReviewThread"
                               r"(?:Reply)?|addPullRequestReview)(?![A-Za-z0-9_])", re.I)
 _STATE_ARG = re.compile(r"(?<![A-Za-z0-9_])state\s*:|\$state(?![A-Za-z0-9_])", re.I)
 # The routes check_plan_api reads: a ref, contents, a merge, a rename, a PR's branch update or merge, a PR close.
 _PLAN_ROUTE = re.compile(r"(?:contents(?:/|$)|git/refs|merges$|branches/.+/rename$|pulls/[^/]+/(?:update-branch|merge)$"
-                         r"|(?:pulls|issues)/[^/]+$|issues/[^/]+/labels(?:/|$)|pulls/[^/]+/comments$)", re.I)
+                         r"|(?:pulls|issues)/[^/]+$)", re.I)
+# The acts 2b added: a label write, a reply, a review, a PR opened through the API. Their placeholder
+# and query-string refusals apply in a plan run, where the rows govern; outside one they are no plan
+# row's business, as every other act's lookup is (ADR 0063 §5, §1a).
+_ACT_ROUTE = re.compile(r"(?:issues/[^/]+/labels(?:/|$)|pulls$|pulls/comments/[^/]+$"
+                        r"|pulls/[^/]+/(?:comments(?:/[^/]+/replies)?|reviews)$)", re.I)
 # A directory change or an environment that steers git, anywhere in the command text (nested strings, earlier
 # segments, `export`, `env -C`): the push's checkout and configuration are then not the ones the guard reads.
 _DIR_CHANGE_TEXT = re.compile(r"(?<![A-Za-z0-9_./=-])(?:cd|pushd|popd)(?![A-Za-z0-9_-])|--chdir"
@@ -1004,7 +1017,7 @@ def _act_head(plan: planguard.PlanSupport, read):
     try:
         return read()
     except planrows.Refusal:
-        if plan.plan_run:
+        if plan.in_run():
             raise
         return None
 
@@ -1047,7 +1060,9 @@ def check_git(args: list[Word], before: list[Word], ctx: Ctx) -> None:
         return
     if sub.text != "push":
         return
-    if steered or any(d.dynamic or d.text.startswith("~") for d in dirs) or STEER_ANYWHERE.search(ctx.command):
+    unquoted = re.sub(r"[\"'\\]", "", ctx.command)  # G"IT_CONFIG_COUNT"=1 spells GIT_CONFIG_COUNT=1
+    if steered or any(d.dynamic or d.text.startswith("~") for d in dirs) \
+            or STEER_ANYWHERE.search(ctx.command) or STEER_ANYWHERE.search(unquoted):
         ctx.unknown("a push run with configuration, a repository or a directory chosen by an option, a variable "
                     "or a shell expansion")
         return
@@ -1235,11 +1250,13 @@ def check_plan_api(req: Request, ctx: Ctx) -> None:
             ctx.unknown("the repository of an API write is a shell expansion")
         return
     repo, rest = f"{found[1]}/{found[2]}", found[3]
-    if _PLAN_ROUTE.match(rest) and GH_PLACEHOLDER.search(ctx.command):
+    acts = _ACT_ROUTE.match(rest) and plan.in_run(ctx.cwd)
+    if (_PLAN_ROUTE.match(rest) or acts) and GH_PLACEHOLDER.search(ctx.command):
         ctx.unknown("gh fills {owner}, {repo} or {branch} in this call, which the guard cannot read")
         return
-    if req.query and _PLAN_ROUTE.match(rest):
-        ctx.unknown("a write to a ref, contents, merge or PR route with a query string, which may carry its fields")
+    if req.query and (_PLAN_ROUTE.match(rest) or acts):
+        ctx.unknown("a write to a ref, contents, merge, PR or review route with a query string, which may "
+                    "carry its fields")
         return
     if re.fullmatch(r"contents(?:/.*)?", rest, re.I):
         branch = planrows.normalise(_get(body_of(req, ctx), "branch", ctx, "the contents write's branch is unreadable"))
@@ -1278,10 +1295,17 @@ def check_plan_api(req: Request, ctx: Ctx) -> None:
         base = _plan_ref(plan.facts.pr_base, int(m.group(1)), repo)
         if base is not None and planrows.plan_branch(base):
             _ref_write(plan, base, repo=repo)
-    elif (m := re.fullmatch(r"issues/([0-9]+)/labels", rest, re.I)) and method in ("POST", "PUT"):
+    elif (m := re.fullmatch(r"issues/([0-9]+)/labels", rest, re.I)) and method in ("POST", "PUT", "DELETE"):
         head = _act_head(plan, lambda: _plan_head(plan, int(m.group(1)), repo))
         if head is not None and planrows.plan_branch(head):
-            _labels_of(body_of(req, ctx), ctx, head, plan)
+            if method == "DELETE":  # no label named: it removes every one of them
+                planacts.label_remove(plan, head, planacts.ALL_LABELS)
+            else:
+                if method == "PUT":
+                    # A replacement removes every label it does not name, which §1a allows for
+                    # plan:continue only; the removal is judged before the additions.
+                    planacts.label_remove(plan, head, planacts.ALL_LABELS)
+                _labels_of(body_of(req, ctx), ctx, head, plan)
     elif (m := re.fullmatch(r"issues/([0-9]+)/labels/(.+)", rest, re.I)) and method == "DELETE":
         head = _act_head(plan, lambda: _plan_head(plan, int(m.group(1)), repo))
         if head is not None and planrows.plan_branch(head):
@@ -1289,7 +1313,26 @@ def check_plan_api(req: Request, ctx: Ctx) -> None:
                 _label_unreadable(plan, head, ctx)
             else:
                 planacts.label_remove(plan, head, unquote(m.group(2)))
-    elif (m := re.fullmatch(r"pulls/([0-9]+)/comments", rest, re.I)) and method == "POST":
+    elif rest.lower() == "pulls" and method == "POST":
+        body = body_of(req, ctx)
+        head = planrows.normalise(_get(body, "head", ctx, "the new PR's head branch is unreadable"))
+        if isinstance(head, Unknown) or (head and not isinstance(head, str)):
+            raise planrows.Refusal("a PR opened through the API whose head branch this guard cannot read "
+                                   "may be a plan/* branch, which E23 governs; refusing (ADR 0063 §5)")
+        if head and planrows.plan_branch(head.rpartition(":")[2]):
+            _plan_draft_branch(plan, head.rpartition(":")[2], ctx)
+    elif (m := re.fullmatch(r"pulls/([0-9]+)/reviews", rest, re.I)) and method == "POST":
+        head = _act_head(plan, lambda: _plan_head(plan, int(m.group(1)), repo))
+        if head is not None and planrows.plan_branch(head):
+            # A review carries comment bodies of its own, in a shape this guard does not read, so in a
+            # run it cannot be told from a tagged reply (ADR 0063 §1a, E8).
+            raise planrows.Refusal("a review posted on a plan/* PR carries comment bodies this guard "
+                                   "cannot read as outcome tags; reply to each thread instead "
+                                   "(ADR 0063 §1a)")
+    elif re.fullmatch(r"pulls/comments/[0-9]+", rest, re.I) and method in ("PATCH", "PUT"):
+        raise planrows.Refusal("editing a review comment on a plan/* PR can turn one outcome tag into "
+                               "another, which this guard cannot judge; reply instead (ADR 0063 §1a)")
+    elif (m := re.fullmatch(r"pulls/([0-9]+)/comments(?:/[0-9]+/replies)?", rest, re.I)) and method == "POST":
         head = _act_head(plan, lambda: _plan_head(plan, int(m.group(1)), repo))
         if head is not None and planrows.plan_branch(head):
             body = _get(body_of(req, ctx), "body", ctx, "a reply's body is unreadable")
@@ -1338,7 +1381,10 @@ def _has_key(value, key: str) -> bool:
 def check_plan_graphql(query: str, text: str, unknown: bool, ctx: Ctx, variables=None) -> None:
     if ctx.plan is None:
         return
-    if ctx.plan.plan_run and _RUN_ID_MUTATION.search(query):
+    if _CREATE_PR_MUTATION.search(query) and (unknown or "plan/" in text.casefold()):
+        raise planrows.Refusal("a GraphQL mutation that opens a PR from plan/* cannot be judged for E23; "
+                               "open it with `gh pr create --draft` (ADR 0063 §5)")
+    if ctx.plan.in_run(ctx.cwd) and _RUN_ID_MUTATION.search(query):
         raise planrows.Refusal("a GraphQL mutation that marks a PR ready, returns it to draft, writes a label "
                                "or replies to a review thread names them by an ID this guard cannot read; in a "
                                "plan run it is refused. Use gh's own commands (ADR 0063 §5, §1a)")
@@ -1378,7 +1424,7 @@ def _may_be_gh(rest: list[Word]) -> bool:
     if k >= len(rest) or rest[k].dynamic:
         return False
     group = rest[k].text
-    if group in ("pr", "api", "repo", "alias"):
+    if group in ("pr", "issue", "api", "repo", "alias"):
         return True
     if group not in GROUP_REFUSALS:
         return False
@@ -1484,9 +1530,7 @@ def judge(command: str, ctx: Ctx, parsed: list[list[Word]] | None = None) -> Non
             check_segment(words, sub)
 
 
-# E21: whether the enforcement gate has passed for this session's key (ADR 0063 §3). A module
-# attribute so a test can stand in for it; nothing else sets it.
-GATE_OK = guardgate.holds
+
 
 
 def decide(payload: dict, plan: planguard.PlanSupport | None = None) -> tuple[int, str]:
@@ -1507,12 +1551,12 @@ def decide(payload: dict, plan: planguard.PlanSupport | None = None) -> tuple[in
     # and default-branch head. Every command here is one the prefilter read as touching GitHub or a
     # remote ref, so each is refused while the gate fails — guard-paths refuses the whole shell anyway,
     # and this is the half that holds if only this hook is registered (ADR 0063 §3).
-    if support.plan_run and not GATE_OK(where):
+    if support.in_run(where) and not guardgate.holds(where):
         return BLOCK, ("guard-github: blocked: E21: the enforcement gate has not passed for this "
                        "session's lock, base and default-branch head, so a plan run reaches GitHub with "
-                       "nothing (ADR 0063 §3, AGW-4). A recorder has been started; run "
-                       "`trimtab check-enforcement` to see which row is not shown. Only the operator "
-                       "lifts this, by exporting HOOK_ALLOW_GITHUB=1 before launching claude.")
+                       "nothing (ADR 0063 §3, AGW-4). A recorder may have been started; the installed "
+                       "bin/trimtab with `check-enforcement` says which row is not shown. Only the "
+                       "operator lifts this, by exporting HOOK_ALLOW_GITHUB=1 before launching claude.")
     try:
         judge(command, Ctx(where, cwd_known, True, command, support,
                            planguard.stability_of(command)), parsed)

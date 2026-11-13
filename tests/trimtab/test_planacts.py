@@ -47,13 +47,15 @@ class Base(unittest.TestCase):
         found.start(remote_branch_exists=False)
         return found
 
-    def act(self, name, facts=None, *, branch=BRANCH, plan_run=True, **kw):
-        """Call one act with this test's instance, config and plan text."""
+    def act(self, name, facts=None, *, branch=BRANCH, plan_run=True, plan_text=True, **kw):
+        """Call one act with this test's instance, config and plan text. `plan_text=False` answers as a
+        merge-base that does not hold the authorised plan at all."""
         found = facts if facts is not None else FakeFacts()
         support = Support(found, self.tmp, plan_run)
         read = planacts.planscope.read_files
         path = planacts.planscope.plan_files(PLAN)[0]
-        planacts.planscope.read_files = lambda repo, sha, paths: {path: self.plan_text}
+        answer = {path: self.plan_text} if plan_text else {}
+        planacts.planscope.read_files = lambda repo, sha, paths: answer
         try:
             return getattr(planacts, name)(support, branch, inst=self.instance, config=self.config, **kw)
         finally:
@@ -151,6 +153,42 @@ class Labels(Base):
         self.assertIsNone(self.act("label_add", FakeFacts(), label="needs-work"))
 
 
+class RowsOnTheHookPath(Base):
+    """One case per row that the act itself must still enforce, so the mutation test reaches the hook
+    path and not only the pure row (ADR 0063 §2)."""
+
+    def facts(self, **kw):
+        base = {"runs": [(review(head=H1), [thread()]),
+                         (review(head=H1, run="43"), [thread(state="resolved", by=REVIEWER, run="43")])],
+                "comments": [planreview.Comment(11, REVIEWER, "a finding"),
+                             planreview.Comment(12, AGENT, f"[fixed] {H2}", 11)]}
+        return FakeFacts(**{**base, **kw})
+
+    def test_e6_a_rerequest_of_a_reviewed_head_refuses_through_the_act(self):
+        ledger = self.ledger()
+        for name in planledger.PASSES:
+            ledger.round(H1, name, before_draft=False)
+        ledger.push(BRANCH, MB, H1, run_env="1")
+        facts = self.facts(runs=[(review(head=H1, verdict="fail"), [])], branch_commits=(H1,),
+                           branch_head=H1, push_commits={(MB, H1): frozenset({H1})})
+
+        with self.assertRaisesRegex(planrows.Refusal, "E6"):
+            self.act("label_add", facts, label=LABEL)
+
+    def test_e8_an_unanswered_thread_refuses_ready_through_the_act(self):
+        self.ledger()
+        facts = self.facts(comments=[planreview.Comment(11, REVIEWER, "a finding")])
+
+        with self.assertRaisesRegex(planrows.Refusal, "E8"):
+            self.act("ready_mark", facts)
+
+    def test_e9_a_fixed_reply_that_fixes_nothing_refuses_ready_through_the_act(self):
+        self.ledger()
+
+        with self.assertRaisesRegex(planrows.Refusal, "E9"):
+            self.act("ready_mark", self.facts(fix_valid=False))
+
+
 class Replies(Base):
     def ready_facts(self):
         return FakeFacts(open_pr=planrows.PrState(7, False, "2026-11-12T10:00:00Z", "main"))
@@ -236,6 +274,55 @@ class Pushes(Base):
 
         with self.assertRaisesRegex(planrows.Refusal, "E18"):
             self.act("pushed", FakeFacts(commit_of=H2), source="HEAD")
+
+
+class FailClosedArms(Base):
+    """Every arm that turns a failed read into a refusal, one case each (SEC-2.5)."""
+
+    def test_an_instance_with_no_review_key_refuses_every_act(self):
+        self.instance = instance.load(make_instance(self.tmp / "bare"))
+        self.ledger()
+
+        for name, kw in (("ready_mark", {}), ("undraft", {}), ("label_add", {"label": LABEL}),
+                         ("label_remove", {"label": "x"}), ("reply", {"body": "[wrong] no"}),
+                         ("draft_opened", {"head": H1}), ("resume_ok", {})):
+            with self.subTest(name), self.assertRaises(planrows.Refusal):
+                self.act(name, FakeFacts(), **kw)
+
+    def test_a_failed_read_refuses_each_act_that_needs_it(self):
+        self.ledger()
+
+        for name, kw, raises in (("ready_mark", {}, "branch_head"), ("draft_opened", {"head": H1}, "open_pr"),
+                                 ("label_add", {"label": LABEL}, "branch_head"),
+                                 ("resume_ok", {}, "branch_head")):
+            with self.subTest(name), self.assertRaises(planrows.Refusal):
+                self.act(name, FakeFacts(raises=raises), **kw)
+
+    def test_a_plan_that_cannot_be_read_refuses_a_push(self):
+        self.ledger()
+
+        with self.assertRaisesRegex(planrows.Refusal, "plan"):
+            self.act("pushed", FakeFacts(commit_of=H2), source="HEAD", plan_text=False)
+
+    def test_a_round_starting_with_no_ledger_counts_nothing(self):
+        self.assertIsNone(self.act("round_starting", FakeFacts(), head=H1))
+
+    def test_a_scope_read_that_fails_refuses_the_resume(self):
+        ledger = self.ledger()
+        ledger.push(BRANCH, MB, H1, run_env="1")
+        check = planacts.planscope.check
+
+        def boom(*a, **kw):
+            raise planacts.planscope.PlanScopeError("git failed")
+
+        planacts.planscope.check = boom
+        try:
+            with self.assertRaisesRegex(planrows.Refusal, "merge-base"):
+                self.act("resume_ok", FakeFacts(branch_commits=(H1,), merge_base=MB,
+                                                activity=(planreview.Activity(MB, H1, AGENT, "t"),),
+                                                push_commits={(MB, H1): frozenset({H1})}))
+        finally:
+            planacts.planscope.check = check
 
 
 class NextPart(Base):

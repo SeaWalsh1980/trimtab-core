@@ -22,6 +22,8 @@ from trimtab.planrows import FactsError, Refusal
 
 ZERO = "0" * 40
 BLOCKED_LABEL = "plan:blocked"
+# A label write that names no label removes every one of them (a REST replacement or a bare delete).
+ALL_LABELS = "*"
 CONTINUE_LABEL = "plan:continue"
 # §1a: a ledgerless session after ready may answer a thread only with one of these, since the other
 # two tags each need a push (a commit for fixed, a register entry for a deferral).
@@ -43,9 +45,12 @@ def part_of(branch: str) -> tuple[str, int, int] | None:
     return (found.plan, int(m["item"]), int(m["part"])) if m else None
 
 
-def limits_for(repo: Path, facts, branch: str, inst, item: int) -> planchecks.Limits | None:
+def limits_for(repo: Path, facts, branch: str, inst, item: int, at: str) -> planchecks.Limits | None:
     """E18's limits: the instance's `fix_limits`, and the lines the plan's item section names, read from
-    the authorised plan at the merge-base — the tree an admin merged, never the working copy."""
+    the authorised plan at the merge-base of `at` — the tree an admin merged, never the working copy.
+
+    `at` is `origin/<branch>` once the branch is on the remote, and the commit being sent for the write
+    that creates it, which has no `origin/<branch>` to take a merge-base from."""
     if inst is None or inst.fix_limits is None:
         return None  # E18 is not shown, so no push is allowed
     named = part_of(branch)
@@ -53,7 +58,7 @@ def limits_for(repo: Path, facts, branch: str, inst, item: int) -> planchecks.Li
         return None
     path = planscope.plan_files(named[0])[0]
     try:
-        text = planscope.read_files(str(repo), facts.merge_base(branch), [path]).get(path)
+        text = planscope.read_files(str(repo), facts.merge_base_of(at), [path]).get(path)
     except planscope.PlanScopeError as err:
         raise FactsError(f"the authorised plan could not be read at the merge-base ({err})") from err
     if text is None:
@@ -70,7 +75,7 @@ def load_instance(instance_root: Path | None = None):
 
 
 def context(repo: Path, facts, branch: str, *, instance_root: Path | None = None,
-            config: Path | None = None, inst=None, limits: bool = True) -> planchecks.Context:
+            config: Path | None = None, inst=None, limits_at: str | None = None) -> planchecks.Context:
     """One part's context. A branch that is not a part, or an instance with no review key, is a failed
     read: every row that rests on it refuses (SEC-2.5)."""
     named = part_of(branch)
@@ -86,7 +91,8 @@ def context(repo: Path, facts, branch: str, *, instance_root: Path | None = None
                               item=item, part=part, facts=facts, ledger=ledger, agent=found.agent,
                               review_login=found.review.login, tags=dict(found.review.tags),
                               rerequest_label=found.review.rerequest_label, ledger_config=where,
-                              limits=limits_for(Path(repo), facts, branch, found, item) if limits else None)
+                              limits=None if limits_at is None
+                              else limits_for(Path(repo), facts, branch, found, item, limits_at))
 
 
 def _ctx(support, branch: str, **kw) -> planchecks.Context:
@@ -130,7 +136,7 @@ def ready_mark(support, branch: str, **kw) -> None:
     if not planrows.plan_branch(branch):
         return
     try:
-        ctx = _ctx(support, branch, limits=False, **kw)
+        ctx = _ctx(support, branch, **kw)
     except FactsError as err:
         raise Refusal(f"a plan/* PR cannot be marked ready ({err}); refusing (ADR 0063 §5)") from err
     _with_ledger(ctx, "the ready mark")
@@ -143,7 +149,7 @@ def undraft(support, branch: str, **kw) -> None:
     if not planrows.plan_branch(branch):
         return
     try:
-        ctx = _ctx(support, branch, limits=False, **kw)
+        ctx = _ctx(support, branch, **kw)
     except FactsError as err:
         raise Refusal(f"a plan/* PR cannot be returned to draft ({err}); refusing (ADR 0063 §1a)") from err
     _with_ledger(ctx, "returning the PR to draft")
@@ -155,7 +161,7 @@ def label_add(support, branch: str, label: str, **kw) -> None:
     if not planrows.plan_branch(branch):
         return
     try:
-        ctx = _ctx(support, branch, limits=False, **kw)
+        ctx = _ctx(support, branch, **kw)
     except FactsError as err:
         raise Refusal(f"a label on a plan/* PR cannot be judged ({err}); refusing (ADR 0063 §5)") from err
     if label.casefold() != _rerequest_label(ctx).casefold():
@@ -171,14 +177,15 @@ def label_add(support, branch: str, label: str, **kw) -> None:
 
 
 def label_remove(support, branch: str, label: str, **kw) -> None:
-    """Removing a label. §1a allows removing `plan:continue` only."""
+    """Removing a label. §1a allows removing `plan:continue` only; `ALL_LABELS` is a write that removes
+    every label, which is never one of §1a's two allowances."""
     if not planrows.plan_branch(branch) or label.casefold() == CONTINUE_LABEL:
         return
     try:
-        ctx = _ctx(support, branch, limits=False, **kw)
+        ctx = _ctx(support, branch, **kw)
     except FactsError as err:
         raise Refusal(f"a label on a plan/* PR cannot be judged ({err}); refusing (ADR 0063 §5)") from err
-    _with_ledger(ctx, f"removing {label!r}")
+    _with_ledger(ctx, "removing every label" if label == ALL_LABELS else f"removing {label!r}")
 
 
 def reply(support, branch: str, body: str, **kw) -> None:
@@ -187,7 +194,7 @@ def reply(support, branch: str, body: str, **kw) -> None:
     if not planrows.plan_branch(branch):
         return
     try:
-        ctx = _ctx(support, branch, limits=False, **kw)
+        ctx = _ctx(support, branch, **kw)
     except FactsError as err:
         raise Refusal(f"a reply on a plan/* PR cannot be judged ({err}); refusing (ADR 0063 §1a)") from err
     if ctx.ledger.exists():
@@ -200,17 +207,19 @@ def reply(support, branch: str, body: str, **kw) -> None:
 
 
 def pushed(support, branch: str, source: str | None, **kw) -> None:
-    """A `plan/*` push guard-github has already judged for E14-E17, E19 and E12's server count: E18 and
-    E12's ledger conflicts, then the ledger's own record of the push (E13, E14)."""
+    """A `plan/*` ref write guard-github has already judged for E14-E17, E19 and E12's server count: E18
+    and E12's ledger conflicts, then the ledger's own record of it (E13, E14)."""
     if not planrows.plan_branch(branch):
         return
     try:
-        ctx = _ctx(support, branch, **kw)
+        old = support.facts.branch_head(branch) or ZERO
+        new = _commit_sent(support.facts, source)
+        # The plan is read at the merge-base of what the branch holds. Before the branch is on the
+        # remote there is no `origin/<branch>`, so that is the merge-base of the commit being sent.
+        ctx = _ctx(support, branch, limits_at=f"origin/{branch}" if old != ZERO else new, **kw)
     except FactsError as err:
-        raise Refusal(f"a plan/* push cannot be judged ({err}); refusing (ADR 0063 §5)") from err
-    old = ctx.facts.branch_head(branch) or ZERO
+        raise Refusal(f"a plan/* write cannot be judged ({err}); refusing (ADR 0063 §5)") from err
     _start(ctx, old)
-    new = _source_sha(ctx, source)
     _refuse(planchecks.push(ctx, old=old, new=new, source=source), ctx)
     ctx.ledger.push(branch, old, new, run_env="1" if support.plan_run else "")
 
@@ -222,7 +231,7 @@ def resume_ok(support, branch: str, **kw) -> None:
     if not planrows.plan_branch(branch):
         return
     try:
-        ctx = _ctx(support, branch, limits=False, **kw)
+        ctx = _ctx(support, branch, **kw)
     except FactsError as err:
         raise Refusal(f"a write on a plan/* branch cannot be judged ({err}); refusing (ADR 0063 §5)") from err
     _with_ledger(ctx, "a write on the branch")
@@ -260,7 +269,7 @@ def round_recorded(support, branch: str, head: str, pass_name: str, *, before_dr
     round count as pre-draft by writing anything."""
     if not planrows.plan_branch(branch):
         return
-    ctx = _ctx(support, branch, limits=False, **kw)
+    ctx = _ctx(support, branch, **kw)
     _start(ctx, ctx.facts.branch_head(branch) or ZERO)
     first = _before_draft(ctx) if before_draft is None else before_draft
     if first:
@@ -272,7 +281,7 @@ def round_starting(support, branch: str, head: str, **kw) -> None:
     """E23: a sixth pre-draft round refuses at its first pass's PreToolUse, before the pass runs."""
     if not planrows.plan_branch(branch):
         return
-    ctx = _ctx(support, branch, limits=False, **kw)
+    ctx = _ctx(support, branch, **kw)
     if not ctx.ledger.exists():
         return  # the part's first pass starts the ledger when it completes, so there is nothing to count
     if _before_draft(ctx):
@@ -293,7 +302,7 @@ def draft_opened(support, branch: str, head: str, **kw) -> None:
     if not planrows.plan_branch(branch):
         return
     try:
-        ctx = _ctx(support, branch, limits=False, **kw)
+        ctx = _ctx(support, branch, **kw)
     except FactsError as err:
         raise Refusal(f"a plan/* PR cannot be opened ({err}); refusing (ADR 0063 §5)") from err
     _with_ledger(ctx, "opening the PR")
@@ -303,7 +312,11 @@ def draft_opened(support, branch: str, head: str, **kw) -> None:
 # ---- the pieces each act needs -----------------------------------------------------------------
 
 def _head(ctx: planchecks.Context) -> str:
-    head = ctx.facts.branch_head(ctx.branch)
+    try:
+        head = ctx.facts.branch_head(ctx.branch)
+    except FactsError as err:
+        raise Refusal(f"the branch's head cannot be read ({err}), so the plan rows have no head to "
+                      "judge; refusing (ADR 0063 §5)") from err
     if head is None:
         raise Refusal("the branch is not on the remote, so the plan rows have no head to judge "
                       "(ADR 0063 §5)")
@@ -347,14 +360,14 @@ def _is_next_part(ctx: planchecks.Context) -> None:
                       f"{expected}; refusing (ADR 0063 §6)")
 
 
-def _source_sha(ctx: planchecks.Context, source: str | None) -> str:
-    """The commit a push sends, as a SHA. A push whose source this guard cannot resolve is refused: the
-    ledger could not record it, and E13 would then read the branch as holding work no run pushed."""
+def _commit_sent(facts, source: str | None) -> str:
+    """The commit a ref write sends, as a SHA. A write whose source this guard cannot resolve is refused:
+    the ledger could not record it, and E13 would then read the branch as holding work no run made."""
     if not source:
         raise Refusal("a plan/* write with no source commit cannot be recorded in the ledger, so E13 "
                       "could never resume the branch; refusing (ADR 0063 §1, §5)")
     try:
-        return ctx.facts.commit_of(source)
+        return facts.commit_of(source)
     except FactsError as err:
-        raise Refusal(f"the commit a plan/* push sends cannot be read ({err}); refusing "
+        raise Refusal(f"the commit a plan/* write sends cannot be read ({err}); refusing "
                       "(ADR 0063 §1)") from err

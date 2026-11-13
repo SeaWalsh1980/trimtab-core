@@ -183,6 +183,8 @@ def deferral_allowed(thread: Thread, *, outside_diff: bool, merge_base_keys: fro
 def accepted_reply(thread: Thread, replies: Sequence[Comment], agent: str, tags: dict[str, str],
                    deferral_ok: Callable[[Thread], bool]) -> str | None:
     """The tag name of the first acceptable agent reply to the thread, else None."""
+    if len({v for v in tags.values()}) != len(tags):
+        raise FactsError("two outcome tags in the instance are the same word, so a reply cannot be placed")
     by_tag = {v: k for k, v in tags.items()}
     for reply in replies:
         if reply.in_reply_to != thread.id or reply.user.casefold() != agent.casefold():
@@ -305,12 +307,18 @@ def check_e13(branch_commits: Sequence[str], pushes: Sequence[LedgerPush], event
 
 # ---- E18 ---------------------------------------------------------------------------------------
 
-def _number(text: str) -> tuple[float, ...]:
+def _number(text: str) -> tuple[float | int, ...]:
     """A number as a tuple that compares as it reads: a decimal (one dot) as one float, a dotted version
-    (`3.9.1`) as its integer parts, so `3.10` is above `3.9` only where it is written with two dots."""
+    (`3.9.1`) as its integer parts, so `3.10` is above `3.9` only where it is written with two dots.
+
+    A version's parts stay integers: `float()` on a part of 309 digits or more raises `OverflowError`,
+    which is not a refusal this row could report."""
     if text.count(".") >= 2:
-        return tuple(float(int(p)) for p in text.lstrip("-").split("."))
-    return (float(text),)
+        return tuple(int(p) for p in text.lstrip("-").split("."))
+    try:
+        return (float(text),)
+    except (ValueError, OverflowError) as err:
+        raise FactsError("a threshold line holds a number this reader cannot compare") from err
 
 
 def _numbers(line: str) -> list[tuple[float, ...]]:

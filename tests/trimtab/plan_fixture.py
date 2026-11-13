@@ -15,8 +15,8 @@ from pathlib import Path
 from unittest import mock
 
 from instance_fixture import make_instance
-from trimtab import planacts, planledger, planscope
-from trimtab.adapters import guard_github
+from trimtab import planledger, planscope
+from trimtab.enforcement import guardgate
 
 REPO = "owner/proj"
 PLAN = "0008-slug"
@@ -37,6 +37,9 @@ KEYS = {
     "fix_limits": {"markers": ["pytest.skip("], "thresholds": ["fail_under"]},
 }
 
+# TST-4: a fixed clock, so nothing a test writes depends on the time it ran.
+WHEN = "2026-11-13T10:00:00+00:00"
+
 _state: dict[str, object] = {}
 
 
@@ -55,7 +58,7 @@ def set_up(plan=PLAN, item=ITEM, part=PART) -> None:
     (root / "instance.json").write_text(json.dumps({**body, **KEYS}))
     config = tmp / "config"
     config.mkdir(mode=0o700)
-    planledger.Ledger(config, REPO, plan, item, part, clock=planacts.now).start(remote_branch_exists=False)
+    planledger.Ledger(config, REPO, plan, item, part, clock=lambda: WHEN).start(remote_branch_exists=False)
     env = mock.patch.dict(os.environ, {"TRIMTAB_INSTANCE": str(root), "CLAUDE_CONFIG_DIR": str(config)})
     env.start()
     reader = mock.patch.object(planscope, "read_files",
@@ -63,7 +66,7 @@ def set_up(plan=PLAN, item=ITEM, part=PART) -> None:
     reader.start()
     # E21 is tested on its own (test_plan_gate); here the gate stands passed, so each spelling test
     # judges the row it is about and no test reads the machine's own enforcement cache.
-    passed = mock.patch.object(guard_github, "GATE_OK", lambda project, *a, **kw: True)
+    passed = mock.patch.object(guardgate, "holds", lambda project, *a, **kw: True)
     passed.start()
     _state["passed"] = passed
     _state["tmp"], _state["env"], _state["reader"], _state["config"] = tmp, env, reader, config
@@ -83,4 +86,18 @@ def tear_down() -> None:
 
 def ledger(plan=PLAN, item=ITEM, part=PART) -> planledger.Ledger:
     """The fixture's ledger, for a test that reads what a guard wrote to it."""
-    return planledger.Ledger(_state["config"], REPO, plan, item, part, clock=planacts.now)
+    return planledger.Ledger(_state["config"], REPO, plan, item, part, clock=lambda: WHEN)
+
+
+def own_part(case) -> tuple[str, planledger.Ledger]:
+    """A part of this test's own, started, with its branch: one ledger per test, so no test reads the
+    events another wrote (TST-1 forbids shared mutable state and order dependence).
+
+    The part number comes from the test's own name, so two tests never collide and a test's number does
+    not move when another is added."""
+    import hashlib
+    name = f"{type(case).__module__}.{type(case).__name__}.{case._testMethodName}"
+    part = 1 + int(hashlib.sha256(name.encode()).hexdigest()[:8], 16) % 100000
+    found = ledger(part=part)
+    found.start(remote_branch_exists=False)
+    return f"plan/{PLAN}/item-{ITEM:02d}-part{part}", found

@@ -14,7 +14,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from test_planchecks import BRANCH
+import plan_fixture
+from instance_fixture import make_instance
+from test_planchecks import BRANCH, H1
 from trimtab import guardstate, roots
 from trimtab.adapters import guard_github, plan_gate
 from trimtab.enforcement import gate, guardgate, tools
@@ -33,28 +35,92 @@ def payload(tool="Write", command=None, cwd=CWD):
 
 
 class ReportsOnly(unittest.TestCase):
-    """The one command a run may make while the gate fails."""
+    """The one command a run may make while the gate fails: the installed bin/trimtab, by its path."""
 
-    def test_the_report_command_is_allowed_in_its_own_spellings(self):
-        for command in ("trimtab check-enforcement", "bin/trimtab check-enforcement",
-                        "/usr/bin/trimtab check-enforcement --repository owner/proj",
-                        "trimtab check-enforcement --repo ."):
+    def setUp(self):
+        self.code = roots.code_root()
+        self.installed = (self.code / "bin" / "trimtab").resolve()
+
+    def test_the_installed_binary_named_by_a_path_is_allowed(self):
+        for command in (f"{self.installed} check-enforcement",
+                        f"{self.installed} check-enforcement --repository owner/proj",
+                        "bin/trimtab check-enforcement --repo ."):
             with self.subTest(command):
-                self.assertTrue(plan_gate.reports_only(command))
+                self.assertTrue(plan_gate.reports_only(command, self.code))
+
+    def test_another_binary_of_the_same_name_is_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            planted = Path(tmp) / "trimtab"
+            planted.write_text("#!/bin/sh\nexit 0\n")
+            planted.chmod(0o755)
+
+            for command in (f"{planted} check-enforcement", "./trimtab check-enforcement",
+                            "trimtab check-enforcement"):
+                with self.subTest(command):
+                    self.assertFalse(plan_gate.reports_only(command, Path(tmp)))
 
     def test_anything_more_than_the_report_is_not(self):
-        for command in ("trimtab check-enforcement && rm -rf /", "trimtab check-enforcement; echo hi",
-                        "trimtab registry", "echo trimtab check-enforcement", "trimtab",
-                        "trimtab check-enforcement $(touch /work/x)", "trimtab check-enforcement | tee out",
-                        "trimtab check-enforcement > out", "x=1 trimtab check-enforcement",
-                        "trimtab check-pr --body-file b"):
+        destructive = f"{self.installed} check-enforcement && " + "rm -" + "rf /"
+        for command in (destructive, f"{self.installed} check-enforcement; echo hi",
+                        f"{self.installed} registry", f"echo {self.installed} check-enforcement",
+                        f"{self.installed}", f"{self.installed} check-enforcement $(touch /work/x)",
+                        f"{self.installed} check-enforcement | tee out",
+                        f"{self.installed} check-enforcement > out",
+                        f"x=1 {self.installed} check-enforcement",
+                        f"{self.installed} check-pr --body-file b"):
             with self.subTest(command):
-                self.assertFalse(plan_gate.reports_only(command))
+                self.assertFalse(plan_gate.reports_only(command, self.code))
+
+
+class RealGate:
+    """A real enforcement cache, armed or not, so a case is decided by `guardgate.holds` itself.
+
+    Nothing here stands in for the decision: a refusal comes from a config directory with no pass, and an
+    allow from one holding a pass for the current key — which is what makes the manifest's mutation test
+    bite for both halves of E21 (ADR 0063 §2, §3)."""
+
+    REPOSITORY = "SeaWalsh1980/trimtab-core"
+
+    def __init__(self, case, *, armed: bool):
+        self.tmp = Path(tempfile.mkdtemp())
+        case.addCleanup(subprocess.run, ["rm", "-rf", str(self.tmp)])
+        self.config = self.tmp / "config"
+        self.config.mkdir(mode=0o700)
+        self.code = roots.code_root()
+        self.instance = make_instance(self.tmp)
+        self.head = "d" * 40
+        self.armed = armed
+        self.project = self.code if armed else self.tmp  # outside a checkout there is no origin: no pass
+        self.pinned = ("e" * 40, gate.head_of(self.code))
+        if armed:
+            armed_key = gate.pinned_key(self.REPOSITORY, self.project, self.instance, self.code,
+                                        self.config, head=self.head, pinned=self.pinned)
+            directory = gate.guardstate.directory(self.config, *gate.CACHE_PARTS, create=True)
+            gate.guardstate.write(directory / gate.EPOCH, "f" * 32)
+            gate.record_pass(self.config, self.REPOSITORY, armed_key, "f" * 32)
+
+    def patches(self):
+        env = {"CLAUDE_CONFIG_DIR": str(self.config), "TRIMTAB_INSTANCE": str(self.instance),
+               "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", "/root")}
+        out = [mock.patch.dict(os.environ, env, clear=True)]
+        if self.armed:  # the one read that would go to the network
+            out.append(mock.patch.object(gate, "remote_head", lambda git, repo, auth=None: self.head))
+        return out
 
 
 class GuardPathsHalf(unittest.TestCase):
     def decide(self, load, holds=False):
-        return plan_gate.decide(load, holds=lambda project, *a, **kw: holds)
+        """`holds` says whether a real pass is armed; `guardgate.holds` itself then decides."""
+        found = RealGate(self, armed=holds)
+        load = {**load, "cwd": str(found.project)}
+        patches = found.patches()
+        for patch in patches:
+            patch.start()
+        try:
+            return plan_gate.decide(load)
+        finally:
+            for patch in reversed(patches):
+                patch.stop()
 
     def test_every_write_tool_is_refused_while_the_gate_fails(self):
         for tool in plan_gate.WRITE_TOOLS:
@@ -69,16 +135,29 @@ class GuardPathsHalf(unittest.TestCase):
             with self.subTest(command):
                 self.assertEqual(self.decide(payload(tool="Bash", command=command))[0], BLOCK)
 
-        self.assertEqual(self.decide(payload(tool="Bash", command="trimtab check-enforcement"))[0], ALLOW)
+        report = f"{(roots.code_root() / 'bin' / 'trimtab').resolve()} check-enforcement"
+        self.assertEqual(self.decide(payload(tool="Bash", command=report,
+                                             cwd=str(roots.code_root())))[0], ALLOW)
 
     def test_a_passing_gate_allows_the_call(self):
         self.assertEqual(self.decide(payload(), holds=True)[0], ALLOW)
         self.assertEqual(self.decide(payload(tool="Bash", command="ls"), holds=True)[0], ALLOW)
 
-    def test_a_tool_the_row_does_not_name_is_not_this_checks_business(self):
-        for tool in ("Read", "Glob", "Grep", "Skill"):
+    def test_a_tool_neither_the_row_nor_this_tightening_names_is_not_judged(self):
+        for tool in ("Read", "Glob", "Grep", "WebFetch"):
             with self.subTest(tool):
                 self.assertEqual(self.decide(payload(tool=tool))[0], ALLOW)
+
+    def test_a_review_pass_is_refused_too_while_the_gate_fails(self):
+        # Tighter than E21's own list: a round minted while the gate fails would count for E10, E11
+        # and E23 (ADR 0063 Amendment 3).
+        code, message = self.decide(payload(tool="Skill"))
+
+        self.assertEqual(code, BLOCK)
+        self.assertIn("E21", message)
+
+    def test_a_review_pass_with_the_gate_passed_needs_no_resume_check(self):
+        self.assertEqual(self.decide(payload(tool="Skill"), holds=True)[0], ALLOW)
 
     def test_a_call_whose_checkout_cannot_be_read_blocks(self):
         for cwd in ("relative", "", None):
@@ -92,57 +171,98 @@ class GuardPathsHalf(unittest.TestCase):
 
 
 class TheResumeCheckOnEveryWrite(unittest.TestCase):
-    """E13: the plan-run layer makes no write on a branch whose resume check has not passed for its head."""
+    """E13 through the real `planacts.resume_ok`: the plan-run layer makes no write on a branch whose
+    resume check has not passed for its head.
 
-    def decide(self, load, branch=BRANCH, refuse=None):
-        from trimtab import planguard, planrows
+    Each case is judged by what the guard answers, never by which function it called (TST-2)."""
 
-        asked = []
+    def setUp(self):
+        plan_fixture.set_up()
+        self.addCleanup(plan_fixture.tear_down)
+        self.branch, self.ledger = plan_fixture.own_part(self)
 
-        def resume(support, name, **kw):
-            asked.append(name)
-            if refuse is not None:
-                raise planrows.Refusal(refuse)
+    def decide(self, load, branch=None, facts=None, scope_ok=True):
+        from test_planchecks import AGENT, MB, FakeFacts
+        from trimtab import planacts, planguard, planreview, planscope
 
-        with mock.patch.object(planguard.PlanSupport, "head_branch", lambda self, cwd=None: branch):
-            code, message = plan_gate.decide(load, holds=lambda *a, **kw: True, resume=resume)
-        return code, message, asked
+        events = (planreview.Activity(MB, H1, AGENT, "2026-11-12T11:00:00Z"),)
+        found = facts if facts is not None else FakeFacts(
+            branch_commits=(H1,), activity=events, merge_base=MB,
+            push_commits={(MB, H1): frozenset({H1})})
+        named = self.branch if branch is None else branch
 
-    def test_a_write_on_a_plan_branch_asks_the_resume_check(self):
-        code, _, asked = self.decide(payload())
+        class Stub:
+            def __init__(self, where):
+                self.cwd, self.facts, self.plan_run = where, found, True
 
-        self.assertEqual((code, asked), (ALLOW, [BRANCH]))
+            def head_branch(self, cwd=None):
+                return named
 
-    def test_a_refused_resume_check_refuses_the_write(self):
-        code, message, _ = self.decide(payload(), refuse="E13: the activity chain is broken")
+            def in_repository(self, cwd):
+                return True
+
+        result = planscope.Result(planscope.Ref.PLAN, plan_fixture.PLAN,
+                                  () if scope_ok else ("src/x.py: outside",))
+        with mock.patch.object(plan_gate.planguard, "PlanSupport", Stub), \
+                mock.patch.object(guardgate, "holds", lambda *a, **kw: True), \
+                mock.patch.object(planacts.planscope, "check", lambda *a, **kw: result), \
+                mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(plan_fixture._state["config"])}):
+            return plan_gate.decide(load)
+
+    def test_a_write_whose_history_the_ledger_vouches_for_is_allowed(self):
+        self.ledger.push(self.branch, "a" * 40, H1, run_env="1")
+
+        self.assertEqual(self.decide(payload())[0], ALLOW)
+
+    def test_a_write_the_resume_check_refuses_is_refused(self):
+        code, message = self.decide(payload())  # no ledger entry covers the branch's commit
 
         self.assertEqual(code, BLOCK)
         self.assertIn("E13", message)
 
-    def test_a_branch_that_is_not_a_plan_part_asks_nothing(self):
-        code, _, asked = self.decide(payload(), branch="feat/x")
+    def test_a_diff_outside_the_plans_scope_refuses_the_write(self):
+        self.ledger.push(self.branch, "a" * 40, H1, run_env="1")
 
-        self.assertEqual((code, asked), (ALLOW, []))
+        code, message = self.decide(payload(), scope_ok=False)
 
-    def test_a_checkout_with_no_branch_asks_nothing(self):
-        code, _, asked = self.decide(payload(), branch=None)
+        self.assertEqual(code, BLOCK)
+        self.assertIn("E13", message)
 
-        self.assertEqual((code, asked), (ALLOW, []))
+    def test_a_branch_that_is_not_a_plan_part_is_allowed_with_no_resume_read(self):
+        from test_planchecks import FakeFacts
+
+        self.assertEqual(self.decide(payload(), branch="feat/x", facts=FakeFacts(raises="activity"))[0],
+                         ALLOW)
+
+    def test_a_checkout_whose_branch_cannot_be_read_refuses_in_a_run(self):
+        code, message = self.decide(payload(), branch=None)
+
+        self.assertEqual(code, BLOCK)
+        self.assertIn("E13", message)
 
 
 class GuardGithubHalf(unittest.TestCase):
-    def decide(self, command, holds=False, run=True):
-        from test_guard_github_plan_acts import GIT, answered_facts
+    def decide(self, command, holds=False, run=True, branch=BRANCH):
+        from test_guard_github_plan_acts import GIT, HEAD_REF, PUSH_REF, answered_facts
         from trimtab import planguard
 
-        def git(cwd, *args):
-            return GIT[args]
+        answers = {**GIT, HEAD_REF: f"{branch}\n", PUSH_REF: f"refs/remotes/origin/{branch}\n"}
 
-        plan = planguard.PlanSupport(Path(CWD), environ={"TRIMTAB_PLAN_RUN": "1"} if run else {},
+        def git(cwd, *args):
+            return answers[args]
+
+        found = RealGate(self, armed=holds)
+        plan = planguard.PlanSupport(found.project, environ={"TRIMTAB_PLAN_RUN": "1"} if run else {},
                                      facts=answered_facts(), git=git)
-        with mock.patch.object(guard_github, "GATE_OK", lambda project, *a, **kw: holds):
-            return guard_github.decide({"tool_name": "Bash", "cwd": CWD,
+        patches = found.patches()
+        for patch in patches:
+            patch.start()
+        try:
+            return guard_github.decide({"tool_name": "Bash", "cwd": str(found.project),
                                         "tool_input": {"command": command}}, plan)
+        finally:
+            for patch in reversed(patches):
+                patch.stop()
 
     def test_a_run_reaches_github_with_nothing_while_the_gate_fails(self):
         for command in ("gh pr view 7", "gh api repos/owner/proj", f"git push origin {BRANCH}"):
@@ -153,7 +273,15 @@ class GuardGithubHalf(unittest.TestCase):
                 self.assertIn("E21", message)
 
     def test_an_interactive_session_is_not_this_rows_business(self):
-        self.assertEqual(self.decide("gh pr view 7", run=False)[0], guard_github.ALLOW)
+        # No flag and no plan/* branch: a plan/* branch alone makes it a run (ADR 0041's signals).
+        self.assertEqual(self.decide("gh pr view 7", run=False, branch="feature/x")[0],
+                         guard_github.ALLOW)
+
+    def test_a_plan_branch_without_the_flag_is_judged_as_a_run(self):
+        code, message = self.decide("gh pr view 7", run=False)
+
+        self.assertEqual(code, guard_github.BLOCK)
+        self.assertIn("E21", message)
 
     def test_a_passing_gate_lets_the_rows_decide(self):
         self.assertEqual(self.decide("gh pr view 7", holds=True)[0], guard_github.ALLOW)
@@ -199,8 +327,93 @@ class TheRecorderStart(unittest.TestCase):
         self.assertFalse(guardgate.holds(self.tmp, start=False))
 
 
+class TheAdaptersEntryPoints(unittest.TestCase):
+    """Both adapters block on a payload they cannot read (ADR 0001, SEC-2.5)."""
+
+    def run_module(self, module, payload_text):
+        argv = [str(roots.code_root() / "hooks" / "run_module.py"), str(roots.code_root()), module]
+        return subprocess.run(["python3", "-I", "-S", "-B", *argv], input=payload_text,
+                              capture_output=True, text=True)
+
+    def test_a_payload_that_is_not_json_blocks(self):
+        for module in ("trimtab.adapters.plan_gate", "trimtab.adapters.plan_review_record"):
+            with self.subTest(module):
+                done = self.run_module(module, "not json")
+
+                self.assertEqual(done.returncode, 2, done.stderr)
+                self.assertIn("blocked", done.stderr.lower())
+
+    def test_a_payload_that_is_not_an_object_blocks(self):
+        for module in ("trimtab.adapters.plan_gate", "trimtab.adapters.plan_review_record"):
+            with self.subTest(module):
+                done = self.run_module(module, "[1, 2]")
+
+                self.assertEqual(done.returncode, 2, done.stderr)
+
+    def test_a_call_neither_adapter_judges_passes(self):
+        load = json.dumps({"tool_name": "Read", "hook_event_name": "PreToolUse", "cwd": "/",
+                           "tool_input": {"file_path": "/x"}})
+        for module in ("trimtab.adapters.plan_gate", "trimtab.adapters.plan_review_record"):
+            with self.subTest(module):
+                done = self.run_module(module, load)
+
+                self.assertEqual(done.returncode, 0, done.stderr)
+
+
 class TheKey(unittest.TestCase):
-    """The current key is three reads, and anything unreadable is no pass."""
+    """The current key, what a pass is accepted for, and what reading it costs (ADR 0063 §3)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.tmp)])
+        self.config = self.tmp / "config"
+        self.config.mkdir(mode=0o700)
+        self.code = roots.code_root()
+        self.head = "d" * 40
+        self.lock, self.base = "e" * 40, gate.head_of(self.code)
+
+    def key(self, **kw):
+        return gate.pinned_key("owner/proj", self.code, self.code, self.code, self.config,
+                               head=self.head, pinned=(self.lock, self.base), **kw)
+
+    def arm(self, epoch="f" * 32, key=None):
+        """Write a pass as the recorder does, under a current epoch."""
+        directory = gate.guardstate.directory(self.config, *gate.CACHE_PARTS, create=True)
+        gate.guardstate.write(directory / gate.EPOCH, epoch)
+        gate.record_pass(self.config, "owner/proj", key or self.key(), epoch)
+
+    def test_the_key_names_the_lock_the_base_the_head_and_the_install_digest_in_that_order(self):
+        got = self.key()
+
+        self.assertEqual(got[:3], (self.lock, self.base, self.head))
+        self.assertRegex(got[3], r"^[0-9a-f]{64}$")
+        self.assertEqual(got, self.key())  # the same install reads as the same key
+
+    def test_a_pass_for_this_key_holds_and_one_for_another_head_does_not(self):
+        self.arm()
+
+        with mock.patch.object(gate, "remote_head", lambda git, repo, auth=None: self.head):
+            self.assertTrue(gate.pass_holds("owner/proj", self.code, self.code, self.code, self.config))
+        with mock.patch.object(gate, "remote_head", lambda git, repo, auth=None: "9" * 40):
+            self.assertFalse(gate.pass_holds("owner/proj", self.code, self.code, self.code, self.config))
+
+    def test_a_pass_from_an_earlier_epoch_does_not_hold(self):
+        self.arm()
+        directory = gate.guardstate.directory(self.config, *gate.CACHE_PARTS, create=True)
+        gate.guardstate.write(directory / gate.EPOCH, "a" * 32)
+
+        with mock.patch.object(gate, "remote_head", lambda git, repo, auth=None: self.head):
+            self.assertFalse(gate.pass_holds("owner/proj", self.code, self.code, self.code, self.config))
+
+    def test_a_pass_whose_lock_or_base_differs_does_not_hold(self):
+        self.arm(key=("1" * 40, self.base, self.head, "x"))
+
+        with mock.patch.object(gate, "remote_head", lambda git, repo, auth=None: self.head):
+            self.assertFalse(gate.pass_holds("owner/proj", self.code, self.code, self.code, self.config))
+
+    def test_no_cached_pass_is_no_pass(self):
+        with mock.patch.object(gate, "remote_head", lambda git, repo, auth=None: self.head):
+            self.assertFalse(gate.pass_holds("owner/proj", self.code, self.code, self.code, self.config))
 
     def test_a_repository_that_is_not_owner_name_is_refused(self):
         with self.assertRaises(gate.GateError):
@@ -214,7 +427,7 @@ class TheKey(unittest.TestCase):
         calls = []
 
         class FakeGit:
-            def ls_remote(self, cwd, url, ref, timeout):
+            def ls_remote(self, cwd, url, ref, timeout, auth=None):
                 calls.append((url, ref, timeout))
                 return "a" * 40
 
@@ -223,19 +436,62 @@ class TheKey(unittest.TestCase):
 
     def test_a_remote_that_names_no_head_is_a_failed_read(self):
         class FakeGit:
-            def ls_remote(self, cwd, url, ref, timeout):
+            def ls_remote(self, cwd, url, ref, timeout, auth=None):
                 raise tools.ToolError("ls-remote failed")
 
         with self.assertRaises(gate.GateError):
             gate.remote_head(FakeGit(), "owner/proj")
 
 
+class LsRemote(unittest.TestCase):
+    """`Git.ls_remote` reads the SHA of one ref from the command's output, or fails (ADR 0063 §3)."""
+
+    def git(self, out, code=0):
+        git = tools.Git.__new__(tools.Git)
+        git._binary, git._env, git._timeout = "/bin/true", {}, 1
+        git._raw = lambda cwd, *args, **kw: out.encode()
+        return git
+
+    def test_the_pinned_credential_helper_is_given_when_an_auth_is(self):
+        seen = {}
+        git = self.git(f"{'a' * 40}\tHEAD\n")
+        git._raw = lambda cwd, *args, **kw: seen.setdefault("args", args) and b"" or (
+            f"{'a' * 40}\tHEAD\n".encode())
+
+        class Auth:
+            binary = "/usr/bin/gh"
+            env = {"GH_CONFIG_DIR": "/tmp/empty", "GH_HOST": "github.com", "GH_TOKEN": "x"}
+
+        git.ls_remote(Path("/"), "https://example.invalid/x.git", "HEAD", 1, Auth())
+
+        self.assertIn("credential.helper=!/usr/bin/gh auth git-credential", seen["args"])
+
+    def test_the_named_refs_sha_is_returned(self):
+        out = f"{'a' * 40}\tHEAD\n{'b' * 40}\trefs/heads/main\n"
+
+        self.assertEqual(self.git(out).ls_remote(Path("/"), "https://example.invalid/x.git", "HEAD", 1),
+                         "a" * 40)
+
+    def test_another_refs_line_is_not_taken_for_it(self):
+        out = f"{'b' * 40}\trefs/heads/main\n"
+
+        with self.assertRaises(tools.ToolError):
+            self.git(out).ls_remote(Path("/"), "https://example.invalid/x.git", "HEAD", 1)
+
+    def test_a_short_or_absent_sha_is_a_failure(self):
+        for out in ("", "\n", "deadbeef\tHEAD\n", "\tHEAD\n", f"{'a' * 40} HEAD\n"):
+            with self.subTest(out=out), self.assertRaises(tools.ToolError):
+                self.git(out).ls_remote(Path("/"), "https://example.invalid/x.git", "HEAD", 1)
+
+
 class TheHookBranch(unittest.TestCase):
     """hooks/guard-paths.sh reads the gate only in a run session."""
 
     def hook(self, load, environ=None):
-        env = {**os.environ, "HOOK_ALLOW_HARNESS": "0", **(environ or {})}
-        env.pop("HOOK_ALLOW_PATHS", None)
+        """The hook's environment is built, never copied: a developer's `TRIMTAB_PLAN_RUN` or
+        `TRIMTAB_INSTANCE` would otherwise decide the case, and CI and a shell would disagree (TST-1)."""
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", "/root"),
+               "HOOK_ALLOW_HARNESS": "0", **(environ or {})}
         return subprocess.run(["bash", str(roots.code_root() / "hooks" / "guard-paths.sh")],
                               input=json.dumps(load), capture_output=True, text=True, env=env)
 
@@ -253,10 +509,38 @@ class TheHookBranch(unittest.TestCase):
         self.assertEqual(done.returncode, 2)
         self.assertIn("E21", done.stderr)
 
-    def test_a_run_session_allows_the_report_command(self):
+    def test_a_run_session_with_a_passing_gate_falls_through_to_the_path_guard(self):
+        # The gate is read, passes, and the call then meets the ordinary path checks: a write to a
+        # protected path is still refused, by the layer below (ADR 0039).
         with tempfile.TemporaryDirectory() as tmp:
-            done = self.hook({"tool_name": "Bash", "cwd": tmp,
-                              "tool_input": {"command": "trimtab check-enforcement"}},
+            done = self.hook({"tool_name": "Write", "cwd": tmp,
+                              "tool_input": {"file_path": f"{tmp}/CLAUDE.md"}},
+                             {"TRIMTAB_PLAN_RUN": "1", "CLAUDE_CONFIG_DIR": tmp,
+                              "HOOK_ALLOW_PATHS": "1"})
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_a_run_session_blocks_when_the_classifier_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hooks = Path(tmp) / "hooks"
+            hooks.mkdir()
+            (hooks / "guard-paths.sh").write_text(
+                (roots.code_root() / "hooks" / "guard-paths.sh").read_text())
+            done = subprocess.run(["bash", str(hooks / "guard-paths.sh")],
+                                  input=json.dumps({"tool_name": "Bash", "cwd": tmp,
+                                                    "tool_input": {"command": "ls"}}),
+                                  capture_output=True, text=True,
+                                  env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                                       "HOME": tmp, "TRIMTAB_PLAN_RUN": "1",
+                                       "CLAUDE_CONFIG_DIR": tmp})
+
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("classifier", done.stderr)
+
+    def test_a_run_session_allows_the_report_command(self):
+        report = f"{(roots.code_root() / 'bin' / 'trimtab').resolve()} check-enforcement"
+        with tempfile.TemporaryDirectory() as tmp:
+            done = self.hook({"tool_name": "Bash", "cwd": tmp, "tool_input": {"command": report}},
                              {"TRIMTAB_PLAN_RUN": "1", "CLAUDE_CONFIG_DIR": tmp})
 
         self.assertEqual(done.returncode, 0, done.stderr)

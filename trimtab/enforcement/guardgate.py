@@ -22,6 +22,7 @@ from trimtab.enforcement import gate, tools
 
 MODULE = "trimtab.adapters.enforcement_record"
 START_LOCK = "recorder.start"
+RECORDER_LOCK = ".lock"  # the lock the recorder holds for its whole run (adapters/enforcement_record)
 RUNNER = "run_module.py"
 
 
@@ -35,7 +36,10 @@ def repository_of(project: Path, environ: Mapping[str, str] = os.environ) -> str
 
 
 def holds(project: Path, environ: Mapping[str, str] = os.environ, *, start: bool = True) -> bool:
-    """Whether the gate's pass holds for this session's key; otherwise start the recorder and say no."""
+    """Whether the gate's pass holds for this session's key; otherwise start the recorder and say no.
+
+    Why no pass is said on stderr, so a run that cannot pass the gate is diagnosable from the guard's
+    own output rather than only from the cache's status line (ENG-2)."""
     config = guardstate.config_dir()
     repository = repository_of(project, environ)
     if repository is None:
@@ -48,28 +52,52 @@ def holds(project: Path, environ: Mapping[str, str] = os.environ, *, start: bool
     if gate.pass_holds(repository, project, instance_root, code, config, tools.Git(environ=environ)):
         return True
     if start:
-        start_recorder(project, environ)
+        if start_recorder(project, environ):
+            print("trimtab: the enforcement gate has not passed; a recorder was started", file=sys.stderr)
+        else:
+            print("trimtab: the enforcement gate has not passed and no recorder was started (one is "
+                  "running, or it could not be started)", file=sys.stderr)
     return False
 
 
-def start_recorder(project: Path, environ: Mapping[str, str] = os.environ) -> bool:
-    """Start one recorder in the background, or nothing where one is already running (ADR 0063 §3).
+def recorder_running(config: Path) -> bool:
+    """Whether a recorder holds the cache lock, which it takes for its whole run (E21's "at most one").
 
-    The lock below is the start lock, not the recorder's own: the recorder holds its own lock for its
-    whole run, so two that did start would serialise rather than race. This only keeps a guarded call
-    from starting a second one while the first is still working."""
+    The probe is the recorder's own lock, not a second one: a lock a guard took and released on starting
+    the child would say nothing about the child, which does not inherit it."""
+    try:
+        directory = guardstate.directory(config, *gate.CACHE_PARTS, create=True)
+        handle = os.open(directory / RECORDER_LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+                         0o600)
+    except (guardstate.GuardStateError, OSError):
+        return True  # a lock this guard cannot probe is read as held, so it starts nothing (fail closed)
+    try:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(handle)
+
+
+def start_recorder(project: Path, environ: Mapping[str, str] = os.environ) -> bool:
+    """Start one recorder in the background, or nothing where one is already running (ADR 0063 §3)."""
     try:
         config = guardstate.config_dir()
         directory = guardstate.directory(config, *gate.CACHE_PARTS, create=True)
-        path = directory / START_LOCK
-        handle = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        handle = os.open(directory / START_LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+                         0o600)
     except (guardstate.GuardStateError, OSError):
         return False
     try:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            return False  # a recorder a guard started is still running
+            return False  # another guarded call is starting one right now
+        if recorder_running(config):
+            return False  # one is already running: it holds the cache lock for its whole run
         runner = roots.code_root() / "hooks" / RUNNER
         if not runner.is_file():
             return False

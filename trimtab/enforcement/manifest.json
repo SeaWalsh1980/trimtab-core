@@ -31,6 +31,7 @@
         }
       ],
       "tests": [
+        "test_planacts.RowsOnTheHookPath.test_e6_a_rerequest_of_a_reviewed_head_refuses_through_the_act",
         "test_planreview.E6.test_a_fail_closed_head_already_re_requested_refuses",
         "test_planreview.E6.test_a_reviewed_head_refuses",
         "test_planreview.E6.test_only_the_latest_verdict_counts"
@@ -53,6 +54,7 @@
         "test_guard_github_plan_acts.ReadyMark.test_every_spelling_of_the_ready_mark_reaches_the_rows",
         "test_plan_check_commands.Commands.test_a_refused_row_exits_1_and_names_itself",
         "test_planchecks.ReadyCheck.test_a_head_no_run_passed_refuses",
+        "test_planchecks.ReadyCheck.test_a_register_commit_counts_only_where_a_deferral_reply_names_each_file",
         "test_planreview.E7.test_a_failed_review_on_the_head_refuses",
         "test_planreview.E7.test_a_later_failed_run_on_the_head_overrides_an_earlier_pass",
         "test_planreview.E7.test_a_register_commit_on_a_failed_head_refuses",
@@ -73,6 +75,7 @@
         }
       ],
       "tests": [
+        "test_planacts.RowsOnTheHookPath.test_e8_an_unanswered_thread_refuses_ready_through_the_act",
         "test_planreview.E8.test_a_critical_thread_refuses_a_deferral",
         "test_planreview.E8.test_a_deferral_needs_the_deferral_check",
         "test_planreview.E8.test_a_high_thread_accepts_only_the_fixed_tag",
@@ -96,6 +99,7 @@
         }
       ],
       "tests": [
+        "test_planacts.RowsOnTheHookPath.test_e9_a_fixed_reply_that_fixes_nothing_refuses_ready_through_the_act",
         "test_planreview.E9.test_a_citation_that_does_not_fix_the_finding_refuses",
         "test_planreview.E9.test_a_fix_the_review_has_not_closed_refuses",
         "test_planreview.E9.test_a_fixed_reply_citing_no_sha_refuses",
@@ -124,8 +128,7 @@
         "test_planreview.E10.test_a_ledger_push_off_the_branch_refuses_rather_than_going_uncounted",
         "test_planreview.E10.test_a_round_before_the_last_answer_refuses",
         "test_planreview.E10.test_a_round_on_a_head_off_the_branch_refuses",
-        "test_planreview.E10.test_an_answer_commit_off_the_branch_refuses",
-        "test_planreview.E10.test_no_complete_round_refuses"
+        "test_planreview.E10.test_an_answer_commit_off_the_branch_refuses"
       ],
       "decision": {
         "function": "trimtab.planreview:check_e10",
@@ -146,6 +149,7 @@
         "test_plan_review_record.Recorder.test_a_completed_pass_on_a_plan_branch_is_recorded_with_the_checkouts_head",
         "test_plan_review_record.Recorder.test_a_failed_fact_read_blocks_rather_than_recording_a_round",
         "test_plan_review_record.Recorder.test_a_head_that_cannot_be_read_blocks",
+        "test_plan_review_record.Recorder.test_a_result_that_says_nothing_about_an_error_still_records",
         "test_plan_review_record.Recorder.test_a_round_after_the_pr_opened_is_not_a_pre_draft_round",
         "test_plan_review_record.Recorder.test_a_sixth_pre_draft_round_refuses_at_its_first_pass"
       ],
@@ -189,13 +193,13 @@
       ],
       "tests": [
         "test_plan_check_commands.Commands.test_a_diff_outside_the_plans_scope_refuses_the_resume",
-        "test_planacts.ResumeOnWrite.test_a_chain_the_ledger_does_not_cover_refuses_and_records_nothing",
-        "test_planacts.ResumeOnWrite.test_a_diff_outside_the_plans_scope_refuses",
+        "test_plan_gate.TheResumeCheckOnEveryWrite.test_a_checkout_whose_branch_cannot_be_read_refuses_in_a_run",
+        "test_plan_gate.TheResumeCheckOnEveryWrite.test_a_diff_outside_the_plans_scope_refuses_the_write",
+        "test_plan_gate.TheResumeCheckOnEveryWrite.test_a_write_the_resume_check_refuses_is_refused",
         "test_planreview.E13.test_a_chain_that_does_not_end_at_the_head_refuses",
         "test_planreview.E13.test_a_chain_that_starts_elsewhere_refuses",
         "test_planreview.E13.test_a_commit_outside_every_ledger_push_refuses",
-        "test_planreview.E13.test_a_diff_out_of_scope_refuses",
-        "test_planreview.E13.test_a_gap_in_the_chain_refuses"
+        "test_planreview.E13.test_a_diff_out_of_scope_refuses"
       ],
       "decision": {
         "function": "trimtab.planreview:check_e13",
@@ -337,9 +341,7 @@
         "test_planreview.E18.test_a_binary_file_the_threshold_patterns_govern_refuses_and_others_pass",
         "test_planreview.E18.test_a_binary_test_file_cannot_be_judged_and_refuses",
         "test_planreview.E18.test_a_decimal_threshold_compares_as_a_number",
-        "test_planreview.E18.test_a_deleted_test_file_refuses",
-        "test_planreview.E18.test_a_different_count_of_numbers_refuses",
-        "test_planreview.E18.test_a_hyphen_before_a_digit_is_part_of_the_word_not_a_minus"
+        "test_planreview.E18.test_a_deleted_test_file_refuses"
       ],
       "decision": {
         "function": "trimtab.planreview:check_e18",
@@ -400,19 +402,17 @@
         }
       ],
       "tests": [
-        "test_plan_gate.GuardPathsHalf.test_a_bash_command_that_is_not_a_string_blocks",
+        "test_plan_gate.GuardGithubHalf.test_a_plan_branch_without_the_flag_is_judged_as_a_run",
+        "test_plan_gate.GuardGithubHalf.test_a_run_reaches_github_with_nothing_while_the_gate_fails",
         "test_plan_gate.GuardPathsHalf.test_a_call_whose_checkout_cannot_be_read_blocks",
+        "test_plan_gate.GuardPathsHalf.test_a_review_pass_is_refused_too_while_the_gate_fails",
         "test_plan_gate.GuardPathsHalf.test_every_bash_command_but_the_report_is_refused",
         "test_plan_gate.GuardPathsHalf.test_every_write_tool_is_refused_while_the_gate_fails",
-        "test_plan_gate.TheResumeCheckOnEveryWrite.test_a_refused_resume_check_refuses_the_write",
-        "test_plan_gate.TheResumeCheckOnEveryWrite.test_a_write_on_a_plan_branch_asks_the_resume_check"
+        "test_plan_gate.TheRecorderStart.test_a_project_with_no_origin_is_no_pass"
       ],
       "decision": {
-        "function": "trimtab.adapters.plan_gate:decide",
-        "allow": [
-          0,
-          ""
-        ]
+        "function": "trimtab.enforcement.guardgate:holds",
+        "allow": true
       }
     },
     "E23": {
@@ -430,7 +430,9 @@
         }
       ],
       "tests": [
+        "test_guard_github_plan_acts.MoreSpellings.test_a_pr_opened_through_the_api_reaches_e23",
         "test_guard_github_plan_acts.TheDraftPr.test_opening_the_pr_needs_a_complete_round_on_the_head",
+        "test_planacts.FailClosedArms.test_a_failed_read_refuses_each_act_that_needs_it",
         "test_planacts.Rounds.test_opening_the_draft_needs_a_complete_round_on_the_head",
         "test_planreview.E23.test_more_than_five_pre_draft_rounds_refuses",
         "test_planreview.E23.test_no_round_on_the_exact_head_refuses"

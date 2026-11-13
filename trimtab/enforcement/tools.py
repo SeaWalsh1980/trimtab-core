@@ -228,11 +228,22 @@ class Git:
             return False
         return True
 
-    def ls_remote(self, cwd: Path, url: str, ref: str, timeout: float) -> str:
+    def ls_remote(self, cwd: Path, url: str, ref: str, timeout: float, auth: "GhAuth | None" = None) -> str:
         """The SHA a remote ref points at, under `timeout`, read without the object checks: nothing it
         returns is read as an object. Run it in a directory that is no repository, so only this
-        environment's pinned configuration takes part and no `insteadOf` can answer (ADR 0063 §3)."""
-        out = self._raw(cwd, "ls-remote", "--", url, ref, timeout=timeout).decode("utf-8", "replace")
+        environment's pinned configuration takes part and no `insteadOf` can answer (ADR 0063 §3).
+
+        With `auth`, the clean fetch's pinned gh credential helper applies, so a private repository
+        answers; without it the read is anonymous and a private repository fails closed."""
+        env = dict(self._env)
+        pins = ["-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "core.sshCommand=",
+                "-c", "http.sslVerify=true"]
+        if auth is not None:
+            env.update({k: auth.env[k] for k in ("GH_CONFIG_DIR", "GH_HOST", "GH_TOKEN")})
+            pins += ["-c", "credential.helper=",
+                     "-c", f"credential.helper=!{auth.binary} auth git-credential"]
+        out = self._raw(cwd, *pins, "ls-remote", "--", url, ref, env=env,
+                        timeout=timeout).decode("utf-8", "replace")
         for line in out.split("\n"):
             sha, _, name = line.partition("\t")
             if name.strip() == ref and len(sha) == 40:

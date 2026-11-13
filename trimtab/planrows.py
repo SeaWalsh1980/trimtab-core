@@ -119,13 +119,13 @@ _LONG = {
     "follow-tags": "flag", "no-follow-tags": "flag", "signed": "optional", "no-signed": "flag",
     "atomic": "flag", "no-atomic": "flag", "push-option": "valued", "receive-pack": "valued",
     "exec": "valued", "repo": "repo", "force-with-lease": "force-optional", "no-force-with-lease": "flag",
-    "force-if-includes": "force", "no-force-if-includes": "flag", "force": "force", "dry-run": "flag",
+    "force-if-includes": "force", "no-force-if-includes": "flag", "force": "force", "dry-run": "dry",
     "porcelain": "flag", "thin": "flag", "no-thin": "flag", "quiet": "flag", "verbose": "flag",
     "progress": "flag", "no-progress": "flag", "recurse-submodules": "valued", "no-recurse-submodules": "flag",
     "verify": "flag", "no-verify": "flag", "ipv4": "flag", "ipv6": "flag", "set-upstream": "flag",
     "no-set-upstream": "flag", "help": "flag",
 }
-_SHORT_FLAGS = set("nvqu46")
+_SHORT_FLAGS = set("vqu46")  # `n` is --dry-run, which is read above, not a flag to pass over
 
 
 def normalise(value) -> str | None:
@@ -201,9 +201,15 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
                 broad = broad if broad == "mirror" else "prune"
             elif kind == "all":
                 broad = broad or "all"
+            elif kind == "dry":
+                # A dry run writes nothing, so a ledger entry for it would vouch for a write that never
+                # happened, and E13 compares the ledger with the server's events (ADR 0063 §1, §5).
+                return PushRead(unreadable="a dry run, which writes nothing the ledger could record")
             continue
         letters = text[1:]
         for pos, ch in enumerate(letters):
+            if ch == "n":
+                return PushRead(unreadable="a dry run, which writes nothing the ledger could record")
             if ch == "f":
                 force = True
             elif ch == "d":
@@ -296,6 +302,13 @@ def progress_only(changes: Sequence[Change], branch: str) -> bool:
         return False
     record = _record_path(m)
     return all(c.path == record and c.status in ("A", "M") and not c.binary for c in changes)
+
+
+def register_file(path: str, branch: str) -> bool:
+    """Whether a path is a register entry of this branch's own item and part (E7's added files)."""
+    m = _item(branch)
+    return bool(m) and path.startswith(_register_dir(m)) \
+        and bool(REGISTER_FILE.fullmatch(posixpath.basename(path)))
 
 
 def register_shape(changes: Sequence[Change], branch: str) -> bool:

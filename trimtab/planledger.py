@@ -56,13 +56,15 @@ def parts_of(config: Path, repo: str, plan: str) -> tuple[str, ...]:
     A plan with no directory holds no parts; a directory that is there but not private, or unreadable,
     raises, since a part it hides would make a new part look free (SEC-2.5)."""
     key = hashlib.sha256(repo.encode("utf-8")).hexdigest()
+    root = Path(config) / guardstate.ROOT / SUBDIR
     try:
         folder = guardstate.directory(config, SUBDIR, key, plan, create=False)
     except guardstate.GuardStateError as err:
-        try:
-            os.lstat(Path(config) / guardstate.ROOT / SUBDIR / key / plan)
-        except FileNotFoundError:
-            return ()  # nothing there at all, not even a link
+        for level in (root, root / key, root / key / plan):
+            try:
+                os.lstat(level)
+            except FileNotFoundError:
+                return ()  # the tree stops before the plan: nothing there, not even a link
         raise LedgerError(str(err)) from err
     try:
         return tuple(sorted(p.name for p in folder.iterdir()))
@@ -76,7 +78,7 @@ class Ledger:
     def __init__(self, config: Path, repo: str, plan: str, item: int, part: int, *, clock: Callable[[], str]):
         if not plan or "/" in plan or plan in (".", "..") or plan.startswith("."):
             raise LedgerError("a plan name must be a plain directory name")
-        if not (isinstance(item, int) and isinstance(part, int) and item >= 1 and part >= 1):
+        if not (type(item) is int and type(part) is int and item >= 1 and part >= 1):
             raise LedgerError("item and part are positive integers")
         self._config, self._clock = Path(config), clock
         self._repo_key = hashlib.sha256(repo.encode("utf-8")).hexdigest()
@@ -161,7 +163,7 @@ class Ledger:
         if new == ZERO:  # a delete is not a push this ledger vouches for; `old` is all zeros for a new branch
             raise LedgerError("a push to the zero SHA deletes the ref")
         self._append({"type": "push", "branch": branch, "old": _sha(old, "old"), "new": _sha(new, "new"),
-                      "run": run_env})
+                      "run": run_env}, once=("branch", "old", "new", "run"))
 
     def round(self, head: str, pass_name: str, *, before_draft: bool) -> None:
         if pass_name not in PASSES:

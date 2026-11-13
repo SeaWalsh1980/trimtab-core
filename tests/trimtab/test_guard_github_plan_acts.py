@@ -43,11 +43,13 @@ def answered_facts(**kw):
 
 
 class Acts(unittest.TestCase):
-    def decide(self, command, facts=None, run=True):
+    def decide(self, command, facts=None, run=True, branch=BRANCH):
+        answers = {**GIT, HEAD_REF: f"{branch}\n", PUSH_REF: f"refs/remotes/origin/{branch}\n"}
+
         def git(cwd, *args):
-            if args not in GIT:
+            if args not in answers:
                 raise guard_github.planguard.tools.ToolError(f"git {args[0]} is not answered")
-            return GIT[args]
+            return answers[args]
 
         plan = planguard.PlanSupport(Path(CWD), environ={"TRIMTAB_PLAN_RUN": "1"} if run else {},
                                      facts=facts if facts is not None else answered_facts(), git=git)
@@ -134,8 +136,58 @@ class Graphql(Acts):
                              " { clientMutationId } }'", "ID this guard cannot read")
 
     def test_outside_a_run_they_are_no_plan_rows_business(self):
+        # Not a run: no flag and no plan/* branch checked out. A plan/* branch alone makes it one
+        # (ADR 0041's signals), which is why this case needs a branch of its own.
         self.allowed("gh api graphql -f query='mutation { addLabelsToLabelable(input: {x: 1})"
-                     " { clientMutationId } }'", run=False, facts=answered_facts())
+                     " { clientMutationId } }'", run=False, facts=answered_facts(), branch="feature/x")
+
+    def test_a_plan_branch_without_the_flag_is_still_a_run(self):
+        self.refused("gh api graphql -f query='mutation { addLabelsToLabelable(input: {x: 1})"
+                     " { clientMutationId } }'", "ID this guard cannot read", run=False)
+
+
+class MoreSpellings(Acts):
+    """The spellings round 1 found unread: review round 1's security and code passes (ADR 0063 §1a, §5)."""
+
+    def test_a_pr_opened_through_the_api_reaches_e23(self):
+        self.refused("gh api -X POST repos/owner/proj/pulls -f head=" + BRANCH
+                     + " -f base=main -f title=t -f body=b -F draft=true", "E23")
+
+    def test_a_pr_opened_from_another_branch_through_the_api_reads_no_plan_row(self):
+        self.allowed("gh api -X POST repos/owner/proj/pulls -f head=feature/x -f base=main "
+                     "-f title=t -f body=b -F draft=true")
+
+    def test_a_pr_whose_head_the_api_call_hides_refuses(self):
+        self.refused("gh api -X POST repos/owner/proj/pulls -f head=$B -f base=main", "unreadable")
+
+    def test_a_graphql_create_naming_a_plan_branch_refuses(self):
+        self.refused("gh api graphql -f query='mutation { createPullRequest(input: {headRefName: "
+                     f'"{BRANCH}", baseRefName: "main", draft: true}})' + " { clientMutationId } }'", "E23")
+
+    def test_a_label_replacement_removes_every_other_label(self):
+        # §1a allows removing plan:continue only, so a replacement needs the ledger.
+        self.allowed("gh api -X PUT repos/owner/proj/issues/7/labels -f labels[]=plan:blocked")
+
+    def test_a_label_clear_is_a_removal_too(self):
+        self.allowed("gh api -X DELETE repos/owner/proj/issues/7/labels")
+
+    def test_a_reply_through_the_replies_route_is_read(self):
+        self.allowed("gh api -X POST repos/owner/proj/pulls/7/comments/987/replies -f body=[wrong] no")
+
+    def test_editing_a_review_comment_refuses(self):
+        self.refused("gh api -X PATCH repos/owner/proj/pulls/comments/987 -f body=[fixed] abc", "outcome tag")
+
+    def test_a_review_posted_on_a_plan_pr_refuses(self):
+        self.refused("gh api -X POST repos/owner/proj/pulls/7/reviews -f body=[fixed] abc -f event=COMMENT",
+                     "comment bodies")
+
+    def test_an_alias_that_stops_at_a_plan_act_refuses(self):
+        for expansion in ("pr ready", "pr edit", "issue edit", "pr close"):
+            with self.subTest(expansion):
+                self.refused(f"gh alias set x '{expansion}'", "alias")
+
+    def test_a_quoted_configuration_assignment_refuses_a_push(self):
+        self.refused('export G"IT_CONFIG_COUNT"=1; git push origin feature/x', "configuration")
 
 
 class TheDraftPr(Acts):

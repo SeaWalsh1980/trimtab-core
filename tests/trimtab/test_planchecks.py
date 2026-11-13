@@ -51,7 +51,8 @@ class FakeFacts:
             "push_commits": {}, "last_answer": None, "on_default": (), "outside_diff": True,
             "fix_valid": True, "changes": (), "register_answer": False, "conflicted": False,
             "commit_of": H2, "pr_heads": {7: BRANCH}, "local_plan_branches": (),
-            "progress_names": (), "pr_head_refs": (),
+            "progress_names": (), "pr_head_refs": (), "parents": (MB,), "base_runs": [],
+            "change_from": None, "on_default": (MB,),
             "default_branch": "main", "failing_heads": set(), "facts_run_heads": set(), "pushes": [],
         }
         self.raises = kw.pop("raises", None)
@@ -68,6 +69,12 @@ class FakeFacts:
     def facts_runs(self, branch, number): return self._value("runs")
     def review_comments(self, number): return self._value("comments")
     def merge_base(self, branch): return self._value("merge_base")
+    def merge_base_of(self, rev): return self._value("merge_base")
+    def parents(self, rev): return self._value("parents")
+    def change_from(self, base, source):
+        found = self._value("change_from")
+        return self._value("changes") if found is None else found
+    def facts_runs_for(self, head): return self._value("base_runs")
     def tree_of(self, commit): return self._value("tree_of")[commit]
     def line_text(self, commit, path, line): return self._value("line_text").get((path, line))
     def branch_commits(self, branch): return self._value("branch_commits")
@@ -141,6 +148,35 @@ class ReadyCheck(Base):
 
         self.assertIn("E7", got.refusal)
 
+    def test_a_register_commit_counts_only_where_a_deferral_reply_names_each_file(self):
+        # E7's alternative: without the naming clause a run could commit any content as a register
+        # entry and have ready accept a head no review ever saw (ADR 0063 §5).
+        entry = "docs/" + "plans/unauthorised/0008-slug/item-02-part1-01.md"
+        change = planrows.Change(entry, "A", ("[x](y)",), 0, False, ())
+        runs = [(review(head=H2), [thread(severity="low")]),
+                (review(head=H2, run="43"), [thread(severity="low", state="resolved", by=REVIEWER,
+                                                    run="43")])]
+        named = [comment(11, REVIEWER, "a finding"),
+                 comment(13, AGENT, f"[deferred] recorded in {entry}", parent=11)]
+        unnamed = [comment(11, REVIEWER, "a finding"), comment(13, AGENT, "[deferred] elsewhere", parent=11)]
+
+        with_name = planchecks.ready(self.context(self.facts(runs=runs, comments=named, changes=(change,),
+                                                            register_answer=True)), H1)
+        without = planchecks.ready(self.context(self.facts(runs=runs, comments=unnamed, changes=(change,),
+                                                           register_answer=True)), H1)
+
+        # With the file named, E7 is satisfied and the next row decides; without it, E7 itself refuses.
+        self.assertNotIn("E7", with_name.refusal or "")
+        self.assertIn("E7", without.refusal)
+
+    def test_a_register_shaped_head_that_adds_no_register_file_is_not_an_answer(self):
+        runs = [(review(head=H2), [])]
+        facts = self.facts(runs=runs, comments=[], changes=(), register_answer=True)
+
+        got = planchecks.ready(self.context(facts), H1)
+
+        self.assertIn("E7", got.refusal)
+
     def test_a_thread_with_no_tagged_reply_refuses(self):
         got = planchecks.ready(self.context(self.facts(comments=[comment(11, REVIEWER, "a finding")])), H1)
 
@@ -163,6 +199,34 @@ class ReadyCheck(Base):
         got = planchecks.ready(self.context(facts), H1)
 
         self.assertEqual((got.refusal, got.unreadable), (None, None))
+
+    def test_a_deferral_is_accepted_against_a_review_that_ran_on_the_merge_base_commit(self):
+        # Such a review runs on the default branch, so it is in `facts_runs_for`, never in the branch's
+        # own runs (ADR 0063 §5, E8).
+        key = planreview.thread_key("src/a.py", "correctness", "two")
+        low = thread(severity="low", key=key)
+        runs = [(review(head=H1, tree="b" * 40), [low]),
+                (review(head=H1, run="43", tree="b" * 40),
+                 [thread(severity="low", key=key, state="resolved", by=REVIEWER, run="43")])]
+        base_runs = [(review(head=MB, run="7", tree="m" * 40), [thread(severity="low", key=key, run="7")])]
+        comments = [comment(11, REVIEWER, "a finding"), comment(13, AGENT, "[deferred] out of scope", parent=11)]
+        facts = self.facts(runs=runs, base_runs=base_runs, comments=comments,
+                           line_text={("src/a.py", 2): "two"})
+
+        got = planchecks.ready(self.context(facts), H1)
+
+        self.assertEqual((got.refusal, got.unreadable), (None, None))
+
+    def test_a_deferral_with_no_review_of_the_merge_base_refuses(self):
+        key = planreview.thread_key("src/a.py", "correctness", "two")
+        low = thread(severity="low", key=key)
+        comments = [comment(11, REVIEWER, "a finding"), comment(13, AGENT, "[deferred] out of scope", parent=11)]
+        facts = self.facts(runs=[(review(head=H1, tree="b" * 40), [low])], base_runs=[], comments=comments,
+                           line_text={("src/a.py", 2): "two"})
+
+        got = planchecks.ready(self.context(facts), H1)
+
+        self.assertIn("E8", got.refusal)
 
     def test_a_deferral_whose_key_this_base_recomputes_differently_refuses(self):
         low = thread(severity="low", key="9" * 64)
@@ -310,6 +374,39 @@ class PushCheck(Base):
         got = planchecks.push(self.context(FakeFacts(raises="changes")), old=MB, new=H2)
 
         self.assertIsNotNone(got.unreadable)
+
+    def test_the_push_that_creates_the_branch_is_still_judged_by_e18(self):
+        facts = FakeFacts(branch_head=None, open_pr=None,
+                          changes=(self.change(added=("    pytest.skip('flaky')",)),))
+
+        got = planchecks.push(self.context(facts), old=ZERO, new=H2)
+
+        self.assertIn("E18", got.refusal)
+
+    def test_a_clean_creating_push_is_allowed_and_counts_no_round(self):
+        facts = FakeFacts(branch_head=None, open_pr=None, changes=(self.change(added=("def test_b(): pass",)),))
+
+        got = planchecks.push(self.context(facts), old=ZERO, new=H2)
+
+        self.assertEqual((got.refusal, got.unreadable), (None, None))
+
+    def test_a_merge_of_the_default_branch_is_judged_from_its_default_parent(self):
+        # ADR 0063 §5a: main's own lowered threshold is not the run's change.
+        lowered = self.change(path="setup.cfg", added=("fail_under = 50",), removed=("fail_under = 90",))
+        clean = self.change(path="src/a.py", added=("x = 1",))
+        facts = FakeFacts(parents=(H1, MB), changes=(lowered,), change_from=(clean,))
+
+        got = planchecks.push(self.context(facts), old=MB, new=H2)
+
+        self.assertEqual((got.refusal, got.unreadable), (None, None))
+
+    def test_the_runs_own_resolution_in_a_merge_is_still_judged(self):
+        lowered = self.change(path="setup.cfg", added=("fail_under = 50",), removed=("fail_under = 90",))
+        facts = FakeFacts(parents=(H1, MB), changes=(self.change(),), change_from=(lowered,))
+
+        got = planchecks.push(self.context(facts), old=MB, new=H2)
+
+        self.assertIn("E18", got.refusal)
 
 
 class ResumeCheck(Base):

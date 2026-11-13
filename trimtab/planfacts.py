@@ -59,12 +59,21 @@ def _when(text: str) -> datetime:
     return moment
 
 
+def latest_attempts(jobs: Sequence[Job]) -> list[Job]:
+    """The last record for each job name, as the job records list them (oldest attempt first)."""
+    out: dict[str, Job] = {}
+    for job in jobs:
+        out[job.name] = job
+    return list(out.values())
+
+
 def scan_state(runs_found: bool, jobs: Sequence[Job]) -> str:
     """The secret-scan job's state from its job records on one head: pass, pending, fail or unreadable.
 
     Any completed job that is not a pass (a failure, a cancellation, a skip, or a success with no
     runner or no steps) is a fail. A job still running, or no run yet, is pending. A run of the
     workflow that holds no job of that name is unreadable: the instance names a job that is not there."""
+    jobs = latest_attempts(jobs)
     if any(j.status == "completed" and not j.passed for j in jobs):
         return "fail"
     if any(j.status != "completed" for j in jobs):
@@ -95,7 +104,12 @@ class GitHubFacts(Facts):
         self._diffs: dict[tuple[str, str], tuple[Change, ...]] = {}
         self._activity: dict[str, tuple[planreview.Activity, ...]] = {}
         self._comment_rows: dict[int, tuple[tuple[planreview.Comment, ...], dict[int, str]]] = {}
+        self._conflicts: dict[int, bool] = {}
+        self._base_runs: dict[str, list[tuple[planreview.Review, list[planreview.Thread]]]] = {}
         self._default: str | None = None
+        self._default_head: str | None = None  # the server's head for it
+        self._default_local: str | None = None  # the local ref, once checked against that head
+        self._branch_local: dict[str, str] = {}
 
     # -- GitHub --------------------------------------------------------------------------
 
@@ -293,9 +307,12 @@ class GitHubFacts(Facts):
                 jobs = [j for j in self._reader.jobs(self.repo, row["id"]) if j.name == review.facts.job]
             except (ActionsError, SourceError) as err:
                 raise FactsError("the facts job's records could not be read") from err
-            if len(jobs) != 1 or not jobs[0].passed or jobs[0].id is None:
-                raise FactsError("a facts run holds no single passing job of the name the instance gives")
-            found, threads = planreview.parse_facts(self._log(jobs[0].id))
+            latest = latest_attempts(jobs)
+            if len(latest) != 1 or latest[0].id is None:
+                raise FactsError("a facts run holds no single job of the name the instance gives")
+            if not latest[0].passed:
+                continue  # a superseded or cancelled run holds no facts; a head with none refuses below
+            found, threads = planreview.parse_facts(self._log(latest[0].id))
             filled = []
             for thread in threads:
                 if thread.id not in anchors:
@@ -303,6 +320,36 @@ class GitHubFacts(Facts):
                 filled.append(replace(thread, commit=anchors[thread.id]))
             out.append((found, filled))
         return out
+
+    def facts_runs_for(self, head: str) -> list[tuple[planreview.Review, list[planreview.Thread]]]:
+        """Each E3 facts run on one commit, whatever branch it ran for, oldest first.
+
+        E8's deferral needs the facts of a review whose `tree` is the merge-base's, and such a review runs
+        on the default branch, never on the part's own branch, so it is read by head here and not through
+        `_rows(branch)`. The threads carry no anchor commit: only their keys are compared."""
+        review = self._instance.review if self._instance else None
+        if review is None:
+            raise FactsError("the instance names no review key, so the E3 facts cannot be read")
+        if head not in self._base_runs:
+            try:
+                runs = [r for event in ("push", "pull_request") for r in self._reader.runs(self.repo, head, event)
+                        if r.path == review.facts.workflow and r.head_sha == head]
+            except (ActionsError, SourceError) as err:
+                raise FactsError("the facts runs for a commit could not be read") from err
+            out = []
+            for run in sorted(runs, key=lambda r: r.id):
+                try:
+                    jobs = [j for j in self._reader.jobs(self.repo, run.id) if j.name == review.facts.job]
+                except (ActionsError, SourceError) as err:
+                    raise FactsError("the facts job's records could not be read") from err
+                latest = latest_attempts(jobs)
+                if len(latest) != 1 or latest[0].id is None:
+                    raise FactsError("a facts run holds no single job of the name the instance gives")
+                if not latest[0].passed:
+                    continue  # a superseded or cancelled run holds no facts to read
+                out.append(planreview.parse_facts(self._log(latest[0].id)))
+            self._base_runs[head] = out
+        return self._base_runs[head]
 
     def _log(self, job_id: int) -> str:
         """One job's log, as text. Only the fixed lines of §4 are read from it, by `planreview.parse_facts`."""
@@ -325,6 +372,11 @@ class GitHubFacts(Facts):
         return self._default
 
     def conflicted(self, number: int) -> bool:
+        if number not in self._conflicts:  # one definite answer per PR, however many rows ask (ENG-6.2)
+            self._conflicts[number] = self._conflicted(number)
+        return self._conflicts[number]
+
+    def _conflicted(self, number: int) -> bool:
         for attempt in range(MERGEABLE_WAITS):
             data = self._json(f"repos/{self.repo}/pulls/{number}", "gh api pull")
             mergeable = data.get("mergeable") if isinstance(data, dict) else "bad"
@@ -408,13 +460,72 @@ class GitHubFacts(Facts):
         """Whether `older` is `newer` or one of its ancestors, asked as a read rather than an exit code."""
         return self._text("merge-base", "--end-of-options", older, newer).strip() == self._commit(older)
 
-    def merge_base(self, branch: str) -> str:
-        """The merge-base of the branch with the default branch, both as the remote has them (E8, E13)."""
-        default = self.default_branch()
-        base = self._text("merge-base", "--end-of-options", f"origin/{default}", f"origin/{branch}").strip()
+    def default_head(self) -> str:
+        """The default branch's head as the server has it, which every local ref is checked against."""
+        if self._default_head is None:
+            data = self._json(f"repos/{self.repo}/branches/{quote(self.default_branch(), safe='')}",
+                              "gh api branch")
+            commit = data.get("commit") if isinstance(data, dict) else None
+            sha = commit.get("sha") if isinstance(commit, dict) else None
+            if not isinstance(sha, str) or not SHA.fullmatch(sha):
+                raise FactsError("gh api branch returned no head for the default branch")
+            self._default_head = sha
+        return self._default_head
+
+    def _verified(self, ref: str, server: str, what: str) -> str:
+        """A local remote-tracking ref, checked against the head the server reports for it.
+
+        Nothing refuses a session's own `git update-ref`, so a ref read without this check is a fact the
+        agent can write: a moved `origin/<default>` would move every merge-base, tree, diff and plan text
+        the rows rest on (ADR 0063 §5, SEC-2.5)."""
+        local = self._text("rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}").strip()
+        if not SHA.fullmatch(local):
+            raise FactsError(f"{what} could not be read locally")
+        if local != server:
+            raise FactsError(f"{what} is not the head the server reports; fetch before judging a plan run")
+        return local
+
+    def default_sha(self) -> str:
+        """`origin/<default>`, verified against the server (every row that reads it goes through here)."""
+        if self._default_local is None:
+            self._default_local = self._verified(f"origin/{self.default_branch()}", self.default_head(),
+                                                 "the default branch's local ref")
+        return self._default_local
+
+    def branch_sha(self, branch: str) -> str:
+        """`origin/<branch>`, verified against the server."""
+        if branch not in self._branch_local:
+            head = self.branch_head(branch)
+            if head is None:
+                raise FactsError("the branch is not on the remote, so its local ref vouches for nothing")
+            self._branch_local[branch] = self._verified(f"origin/{branch}", head, "the branch's local ref")
+        return self._branch_local[branch]
+
+    def merge_base_of(self, rev: str) -> str:
+        """The merge-base of one revision with the default branch as the remote has it."""
+        base = self._text("merge-base", "--end-of-options", self.default_sha(), rev).strip()
         if not SHA.fullmatch(base):
             raise FactsError("the merge-base with the default branch could not be read")
         return base
+
+    def merge_base(self, branch: str) -> str:
+        """The merge-base of the branch with the default branch, both as the remote has them (E8, E13).
+
+        A branch that is not on the remote has no merge-base to read here; a caller that must judge the
+        push creating it asks `merge_base_of` for the commit being sent instead."""
+        return self.merge_base_of(self.branch_sha(branch))
+
+    def parents(self, rev: str) -> tuple[str, ...]:
+        """A commit's parents, as git lists them, so §5a can tell a merge of the default branch."""
+        out = self._text("rev-list", "--parents", "-n", "1", "--end-of-options", rev).split()
+        if not out or any(not SHA.fullmatch(c) for c in out):
+            raise FactsError("a commit's parents could not be read")
+        return tuple(out[1:])
+
+    def change_from(self, base: str, source: str) -> Sequence[Change]:
+        """The change `source` makes against `base`: E18's own-change for a push that creates the branch,
+        and for a merge of the default branch its diff from the default-branch parent (§5a)."""
+        return self._diff(base, source)
 
     def tree_of(self, commit: str) -> str:
         """A commit's tree, which E8 compares with the tree an E2 run reviewed."""
@@ -424,10 +535,10 @@ class GitHubFacts(Facts):
         return sha
 
     def branch_commits(self, branch: str) -> tuple[str, ...]:
-        """`origin/<default>..origin/<branch>`, oldest first: the commits E13 must find inside ledger pushes."""
-        default = self.default_branch()
+        """`origin/<default>..origin/<branch>`, oldest first: the commits E13 must find inside ledger
+        entries. Both refs are the verified ones, never the names, so a local ref write moves nothing."""
         out = self._text("rev-list", "--reverse", "--end-of-options",
-                         f"origin/{default}..origin/{branch}").split()
+                         f"{self.default_sha()}..{self.branch_sha(branch)}").split()
         if any(not SHA.fullmatch(c) for c in out):
             raise FactsError("the branch's commits could not be read")
         return tuple(out)
@@ -452,7 +563,7 @@ class GitHubFacts(Facts):
 
     def on_default(self, sha: str) -> bool:
         """Whether a commit is on the default branch, so E13 reads it as none of the run's work."""
-        return self._ancestor(sha, f"origin/{self.default_branch()}")
+        return self._ancestor(sha, self.default_sha())
 
     def _hunks(self, *args: str) -> tuple[tuple[int, int], tuple[int, int]]:
         """The old-side and new-side line ranges of each hunk a diff holds, as (start, end) pairs."""
@@ -480,7 +591,7 @@ class GitHubFacts(Facts):
         the thread's hunk. The hunk is read as the commit's own change to the thread's path covering the
         anchored line; nothing but the line number is in the E3 facts, so that is the measure."""
         self._commit(sha)  # an unreadable commit is a failed read, not a `False`
-        if not self._ancestor(thread.commit, sha) or not self._ancestor(sha, f"origin/{branch}"):
+        if not self._ancestor(thread.commit, sha) or not self._ancestor(sha, self.branch_sha(branch)):
             return False
         old, new = self._hunks("show", "-U0", "--first-parent", "--format=", "--no-ext-diff", "--no-textconv",
                                "--no-color", "--no-renames", "--end-of-options", sha, "--", thread.path)
@@ -490,7 +601,7 @@ class GitHubFacts(Facts):
         """The plan's progress-record paths on the default branch, which §6 reads for the highest part."""
         folder = f"{planscope.PLANS_DIR}/progress/{plan}/"
         out = self._text("ls-tree", "-r", "--name-only", "--end-of-options",
-                         f"origin/{self.default_branch()}", "--", folder)
+                         self.default_sha(), "--", folder)
         return tuple(name for name in out.split("\n") if name)
 
     def pr_head_refs(self) -> tuple[str, ...]:

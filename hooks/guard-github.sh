@@ -108,7 +108,8 @@ here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 # either way the exit is non-zero and blocks below.
 deadline=()
 command -v timeout >/dev/null 2>&1 && deadline=(timeout -k 1 7)
-${deadline[@]+"${deadline[@]}"} python3 -I -S -B "$here/run_module.py" "$here/.." trimtab.adapters.guard_github <<<"$payload"
+${deadline[@]+"${deadline[@]}"} python3 -I -S -B -X pycache_prefix=/dev/null/trimtab \
+  "$here/run_module.py" "$here/.." trimtab.adapters.guard_github <<<"$payload"
 rc=$?
 [[ $rc -eq 0 ]] && exit 0
 # The adapter printed its reason; any other non-zero is a fault, and blocks.
