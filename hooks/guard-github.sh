@@ -64,9 +64,10 @@ about_github+="|(^|[^A-Za-z0-9_])(pr[[:space:]]+${opt}(create|new|review|close|m
 # subcommand the shell builds (`git $C origin x`) goes to the adapter, which reads it. So does the binary
 # `git-push`, and any brace expansion, since one can spell any letter (`git pu{s,}h`, `g{i,}t pu{s,}h`,
 # `{git,push}`, `pu{s..s}h`): the braces of the payload's own JSON hold other braces between them, or no
-# comma, so they do not match.
+# comma, so they do not match. The group's length is not capped, since padding past a cap would skip the
+# adapter; the match stays linear because a scan from a `{` stops at the next brace of either kind.
 about_github+="|(^|[^A-Za-z0-9_.-])(push|send-pack|http-push)([^A-Za-z0-9_.-]|$)|(^|[^A-Za-z0-9_.-])git[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[^[:space:]]*[\$\`]"
-about_github+="|git-(push|send-pack|http-push)|\{[^{}]{0,200},[^{}]{0,200}\}|\{[^{}]{0,50}\.\.[^{}]{0,50}\}"
+about_github+="|git-(push|send-pack|http-push)|\{[^{}]*,[^{}]*\}|\{[^{}]*\.\.[^{}]*\}"
 # The regex's time grows steeply with a long crafted command (over 20 s at 140 KB,
 # ADR 0055), and a hook that outlives its timeout fails open. So a long payload
 # goes to the adapter, which stops itself and blocks.

@@ -3407,6 +3407,10 @@ tg 2 $'gh pr cl\\\nose '"$PB"                           'the same inside a gh su
 tg 2 "git pu{s..s}h origin $PB"                          'a brace sequence that spells push'
 tg 2 "g{i,}t pu{s,}h origin $PB"                         'a brace list that spells git and push, with neither word whole'
 tg 2 "{g,}it {p,}ush origin $PB"                         'a brace list with an empty alternative'
+BPAD=$(printf 'x%.0s' $(seq 300))
+tg 2 "git push --repo=origin {HEAD:$PB,$BPAD}"           'a brace group padded past 200 characters'
+tg 2 "g{i,$BPAD}t pu{s,$BPAD}h origin $PB"               'two padded groups'
+tg 2 "git pu{s..s,$BPAD}h origin $PB"                    'a padded sequence group'
 tg 2 'A=gi B=t C=pu D=sh E=pla F=n/x; $A$B $C$D origin $E$F' 'a command assembled from variables it assigns'
 tg 2 "git subtree push --prefix=d origin $PB"            'git subtree push'
 tg 0 'git add src/*.py tests/*.py'                       'ordinary git with globs'
