@@ -48,6 +48,9 @@ INDENTED_HEADING = re.compile(r"[ \t]+#{1,6}[ \t]")
 # any indentation: markdown renders it as a heading inside the quote or item, and this reader would not see it.
 # Which prefixes render as a heading is not this reader's to decide, so every one is refused.
 PREFIXED_HEADING = re.compile(r"[ \t]*(?:(?:>|[-*+][ \t]|[0-9]+[.)][ \t])[ \t]*)+#{1,6}[ \t]")
+# The other ways markdown renders a heading: an HTML heading tag, and a setext underline (`-` or `=` under a line).
+HTML_HEADING = re.compile(r"<h[1-6][\s>/]", re.IGNORECASE)
+SETEXT_UNDERLINE = re.compile(r"[ ]{0,3}(?:-+|=+)[ \t]*")
 MAX_RECORDS = 5000  # record paths git names in one answer; past it, an error rather than a partial list (ENG-6.2)
 
 
@@ -172,6 +175,9 @@ def _status(text: str) -> tuple[str | None, str]:
         return None, "holds an indented heading, which markdown may read as a ## Status this does not see"
     if any(PREFIXED_HEADING.match(line) for line in lines):
         return None, "holds a heading behind a blockquote or list marker, which markdown renders as a heading"
+    hidden = _hidden_heading(lines, "Status")
+    if hidden:
+        return None, hidden
     if not heads:
         return None, "has no ## Status heading"
     if len(heads) > 1:  # a quoted or fenced example counts: the reader cannot tell which the author meant
@@ -187,6 +193,27 @@ def _status(text: str) -> tuple[str | None, str]:
     if found is None:
         return None, "has no line under its ## Status heading"
     return found, ""
+
+
+def _hidden_heading(lines: list[str], word: str) -> str | None:
+    """Why some line renders as a heading named `word` in a form this reader does not recognise, or None.
+
+    The reader recognises exactly `## <word>`. Markdown also renders `# word`, `### word`, `## word ##`, a line
+    of `word` over a `---` or `===` underline, and an HTML heading tag as headings, and a second one of those
+    ahead of the real heading, or after its section ends, would show a reviewer a different answer from the
+    one printed. A shape cannot be proved absent, so each is refused by name. (The indented and the
+    blockquote- or list-prefixed forms are refused by their own checks.)"""
+    atx = re.compile(rf"#{{1,6}}[ \t]+{word}([ \t]+#+)?[ \t]*", re.IGNORECASE)
+    exact = re.compile(rf"##[ \t]+{word}[ \t]*", re.IGNORECASE)
+    for i, line in enumerate(lines):
+        if HTML_HEADING.search(line):
+            return "holds an HTML heading tag, which markdown renders as a heading this reader does not read"
+        if atx.fullmatch(line) and not exact.fullmatch(line):
+            return f"holds a `{line.strip()}` heading, a form of ## {word} this reader does not recognise"
+        if (line.strip().casefold() == word.casefold() and i + 1 < len(lines)
+                and SETEXT_UNDERLINE.fullmatch(lines[i + 1])):
+            return f"holds a `{word}` line over an underline, which markdown renders as a heading"
+    return None
 
 
 def _lines(text: str) -> list[str]:
@@ -235,6 +262,14 @@ def plan_items(plan_text: str) -> tuple[tuple[int, ...], tuple[str, ...]]:
     if any(PREFIXED_HEADING.match(line) for line in lines):
         return (), ("the plan holds a heading behind a blockquote or list marker, which markdown renders as a "
                     "heading this reader would not see",)
+    # The same reasoning for an indented heading, which the record reader already refuses file-wide: before the
+    # real section, or after it ends, `  ## Items` renders as a second Items list this reader never counts.
+    if any(INDENTED_HEADING.match(line) for line in lines):
+        return (), ("the plan holds an indented heading, which markdown may read as a heading this reader would "
+                    "not see",)
+    hidden = _hidden_heading(lines, "Items")
+    if hidden:
+        return (), (f"the plan {hidden}",)
     heads = [i for i, line in enumerate(lines) if ITEMS_HEADING.fullmatch(line)]
     if not heads:
         return (), ("the plan has no ## Items section",)

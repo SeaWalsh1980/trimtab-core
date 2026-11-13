@@ -284,6 +284,31 @@ class NextOnRestart(Records):
         self.assertEqual(planrecord.next_work(str(self.repo), self.tip_of(), self.latest(), PLAN_TEXT),
                          ("item 02 part 1", ()))
 
+    def test_a_heading_named_status_in_a_form_the_reader_does_not_recognise_is_refused(self):
+        """Placed ahead of the real heading it would show a reviewer a different status from the one printed."""
+        for decoy in ("# Status", "### Status", "## Status ##", "## status #", "Status\n---", "Status\n===",
+                      "<h2>Status</h2>"):
+            with self.subTest(decoy=decoy):
+                self.merge_branch("decoy-form", {record_path(1, 1): f"## Done\n{decoy}\nitem 1 complete\n\n"
+                                                                    "## Status\nitem 1 part 1 stopped unfinished\n"})
+                self.publish()
+
+                work, problems = planrecord.next_work(str(self.repo), self.tip_of(), self.latest(), PLAN_TEXT)
+
+                self.assertEqual((work, len(problems)), ("", 1))
+                self.assertRegex(problems[0], r"heading|underline")
+                tpa.git(self.repo, "reset", "-q", "--hard", "HEAD~1")
+                tpa.git(self.repo, "branch", "-q", "-D", "decoy-form")
+                self.publish()
+
+    def test_plain_words_status_in_prose_are_still_read(self):
+        body = "## Done\nStatus updates are in the log. The status of the work is fine.\n\n## Status\nitem 1 complete\n"
+        self.merge_branch("prose", {record_path(1, 1): body})
+        self.publish()
+
+        self.assertEqual(planrecord.next_work(str(self.repo), self.tip_of(), self.latest(), PLAN_TEXT),
+                         ("item 02 part 1", ()))
+
     def test_a_second_line_under_status_is_a_named_problem(self):
         self.merge_branch("twoline", {record_path(1, 1): "## Done\nx\n\n## Status\nitem 1 complete\nitem 2 "
                                                          "complete\n"})
@@ -394,12 +419,44 @@ class NextOnRestart(Records):
                 self.assertEqual(planrecord.plan_items(f"{heading}\n1. a\n"), ((1,), ()))
 
     def test_a_line_that_is_not_the_heading_does_not_open_a_section(self):
-        for heading in ("##Items", "### Items", "## Items and more", "  ## Items"):
+        """Text that renders as plain text, not as a heading named Items, is just not the heading."""
+        for heading in ("##Items", "## Items and more", "#Items"):
             with self.subTest(heading=heading):
                 items, problems = planrecord.plan_items(f"{heading}\n1. a\n")
 
                 self.assertEqual((items, len(problems)), ((), 1))
                 self.assertIn("no ## Items section", problems[0])
+
+    def test_a_heading_named_items_in_a_form_the_reader_does_not_recognise_is_refused(self):
+        """It renders as a second Items heading, so the reader refuses rather than count only the real one."""
+        for decoy in ("# Items", "### Items", "## Items ##", "## items #", "Items\n---", "Items\n===",
+                      "  Items\n  ---", "<h2>Items</h2>", "<H3 id=x>Items</H3>"):
+            with self.subTest(decoy=decoy):
+                items, problems = planrecord.plan_items(f"{decoy}\n\n## Items\n\n1. a\n2. b\n")
+
+                self.assertEqual((items, len(problems)), ((), 1))
+                self.assertRegex(problems[0], r"heading|underline")
+
+    def test_such_a_decoy_after_the_real_section_is_refused_too(self):
+        items, problems = planrecord.plan_items("## Items\n\n1. a\n\n## Notes ##\n\n### Items\n")
+
+        self.assertEqual((items, len(problems)), ((), 1))
+
+    def test_an_indented_items_heading_outside_the_section_is_a_named_problem(self):
+        """Before the real section it renders as a second Items list this reader would never count."""
+        for text in ("# p\n  ## Items\n\n1. x\n2. y\n\n## Items\n\n1. a\n",
+                     "## Items\n\n1. a\n\n## Notes\n   ## Items\n\n2. b\n"):
+            with self.subTest(text=text):
+                items, problems = planrecord.plan_items(text)
+
+                self.assertEqual((items, len(problems)), ((), 1))
+                self.assertIn("indented heading", problems[0])
+
+    def test_the_exact_items_heading_and_plain_words_are_still_read(self):
+        """The refusal is for decoys, not for the word: prose mentioning items, or Items inside a sentence."""
+        text = "# Items to do\nThe items are below, see Items.\nItems and more\n\n## Items\n\n1. a\n2. b\n"
+
+        self.assertEqual(planrecord.plan_items(text), ((1, 2), ()))
 
     def test_a_heading_deeper_than_the_section_is_refused_not_treated_as_content(self):
         for inner in ("### Phase one\n", "# Title\n"):
