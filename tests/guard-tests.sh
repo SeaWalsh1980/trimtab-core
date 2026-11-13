@@ -7,6 +7,8 @@ set -u
 # clear them all before any case runs. The override cases below set their own,
 # per case, after this.
 for v in $(compgen -v HOOK_ALLOW_); do unset "$v"; done
+# A plan run exports this, and guard-github's E14 case below must see it unset, not read GitHub.
+unset TRIMTAB_PLAN_RUN
 HOOKS="${1:?usage: guard-tests.sh <hooks-dir>}"
 # Absolute, because the relative-path cases below run `t` from a different cwd.
 # Left relative, `bash "$HOOKS/guard-paths.sh"` would resolve against THAT cwd
@@ -3266,8 +3268,10 @@ tg 2 'gh api -X DELETE repos/o/r/contents/a/b.md -f message=m -f sha=x'
 tg 2 'gh api -X POST repos/o/r/merge-upstream -f branch=main'
 # Merging a PR is left to the project's merge gate and the server ruleset
 # (ADR 0037): the base cannot know a project's merge conditions.
-tg 0 'gh pr merge 1 --squash'                            'a PR merge is the merge gate'"'"'s, not this guard'"'"'s'
-tg 0 'gh api -X PUT repos/o/r/pulls/1/merge'             'a REST PR merge is the merge gate'"'"'s, not this guard'"'"'s'
+# Whether a merge is allowed stays the merge gate's. This guard only reads the PR's base, because a merge into
+# a plan/* base writes that ref (ADR 0063 §5); here the base cannot be read, so the merge refuses (closed).
+tg 2 'gh pr merge 1 --squash'                            'a merge whose base cannot be read refuses'
+tg 2 'gh api -X PUT repos/o/r/pulls/1/merge'             'a REST merge whose base cannot be read refuses'
 tg 2 'gh repo sync --force'
 tg 2 'gh repo sync o/r --source u/r --force'
 tg 0 'gh repo sync -b feat'
@@ -3439,6 +3443,8 @@ gg_long 2 'a long crafted command ending in a refused write' 'run -a ' 20000 ' ;
 gg_long 2 'the same shape on another group'                  'pr -a ' 20000 ' ; gh pr create --title t'
 gg_long 2 'a very long one'                                  'run -a ' 100000 ' ; gh pr create --title t'
 gg_long 0 'a long harmless command still passes'             'run -a ' 20000
+gg_long 0 'many git words stay fast through the prefilter'   'git ' 7000
+gg_long 0 'many brace lists stay fast through the prefilter' '{a,b} ' 5000
 tg 0 'gh run view 123'
 tg 0 'gh run list'
 tg 0 'gh run watch 123'
@@ -3453,6 +3459,79 @@ tg 0 'gh api -X POST repos/o/r/actions/runs/1/cancel'
 tg 0 'gh api -X POST repos/o/r/actions/jobs/1/rerun'
 tg 0 'gh api repos/o/r/actions/workflows/1'
 tg 0 'git commit -m "gh run delete and gh workflow run are refused"' 'a commit message naming them'
+
+# --- plan/* writes: E14 (a plan run only), E15 (no force), E16 (no delete or close) (ADR 0063 §5) ---
+# Every case here refuses, or allows, before any fact is read, so no gh or network is needed. The rows
+# that read GitHub (E12, E17, E19) are tested with injected facts in tests/trimtab/test_guard_github_plan.py.
+PB='plan/0008-slug/item-02-part1'
+PSHA=$(printf 'a%.0s' $(seq 40))
+tg 2 "git push origin $PB"                               'E14: a push to plan/* outside a plan run'
+tg 2 "git push origin HEAD:refs/heads/$PB"               'E14: the same, as a refspec'
+tg 2 "git push --force origin $PB"                       'E15: a forced push to plan/*'
+tg 2 "git push --force-with-lease origin $PB"            'E15: with a lease too'
+tg 2 "git push origin +HEAD:$PB"                         'E15: a + refspec'
+tg 2 'git push --mirror origin'                          'E15: a mirror push'
+tg 2 "git push origin :$PB"                              'E16: a delete refspec'
+tg 2 "git push --delete origin $PB"                      'E16: --delete'
+tg 2 'git push --prune origin'                           'E16: --prune'
+tg 2 "git -C /tmp push origin $PB"                       'a push through git -C'
+tg 2 "sudo git push origin $PB"                          'a push behind sudo'
+tg 2 "bash -c 'git push origin $PB'"                     'a push in a shell string'
+tg 2 "\$G push origin $PB"                               'a command word the shell builds, then push'
+tg 2 'git push origin $B'                                'a refspec the shell builds'
+tg 0 'git push origin feature/x'                         'a push of another branch reads nothing'
+tg 0 'git push -u origin feature/x'
+tg 0 'git status'
+tg 0 'echo push'                                         'the word push alone'
+tg 2 "gh api -X DELETE repos/o/r/git/refs/heads/$PB"     'E16: a REST ref delete'
+tg 2 "gh api -X POST repos/o/r/git/refs -f ref=refs/heads/$PB -f sha=$PSHA" 'E14: a REST ref create'
+tg 2 "gh api -X PATCH repos/o/r/git/refs/heads/$PB -f sha=$PSHA -F force=true" 'E15: a REST forced update'
+tg 2 "gh api -X PUT repos/o/r/contents/a.txt -f branch=$PB -f message=m" 'E14: a contents write'
+tg 2 "gh api -X POST repos/o/r/branches/$PB/rename -f new_name=x" 'E16: a rename of plan/*'
+tg 0 "gh api -X POST repos/o/r/git/refs -f ref=refs/heads/feature/x -f sha=$PSHA" 'another ref is not a plan write'
+tg 2 "git pu{s,}h origin $PB"                            'a push spelled with a brace expansion'
+tg 2 "{git,push} origin $PB"                             'a push spelled as one brace list'
+tg 2 "/usr/lib/git-core/git-push origin $PB"             'the git-push binary'
+tg 2 'git -c remote.origin.mirror=true push origin feature/x' 'a push steered by inline configuration'
+tg 2 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=x git push' 'a push steered by the environment'
+tg 2 "git push --all -f origin"                          'E15: --all with a force flag (no local plan branch is needed to refuse an unreadable repository)'
+tg 2 "F=--force; git push \$F origin $PB"                'a force option held in a variable'
+tg 2 "G=git; S=push; \$G \$S origin $PB"                 'git and push both held in variables'
+tg 2 "M=DELETE; gh api -X \"\$M\" repos/o/r/git/refs/heads/$PB" 'a delete whose method is a variable'
+tg 2 "N=5; gh api -X PATCH repos/o/r/pulls/\$N -f state=closed" 'a close whose PR number is a variable'
+tg 2 'gh api graphql -f query='"'"'mutation { updatePullRequestBranch(input:{pullRequestId:"PR_x"}) { clientMutationId } }'"'"'' 'updatePullRequestBranch'
+tg 2 'G=git P=pus; $G ${P}h origin HEAD'                 'git and the subcommand both assembled in the command'
+tg 2 "gh api -X PUT repos/o/r/contents/graphql -f message=m -f content=aGk= -f branch=$PB" 'a contents path ending in graphql'
+tg 2 "bash -c 'cd /tmp && git push'"                     'a directory change inside a shell string'
+tg 2 "HOME=/tmp git push origin feature/x"               'a push under another HOME'
+tg 2 "gh api -X PATCH 'repos/o/r/pulls/5?state=closed'"  'a close carried in the query string'
+tg 0 "cd /tmp && git push origin feature/x"              'a push after a cd that names no plan branch'
+tg 2 'git push $REMOTE feature/x'                        'a remote word that can split into refspecs'
+tg 2 $'git pu\\\nsh origin '"$PB"                       'a backslash and newline inside the word push'
+tg 2 $'gh pr cl\\\nose '"$PB"                           'the same inside a gh subcommand'
+tg 2 "git pu{s..s}h origin $PB"                          'a brace sequence that spells push'
+tg 2 "g{i,}t pu{s,}h origin $PB"                         'a brace list that spells git and push, with neither word whole'
+tg 2 "{g,}it {p,}ush origin $PB"                         'a brace list with an empty alternative'
+BPAD=$(printf 'x%.0s' $(seq 300))
+tg 2 "\$(printf gi)t pu\$(echo s)h origin HEAD:$PB"       'a push assembled from command substitutions'
+tg 2 '$(printf gi)t pu$(echo s)h origin HEAD'            'the same with no plan branch named'
+tg 0 'echo "$(date)"'                                    'an ordinary substitution'
+tg 0 'ls $(pwd)'                                         'a substitution as an argument'
+tg 0 'touch file-$(date).log'                            'a substitution inside an argument'
+tg 2 "git push --repo=origin {HEAD:$PB,$BPAD}"           'a brace group padded past 200 characters'
+tg 2 "g{i,$BPAD}t pu{s,$BPAD}h origin $PB"               'two padded groups'
+tg 2 "git pu{s..s,$BPAD}h origin $PB"                    'a padded sequence group'
+tg 2 'A=gi B=t C=pu D=sh E=pla F=n/x; $A$B $C$D origin $E$F' 'a command assembled from variables it assigns'
+tg 2 "git subtree push --prefix=d origin $PB"            'git subtree push'
+tg 0 'git add src/*.py tests/*.py'                       'ordinary git with globs'
+tg 0 'git diff "$A" "$B"'                                'ordinary git with variables'
+tg 0 'ls *.py *.md; git status'                          'globs, then git'
+tg 2 "gh pr close $PB"                                   'E16: closing a PR by its plan branch'
+tg 2 "gh pr close -R o/r $PB --comment x"
+tg 2 "gh pr merge $PB --delete-branch"                   'E16: merge with --delete-branch'
+tg 0 'gh pr close feature/x'                             'closing another branch'"'"'s PR'
+tg 2 'gh api graphql -f query='"'"'mutation { closePullRequest(input:{pullRequestId:"PR_x"}) { clientMutationId } }'"'"'' 'E16: closePullRequest'
+tg 2 "gh api graphql -f query='mutation { createRef(input:{name:\"refs/heads/$PB\"}) { ref { id } } }'" 'E14: createRef on plan/*'
 
 # --- the payload, the parser and the override ------------------------------
 t guard-github.sh 2 "empty payload"                      ''

@@ -1,4 +1,167 @@
 {
   "schema_version": 1,
-  "rows": {}
+  "rows": {
+    "E12": {
+      "row_sha256": "7e05f5efd31f6c513a140e19279341cf550c276409b81a119db356e561598549",
+      "hooks": [
+        {
+          "file": "guard-github.sh",
+          "event": "PreToolUse",
+          "matcher": "Bash"
+        }
+      ],
+      "tests": [
+        "test_planrows.CiFixRounds.test_a_conflicted_head_being_answered_counts",
+        "test_planrows.CiFixRounds.test_a_failed_read_refuses",
+        "test_planrows.CiFixRounds.test_the_fourth_round_refuses",
+        "test_guard_github_plan.GitPush.test_an_unreadable_fact_refuses",
+        "test_guard_github_plan.GitPush.test_e12_the_fourth_round_refuses_a_push"
+      ],
+      "decision": {
+        "function": "trimtab.planrows:check_e12",
+        "allow": null
+      }
+    },
+    "E14": {
+      "row_sha256": "39b3baf02feadeaa7539e360cab89cf6cb0d3d7fa461921e4fad97fb30ee3484",
+      "hooks": [
+        {
+          "file": "guard-github.sh",
+          "event": "PreToolUse",
+          "matcher": "Bash"
+        }
+      ],
+      "tests": [
+        "test_planrows.Broad.test_all_with_a_local_plan_branch_is_judged_as_that_branch",
+        "test_planrows.Write14to17.test_e14_refuses_without_plan_run",
+        "test_guard_github_plan.GhCommands.test_pr_update_branch_is_a_plan_write",
+        "test_guard_github_plan.GitPush.test_a_bare_push_resolves_through_the_upstream",
+        "test_guard_github_plan.GitPush.test_all_judges_each_local_plan_branch",
+        "test_guard_github_plan.GitPush.test_e14_a_plan_push_needs_a_plan_run",
+        "test_guard_github_plan.Rest.test_a_contents_write_on_a_plan_branch",
+        "test_guard_github_plan.Rest.test_a_merge_into_a_plan_branch",
+        "test_guard_github_plan.Rest.test_a_ref_create_naming_a_plan_branch",
+        "test_guard_github_plan.Rest.test_a_ref_update_without_force_is_judged_like_a_push",
+        "test_guard_github_plan.Rest.test_a_rename_onto_a_plan_branch_is_a_plan_write",
+        "test_guard_github_plan.Rest.test_update_branch_of_a_plan_pr",
+        "test_guard_github_plan_bypasses.HiddenCommandWords.test_the_binary_behind_the_push_subcommand_is_judged_as_a_push",
+        "test_guard_github_plan_bypasses.MergeIntoAPlanBase.test_gh_pr_merge_by_branch",
+        "test_guard_github_plan_bypasses.MergeIntoAPlanBase.test_gh_pr_merge_by_number",
+        "test_guard_github_plan_bypasses.MergeIntoAPlanBase.test_rest_merge",
+        "test_guard_github_plan_bypasses.RouteOrder.test_a_contents_path_that_looks_like_a_ref_route_is_still_contents",
+        "test_guard_github_plan_round2.GraphqlLookingRoute.test_a_rest_route_ending_in_graphql_is_still_rest",
+        "test_guard_github_plan_round3.NormalisedBranchFields.test_a_prefixed_or_padded_branch_in_a_body_is_still_a_plan_branch",
+        "test_guard_github_plan_round4.GhRepositoryReachesTheWrite.test_the_same_repository_named_explicitly_is_judged"
+      ],
+      "decision": {
+        "function": "trimtab.planrows:check_e14",
+        "allow": null
+      }
+    },
+    "E15": {
+      "row_sha256": "79ac1cf638eec422c80503761be324c66eba8254fadd8c173975a5e8a86c45b8",
+      "hooks": [
+        {
+          "file": "guard-github.sh",
+          "event": "PreToolUse",
+          "matcher": "Bash"
+        }
+      ],
+      "tests": [
+        "test_planrows.Broad.test_mirror_and_prune_refuse_in_any_mode",
+        "test_planrows.Write14to17.test_e15_refuses_force_even_in_a_run",
+        "test_guard_github_plan.GitPush.test_a_hidden_command_is_read_by_the_naive_pass",
+        "test_guard_github_plan.GitPush.test_e15_force_refuses_in_a_run",
+        "test_guard_github_plan.Rest.test_a_ref_update_forces",
+        "test_guard_github_plan_bypasses.AllWithForce.test_force_and_delete_carry_into_each_branch",
+        "test_guard_github_plan_bypasses.GitConfigSteering.test_a_mirror_remote_refuses_any_push",
+        "test_guard_github_plan_round3.GitBooleans.test_a_mirror_set_to_two_refuses"
+      ],
+      "decision": {
+        "function": "trimtab.planrows:check_e15",
+        "allow": null
+      }
+    },
+    "E16": {
+      "row_sha256": "30be57208af3c6e82dac5e4a5104e9fff9ca58ffd8e09b0eb444ec5a0e5d9ece",
+      "hooks": [
+        {
+          "file": "guard-github.sh",
+          "event": "PreToolUse",
+          "matcher": "Bash"
+        }
+      ],
+      "tests": [
+        "test_planrows.Broad.test_mirror_and_prune_refuse_in_any_mode",
+        "test_planrows.Close.test_a_plan_head_refuses_and_others_pass",
+        "test_planrows.Write14to17.test_e16_refuses_delete_in_any_mode",
+        "test_guard_github_plan.GhCommands.test_issue_close_of_a_plan_pr",
+        "test_guard_github_plan.GhCommands.test_pr_close",
+        "test_guard_github_plan.GhCommands.test_pr_merge_delete_branch",
+        "test_guard_github_plan.GitPush.test_e16_delete_refuses_in_any_mode",
+        "test_guard_github_plan.GitPush.test_prune_refuses",
+        "test_guard_github_plan.Graphql.test_closing_a_pull_request_refuses",
+        "test_guard_github_plan.Rest.test_a_ref_delete",
+        "test_guard_github_plan.Rest.test_a_rename_of_a_plan_branch",
+        "test_guard_github_plan.Rest.test_closing_a_plan_pr",
+        "test_guard_github_plan_bypasses.AllWithForce.test_force_and_delete_carry_into_each_branch",
+        "test_guard_github_plan_bypasses.Graphql.test_update_pull_request_branch_writes_the_head",
+        "test_guard_github_plan_bypasses.Graphql.test_update_pull_request_with_a_state_closes_a_pr",
+        "test_guard_github_plan_bypasses.RouteOrder.test_cheap_rows_refuse_before_any_repository_lookup",
+        "test_guard_github_plan_round2.GraphqlLookingRoute.test_a_bare_graphql_path_is_still_graphql",
+        "test_guard_github_plan_round2.GraphqlLookingRoute.test_a_rest_route_ending_in_graphql_is_still_rest",
+        "test_guard_github_plan_round2.GraphqlMerges.test_merging_a_pull_request_by_id_refuses",
+        "test_guard_github_plan_round2.TrackedBranchSelector.test_gh_without_a_selector_follows_the_branch_upstream",
+        "test_guard_github_plan_round3.GhSelectors.test_a_url_carries_its_repository_so_a_directory_change_does_not_matter",
+        "test_guard_github_plan_round3.GhSelectors.test_the_host_of_a_url_is_matched_without_case",
+        "test_guard_github_plan_round3.GraphqlState.test_a_state_argument_refuses",
+        "test_guard_github_plan_round3.GraphqlState.test_a_variable_named_state_refuses"
+      ],
+      "decision": {
+        "function": "trimtab.planrows:check_e16",
+        "allow": null
+      }
+    },
+    "E17": {
+      "row_sha256": "c104e4322174b4f20ea39f23a9f8908b86a34343adb0f8df9068b774ea145325",
+      "hooks": [
+        {
+          "file": "guard-github.sh",
+          "event": "PreToolUse",
+          "matcher": "Bash"
+        }
+      ],
+      "tests": [
+        "test_planrows.Write14to17.test_e17_refuses_a_push_to_a_ready_pr",
+        "test_planrows.Write14to17.test_e17_refuses_a_register_commit_with_prose_in_the_record",
+        "test_guard_github_plan.GitPush.test_e17_a_ready_pr_refuses_a_push",
+        "test_guard_github_plan.Rest.test_a_contents_write_to_a_ready_pr_refuses"
+      ],
+      "decision": {
+        "function": "trimtab.planrows:check_e17",
+        "allow": null
+      }
+    },
+    "E19": {
+      "row_sha256": "9ab59f49890014356101c53fc83fe9c65c8683b79c1cabd9210e0bfbff1bba8b",
+      "hooks": [
+        {
+          "file": "guard-github.sh",
+          "event": "PreToolUse",
+          "matcher": "Bash"
+        }
+      ],
+      "tests": [
+        "test_planrows.SecretScan.test_a_failed_scan_refuses_a_push_touching_the_record_and_more",
+        "test_planrows.SecretScan.test_a_failed_scan_with_no_change_refuses",
+        "test_planrows.SecretScan.test_fail_and_unreadable_refuse_an_ordinary_push",
+        "test_guard_github_plan.GitPush.test_e19_a_failed_scan_refuses_a_push",
+        "test_guard_github_plan_round3.SecretScanThatNeverRuns.test_a_branch_with_runs_but_none_of_the_scan_workflow_is_unreadable"
+      ],
+      "decision": {
+        "function": "trimtab.planrows:check_e19",
+        "allow": null
+      }
+    }
+  }
 }

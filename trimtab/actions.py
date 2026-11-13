@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from trimtab.capture.sources import PER_PAGE, GhApi, SourceError
+from trimtab.capture.ghapi import PER_PAGE, GhApi, SourceError
 
 LIMIT = 200  # runs on one head, or jobs in one run, every attempt; past it, an error
 

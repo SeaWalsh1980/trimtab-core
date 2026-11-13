@@ -254,7 +254,7 @@ def _git_answer(repo: str, *args: str, stdin: bytes | None = None, answers: tupl
            and k != "GIT_CONFIG_COUNT"}
     env.update(GIT_NO_REPLACE_OBJECTS="1", GIT_LITERAL_PATHSPECS="1", **(objects or {}))
     pins = [arg for key, value in GIT_PINNED for arg in ("-c", f"{key}={value}")]
-    from trimtab.capture.sources import SourceError  # see git_answer below
+    from trimtab.capture.ghapi import SourceError  # standard library only; see git_answer below
     try:
         return git_answer(repo, *pins, *args, env=env, stdin=stdin, name=args[0], answers=answers)
     except SourceError as err:
@@ -262,11 +262,10 @@ def _git_answer(repo: str, *args: str, stdin: bytes | None = None, answers: tupl
 
 
 def git_answer(*args, **kwargs):
-    """capture.sources.git_answer, imported when first called rather than with this module:
-    capture.sources pulls in PyYAML, and the Bash write detector (trimtab.adapters.bash_writes,
-    ADR 0066) imports this module's pure rules under `python3 -S`. A module-level name, so a test
-    can still patch it."""
-    from trimtab.capture.sources import git_answer as answer
+    """capture.ghapi.git_answer (also exported by capture.sources), imported when first called rather
+    than with this module, which the Bash write detector (trimtab.adapters.bash_writes, ADR 0066)
+    imports for its pure rules under `python3 -S`. A module-level name, so a test can still patch it."""
+    from trimtab.capture.ghapi import git_answer as answer
     return answer(*args, **kwargs)
 
 

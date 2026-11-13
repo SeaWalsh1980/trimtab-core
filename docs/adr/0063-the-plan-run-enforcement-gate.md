@@ -610,3 +610,206 @@ a run's PR, as the doctrine record says.
 
 None. The 3 s `ls-remote` bound and the defaults are unmeasured starting values. The 60-minute
 and 24-hour bounds come from the doctrine record.
+
+## Amendment 1: guard-github's rows (E12, E14-E17, E19), second PR of four
+
+The record above is unchanged; this amendment records what the second PR built and the choices
+the rows left open. Status of the record: still proposed.
+
+**What ships.** `hooks/guard-github.sh` now sends any command naming `push`, `send-pack`,
+`http-push`, a git subcommand the shell builds, `gh pr close|merge|update-branch` or
+`gh issue close` to `trimtab/adapters/guard_github.py`, which reads the spellings of a `plan/*`
+write and hands them to `trimtab/planrows.py`. Each row is its own decision function
+(`check_e12`, `check_e14` to `check_e17`, `check_e19`), so the mutation test removes one row at a
+time. `trimtab/planfacts.py` reads GitHub and the checkout; `trimtab/planguard.py` joins the two
+for the hook.
+
+**Spellings read.**
+- `git push`: options with git's abbreviation rule, refspecs (`src:dst`, `+`, `:dst`, `HEAD`,
+  `refs/heads/`, `heads/`), `--delete`, `--mirror`, `--prune`, `--all`, and a bare push resolved
+  through `@{push}`. A branch it cannot resolve, a refspec built by the shell or holding a
+  pattern, an option it does not know, `-C` through a shell expansion, `--git-dir` and
+  `--work-tree` all refuse.
+- `--mirror` refuses as E15 and `--prune` as E16, whatever the refs. `--all` is judged ref by ref
+  for the local `plan/*` branches.
+- REST: a ref create, update (with `force`) and delete, a contents write with a `branch`, a
+  merge with a `base`, a branch rename, `update-branch`, and a PATCH to `pulls/N` or `issues/N`
+  with `state=closed` (the head is looked up). A GraphQL `createRef`, `createCommitOnBranch` or
+  `mergeBranch` naming `plan/` refuses, as does every `closePullRequest`, because it names the PR
+  by an ID this guard cannot read.
+- `gh pr close`, `gh pr merge --delete-branch`, `gh pr update-branch` and `gh issue close`, by
+  number, URL, branch or the current branch.
+- Branch names are compared case-folded and looked up as spelled.
+
+**Choices.**
+- **E12 counts the run, not each job.** A head fails when a run for the branch concluded
+  `failure`, `timed_out` or `cancelled` on its latest attempt. One list read replaces a job read
+  per head (ENG-6.2); a failure re-run to success reads as passed, which is AGW-4's "an
+  infrastructure failure is re-run once and does not count". An E3 facts run is a run of the
+  instance's `review.facts` workflow. With no `review` key E12 cannot be counted and refuses.
+- **The conflict count has a gap until the ledger.** A head that conflicted with the default
+  branch counts when `mergeable` is `false` for the head the push answers, read at that push. The
+  record of past conflicts is the ledger's (the plan-run layer's PR); until it lands, an earlier
+  conflict-only round is not counted, and E22 has no server fact for it either. The cap is
+  therefore weaker by conflict-only rounds until then.
+- **E19 is stateless.** Each guarded write re-reads the scan job's records for the branch's
+  latest head, so a failing head keeps the stop standing without a stored stop. Writing a `stop`
+  to the ledger is the plan-run layer's. No `secret_scan` key refuses.
+- **The instance schema gains `secret_scan` and `review`** (the job, the review's login, the
+  re-request label, the five tags and the two bounds, as §4 lists them). `fix_limits` is E18's,
+  in the next PR.
+- **Hook-path imports are standard library only.** `GhApi`, its errors and `git_bytes` moved to
+  `trimtab/capture/ghapi.py`, re-exported from `capture/sources.py`. The hook runs Python with
+  `-I -S`, where PyYAML (reached through `capture/sources.py`) is not found; so did the recorder
+  under `-I` on a host that installs PyYAML for the user only, which left the recorder without a
+  pass. Both now import without it.
+
+**Residuals accepted.**
+- A git alias (`git -c alias.x=push x`) or a push through a binary the guard does not name is not
+  read; the push still faces E22 at merge.
+- The hook's 10 s limit holds the adapter to 6 s for several GitHub reads. A slow read refuses
+  the push (closed), and the run retries.
+- A bare push in a shallow clone refuses, because the gate's git refuses shallow history.
+- `update-branch`, a contents write and a ref update by REST carry no source commit, so on a ready
+  PR they refuse (E17) and cannot take the register-commit exception.
+
+**Review round 1 (three passes) changed these, and added these residuals.**
+- **Read as well:**
+  - A command word the shell builds, followed by a push or another word the shell builds, when the
+    command names `push` or `plan/`.
+  - An HTTP method the shell builds.
+  - A PR or issue number the shell builds in a close, merge or `update-branch` route.
+  - A GraphQL `updatePullRequest` with a `state`, every `updatePullRequestBranch`, and string
+    escapes in a ref or commit mutation.
+  - A merge into a `plan/*` base, by `gh pr merge` or `PUT pulls/N/merge` (the PR's base is looked
+    up, so every merge now needs that read; an unreadable base refuses).
+- **Routes are anchored to `repos/<owner>/<name>/`** and contents is matched before refs, so a
+  contents path that looks like a ref route is still contents. A ref write to another repository
+  than the facts are read for is refused, after the rows that read nothing (E14, E15, E16).
+- **Git configuration that steers a push.** `-c` keys under `remote.`, `push.`, `url.`, `alias.`,
+  `include`, `branch.` and `core.sshCommand`, `--config-env`, and the variables `GIT_CONFIG_*`,
+  `GIT_DIR` and kin on the command refuse. The repository's effective configuration is read for
+  every push: a mirror remote refuses (E15), a bare push with `remote.<r>.push` refuses, and
+  `push.default=matching` refuses when local `plan/*` branches exist.
+- **Where a push goes.** For a push that writes `plan/*`, the destination is the named remote's
+  `pushurl`, else its `url`, or the literal URL; it must be the repository the facts are read for.
+  `url.<base>.insteadOf` refuses. Facts, diffs and local branches come from the directory the push
+  runs in (`-C`).
+- **`--all` carries `-f`, `--force-with-lease` and `--delete` into each local `plan/*` branch.** A
+  first word the shell builds, before a `plan/*` refspec, may be an option and refuses.
+- **The prefilter** also passes a brace expansion that can spell `git` or `push`, and the
+  `git-push` binary.
+- **E12's cap.** The code holds the owner's three rounds (§5a). AGW-4's text says two; changing
+  the rule is the owner's, in a Trimtab PR of its own.
+
+Residuals added:
+- A command built from variables defined outside the command (`$G $S origin x` where `G` and `S`
+  came from the environment) is not seen by the prefilter and is not read.
+- Configuration set by an earlier command (`git config remote.origin.push …`) is read when the push
+  runs, not when it is set; a push is then refused if the effective setting steers it.
+- A sourceless write (`update-branch`, a contents write, a ref update with no sha) on a draft whose
+  head is failing or conflicted refuses, as it does on a ready PR, because the register-commit shape
+  cannot be shown for it.
+
+**Review round 2 (three passes) changed these, and added these residuals.**
+- **Read as well:**
+  - A REST route that ends in `graphql` is REST; only a bare `graphql` path is GraphQL.
+  - A directory change (`cd`, `pushd`, `popd`, `env -C`, `--chdir`) or a variable that steers git
+    (`GIT_*`, `HOME`, `XDG_CONFIG_HOME`) anywhere in the command text, including nested strings and
+    earlier segments. A push after such a change is read only if it names no plan branch.
+  - A command that assembles `git` and its subcommand from variables inside the command.
+  - A write to a ref, contents, merge, rename, PR-update or PR-close route whose path carries a
+    query string.
+  - `gh pr close`, `merge` and `update-branch` with no selector take the PR from the checked-out
+    branch's upstream (`branch.<b>.merge`), as `gh` does.
+  - A remote word the shell builds (it can split into options or refspecs of its own), a refspec with
+    no `:dst` while `remote.<r>.push` maps it, `-c alias.*`, GraphQL `mergePullRequest` and
+    `enablePullRequestAutoMerge`.
+- **Configuration is read as a push sees it:** global and system configuration are read for the
+  steering keys, though never for objects. The gate's own reads still ignore them.
+- **A 404 is absence only where the repository answers.** A branch or PR that returns 404 while the
+  repository itself is unreadable is a refusal. Every other 404 is a `FactsError`. A PR is read once
+  for its head and base.
+- **A push after a `cd` that names no plan branch is no longer refused** (round 1 over-refused it).
+
+Residuals added:
+- **Alias residual stays.** A stored alias (`alias.p=push` in a config file) used as `git p …` never
+  reaches the prefilter; only `-c alias.*` on the command is read. E22 is the bound.
+- **Commands that run a string**, such as `git rebase -x`, `git submodule foreach`,
+  `git bisect run` and `git filter-branch --exec`, and a renamed copy of the git binary, are not read.
+- **`--all` reads facts once per local `plan/*` branch.** Each is a handful of `gh` calls against
+  the adapter's 6 s limit. No timing has been measured; a slow read refuses.
+- **Not done in this PR** (medium and low findings left for the owner's decision): refusal text still
+  quotes words from the command in a few places, `cancelled` runs count as E12 rounds, activity
+  paging may need cursors, a binary change to the progress record can pass as register-only, E19 reads
+  only the latest head, selector URLs are matched case-sensitively, and `merge-upstream` of a
+  `plan/*` branch is not read.
+
+**Triage after round 2 (4e0e8d3), and review round 3's HIGH findings.** Earlier rounds above are
+unchanged; this records what changed since and supersedes their "Not done in this PR" list.
+
+Changed in 4e0e8d3:
+- REST branch fields are normalised (`refs/heads/`, `heads/`, padding) before the `plan/` test.
+- A binary change to the progress record is neither register-only nor progress-only.
+- A configuration read needs none of the object checks, so a shallow, partial or alternates clone
+  pushes like any other (round 3 removed the check; 4e0e8d3 had kept it).
+- Git booleans are read as git reads them, integers included.
+- `gh` selectors: `GH_REPO` or `GH_HOST` in the command, a repository option in the attached forms,
+  a number selected after a directory change, and a URL the guard cannot read all refuse.
+- A scan workflow that never runs on a branch that has runs of others reads "unreadable", so a typo
+  cannot switch E19 off. E19 still reads the latest head, as the row says.
+- Refusal text names the kind of problem, not words from the command or `gh`'s stderr.
+- GraphQL `updatePullRequest` refuses for a `state` argument or variable, not the word in a body.
+- Branch activity is one page of 100 events, and a full page refuses: the endpoint pages by a cursor
+  in a Link header (`after=`), which `gh api` does not return, and ignores `page=`.
+
+Changed for round 3's HIGH findings:
+- **Prefilter:** a backslash before a newline inside a word, a brace sequence (`{a..b}`), and a
+  command that assigns variables and expands them all reach the adapter.
+- **Dynamic command word:** only the command word is judged, so `git add src/*.py` and
+  `git diff "$A" "$B"` pass again (round 2 refused them). A command word built from variables in a
+  command that assigns variables refuses.
+- **State changed earlier in the same command.** A name change (`switch`, `checkout`, `branch`), a
+  content change (`commit`, `merge`, `reset`, `rebase`) and a configuration change (`config`,
+  `remote`) are told apart. A push that names a plan branch after a name or content change, a bare or
+  `HEAD` push after a name change, and a bare or destination-less push after a configuration change all
+  refuse. A plan run therefore commits and pushes in separate commands. An ordinary
+  `git commit … && git push origin feature/x` passes.
+- **`push.default=upstream`** maps a refspec with no `:dst` onto the branch's upstream; it refuses
+  when any branch's upstream is a `plan/*` branch.
+- **`git subtree`, `git-subtree` and a `{}` refspec** (`find -exec`) are not read and refuse. GraphQL
+  `createLinkedBranch` is judged like `createRef`.
+- **gh placeholders** (`{owner}`, `{repo}`, `{branch}`) on a ref, contents, merge or PR route refuse.
+- **`gh pr update-branch` and `merge`** carry the repository of `-R` or the URL to the write, so it is
+  judged against that repository's facts or refused; a branch selected in another repository refuses.
+  `gh repo set-default` (a `remote.*.gh-resolved` setting) refuses, because gh then acts on a
+  repository that may not be origin's.
+- **`git -C ~/x`** refuses: the guard does not expand a tilde.
+
+Left on purpose, still bounded by E22: the cost of the prefilter's new alternatives is unmeasured
+beyond the guard suite's long-command cases; `cancelled` runs count as E12 rounds; selector forms
+`http://…` refuse rather than parse; the unmeasured 6 s budget; a push from a repository reached by
+`cd` is judged without that repository's configuration; a gh alias, a legacy `.git/remotes` push
+line, and a command assembled wholly from variables that the command does not itself assign.
+
+**claude-review on the ready PR (comment on PR 166).**
+- **Prefilter, brace groups.** `g{i,}t pu{s,}h origin HEAD:plan/x` names neither `git` nor `push` whole and
+  none of the earlier brace patterns matched it. Any brace group with a comma, or a `..` sequence, now
+  reaches the adapter, which reads a brace group as a word the shell builds. The braces of the payload's
+  own JSON have other braces or no comma between them, so they do not match.
+- **E19 allows a push while the scan is `pending`.** This is the row's own text ("pending allows writes but
+  refuses ready"), so a push made before the scan finishes can introduce a secret that the scan then
+  fails; the next guarded write is refused, and ready is refused. The server-side E22 job and the
+  operator's own scanner merge gate bound it. It is a residual, not a gap in the row.
+- **Times are parsed, not compared as text.** Branch-activity times and the PR's opening are RFC 3339
+  with their offset; a time that cannot be parsed, or has no offset, refuses.
+
+**claude-review on 9e10bd5.** A push built only from command substitutions (`$(printf gi)t pu$(echo s)h
+origin HEAD`) named no `git`, `push` or `gh` and held no brace group, so the prefilter exited 0. Any
+command holding a substitution (`$(` or a backquote) now reaches the adapter, which refuses a command word
+assembled from a substitution and other characters (`$(printf gi)t`, `g$(echo i)t`). A substitution followed
+by `/`, `.` or `-` (`$(dirname "$0")/x.sh`) is a path and passes, as does a substitution in an argument. The
+cost is that a command with a substitution starts python3 (about 50 ms), and a command word that is a
+substitution plus letters is refused. Still not read: a push whose every word is a bare substitution
+(`$(echo git) $(echo push) origin x`) and a substitution run through a shell string, which the first
+"state and strings" residual already names; E22 bounds both.
