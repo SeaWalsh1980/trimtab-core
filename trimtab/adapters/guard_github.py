@@ -929,6 +929,10 @@ STEER_ANYWHERE = re.compile(r"(?<![A-Za-z0-9_])(?:GIT_(?:CONFIG|DIR|WORK_TREE|CO
                             r"|NAMESPACE|EXEC_PATH|SSH|PROXY)[A-Za-z0-9_]*|HOME|XDG_CONFIG_HOME)=", re.I)
 # A variable assigned in the command: a command word the shell builds from it can be anything.
 _DEFINES_VARS = re.compile(r"(?:^|[;&|(\s])[A-Za-z_][A-Za-z0-9_]*=")
+# A command word assembled from a substitution and other characters (`$(printf gi)t`, `g$(echo i)t`): it can
+# spell any command. A substitution followed by `/`, `.` or `-` (`$(dirname "$0")/x.sh`) is a path, not this.
+_BUILT_COMMAND_WORD = re.compile(r"(?:^|[;&|(]\s*)(?:(?:\$\([^()]*\)|`[^`]*`)[A-Za-z0-9_]"
+                                 r"|[A-Za-z0-9_]+(?:\$\(|`))")
 # A command that names a push or a plan branch: where an unreadable command word may hide one.
 _PUSHY = re.compile(r"(?<![A-Za-z0-9_.-])push(?![A-Za-z0-9_.-])|plan/|(?<![A-Za-z0-9_.-])git(?![A-Za-z0-9_-])", re.I)
 
@@ -1316,6 +1320,8 @@ def judge(command: str, ctx: Ctx, parsed: list[list[Word]] | None = None) -> Non
     The naive pass runs only when something in the command can run quoted text, so a comment or
     a commit message that mentions a refused command is not read as one.
     """
+    if ctx.strict and _BUILT_COMMAND_WORD.search(command):
+        ctx.unknown("a command word assembled from a substitution and other characters")
     naive = naive_segments(command)
     passes = [(False, naive)] if not ctx.strict else [(True, parsed if parsed is not None else segments(command))]
     if ctx.strict and runs_text(command, naive):

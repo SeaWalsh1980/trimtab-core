@@ -803,3 +803,13 @@ line, and a command assembled wholly from variables that the command does not it
   operator's own scanner merge gate bound it. It is a residual, not a gap in the row.
 - **Times are parsed, not compared as text.** Branch-activity times and the PR's opening are RFC 3339
   with their offset; a time that cannot be parsed, or has no offset, refuses.
+
+**claude-review on 9e10bd5.** A push built only from command substitutions (`$(printf gi)t pu$(echo s)h
+origin HEAD`) named no `git`, `push` or `gh` and held no brace group, so the prefilter exited 0. Any
+command holding a substitution (`$(` or a backquote) now reaches the adapter, which refuses a command word
+assembled from a substitution and other characters (`$(printf gi)t`, `g$(echo i)t`). A substitution followed
+by `/`, `.` or `-` (`$(dirname "$0")/x.sh`) is a path and passes, as does a substitution in an argument. The
+cost is that a command with a substitution starts python3 (about 50 ms), and a command word that is a
+substitution plus letters is refused. Still not read: a push whose every word is a bare substitution
+(`$(echo git) $(echo push) origin x`) and a substitution run through a shell string, which the first
+"state and strings" residual already names; E22 bounds both.

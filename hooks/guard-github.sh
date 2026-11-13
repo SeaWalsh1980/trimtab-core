@@ -78,7 +78,13 @@ if (( ${#payload} <= 32768 )) && [[ "$payload" != *'\u'* && "$payload" != *"\$'"
     # expands them (`A=gi B=t; $A$B …`), can spell a push without ever naming it.
     git_word='(^|[^A-Za-z0-9_.-])git([^A-Za-z0-9_.-]|$)'
     assigned='(^|[^A-Za-z0-9_.-])[A-Za-z_][A-Za-z0-9_]*='
-    [[ "$flat" == *[\$\`]* ]] && [[ "$flat" =~ $git_word || "$flat" =~ $assigned ]] || exit 0
+    # A command substitution (`$(printf gi)t pu$(echo s)h …`) can spell any word, so any command holding one
+    # goes to the adapter, which refuses a command word assembled from a substitution and other characters.
+    if [[ "$flat" == *'$('* || "$flat" == *'`'* ]]; then
+      :
+    else
+      [[ "$flat" == *'$'* ]] && [[ "$flat" =~ $git_word || "$flat" =~ $assigned ]] || exit 0
+    fi
   fi
   shopt -u nocasematch
 fi

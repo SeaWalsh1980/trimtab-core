@@ -3408,6 +3408,11 @@ tg 2 "git pu{s..s}h origin $PB"                          'a brace sequence that 
 tg 2 "g{i,}t pu{s,}h origin $PB"                         'a brace list that spells git and push, with neither word whole'
 tg 2 "{g,}it {p,}ush origin $PB"                         'a brace list with an empty alternative'
 BPAD=$(printf 'x%.0s' $(seq 300))
+tg 2 "\$(printf gi)t pu\$(echo s)h origin HEAD:$PB"       'a push assembled from command substitutions'
+tg 2 '$(printf gi)t pu$(echo s)h origin HEAD'            'the same with no plan branch named'
+tg 0 'echo "$(date)"'                                    'an ordinary substitution'
+tg 0 'ls $(pwd)'                                         'a substitution as an argument'
+tg 0 'touch file-$(date).log'                            'a substitution inside an argument'
 tg 2 "git push --repo=origin {HEAD:$PB,$BPAD}"           'a brace group padded past 200 characters'
 tg 2 "g{i,$BPAD}t pu{s,$BPAD}h origin $PB"               'two padded groups'
 tg 2 "git pu{s..s,$BPAD}h origin $PB"                    'a padded sequence group'
