@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -70,8 +71,10 @@ class Ledger:
         try:
             self._dir(create=False)
         except LedgerError:
-            if not (self._config / guardstate.ROOT / SUBDIR / self._repo_key / self._plan).exists():
-                return False
+            try:
+                os.lstat(self._config / guardstate.ROOT / SUBDIR / self._repo_key / self._plan)
+            except FileNotFoundError:
+                return False  # nothing there at all, not even a link
             raise
         try:
             self.path.lstat()
