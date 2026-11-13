@@ -228,6 +228,39 @@ class Git:
             return False
         return True
 
+    def ls_remote(self, cwd: Path, url: str, ref: str, timeout: float, auth: "GhAuth | None" = None) -> str:
+        """The SHA a remote ref points at, under `timeout`, read without the object checks: nothing it
+        returns is read as an object. It runs in a bare repository made here inside `cwd`, so only
+        this environment's pinned configuration takes part and no `insteadOf` of a repository above can
+        answer (ADR 0063 §3, review round 2). `cwd` must be a private directory of the caller's own.
+
+        With `auth`, the clean fetch's pinned gh credential helper applies, so a private repository
+        answers; without it the read is anonymous and a private repository fails closed."""
+        env = dict(self._env)
+        pins = ["-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "core.sshCommand=",
+                "-c", "http.sslVerify=true"]
+        if auth is not None:
+            env.update({k: auth.env[k] for k in ("GH_CONFIG_DIR", "GH_HOST", "GH_TOKEN")})
+            pins += ["-c", "credential.helper=",
+                     "-c", f"credential.helper=!{auth.binary} auth git-credential"]
+        # Git finds a repository by searching upward from its directory and then reads that repository's
+        # configuration, so a read made in a plain temp directory would take an `insteadOf` planted in any
+        # repository above it. A bare repository made here is found first and holds no configuration but
+        # what the pins give (the same shape `fetch_clean` uses).
+        probe = Path(cwd) / "ls-remote.git"
+        try:
+            os.mkdir(probe, 0o700)  # exclusively: `git init` on an existing directory keeps a planted config
+        except OSError as err:
+            raise ToolError(f"the ls-remote probe directory could not be made ({type(err).__name__})") from err
+        self._raw(Path(cwd), "init", "-q", "--bare", str(probe), env=env)
+        out = self._raw(probe, *pins, "ls-remote", "--", url, ref, env=env,
+                        timeout=timeout).decode("utf-8", "replace")
+        for line in out.split("\n"):
+            sha, _, name = line.partition("\t")
+            if name.strip() == ref and len(sha) == 40:
+                return sha
+        raise ToolError(f"ls-remote named no {ref} for the repository")
+
     def config_get(self, repo: Path, key: str) -> str:
         """One config value, read without the object checks: it names nothing the gate then trusts."""
         return self._raw(repo, "config", "--get", key).decode("utf-8", "replace").strip()

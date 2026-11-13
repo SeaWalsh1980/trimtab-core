@@ -8,8 +8,17 @@ from pathlib import Path
 
 from test_guard_github_plan import CONFIG_REF, HEAD_REF, ON_MAIN, ON_PLAN, ORIGIN, PUSH_REF, NoFacts, decide
 from test_planrows import BRANCH, DRAFT, H1, FakeFacts
+import plan_fixture
 from trimtab import planguard, planrows
 from trimtab.adapters import guard_github
+
+
+def setUpModule():
+    plan_fixture.set_up()
+
+
+def tearDownModule():
+    plan_fixture.tear_down()
 
 PLAN = {**ON_PLAN}
 REPO = "repos/owner/proj"
@@ -141,12 +150,72 @@ class GitConfigSteering(Cases):
 
 class AllWithForce(Cases):
     def test_force_and_delete_carry_into_each_branch(self):
-        for opt in ("-f", "--force", "--force-with-lease", "-nf", "--delete"):
+        # `-n` is no longer a flag to pass over: a dry run writes nothing the ledger could record, so it
+        # is unreadable before any row is reached (ADR 0063 §1, Amendment 3).
+        for opt in ("-f", "--force", "--force-with-lease", "-qf", "--delete"):
             with self.subTest(opt):
                 self.refused(f"git push --all {opt} origin", "E1", facts=FakeFacts(local=(BRANCH,), pr_state=DRAFT, head=H1))
 
-    def test_all_without_force_still_passes(self):
-        self.allowed("git push --all origin", facts=FakeFacts(local=(BRANCH,), pr_state=DRAFT, head=H1))
+    def test_a_dry_run_is_judged_like_any_push_and_never_recorded(self):
+        # It writes nothing, so no ledger entry may vouch for it; the rows that read the push still judge
+        # it, so a dry run of a push they would refuse is refused too (E14 here, with no plan run).
+        # Bundled short options are read letter by letter, whichever side `n` falls on.
+        for opt in ("-n", "--dry-run", "-nv", "-vn"):
+            with self.subTest(opt):
+                self.refused(f"git push {opt} origin {BRANCH}", "E14", run=False,
+                             facts=FakeFacts(pr_state=DRAFT, head=H1))
+                self.allowed(f"git push {opt} origin {BRANCH}", facts=FakeFacts(pr_state=DRAFT, head=H1))
+
+    def test_a_dry_run_reaches_the_record_callback_never_and_a_real_push_always(self):
+        from pathlib import Path
+        from test_planrows import FakeFacts as Facts
+        from trimtab import planguard
+
+        def judged(args):
+            seen = []
+            support = planguard.PlanSupport(Path("/work"), environ={"TRIMTAB_PLAN_RUN": "1"},
+                                            facts=Facts(pr_state=DRAFT, head=H1),
+                                            git=lambda cwd, *a: ON_PLAN[a])
+            planguard.judge_push([(w, False) for w in args], support, Path("/work"),
+                                 record=lambda sup, branch, source, **kw: seen.append(branch))
+            return seen
+
+        self.assertEqual(judged(["origin", BRANCH]), [BRANCH])
+        self.assertEqual(judged(["--dry-run", "origin", BRANCH]), [])
+        self.assertEqual(judged(["-n", "origin", BRANCH]), [])
+
+    def test_a_write_is_recorded_against_the_checkout_it_was_judged_in(self):
+        # With `-C`, the rows read that checkout, so the ledger entry and E18's diff must too, not the
+        # hook's own directory (review round 3).
+        from pathlib import Path
+        from test_planrows import FakeFacts as Facts
+        from trimtab import planguard
+
+        other = Facts(pr_state=DRAFT, head=H1)
+        seen = []
+        support = planguard.PlanSupport(Path("/work"), environ={"TRIMTAB_PLAN_RUN": "1"},
+                                        facts=Facts(pr_state=DRAFT, head=H1),
+                                        git=lambda cwd, *a: ON_PLAN[a])
+        support.facts_for = lambda cwd: other  # the checkout the command runs in has facts of its own
+
+        planguard.judge_push([("origin", False), (BRANCH, False)], support, Path("/elsewhere"),
+                             record=lambda sup, branch, source, facts=None, cwd=None: seen.append((facts, cwd)))
+
+        self.assertEqual(seen, [(other, Path("/elsewhere"))])
+
+    def test_a_dry_run_of_another_branch_still_passes(self):
+        for opt in ("-n", "--dry-run"):
+            with self.subTest(opt):
+                self.allowed(f"git push {opt} origin feature/x", facts=NoFacts(), git=ON_MAIN)
+
+    def test_all_is_refused_once_a_local_plan_branch_exists(self):
+        # ADR 0063 §1: a broad write names refs this reading cannot list one by one, so no ledger entry
+        # could cover them and E13 would read the branch as holding work no run sent. 2b tightened this.
+        self.refused("git push --all origin", "ledger",
+                     facts=FakeFacts(local=(BRANCH,), pr_state=DRAFT, head=H1))
+
+    def test_all_still_passes_where_no_local_plan_branch_exists(self):
+        self.allowed("git push --all origin", facts=FakeFacts(local=(), pr_state=DRAFT, head=H1))
 
 
 class DynamicFirstWord(Cases):

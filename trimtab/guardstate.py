@@ -84,7 +84,7 @@ def append(path: Path, text: str, *, create: bool = False) -> None:
     The file must exist unless `create`. A planted link, a file open to others or one past
     MAX_BYTES raises, so a ledger line is never written where it will not be read back.
     """
-    flags = os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    flags = os.O_RDWR | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
     if create:
         flags |= os.O_CREAT | os.O_EXCL  # a file planted before the create is refused, not adopted
     try:
@@ -92,24 +92,23 @@ def append(path: Path, text: str, *, create: bool = False) -> None:
     except OSError as err:
         raise GuardStateError(f"a guard-state file cannot be opened for append ({type(err).__name__})") from err
     try:
-        fh = os.fdopen(fd, "ab")
+        _lock(fd)  # before the size is read, so parallel hooks cannot both pass it
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or not private(st):
+            raise GuardStateError("a guard-state file is not a private regular file")
+        data = text.encode("utf-8")
+        if st.st_size + len(data) > MAX_BYTES:
+            raise GuardStateError("a guard-state file would pass the size any this base reads")
+        if st.st_size and os.pread(fd, 1, st.st_size - 1) != b"\n":
+            # an earlier append was cut short: another record after it would glue the two into one line
+            raise GuardStateError("a guard-state file does not end in a newline")
+        if os.write(fd, data) != len(data):  # one write, so a record is whole or cut short, never interleaved
+            raise GuardStateError("a guard-state append was cut short")
+        os.fsync(fd)
     except OSError as err:
+        raise GuardStateError(f"a guard-state file cannot be appended to ({type(err).__name__})") from err
+    finally:
         os.close(fd)
-        raise GuardStateError(f"a guard-state file cannot be opened for append ({type(err).__name__})") from err
-    with fh:
-        try:
-            _lock(fh.fileno())  # before the size is read, so parallel hooks cannot both pass it
-            st = os.fstat(fh.fileno())
-            if not stat.S_ISREG(st.st_mode) or not private(st):
-                raise GuardStateError("a guard-state file is not a private regular file")
-            data = text.encode("utf-8")
-            if st.st_size + len(data) > MAX_BYTES:
-                raise GuardStateError("a guard-state file would pass the size any this base reads")
-            fh.write(data)
-            fh.flush()
-            os.fsync(fh.fileno())
-        except OSError as err:
-            raise GuardStateError(f"a guard-state file cannot be appended to ({type(err).__name__})") from err
 
 
 def _lock(fd: int) -> None:

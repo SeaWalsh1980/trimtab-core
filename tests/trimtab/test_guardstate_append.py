@@ -58,7 +58,7 @@ class Append(unittest.TestCase):
             guardstate.append(self.path, "a\n")
 
     def test_an_append_that_would_pass_the_size_bound_is_refused(self):
-        self.path.write_bytes(b"x" * (guardstate.MAX_BYTES - 1))
+        self.path.write_bytes(b"x" * (guardstate.MAX_BYTES - 2) + b"\n")
         os.chmod(self.path, 0o600)
         with self.assertRaises(guardstate.GuardStateError):
             guardstate.append(self.path, "ab")

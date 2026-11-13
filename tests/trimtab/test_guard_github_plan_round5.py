@@ -3,9 +3,19 @@ without the fix. GitHub and git are injected (TST-2)."""
 
 import unittest
 
+import plan_fixture
+
 from test_guard_github_plan import ON_MAIN, NoFacts
 from test_guard_github_plan_bypasses import Cases
 from test_planrows import BRANCH
+
+
+def setUpModule():
+    plan_fixture.set_up()
+
+
+def tearDownModule():
+    plan_fixture.tear_down()
 
 
 class CommandWordsBuiltFromSubstitutions(Cases):

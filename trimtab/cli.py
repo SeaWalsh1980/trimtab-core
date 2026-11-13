@@ -15,7 +15,9 @@ from pathlib import Path
 from trimtab import bump
 from trimtab import config as project_config
 from trimtab import dependabot
-from trimtab import instance, mergeauthority, planauth, planrecord, planscope, propose, roots, routines, scrub, upstream
+from trimtab import guardstate, instance, mergeauthority, planacts, planauth, planchecks, planguard
+from trimtab import planledger, planrecord
+from trimtab import planscope, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
 from trimtab.ids import ID_SHAPE
@@ -1036,6 +1038,72 @@ def cmd_check_enforcement(args) -> int:
     return 1 if any(r.problem for r in results) else 0
 
 
+# ---- the plan-run checks (ADR 0063 §5) --------------------------------------------------------
+# Each reports only: the ledger is the hook's to write (§1). Exit 0 allows, 1 refuses, 2 is a failed
+# read, which refuses too wherever a guard asks.
+
+
+def _plan_context(args, facts=None, limits_at: str | None = None) -> planchecks.Context:
+    """One part's context, built as the guards build it (`planacts.context`): the branch's plan and part,
+    the real facts, the part's ledger, the instance's review keys, and, for the push check, E18's limits
+    read from the authorised plan at `limits_at`'s merge-base."""
+    found = facts or planguard.build_facts(Path(args.repo))
+    return planacts.context(Path(args.repo), found, args.branch,
+                            instance_root=getattr(args, "instance", None), limits_at=limits_at)
+
+
+def _plan_exit(name: str, verdict: planchecks.Verdict) -> int:
+    if verdict.unreadable is not None:
+        print(f"error: {verdict.unreadable}; nothing is vouched for", file=sys.stderr)
+        return 2
+    if verdict.refusal is not None:
+        print(f"FAIL  {verdict.refusal}", file=sys.stderr)
+        return 1
+    print(f"{name}: every row this check reads allows it")
+    return 0
+
+
+def _plan_check(args, name: str, call, limits_at: str | None = None) -> int:
+    try:
+        return _plan_exit(name, call(_plan_context(args, limits_at=limits_at)))
+    except (planchecks.FactsError, planledger.LedgerError, planscope.PlanScopeError) as err:
+        print(f"error: {err}; nothing is vouched for", file=sys.stderr)
+        return 2
+
+
+def cmd_plan_ready_check(args) -> int:
+    return _plan_check(args, "plan-ready-check", lambda ctx: planchecks.ready(ctx, args.head))
+
+
+def cmd_plan_rerequest_check(args) -> int:
+    return _plan_check(args, "plan-rerequest-check", lambda ctx: planchecks.rerequest(ctx, args.head))
+
+
+def cmd_plan_push_check(args) -> int:
+    # Before the branch is on the remote there is no `origin/<branch>` to take the plan's merge-base
+    # from, so the commit being sent stands in, as it does in the guard (ADR 0063 §5).
+    creating = set(args.old) == {"0"}
+    at = (args.source or args.new) if creating else planacts.BRANCH_TIP
+    return _plan_check(args, "plan-push-check",
+                       lambda ctx: planchecks.push(ctx, old=args.old, new=args.new, source=args.source),
+                       limits_at=at)
+
+
+def cmd_plan_resume_check(args) -> int:
+    def call(ctx):
+        try:
+            scope = planscope.check(str(ctx.repo), base=ctx.facts.merge_base(ctx.branch), head=args.head,
+                                    head_ref=f"refs/heads/{ctx.branch}",
+                                    base_ref=f"refs/heads/{ctx.facts.default_branch()}",
+                                    default_branch=ctx.facts.default_branch())
+        except planscope.PlanScopeError as err:
+            return planchecks.Verdict(unreadable=f"the diff from the merge-base could not be judged ({err})")
+        ok = scope.ref is planscope.Ref.PLAN and not scope.problems
+        return planchecks.resume(ctx, args.head, scope_ok=ok)
+
+    return _plan_check(args, "plan-resume-check", call)
+
+
 def cmd_routine_render(args) -> int:
     pairs = {}
     for item in args.set or []:
@@ -1418,6 +1486,28 @@ def build_parser() -> argparse.ArgumentParser:
     ce.add_argument("--repo", default=".", metavar="DIR", help="the project's checkout, fetched (default: .)")
     ce.add_argument("--server", action="store_true", help="run in the project's CI: no liveness, no cache")
     ce.set_defaults(func=cmd_check_enforcement)
+
+    for name, help_text, extra in (
+            ("plan-ready-check", "E5, E7, E8, E9 and E19 for the ready mark", "head"),
+            ("plan-rerequest-check", "E6 and E10 for a re-request of the CI review", "head"),
+            ("plan-push-check", "E18 and E12 (with the ledger's conflicts) for a plan/* push", "push"),
+            ("plan-resume-check", "E13 for resuming a plan/* branch", "head")):
+        pc = sub.add_parser(name, parents=[common],
+                            help=f"{help_text} (ADR 0063 §5). Exits 0 if every row allows it, 1 if one "
+                                 "refuses, 2 on a failed read. Reports only: the hook writes the ledger")
+        pc.add_argument("--repo", default=".", metavar="DIR", help="the project's checkout (default: .)")
+        pc.add_argument("--branch", required=True, metavar="plan/<plan>/item-NN-partK",
+                        help="the part's branch")
+        if extra == "head":
+            pc.add_argument("--head", required=True, metavar="SHA", help="the head the check is about")
+        else:
+            pc.add_argument("--old", required=True, metavar="SHA", help="the ref's value before the push")
+            pc.add_argument("--new", required=True, metavar="SHA", help="the ref's value after it")
+            pc.add_argument("--source", metavar="REV", help="the local commit the push sends (default: --new)")
+        pc.set_defaults(func={"plan-ready-check": cmd_plan_ready_check,
+                              "plan-rerequest-check": cmd_plan_rerequest_check,
+                              "plan-push-check": cmd_plan_push_check,
+                              "plan-resume-check": cmd_plan_resume_check}[name])
 
     rt = sub.add_parser("routine", help="routine specs")
     rts = rt.add_subparsers(dest="routine_command", required=True)

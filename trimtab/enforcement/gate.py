@@ -562,16 +562,96 @@ def clear_pass(config: Path, repository: str | None = None) -> None:
             continue  # nothing cached under that name
 
 
+LS_REMOTE_SECONDS = 3  # the default-branch head's bound on every guarded call (ADR 0063 §3)
+
+
+def _auth():
+    """The gh authentication the clean fetch uses, or None where it cannot be built (an anonymous read
+    then fails closed on a private repository)."""
+    try:
+        return tools.GhAuth()
+    except tools.ToolError:
+        return None
+
+
+def _no_gh(argv, stdin=None):
+    raise GateError("the current key is read without the API")
+
+
+def remote_head(git: tools.Git, repository: str, auth=None) -> str:
+    """The default branch's head, by `git ls-remote <url> HEAD` under 3 s, with only this environment's
+    pinned configuration: no `insteadOf` of the project's can answer with a stale head (ADR 0063 §3)."""
+    scratch = tools.private_tempdir()
+    try:
+        return git.ls_remote(scratch, f"https://github.com/{repository}.git", "HEAD", LS_REMOTE_SECONDS,
+                             auth)
+    except tools.ToolError as err:
+        raise GateError(f"the default-branch head could not be read ({err})") from err
+    finally:
+        tools.remove_tree(scratch)
+
+
+def pinned_key(repository: str, project: Path, instance_root: Path, code: Path, config: Path,
+               git: tools.Git | None = None, head: str | None = None,
+               pinned: tuple[str, str] | None = None) -> tuple[str, str, str, str]:
+    """The key a pass must carry to be this session's (ADR 0063 §3): the lock's `trimtab_sha`, the base the
+    instance pins at it, the default-branch head, and the install digest.
+
+    With `pinned` given — the `(trimtab_sha, base_sha)` the pass carries, which a guard has — the lock and the instance are
+    not read as objects at all: both are files of the default branch, so they can only change when its
+    head does, and that head is read here. A guard needs that, because the objects at a head the server
+    has just moved to are not in the project's checkout until something fetches, and while the gate fails
+    a run may run no command that could (E21)."""
+    if not REPOSITORY.fullmatch(repository) or ".." in repository:
+        raise GateError(f"{repository!r} is not owner/name")
+    reads = _Reads(_no_gh, git)
+    try:
+        found = head or remote_head(reads.git, repository, _auth())
+        if pinned is None:
+            lock = _lock(reads, project, found, False)
+            trimtab_sha, base = lock.trimtab_sha, _instance(reads, instance_root, lock.trimtab_sha).base_sha
+        else:
+            trimtab_sha, base = pinned
+        entries = _entries(reads, code, base)
+        hooks = [h for e in entries.values() for h in e.hooks]
+        install = snapshot(code, config, project, instance_root, hooks)
+        return (trimtab_sha, base, found, install_digest(install))
+    finally:
+        reads.close()
+
+
+def cached_body(config: Path, repository: str) -> dict | None:
+    """The pass as it was written, or None where there is none this guard can read."""
+    try:
+        directory = guardstate.directory(config, *CACHE_PARTS, create=False)
+        text = guardstate.read(directory / cache_name(repository))
+        body = json.loads(text) if text is not None else None
+    except (guardstate.GuardStateError, ValueError):
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def pass_holds(repository: str, project: Path, instance_root: Path, code: Path, config: Path,
+               git: tools.Git | None = None) -> bool:
+    """Whether the cache holds a pass for the current key. Anything unreadable is no pass (E21 refuses).
+
+    The lock and base come from the pass, and the key is then rebuilt and compared whole, so a pass is
+    accepted only for the default-branch head `ls-remote` reports now and for this install's digest."""
+    body = cached_body(config, repository)
+    if body is None or not all(isinstance(body.get(k), str) for k in ("trimtab_sha", "base_sha")):
+        return False
+    try:
+        key = pinned_key(repository, project, instance_root, code, config, git,
+                         pinned=(body["trimtab_sha"], body["base_sha"]))
+        return cached_pass(config, repository, key)
+    except (GateError, tools.ToolError, OSError, ValueError):
+        return False
+
+
 def cached_pass(config: Path, repository: str, key: tuple[str, str, str, str]) -> bool:
     """Whether a pass is cached for exactly this key under the current epoch. A missing, planted or malformed
     cache, a pass from an earlier epoch, or no epoch at all is no pass."""
     epoch = current_epoch(config)
     if epoch is None:
         return False
-    try:
-        directory = guardstate.directory(config, *CACHE_PARTS, create=False)
-        text = guardstate.read(directory / cache_name(repository))
-        body = json.loads(text) if text is not None else None
-    except (guardstate.GuardStateError, ValueError):
-        return False
-    return body == _body(repository, key, epoch)
+    return cached_body(config, repository) == _body(repository, key, epoch)

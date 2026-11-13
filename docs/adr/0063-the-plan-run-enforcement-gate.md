@@ -916,3 +916,328 @@ each decision function replaced by one that allows, at least one of its tests fa
   `capture/sources.py`.
 - A `cancelled` run counts as an E12 round, and the 6 s hook budget is unmeasured.
 - The ledger, E10, E11 and E23 rest on a file the session's account can write; the ADR 0028 residual stands.
+
+## Amendment 3: the wiring, 2b of the plan-run layer
+
+Amendments 1 and 2 are unchanged. 2b wires 2a's pure rows to live hooks: a row counts as shown only
+where a hook calls it (§2), so this is the part that earns the manifest entries. 2c still holds E22
+and its lock field, so the gate cannot pass yet.
+
+**2b ships.**
+
+- **The facts the review rows read** (`planfacts.GitHubFacts`): the branch-activity events, oldest
+  first, each with its actor, read through the Link cursor (`GhApi.cursor_pages`), which replaces
+  Amendment 1's one-page read; the part's updates now come from those events; a PR's review comments
+  and each comment's anchor commit from one read; each E3 facts run's log through
+  `planreview.parse_facts`, with every `Thread.commit` filled from the comment the thread names; the
+  merge-base and its tree; the anchored line's text for E8's key; the branch's commits; each ledger
+  entry's commits, bounded by the merge-base where it created the branch; the last commit answering a
+  CI review or a failing check; `on_default`; the progress-record names and every PR's head ref for
+  §6; and `Change.removed_lines`, which E18 judges.
+- **The checks** (`planchecks`): `ready` (E5, E7, E8, E9, E19-pending), `rerequest` (E6, E10), `push`
+  (E18 and E12 with the ledger's conflicts), `resume` (E13), `draft` and `round_start` (E23). Each
+  returns one `Verdict`: allowed, refused with the row's own words, or unreadable, and names what the
+  caller must record (the head an update answered while it conflicted, the reason a part stops).
+- **The subcommands** `trimtab plan-ready-check`, `plan-rerequest-check`, `plan-push-check` and
+  `plan-resume-check`: 0 allows, 1 refuses, 2 is a failed read. They report only.
+- **The acts** (`planacts`): what a hook calls. It builds the part's context from the branch, asks a
+  check, and writes what §1 gives the hooks — the update, `conflict`, `rerequest`, `round` and `stop` —
+  and holds §1a's watch-only set.
+- **guard-github** reads the ready mark (`gh pr ready`, a REST `draft` edit, and the GraphQL
+  mutation), the re-request label in any spelling (`gh pr edit`/`gh issue edit`, the REST label
+  routes), a reply's outcome tag, returning the PR to draft, and E23 at `gh pr create`; and it
+  records every allowed `plan/*` ref write in the ledger.
+- **guard-paths** gains `hook_event_name` and `cwd` fields, a Skill branch for E11's recorder and
+  E23's sixth-round refusal, and the E21 branch: in a run session, unless the gate's pass holds for
+  the current key, it refuses every Edit, Write, MultiEdit and NotebookEdit and every Bash command
+  except the installed `bin/trimtab check-enforcement` as the whole command (named by a path that
+  resolves to it, as round 1 changed), and it refuses any write on a `plan/*`
+  branch whose resume check has not passed for its head.
+- **E21's key** (`gate.pinned_key`, `gate.pass_holds`, `enforcement.guardgate`): the default-branch
+  head by `git ls-remote … HEAD` under 3 s with only the pinned configuration, the lock and the
+  instance's base as git objects, and the install digest from local reads. A guard that finds no pass
+  starts one recorder, under a start lock, and refuses.
+- **The manifest** maps E5–E11, E13, E18, E20, E21 and E23, each to its hook, its decision function
+  and the refusal tests that fail when that function is replaced by one that allows. Only E22 is
+  still unmapped, so `trimtab check-enforcement` still fails, and no run starts.
+
+**Choices.**
+
+- **E20 gets its entry here**, not with E22's PR. It had none, and `entry_problem` refuses any base
+  row the manifest does not map, so the gate could never pass without it. Rejected: leaving it to 2c
+  with E22 — the entry is three lines, and forgetting it would read as a missing row rather than as
+  unfinished work. Its decision is `gate.decide`, whose refusal tests are the gate's own.
+- **E23 is read at `gh pr create` in guard-github**, and only its sixth-round half sits in
+  guard-paths. Rejected: both halves in guard-paths, which would have to read `gh pr create` out of a
+  Bash command that guard-github already parses.
+- **A ref write with no source commit refuses**, in a run as well as on a ready PR: `update-branch`,
+  a contents write and a ref update with no sha carry no commit, so no ledger entry could cover them
+  and E13 would then read the branch as holding work no run made. A broad write (`--all`, `--mirror`,
+  `--prune`) that touches a `plan/*` branch refuses for the same reason. Rejected: recording such a
+  write anyway, which would vouch for a head the ledger never saw. This tightens Amendment 1, where
+  those writes passed on a draft PR with a passing scan.
+- **A round is pre-draft when the branch has no open PR**, a server fact, rather than when the
+  ledger holds no `draft` entry. Rejected: the ledger's own entry — at the PreToolUse of
+  `gh pr create` the PR has no number yet, so nothing could write it there; `Ledger.draft` therefore
+  stays unused until something reads a PR number at a point where one exists.
+- **E13 is read on every guarded write, and no verdict is kept.** An earlier draft of this record gave
+  the ledger a seventh event, `resume`, holding E13's verdict for one head, so the check ran once per
+  head; round 3 removed it (see "Review round 3"). Rejected: that entry, and a cache file of its own,
+  because each is one more line the session's account can write and would then stand in for the whole
+  check.
+- **An act's lookup is read strictly only in a run.** Outside a plan run, a fact a lookup cannot read
+  (a PR's head branch, the branch a PR is opened from) is no plan row's business and the command
+  passes; inside a run it refuses. Rejected: refusing every unreadable lookup, which would block an
+  ordinary interactive `gh pr ready` whenever gh cannot answer, for a row that governs runs — and
+  E22 re-checks every server-side row at merge either way.
+- **E18's exception is read from the plan's item section** at the merge-base: the item's numbered
+  entry and the lines indented under it, or its heading and the lines under it; every non-empty line
+  counts, and so does the content of each inline code span, which is how a plan names a line inside a
+  sentence. Rejected: code spans alone, which would refuse a line the plan names in prose.
+- **E21 runs its adapter even for the report command.** `trimtab check-enforcement` is recognised in
+  Python, not in bash. Rejected: a bash-side match, which would duplicate the rule in a second
+  language where the two could drift apart.
+- **The guard-github half of E21 refuses every command the prefilter sent it**, not only the ones it
+  would otherwise judge as writes. guard-paths already refuses the whole shell in a run without a
+  pass, so this is the half that holds where only guard-github is registered, and it needs no
+  read-versus-write reading of its own.
+
+**Measurements (ENG-6.1).** Taken before review round 1 and **not** repeated since: rounds 1 and 2 added a
+Skill gate, a rebuilt key, an `ls-remote` credential helper and a bare-repository probe, so the run-session
+rows below are a floor, and the figure is still to be re-taken. 20 calls of `hooks/guard-paths.sh` per case
+on the workstation, against `main`'s hook as the baseline:
+
+| Case | Before | After |
+|---|---|---|
+| Read, interactive | 17.8 ms | 17.1 ms |
+| Bash, interactive | 17.6 ms | 19.5 ms |
+| Write, interactive | 17.7 ms | 20.6 ms |
+| Bash, run session, gate failing | 13.1 ms | 275.4 ms |
+| Bash, run session, the report command | 10.9 ms | 286.1 ms |
+
+So the E21 branch costs about 3 ms in an interactive session (one classifier call) and about 265 ms
+on a guarded call in a run, before any network read: a python start under `-I -S`, the local reads of
+the key, and the digest. The `ls-remote` is bounded at 3 s and the adapter at 8 s, inside the hook's
+10 s. The first write on each head also pays E13's reads. Amendment 1's 6 s budget for guard-github
+is still unmeasured.
+
+**Residuals (2b's own; the shell-spelling class of Amendment 1 and 2a's residuals stand).**
+
+- **E9's hunk is read by line number.** The E3 facts carry a path and a line, so a fixed commit
+  counts when one of its hunks for that path covers the thread's line. A finding whose line moved
+  between the reviewed commit and the fix is judged at the old number, and a fix that only moves the
+  line passes. The row says "changes lines in the thread's hunk"; the facts hold nothing finer.
+- **The activity read is bounded at 20 pages of 100 events.** Past that it is a failed read, so a
+  long-lived branch stops rather than being judged on part of its history.
+- **A label, a reply, a ready mark or a draft conversion spelt in GraphQL is refused in a run**
+  rather than read: each names the PR or the thread by an ID this guard cannot read. Outside a run
+  they are no plan row's business and pass.
+- **§6 reads every PR in the repository**, bounded at 2000; past that a new part refuses.
+- **`Ledger.draft` has no writer** (above), and `plan-resume-check`'s `--head` is the caller's, where
+  the guard uses the branch's remote head.
+- **The E11 recorder's registration is still the operator's control PR**, so E11 and E23 read as not
+  live until it lands, and `trimtab check-enforcement` says so.
+- **Every guarded call in a run costs the key's reads and E13's**, since no verdict is kept; the cost is
+  unmeasured since round 1 and is the figure still to be re-taken (ENG-6.1).
+- **A session that runs a review pass outside the Skill tool records nothing**, as E11 intends, so a
+  round run any other way does not count — and a session that cannot reach gh cannot record one
+  either, which is a stop rather than an uncounted round.
+
+**Review round 1 (three passes) changed these.** The passes found 5 CRITICAL, 24 HIGH, 11 MEDIUM and 9
+LOW between them, de-duplicated; everything in 2b's own scope is fixed here, and what is left is named
+under the residuals below.
+
+- **Nothing rests on a ref the session can write.** `origin/<default>` and `origin/<branch>` are checked
+  against the heads the server reports before any merge-base, tree, diff, plan-text or ancestry read
+  (`planfacts.default_sha`, `branch_sha`). A local ref the server does not agree with is a failed read,
+  so a `git update-ref` cannot move the merge-base — which would have moved E8's keys and
+  `outside_diff`, emptied E13's commit list and let the plan text name any marker.
+- **A part's first push is judged, and possible.** The merge-base of a branch that is not yet on the
+  remote is taken from the commit being sent, so E18's limits can be read at all (the plan was read at
+  `origin/<branch>`, which does not exist then: every part's first push refused), and E18 now judges
+  that push, where it had returned an allow before any row (E12 still counts nothing: there is no head
+  it answers).
+- **§5a's exception is implemented.** For a merge of the default branch, E18 judges the merge commit's
+  diff from its default-branch parent, so a threshold `main` itself lowered is not the run's change.
+  E7's register-commit shape is still read on the plain diff from the remote head.
+- **E8's deferral can be accepted.** The facts of a review whose `tree` is the merge-base's are read by
+  commit (`facts_runs_for`), because such a review runs on the default branch and never on the part's
+  branch; before this `base_keys` was always empty, so no deferral could ever pass.
+- **E7's alternative carries its naming clause.** Every register file the head adds must be named in an
+  E3-listed thread's deferral reply, not merely have the register-commit shape; without it a run could
+  commit any content as a register entry and have ready accept a head no review saw.
+- **Every thread any run listed is answered.** The ready mark reads the latest line per thread id across
+  runs, so a thread an earlier run opened and the latest run leaves out still needs its reply.
+- **E21's key no longer needs objects the checkout may not hold.** The lock and the pinned base come
+  from the pass itself; the head (by `ls-remote`) and the install digest are rebuilt and the whole key is
+  compared. Both are files of the default branch, so they change only when its head does, and that head
+  is read. Reading them as objects made the gate unopenable after a merge mid-run, since the run may use
+  no command that could fetch.
+- **The one command E21 leaves open is the installed `bin/trimtab`**, named by a path that resolves to
+  it. A basename match accepted any file a run had called `trimtab`, which is arbitrary code in the one
+  place the row allows none.
+- **guard-github reads a run as guard-paths does**: the flag, or a checked-out `plan/*` branch
+  (ADR 0041's signals). A session on a plan branch without the flag was a run to one guard and not the
+  other, so its acts went ungated.
+- **A review pass is gated and weighed.** The E21 branch covers the Skill tool too, ahead of the
+  recorder, so a run whose gate has not passed mints no round; and a pass whose own result says it
+  errored records none.
+- **Spellings now read:** a PR opened by `POST …/pulls` or the GraphQL `createPullRequest` (E23), the
+  `…/comments/{id}/replies` route and an edit of a review comment (§1a), a review posted on the PR, a
+  REST label replacement or clear (both are removals §1a does not allow), `gh issue` in the fail-closed
+  lists, an alias that stops at a plan act, a quoted git-configuration assignment that steers a push,
+  and a dry run — which writes nothing the ledger could record, so it is unreadable rather than judged.
+- **One flake is no longer a permanent stop.** The latest attempt of each job decides, for the
+  secret-scan job and the facts job, and a facts run whose latest attempt did not pass (a superseded or
+  cancelled run) holds no facts rather than failing the read.
+- **The recorder's "at most one"** is the recorder's own lock, probed rather than a lock the guard took
+  and released, and the guard says on stderr whether it started one.
+- **`ls-remote` carries the clean fetch's pinned credential helper**, so a private project answers it.
+- **Smaller fixes.** A write is recorded once per `(branch, old, new, run)`, so a command that also runs
+  quoted text cannot record it twice and break E13's pair equality; `parts_of` raises rather than
+  reading "no parts" when a level above the plan is not private; an item or part that is a bool is
+  refused; a version's parts compare as integers (`float()` overflows past 308 digits); two outcome tags
+  that share a word refuse rather than letting one reply read as another; `_head` turns a failed read
+  into the row's refusal; the branch a PR is opened from is read as `gh` reads it (the branch's merge
+  ref); and two unused option tables are gone.
+- **Tests.** Each test takes a part of its own, so none reads another's rounds (a random method order
+  now passes over four seeds); E13's refusal is driven through the real act rather than a recording
+  stand-in; the hook tests build their environment instead of copying the developer's; and the key,
+  `ls_remote`, both adapters' entry points, the fail-closed arms and every new spelling have cases.
+
+**Residuals added.**
+
+- **§1's residual list is unchanged by E13.** The Consequences above say a forged ledger buys at most E10,
+  E11 and E23. An earlier draft added E13 to that list through a `resume` entry; round 3 removed the entry
+  and reads E13 on every write instead, at the cost recorded under "Review round 3".
+- **A round whose result the harness does not report still counts.** Only a `tool_response` that says
+  error stops a round being recorded; a payload with no result records as before, so a pass that failed
+  silently counts. The harness promises no shape here.
+- **The activity reader does not read `activity_type`.** Every row it feeds fails closed on a shape it
+  does not know, but E13's meaning would change silently if GitHub added a type.
+- **A refusal can still quote git's stderr** in one place (`_refusal`), so a message may echo an argument
+  of the command; no token, header or environment value reaches a refusal, a log or a ledger line.
+- **E12's and E17's register-shape exception is unchanged.** Only E7's gained the naming clause, because
+  E12 and E17 ask whether a push is register-shaped, not whether it answers a thread.
+- **`gh pr create --label` and `POST …/issues` with labels** attach a label without reaching E6 or E10,
+  since a label given at creation is not a label write this guard reads.
+
+Two of round 1's fixes were settled by the guard suite's own pinned cases, and are choices in their own
+right:
+
+- **`HOOK_ALLOW_HARNESS=1` lifts E21's guard-paths half**, as it lifts the allowlist and plan-scope
+  layers (ADR 0041). The first reading here refused in a run whatever the operator exported, on the
+  ground that a run is always narrower; the suite's case "the operator export lifts a run too" pins the
+  opposite, and an override is the operator's decision, never the agent's (CFG-2). E22's server-side
+  re-check still binds the run's PR at merge. Rejected: ignoring the export, which would also leave the
+  harness undevelopable inside a run.
+- **The acts 2b added refuse an unreadable route only in a run.** A `{owner}`/`{repo}` placeholder or a
+  query string on a label, reply, review or PR-create route is a refusal in a plan run, where those rows
+  govern, and no plan row's business outside one — the same rule as every other act's lookup. The routes
+  Amendment 1 shipped (a ref, contents, a merge, a rename, a PR close) keep their unconditional
+  refusals. Rejected: refusing them in every session, which would have turned the suite's pinned
+  interactive reply from an allow into a block for a row that governs runs.
+
+**Review round 2 (the security pass reported; the other two passes were cut off) changed these.**
+
+- **`PlanSupport.in_run` reads the classifier's three signals.** The run flag, a checked-out `plan/*`
+  branch, and a record that the session was autonomous earlier (the record `sm_recorded` reads, with the same
+  rule that a link on its path counts as recorded). A git that fails inside a repository counts as a run,
+  never as interactive, since `tools.Git` refuses a shallow clone, alternates or a partial clone and a session
+  could otherwise make itself interactive to guard-github alone and mark its own PR ready by GraphQL. A
+  detached HEAD in a readable repository is no run by itself. guard-github hands the payload's `session_id`
+  to the support it builds.
+- **`ls-remote` runs inside a bare repository made for the read.** Git discovers a repository upward from its
+  directory and reads that repository's configuration, so a read in a plain temp directory took an
+  `insteadOf` planted in any repository above it, and with it the one server-verified element of E21's key.
+  Rejected: `GIT_CEILING_DIRECTORIES` alone, which stops the search but not a parent that is itself the
+  temp directory.
+- **A dry run is judged and not recorded**, where round 1 had refused it. That refusal reached every dry-run
+  push of any branch, which the guard allowed before 2b and which writes nothing. Every row still reads it.
+- **The plan is read at the merge-base of the branch's server-verified tip**, not of a bare `origin/<branch>`
+  name a session can move; and E7's register-file naming matches a whole path, not a piece of one.
+
+**Residuals named by round 2; round 3 fixed the first two, see below.**
+
+- **The ledger entry for a push is written at PreToolUse, before the push runs.** (Fixed in round 3.)
+- **The `resume` entry is a line the session's account can write.** (Removed in round 3.)
+- **Every guarded write in a run costs a GitHub read for the branch head and a `gh auth token` spawn**, on top
+  of the key's `ls-remote`, against the adapter's 8 s deadline. Neither is cached beyond the pass.
+- **Round 2's `/trimtab-review` and `/code-review` passes did not complete** (a usage limit cut them off); round 3
+  ran all three on the next head.
+
+**Review round 3 (all three passes, on 412edbb) changed these.**
+
+- **The production wiring is tested.** `LazyFacts`, the facts the guard actually builds, delegated 13 of the
+  readers `planacts` and `planchecks` call and raised AttributeError on the rest, so the real guard refused
+  a second push and every ready mark while every test, which injects a fake, passed. It now delegates any
+  reader the real facts have, and a test builds the wrapper and calls every public reader of `GitHubFacts`.
+- **The branch is read as the classifier reads it.** `symbolic-ref --short` prints `heads/plan/x` when a tag
+  has the branch's name; `head_branch` strips the prefix, so `git tag plan/x; git switch plan/x` no longer
+  makes a session interactive to guard-github alone. `in_run` is also remembered per directory, not once.
+- **A branch that is not on the remote needs no ledger yet.** `resume_ok` asked for the ledger before it
+  looked for a remote head, and nothing starts a part's ledger before its first push or review pass, so a run
+  could not edit a file on a fresh branch.
+- **No E13 verdict is kept.** The `resume` ledger event is removed; E13 is read on every guarded write. The
+  security pass would not accept it as "the same class as a forged push line", since it replaces the whole
+  check (the chain of events by the agent, the ledger pairs, the scope of the diff) with one line the
+  session's account can write. Rejected: keeping it with the owner's acceptance, which leaves E13 resting on
+  a file the rule's own text says must be a record no agent can write. Cost: a GitHub read and a few git reads
+  on every write, unmeasured, bounded by the adapter's 8 s deadline, and failing closed.
+- **A recorded push that never landed no longer strands the part.** The ledger entry is written before the push
+  runs, so a denied prompt, a rejected push or the network leaves one the server never saw. E13 and E10 now
+  drop an entry whose new head is on neither the branch nor the default branch before they compare; every
+  entry that did land still has to match a server event exactly (E13) and still counts as a push after the
+  round (E10). This does not loosen what a push could do: a dropped entry contributes no coverage to a
+  branch commit, and a landed one is judged as before. It changes 2a's "refuses rather than leaving it
+  uncounted" for an entry that is not on the branch, which was the part that stranded a run.
+- **Re-request labels are read on every route that sets them.** A `labels` field on a PATCH of an issue or PR
+  (a replacement, so a removal §1a does not allow), `--label` when a PR is created (it emits `labeled`, which
+  starts a CI review, with no open PR for E6 and E10 to judge, so it refuses), and the GraphQL mutations that
+  clear labels, edit or submit review comments, or carry `labelIds`. Before this each started a CI review or
+  changed a judged reply without reaching a row.
+- **A push is recorded against the checkout it was judged in.** With `-C`, the rows read that checkout, and the
+  ledger entry and E18's diff read the hook's own directory; `pushed` now takes the facts and directory the
+  push was judged with.
+- **Smaller:** the `ls-remote` probe directory is made exclusively, so one planted before the read fails
+  closed (a same-uid process can still write into it after, which ADR 0028 already accepts); the recorder
+  child inherits the start lock and holds it for its life, so a second refused call finds it taken;
+  `reports_only` allows only the subcommand's own options and their values; E21's guard-paths half resolves
+  the package root with `readlink -f`, as the other branches do; guard-github falls back to the process's
+  directory rather than `/` when the payload has none; `session_id` wiring, `BRANCH_TIP` in the CLI, bundled
+  dry-run shapes and the record's edge cases have tests.
+
+**Residuals named by round 3.**
+
+- **A dry run is not judged by E18 and E12's ledger conflicts.** The recording act is where they run, and a
+  dry run skips it; every row that reads the push (E14-E17, E19) still judges it. Nothing is written, so
+  nothing opens; the earlier wording said "every row".
+- **A partial clone, a shallow clone or one with alternates counts as a run for guard-github.** `tools.Git`
+  refuses them, which `in_run` reads as a git failure and fails closed; the shell classifier reads without
+  those checks and says interactive. So an interactive session in such a clone has every GitHub command
+  refused once the gate runs. Strict, never looser.
+- **The measurements are still the round-1 figures**, and the `ls-remote` probe's `git init` runs outside
+  its 3 s bound. Re-taking them (ENG-6.1) needs a run with a real default-branch head.
+- **The E9 hunk is read by line number, the activity read is bounded at 20 pages, and a round whose result
+  the harness does not report still counts** (round 2's residuals, unchanged and re-judged by the security pass as
+  accepted).
+
+**After the PR was ready (CI's `lint-test` and `claude-review`) changed these.**
+
+- **A detached HEAD is no plan branch; only a git that fails to answer refuses.** Round 3's E21 and review-recorder
+  arms refused any call where git named no branch inside a repository. CI checks a pull request out detached, so
+  `lint-test` refused everything a test did, and in a run it would stop even the command that switches back
+  (guard-paths already refuses a run's file writes off a `plan/*` branch, ADR 0041). `PlanSupport.branch_unreadable`
+  tells a detached HEAD, no repository and a failed git apart. Reproduced in a clean detached clone.
+- **E13 judges a file tool's own checkout, not only the session's.** An Edit or Write of a file in another
+  worktree or sibling clone that sits on a `plan/*` branch was judged by the session's `cwd`, so it went unjudged
+  while the session stood elsewhere. The directory is the file's nearest existing parent when the file is outside
+  the session's directory. A report command is also refused when the payload gives no usable directory, instead of
+  being resolved against the hook process's own.
+- **Residual: a Bash command's own `git -C other` or `cd` is still judged by the session's `cwd`.** guard-paths does
+  not confine Bash writes (ADR 0041), and resolving a directory from shell text is the open-ended spelling class
+  this record bounds with E22, so E13 does not follow it. The sentence in the PR body that "no write lands on a branch
+  whose resume check has not passed" holds for the file tools and for Bash run in the checkout it names.
+- **Tests no longer depend on `.pyc` files.** The install digest covers every file under `hooks/` and `trimtab/`,
+  and a fresh checkout has none, so a pass armed before Python wrote them never held. The arming helpers pin the
+  digest; its own binding is tested in `test_enforcement_gate`.

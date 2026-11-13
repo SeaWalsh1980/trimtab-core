@@ -206,49 +206,57 @@ class Pushes(unittest.TestCase):
         return {"before": before, "after": after, "timestamp": stamp, "ref": f"refs/heads/{BRANCH}",
                 "activity_type": "push", "actor": {"login": "agent"}}
 
+    def page(self, rows, link=None):
+        """One `gh api -i` answer: the activity endpoint is read through its Link cursor (Amendment 1)."""
+        head = ["HTTP/2.0 200 OK", "Content-Type: application/json"]
+        if link:
+            head.append(f"Link: {link}")
+        return Pages(["\r\n".join(head) + "\r\n\r\n" + json.dumps(rows)])
+
     def test_reads_pushes_since_the_pr_opened(self):
         rows = [self.event(H1, H2), self.event("3" * 40, H1, stamp="2026-11-12T09:00:00Z")]
-        f = facts({PULLS: [pr_row()], self.ACTIVITY: rows})
+        f = facts({PULLS: [pr_row()], self.ACTIVITY: self.page(rows)})
         self.assertEqual(f.pushes(BRANCH), [planrows.Push(H1, H2)])
 
     def test_times_compare_whatever_offset_they_are_written_in(self):
         # the PR opened at 10:00Z: 12:30+02:00 is 10:30Z (after), 11:30+02:00 is 09:30Z (before)
         rows = [self.event(H1, H2, stamp="2026-11-12T12:30:00+02:00"),
                 self.event("3" * 40, H1, stamp="2026-11-12T11:30:00+02:00")]
-        f = facts({PULLS: [pr_row()], self.ACTIVITY: rows})
+        f = facts({PULLS: [pr_row()], self.ACTIVITY: self.page(rows)})
         self.assertEqual(f.pushes(BRANCH), [planrows.Push(H1, H2)])
 
     def test_a_time_that_cannot_be_read_refuses(self):
         for stamp in ("yesterday", "2026-11-12T11:30:00", ""):
             with self.subTest(stamp):
-                f = facts({PULLS: [pr_row()], self.ACTIVITY: [self.event(H1, H2, stamp=stamp)]})
+                f = facts({PULLS: [pr_row()], self.ACTIVITY: self.page([self.event(H1, H2, stamp=stamp)])})
                 with self.assertRaises(FactsError):
                     f.pushes(BRANCH)
 
     def test_a_pr_time_that_cannot_be_read_refuses(self):
-        f = facts({PULLS: [pr_row(created="not a time")], self.ACTIVITY: []})
+        f = facts({PULLS: [pr_row(created="not a time")], self.ACTIVITY: self.page([])})
         with self.assertRaises(FactsError):
             f.pushes(BRANCH)
 
     def test_a_branch_creation_with_a_zero_before_is_not_a_push(self):
-        f = facts({PULLS: [pr_row()], self.ACTIVITY: [self.event("0" * 40, H1)]})
+        f = facts({PULLS: [pr_row()], self.ACTIVITY: self.page([self.event("0" * 40, H1)])})
         self.assertEqual(f.pushes(BRANCH), [])
 
     def test_no_open_pr_means_no_pushes_to_count(self):
         self.assertEqual(facts({PULLS: []}).pushes(BRANCH), ())
 
-    def test_a_page_below_the_limit_is_read_whole(self):
-        rows = [self.event(H1, H2)] * 99
-        f = facts({PULLS: [pr_row()], self.ACTIVITY: rows})
-        self.assertEqual(len(f.pushes(BRANCH)), 99)
+    def test_a_page_with_no_next_link_is_the_whole_list(self):
+        rows = [self.event(H1, H2)] * 100
+        f = facts({PULLS: [pr_row()], self.ACTIVITY: self.page(rows)})
+        self.assertEqual(len(f.pushes(BRANCH)), 100)
 
-    def test_a_full_page_refuses_because_the_rest_is_behind_a_cursor(self):
-        f = facts({PULLS: [pr_row()], self.ACTIVITY: [self.event(H1, H2)] * 100})
-        with self.assertRaisesRegex(FactsError, "or more"):
+    def test_a_next_link_this_reader_cannot_place_refuses(self):
+        broken = '<https://api.github.com/x>; rel="nxt", <https://api.github.com/y>; rel=next'
+        f = facts({PULLS: [pr_row()], self.ACTIVITY: self.page([self.event(H1, H2)], link=broken)})
+        with self.assertRaises(FactsError):
             f.pushes(BRANCH)
 
-    def test_the_read_asks_for_one_page_without_a_page_number(self):
-        f = facts({PULLS: [pr_row()], self.ACTIVITY: []})
+    def test_the_read_asks_for_a_full_page_without_a_page_number(self):
+        f = facts({PULLS: [pr_row()], self.ACTIVITY: self.page([])})
         f.pushes(BRANCH)
         query = [a[4] for a in f.fake.argvs() if "activity" in a[4]][0]
         self.assertIn("per_page=100", query)
@@ -256,7 +264,7 @@ class Pushes(unittest.TestCase):
 
     def test_a_bad_event_refuses(self):
         with self.assertRaises(FactsError):
-            facts({PULLS: [pr_row()], self.ACTIVITY: [{"before": 1}]}).pushes(BRANCH)
+            facts({PULLS: [pr_row()], self.ACTIVITY: self.page([{"before": 1}])}).pushes(BRANCH)
 
 
 class Conflicted(unittest.TestCase):

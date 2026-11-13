@@ -1,6 +1,166 @@
 {
   "schema_version": 1,
   "rows": {
+    "E5": {
+      "row_sha256": "1612670f5cd38fa91fc3fe5b3fd34fc0debacfe1264e7d50f68e9ff3af22e28f",
+      "hooks": [
+        {
+          "file": "guard-github.sh",
+          "event": "PreToolUse",
+          "matcher": "Bash"
+        }
+      ],
+      "tests": [
+        "test_planacts.ReadyMark.test_an_unlisted_review_comment_refuses_and_writes_a_stop",
+        "test_planchecks.ReadyCheck.test_an_unlisted_comment_by_the_review_refuses_ready_and_stops_the_part",
+        "test_planreview.E5.test_a_review_comment_outside_the_facts_refuses",
+        "test_planreview.E5.test_the_login_compares_without_case"
+      ],
+      "decision": {
+        "function": "trimtab.planreview:check_e5",
+        "allow": null
+      }
+    },
+    "E6": {
+      "row_sha256": "ccbc0b0c4b6a9731232ed1fe38212dcc0eaf51ac0a7b922d8153cbe519ee13f0",
+      "hooks": [
+        {
+          "file": "guard-github.sh",
+          "event": "PreToolUse",
+          "matcher": "Bash"
+        }
+      ],
+      "tests": [
+        "test_planacts.RowsOnTheHookPath.test_e6_a_rerequest_of_a_reviewed_head_refuses_through_the_act",
+        "test_planreview.E6.test_a_fail_closed_head_already_re_requested_refuses",
+        "test_planreview.E6.test_a_reviewed_head_refuses",
+        "test_planreview.E6.test_only_the_latest_verdict_counts"
+      ],
+      "decision": {
+        "function": "trimtab.planreview:check_e6",
+        "allow": null
+      }
+    },
+    "E7": {
+      "row_sha256": "c20b174f3aaaa27afa2d8c5f19ce1d86229f142ef38d91d75b58d587b6864073",
+      "hooks": [
+        {
+          "file": "guard-github.sh",
+          "event": "PreToolUse",
+          "matcher": "Bash"
+        }
+      ],
+      "tests": [
+        "test_guard_github_plan_acts.ReadyMark.test_every_spelling_of_the_ready_mark_reaches_the_rows",
+        "test_plan_check_commands.Commands.test_a_refused_row_exits_1_and_names_itself",
+        "test_planchecks.ReadyCheck.test_a_head_no_run_passed_refuses",
+        "test_planchecks.ReadyCheck.test_a_register_commit_counts_only_where_a_deferral_reply_names_each_file",
+        "test_planreview.E7.test_a_failed_review_on_the_head_refuses",
+        "test_planreview.E7.test_a_later_failed_run_on_the_head_overrides_an_earlier_pass",
+        "test_planreview.E7.test_a_register_commit_on_a_failed_head_refuses",
+        "test_planreview.E7.test_no_review_refuses"
+      ],
+      "decision": {
+        "function": "trimtab.planreview:check_e7",
+        "allow": null
+      }
+    },
+    "E8": {
+      "row_sha256": "61a69b7a2d2a075627cca55d48ed67caf700ff06b7587558999df3c6babaa8e6",
+      "hooks": [
+        {
+          "file": "guard-github.sh",
+          "event": "PreToolUse",
+          "matcher": "Bash"
+        }
+      ],
+      "tests": [
+        "test_planacts.RowsOnTheHookPath.test_e8_an_unanswered_thread_refuses_ready_through_the_act",
+        "test_planreview.E8.test_a_critical_thread_refuses_a_deferral",
+        "test_planreview.E8.test_a_deferral_needs_the_deferral_check",
+        "test_planreview.E8.test_a_high_thread_accepts_only_the_fixed_tag",
+        "test_planreview.E8.test_a_reply_by_someone_else_does_not_count",
+        "test_planreview.E8.test_a_reply_without_a_tag_does_not_count",
+        "test_planreview.E8.test_an_unanswered_thread_refuses",
+        "test_planreview.E8.test_every_thread_must_be_answered"
+      ],
+      "decision": {
+        "function": "trimtab.planreview:check_e8",
+        "allow": null
+      }
+    },
+    "E9": {
+      "row_sha256": "c25adf607843ad2c526006e576ac6d32243c99c5de0e746f8ff0d24bed47df4e",
+      "hooks": [
+        {
+          "file": "guard-github.sh",
+          "event": "PreToolUse",
+          "matcher": "Bash"
+        }
+      ],
+      "tests": [
+        "test_planacts.RowsOnTheHookPath.test_e9_a_fixed_reply_that_fixes_nothing_refuses_ready_through_the_act",
+        "test_planreview.E9.test_a_citation_that_does_not_fix_the_finding_refuses",
+        "test_planreview.E9.test_a_fix_the_review_has_not_closed_refuses",
+        "test_planreview.E9.test_a_fixed_reply_citing_no_sha_refuses",
+        "test_planreview.E9.test_a_resolution_by_the_agent_does_not_close",
+        "test_planreview.E9.test_a_thread_reopened_by_a_later_line_is_not_closed",
+        "test_planreview.E9.test_a_thread_with_no_anchor_commit_refuses"
+      ],
+      "decision": {
+        "function": "trimtab.planreview:check_e9",
+        "allow": null
+      }
+    },
+    "E10": {
+      "row_sha256": "75c8b4855e8515548253394527abb19b5691c7583ed70fcdc5e63b83c781d0d4",
+      "hooks": [
+        {
+          "file": "guard-github.sh",
+          "event": "PreToolUse",
+          "matcher": "Bash"
+        }
+      ],
+      "tests": [
+        "test_guard_github_plan_acts.Labels.test_every_spelling_of_the_rerequest_label_reaches_e6_and_e10",
+        "test_planacts.Labels.test_a_rerequest_a_row_refuses_writes_no_rerequest_entry",
+        "test_planacts.Labels.test_the_label_is_matched_without_case",
+        "test_planreview.E10.test_a_ledger_push_off_the_branch_refuses_rather_than_going_uncounted",
+        "test_planreview.E10.test_a_round_before_the_last_answer_refuses",
+        "test_planreview.E10.test_a_round_on_a_head_off_the_branch_refuses",
+        "test_planreview.E10.test_an_answer_commit_off_the_branch_refuses"
+      ],
+      "decision": {
+        "function": "trimtab.planreview:check_e10",
+        "allow": null
+      }
+    },
+    "E11": {
+      "row_sha256": "42a4e44c4d66541865ab242f12bdee6bf50f1130554ca512be8725fdfabdeb6d",
+      "hooks": [
+        {
+          "file": "guard-paths.sh",
+          "event": "PostToolUse",
+          "matcher": "Skill"
+        }
+      ],
+      "tests": [
+        "test_plan_review_record.Recorder.test_a_checkout_the_recorder_cannot_read_blocks",
+        "test_plan_review_record.Recorder.test_a_completed_pass_on_a_plan_branch_is_recorded_with_the_checkouts_head",
+        "test_plan_review_record.Recorder.test_a_failed_fact_read_blocks_rather_than_recording_a_round",
+        "test_plan_review_record.Recorder.test_a_head_that_cannot_be_read_blocks",
+        "test_plan_review_record.Recorder.test_a_result_that_says_nothing_about_an_error_still_records",
+        "test_plan_review_record.Recorder.test_a_round_after_the_pr_opened_is_not_a_pre_draft_round",
+        "test_plan_review_record.Recorder.test_a_sixth_pre_draft_round_refuses_at_its_first_pass"
+      ],
+      "decision": {
+        "function": "trimtab.adapters.plan_review_record:decide",
+        "allow": [
+          0,
+          ""
+        ]
+      }
+    },
     "E12": {
       "row_sha256": "7e05f5efd31f6c513a140e19279341cf550c276409b81a119db356e561598549",
       "hooks": [
@@ -19,6 +179,30 @@
       ],
       "decision": {
         "function": "trimtab.planrows:check_e12",
+        "allow": null
+      }
+    },
+    "E13": {
+      "row_sha256": "75c3209df451c24a310df8d83bc3a7ac5bfa4600675af1b7a2761fd80078547b",
+      "hooks": [
+        {
+          "file": "guard-paths.sh",
+          "event": "PreToolUse",
+          "matcher": "Read|Edit|Write|MultiEdit|NotebookEdit|Bash"
+        }
+      ],
+      "tests": [
+        "test_plan_check_commands.Commands.test_a_diff_outside_the_plans_scope_refuses_the_resume",
+        "test_plan_gate.TheResumeCheckOnEveryWrite.test_a_diff_outside_the_plans_scope_refuses_the_write",
+        "test_planacts.ResumeOnWrite.test_a_chain_the_ledger_does_not_cover_refuses",
+        "test_plan_gate.TheResumeCheckOnEveryWrite.test_a_write_the_resume_check_refuses_is_refused",
+        "test_planreview.E13.test_a_chain_that_does_not_end_at_the_head_refuses",
+        "test_planreview.E13.test_a_chain_that_starts_elsewhere_refuses",
+        "test_planreview.E13.test_a_commit_outside_every_ledger_push_refuses",
+        "test_planreview.E13.test_a_diff_out_of_scope_refuses"
+      ],
+      "decision": {
+        "function": "trimtab.planreview:check_e13",
         "allow": null
       }
     },
@@ -142,6 +326,28 @@
         "allow": null
       }
     },
+    "E18": {
+      "row_sha256": "4ae33a58c96a98bfe563c7e903551fd1678be20b057b2b0cb334f4b1ed1fa1dc",
+      "hooks": [
+        {
+          "file": "guard-github.sh",
+          "event": "PreToolUse",
+          "matcher": "Bash"
+        }
+      ],
+      "tests": [
+        "test_plan_check_commands.Commands.test_a_push_check_reads_the_named_lines_from_the_plan_at_the_merge_base",
+        "test_planacts.Pushes.test_a_push_e18_refuses_is_not_recorded",
+        "test_planreview.E18.test_a_binary_file_the_threshold_patterns_govern_refuses_and_others_pass",
+        "test_planreview.E18.test_a_binary_test_file_cannot_be_judged_and_refuses",
+        "test_planreview.E18.test_a_decimal_threshold_compares_as_a_number",
+        "test_planreview.E18.test_a_deleted_test_file_refuses"
+      ],
+      "decision": {
+        "function": "trimtab.planreview:check_e18",
+        "allow": null
+      }
+    },
     "E19": {
       "row_sha256": "9ab59f49890014356101c53fc83fe9c65c8683b79c1cabd9210e0bfbff1bba8b",
       "hooks": [
@@ -160,6 +366,79 @@
       ],
       "decision": {
         "function": "trimtab.planrows:check_e19",
+        "allow": null
+      }
+    },
+    "E20": {
+      "row_sha256": "f9bf2291e51af9074da88fb5b0264025e9ce341312ae3660aa4722091ff96a14",
+      "hooks": [],
+      "tests": [
+        "test_enforcement_gate.Decides.test_e22_needs_its_base_entry",
+        "test_enforcement_gate.Decides.test_e22_needs_its_project_job",
+        "test_enforcement_gate.Decides.test_shows_no_base_row_hooked_or_not_on_a_changed_checkout",
+        "test_enforcement_gate.Decides.test_shows_no_base_row_the_manifest_leaves_out",
+        "test_enforcement_gate.Decides.test_shows_no_base_row_while_this_bases_ci_failed",
+        "test_enforcement_gate.Decides.test_shows_no_project_row_the_instance_names_no_job_for",
+        "test_enforcement_gate.Decides.test_shows_no_project_row_whose_job_failed",
+        "test_enforcement_gate.Decides.test_shows_no_row_whose_hook_is_not_live"
+      ],
+      "decision": {
+        "function": "trimtab.enforcement.gate:decide",
+        "allow": []
+      }
+    },
+    "E21": {
+      "row_sha256": "926df84e3e33fac8b72ac41f4929d69c09059c5a547d94c2400deff08e3d2207",
+      "hooks": [
+        {
+          "file": "guard-paths.sh",
+          "event": "PreToolUse",
+          "matcher": "Read|Edit|Write|MultiEdit|NotebookEdit|Bash"
+        },
+        {
+          "file": "guard-github.sh",
+          "event": "PreToolUse",
+          "matcher": "Bash"
+        }
+      ],
+      "tests": [
+        "test_plan_gate.GuardGithubHalf.test_a_plan_branch_without_the_flag_is_judged_as_a_run",
+        "test_plan_gate.GuardGithubHalf.test_a_run_reaches_github_with_nothing_while_the_gate_fails",
+        "test_plan_gate.GuardPathsHalf.test_a_call_whose_checkout_cannot_be_read_blocks",
+        "test_plan_gate.GuardPathsHalf.test_a_review_pass_is_refused_too_while_the_gate_fails",
+        "test_plan_gate.GuardPathsHalf.test_every_bash_command_but_the_report_is_refused",
+        "test_plan_gate.GuardPathsHalf.test_every_write_tool_is_refused_while_the_gate_fails",
+        "test_plan_gate.TheRecorderStart.test_a_project_with_no_origin_is_no_pass"
+      ],
+      "decision": {
+        "function": "trimtab.enforcement.guardgate:holds",
+        "allow": true
+      }
+    },
+    "E23": {
+      "row_sha256": "2ab06f88957188b1004aa168821543635f60c528bbf4055a98024c0618e4f7a0",
+      "hooks": [
+        {
+          "file": "guard-github.sh",
+          "event": "PreToolUse",
+          "matcher": "Bash"
+        },
+        {
+          "file": "guard-paths.sh",
+          "event": "PreToolUse",
+          "matcher": "Skill"
+        }
+      ],
+      "tests": [
+        "test_guard_github_plan_acts.MoreSpellings.test_a_pr_opened_through_the_api_reaches_e23",
+        "test_guard_github_plan_acts.TheDraftPr.test_opening_the_pr_needs_a_complete_round_on_the_head",
+        "test_planacts.FailClosedArms.test_a_failed_read_refuses_each_act_that_needs_it",
+        "test_planacts.Rounds.test_opening_the_draft_needs_a_complete_round_on_the_head",
+        "test_planreview.E23.test_more_than_five_pre_draft_rounds_refuses",
+        "test_planreview.E23.test_no_round_on_the_exact_head_refuses"
+      ],
+      "decision": {
+        "function": "trimtab.planreview:check_e23",
         "allow": null
       }
     }
