@@ -12,10 +12,52 @@ import yaml
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
 
+REVIEW_WORKFLOW = "claude-code-review.yml"
+REVIEW_JOB = "claude-review"
+REVIEW_ACTION_PREFIX = "anthropics/claude-code-action@"
+JOB_TOKEN = "${{ github.token }}"
+# Fragments of a key name through which a workflow asks for the Claude App's token
+# again: the OIDC permission, the request variables the exchange reads, the review
+# action's own App inputs, and the credentials an App-token action takes. Matched as
+# substrings of a key, so an env name such as ACTIONS_ID_TOKEN_REQUEST_URL is caught
+# too, in either spelling.
+APP_TOKEN_KEY_FRAGMENTS = (
+    "id-token",
+    "id_token",
+    "app-token",
+    "app_token",
+    "app-id",
+    "app_id",
+    "client-id",
+    "client_id",
+    "private-key",
+    "private_key",
+    "oidc",
+)
+# The action that mints an App token here, whatever the token is then passed to. One
+# name, so another minting action would need adding; its App inputs are keys, so the
+# fragments above would catch those.
+APP_TOKEN_ACTION = "create-github-app-token"
+
 
 def load(name: str) -> dict:
     # PyYAML reads the bare key `on` as True.
     return yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
+
+
+def mapping_keys(node) -> list:
+    """Every mapping key in a parsed workflow, lowercased.
+
+    Keys only: the prompt and the messages are free to name OIDC in prose.
+    """
+    if isinstance(node, dict):
+        keys = [str(key).lower() for key in node]
+        for value in node.values():
+            keys += mapping_keys(value)
+        return keys
+    if isinstance(node, list):
+        return [key for item in node for key in mapping_keys(item)]
+    return []
 
 
 class CiWorkflowTest(unittest.TestCase):
@@ -50,37 +92,53 @@ class CiWorkflowTest(unittest.TestCase):
 
 class ClaudeReviewWorkflowTest(unittest.TestCase):
     def setUp(self):
-        self.workflow = load("claude-code-review.yml")
+        self.workflow = load(REVIEW_WORKFLOW)
 
     def test_returning_to_draft_cancels_a_review_in_progress(self):
         self.assertIn("converted_to_draft", self.workflow[True]["pull_request"]["types"])
         self.assertIs(self.workflow["concurrency"]["cancel-in-progress"], True)
 
     def test_the_run_that_cancels_does_not_review(self):
-        self.assertEqual(self.workflow["jobs"]["claude-review"]["if"], "github.event.pull_request.draft == false")
+        self.assertEqual(self.workflow["jobs"][REVIEW_JOB]["if"], "github.event.pull_request.draft == false")
 
     def test_the_skipped_job_never_reports_as_the_required_check(self):
-        self.assertEqual(self.workflow["jobs"]["claude-review"]["name"],
+        self.assertEqual(self.workflow["jobs"][REVIEW_JOB]["name"],
                          "${{ github.event.pull_request.draft && 'claude-review (draft, not run)' || 'claude-review' }}")
 
-    def test_the_review_job_requests_no_oidc_token(self):
-        # Without id-token the action cannot exchange for the Claude App's token (ADR 0071).
-        job = self.workflow["jobs"]["claude-review"]
+    def test_no_key_names_an_app_token_path(self):
+        # Restoring the Claude App's token (ADR 0071) means a permission, an input or
+        # an env name that asks for it. Those are keys, so a key naming one fails
+        # here, anywhere in the file; prose in the prompt and the messages is free to
+        # discuss OIDC. A token smuggled in as a VALUE is out of this test's reach:
+        # test_the_review_uses_the_jobs_own_token pins the review action's own input,
+        # but a `run:` step or a local composite action could still mint one unseen.
+        keys = mapping_keys(self.workflow)
 
-        self.assertNotIn("id-token", self.workflow.get("permissions", {}))
-        self.assertNotIn("id-token", job.get("permissions", {}))
+        for fragment in APP_TOKEN_KEY_FRAGMENTS:
+            with self.subTest(fragment=fragment):
+                named = [key for key in keys if fragment in key]
+
+                self.assertEqual(named, [], f"{REVIEW_WORKFLOW} names {named}")
+
+    def test_no_step_mints_an_app_token(self):
+        # Every job, not just the reviewer's: a second job could mint the token and
+        # pass it on.
+        for name, job in self.workflow["jobs"].items():
+            for step in job.get("steps", []):
+                with self.subTest(job=name, step=step.get("name", step.get("uses"))):
+                    self.assertNotIn(APP_TOKEN_ACTION, str(step.get("uses", "")))
 
     def test_the_review_uses_the_jobs_own_token(self):
-        steps = self.workflow["jobs"]["claude-review"]["steps"]
-        action = [s for s in steps if str(s.get("uses", "")).startswith("anthropics/claude-code-action@")]
+        steps = self.workflow["jobs"][REVIEW_JOB]["steps"]
+        action = [s for s in steps if str(s.get("uses", "")).startswith(REVIEW_ACTION_PREFIX)]
 
         self.assertEqual(len(action), 1)
-        self.assertEqual(action[0]["with"]["github_token"], "${{ github.token }}")
+        self.assertEqual(action[0]["with"]["github_token"], JOB_TOKEN)
 
     def test_the_review_token_is_comment_only(self):
         self.assertEqual(self.workflow["permissions"],
                          {"contents": "read", "pull-requests": "write", "issues": "read"})
-        self.assertNotIn("permissions", self.workflow["jobs"]["claude-review"])
+        self.assertNotIn("permissions", self.workflow["jobs"][REVIEW_JOB])
 
 
 if __name__ == "__main__":
