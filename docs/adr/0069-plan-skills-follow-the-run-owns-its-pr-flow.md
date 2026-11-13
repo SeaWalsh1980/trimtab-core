@@ -75,7 +75,9 @@ unmeasured defaults a project may override.
   review pass that fails twice on one head is a stop; a failed read anywhere in the in-flight table
   is a stop; an infrastructure failure that fails its re-run is an ordinary failing check.
 - **No write without authority:** a failed authorisation check or gate, in any session, and
-  in-flight work the run may not build on, forbid every file write; the stop only labels. A
+  in-flight work the run may not build on, forbid every file write; the stop only labels.
+  `stops.md` keeps those apart from the stops whose one write is the stop record itself (a
+  secret-scan failure, a stray Bash write). A
   ledger the session cannot read counts as none. A label write that fails twice is reported as
   "stopped but unlabelled". An open blocked PR is judged by its label events, not the label's
   presence. A `fail` verdict that leaves nothing to fix, an in-scope finding the fix limits
@@ -128,5 +130,5 @@ unmeasured defaults a project may override.
 
 ## Measurements
 
-None. The line counts after the change: `plan-run/SKILL.md` 174, `plan-item/SKILL.md` 108,
+None. The line counts after the change: `plan-run/SKILL.md` 174, `plan-item/SKILL.md` 109,
 `plan-pr/SKILL.md` 117.

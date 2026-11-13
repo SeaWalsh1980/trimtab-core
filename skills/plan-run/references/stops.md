@@ -14,9 +14,9 @@ reviewed PR). Then, by where the part is; take the first row that applies:
 | Where the part is | Record | Labels |
 |---|---|---|
 | The merge was not confirmed (section 1) | No file write. | None: that stop reports only. |
-| One of the "Stops that forbid a write" | No file write. | `plan:blocked` on the open item PR if there is one, otherwise on the record PR; remove `plan:continue` from it. |
+| One of the "Stops with no write" | No file write. | `plan:blocked` on the open item PR if there is one, otherwise on the record PR; remove `plan:continue` from it. |
 | No branch pushed yet: any stop before the part's first push (sections 2–4, or plan-item step 1) | No file write. | `plan:blocked` on the record PR (below), through `gh api` if `gh pr` is blocked; remove `plan:continue` from it. |
-| Work began on a `plan/…` branch, its draft has not opened, and this session may write to it | Commit the progress record on the branch, with `## Status` saying whether this part finished (`stopped unfinished` if not) and `## Next` reading `blocked: <reason>`, and push it, unless the stop is one of the "Stops that forbid a write". | The same merged PR as the row above: `plan:blocked` on, `plan:continue` off. |
+| Work began on a `plan/…` branch, its draft has not opened, and this session may write to it | Commit the progress record on the branch, with `## Status` saying whether this part finished (`stopped unfinished` if not) and `## Next` reading `blocked: <reason>`, and push it, within the limits of "Stops with a limited write" where one applies. | The same merged PR as the row above: `plan:blocked` on, `plan:continue` off. |
 | The item's PR is open | As the row above, pushed to the PR's branch (returning the PR to draft first if it is ready). | `plan:blocked` on the PR; remove any `plan:continue` from it. The labels always follow the final `## Next`. |
 
 **The record PR** is the merged PR whose progress record the session took, or would take, its next
@@ -30,19 +30,26 @@ nothing and says so. A restart that resumed a branch or an open PR takes that br
 **If a label write fails**, try it once more. If it fails again, make no further write, and report
 loudly that the run is stopped but unlabelled, naming the PR, so the operator labels it.
 
-## Stops that forbid a write
+## Stops with no write
 
-- **Launched without `TRIMTAB_PLAN_RUN=1`** (check 0): no file write at all, not even the record.
+These take the table's second row: no file write at all, not even the record; they only label.
+
+- **Launched without `TRIMTAB_PLAN_RUN=1`** (check 0).
 - **The authorisation check (checks 1–4) or the gate failed**, in any session, whatever is in
   flight: the run has no authority to write.
 - **In-flight work the run may not build on** (plan-run/references/in-flight.md): a fork head, a
   foreign author, a push the run cannot vouch for, or a read that failed.
-- **A secret-scan failure:** never fixed by the run. The one write it allows is the stop record
-  itself: one push touching only the part's progress record, then label as the table says.
-- **No round ledger for the part** (plan-pr/SKILL.md, "Who owns the PR"): no file write or push,
-  whether the PR is ready (watch-only) or a draft. A ledger the session cannot read counts as none.
+- **No round ledger for the part** (plan-pr/SKILL.md, "Who owns the PR"), whether the PR is ready
+  (watch-only) or a draft. A ledger the session cannot read counts as none.
+
+## Stops with a limited write
+
+These take the row for where the part is, and write the stop record only:
+
+- **A secret-scan failure:** never fixed by the run. The one write is one push touching only the
+  part's progress record.
 - **A stray Bash write** (a path the call changed outside the plan's scope, reported after the
-  call): do not commit it, and name its path in the `blocked:` reason of `## Next`.
+  call): do not commit the stray write; the record's `blocked:` reason in `## Next` names its path.
 
 ## When the label and the record disagree
 
