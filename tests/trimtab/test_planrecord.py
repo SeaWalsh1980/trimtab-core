@@ -249,6 +249,41 @@ class NextOnRestart(Records):
         self.assertEqual((work, len(problems)), ("", 1))
         self.assertIn("indented heading", problems[0])
 
+    def test_a_heading_behind_a_blockquote_or_list_marker_is_a_named_problem(self):
+        """Markdown renders each as a heading the reader would not see, so none may sit anywhere in a record."""
+        prefixes = (">", "> >", "  >", "-", "*", "+", "1.", "2)", "- >", "> -", "   -", "1. 2.")
+        for prefix in prefixes:
+            with self.subTest(prefix=prefix):
+                self.merge_branch("prefixed", {record_path(1, 1): f"## Done\nx\n{prefix} ## Status\n\n## Status\n"
+                                                                  "item 1 complete\n"})
+                self.publish()
+
+                work, problems = planrecord.next_work(str(self.repo), self.tip_of(), self.latest(), PLAN_TEXT)
+
+                self.assertEqual((work, len(problems)), ("", 1))
+                self.assertIn("blockquote or list marker", problems[0])
+                tpa.git(self.repo, "reset", "-q", "--hard", "HEAD~1")
+                tpa.git(self.repo, "branch", "-q", "-D", "prefixed")
+                self.publish()
+
+    def test_a_blockquote_with_no_space_before_the_hashes_is_refused(self):
+        self.merge_branch("nospace", {record_path(1, 1): "## Done\n>## Status\n\n## Status\nitem 1 complete\n"})
+        self.publish()
+
+        work, problems = planrecord.next_work(str(self.repo), self.tip_of(), self.latest(), PLAN_TEXT)
+
+        self.assertEqual((work, len(problems)), ("", 1))
+
+    def test_prefixed_lines_that_are_not_headings_do_not_trip_the_refusal(self):
+        """A marker with no heading after it, a hash with no blank after it, and a marker with no space are text."""
+        body = ("## Done\n- #123 fixed\n> a plain quote\n- an item\n1. another\n-## not a list\n"
+                "The line reads `## Status` then `item 1 complete`.\n\n## Status\nitem 1 complete\n")
+        self.merge_branch("plain", {record_path(1, 1): body})
+        self.publish()
+
+        self.assertEqual(planrecord.next_work(str(self.repo), self.tip_of(), self.latest(), PLAN_TEXT),
+                         ("item 02 part 1", ()))
+
     def test_a_second_line_under_status_is_a_named_problem(self):
         self.merge_branch("twoline", {record_path(1, 1): "## Done\nx\n\n## Status\nitem 1 complete\nitem 2 "
                                                          "complete\n"})
@@ -388,6 +423,22 @@ class NextOnRestart(Records):
                 items, _ = planrecord.plan_items(text)
 
                 self.assertEqual(items, (1, 2))
+
+    def test_a_heading_behind_a_blockquote_or_list_marker_anywhere_in_the_plan_is_a_named_problem(self):
+        """`> ## Items` before the section is a second heading this cannot see; `1. ## x` passes as item text."""
+        cases = ("> ## Items\n\n## Items\n\n1. a\n", "## Items\n\n1. ## a\n2. b\n", "- ## Notes\n\n## Items\n\n1. a\n",
+                 "## Items\n\n1. a\n   > ## Notes\n2. b\n", "## Items\n\n1. a\n> > ## Notes\n")
+        for text in cases:
+            with self.subTest(text=text):
+                items, problems = planrecord.plan_items(text)
+
+                self.assertEqual((items, len(problems)), ((), 1))
+                self.assertIn("blockquote or list marker", problems[0])
+
+    def test_plain_lines_in_a_plan_that_merely_start_with_a_marker_are_still_read(self):
+        text = "# plan\n> a plain quote about #123\n\n## Items\n\n1. a #1 thing\n2. b\n"
+
+        self.assertEqual(planrecord.plan_items(text), ((1, 2), ()))
 
     def test_a_bare_carriage_return_inside_a_line_is_a_named_problem(self):
         """Markdown reads it as a line ending, so the item after it would be invisible here."""

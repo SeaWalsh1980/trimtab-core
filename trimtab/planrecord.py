@@ -44,6 +44,10 @@ ITEM_LINE = re.compile(r"([0-9]+)\.[ \t]+\S.*")
 SUB_ITEM = re.compile(r"([ \t]*)([0-9]+)[.)]([ \t]|$)")
 SUB_INDENT = 4
 INDENTED_HEADING = re.compile(r"[ \t]+#{1,6}[ \t]")
+# A heading behind a blockquote marker (`>`, nested included) or a list marker (`-`, `*`, `+`, `N.`, `N)`), with
+# any indentation: markdown renders it as a heading inside the quote or item, and this reader would not see it.
+# Which prefixes render as a heading is not this reader's to decide, so every one is refused.
+PREFIXED_HEADING = re.compile(r"[ \t]*(?:(?:>|[-*+][ \t]|[0-9]+[.)][ \t])[ \t]*)+#{1,6}[ \t]")
 MAX_RECORDS = 5000  # record paths git names in one answer; past it, an error rather than a partial list (ENG-6.2)
 
 
@@ -166,6 +170,8 @@ def _status(text: str) -> tuple[str | None, str]:
     heads = [i for i, line in enumerate(lines) if STATUS_HEADING.fullmatch(line)]
     if any(INDENTED_HEADING.match(line) for line in lines):  # markdown may read it as a heading; this does not
         return None, "holds an indented heading, which markdown may read as a ## Status this does not see"
+    if any(PREFIXED_HEADING.match(line) for line in lines):
+        return None, "holds a heading behind a blockquote or list marker, which markdown renders as a heading"
     if not heads:
         return None, "has no ## Status heading"
     if len(heads) > 1:  # a quoted or fenced example counts: the reader cannot tell which the author meant
@@ -217,12 +223,18 @@ def plan_items(plan_text: str) -> tuple[tuple[int, ...], tuple[str, ...]]:
 
     A numbered line indented less than four spaces is refused rather than read as a sub-step, because markdown
     reads it as an item of the same list: it is the one shape that could hide a later item. So is an indented
-    heading, which markdown may read as ending the section."""
+    heading, which markdown may read as ending the section, and so is any heading behind a blockquote or list
+    marker anywhere in the plan."""
     lines = _lines(plan_text)
     # A bare CR is a line ending to markdown but not to the split above, so a line holding one could carry an
     # item this reads as text. Refuse rather than decide which of the two readings is the author's.
     if any("\r" in line for line in lines):
         return (), ("the plan holds a carriage return inside a line; markdown would read it as a line ending",)
+    # Whole plan, like the CR check: a `> ## Items` before the section would be a second heading this cannot
+    # see, and `1. ## x` would pass as an item's text, so the file has to be sound before the section is located.
+    if any(PREFIXED_HEADING.match(line) for line in lines):
+        return (), ("the plan holds a heading behind a blockquote or list marker, which markdown renders as a "
+                    "heading this reader would not see",)
     heads = [i for i, line in enumerate(lines) if ITEMS_HEADING.fullmatch(line)]
     if not heads:
         return (), ("the plan has no ## Items section",)
