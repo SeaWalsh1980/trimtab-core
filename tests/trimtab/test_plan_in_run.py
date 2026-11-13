@@ -174,6 +174,18 @@ class InRun(unittest.TestCase):
 
         self.assertEqual(seen, [SID, None])
 
+    def test_branch_unreadable_tells_a_failed_git_from_a_detached_head_or_no_repository(self):
+        branch = self.support({HEAD_REF: "main\n", GIT_DIR: ".git\n"})
+        detached = self.support({GIT_DIR: ".git\n"})  # symbolic-ref fails, rev-parse still answers
+        failing = self.support({})
+        failing._is_repository = lambda cwd: True
+        outside = self.support({})
+        outside._is_repository = lambda cwd: False
+
+        self.assertEqual([branch.branch_unreadable(), detached.branch_unreadable(),
+                          failing.branch_unreadable(), outside.branch_unreadable()],
+                         [False, False, True, False])
+
     def test_the_answer_is_read_once(self):
         calls = []
 

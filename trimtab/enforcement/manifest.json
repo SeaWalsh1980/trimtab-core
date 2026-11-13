@@ -193,8 +193,8 @@
       ],
       "tests": [
         "test_plan_check_commands.Commands.test_a_diff_outside_the_plans_scope_refuses_the_resume",
-        "test_plan_gate.TheResumeCheckOnEveryWrite.test_a_checkout_whose_branch_cannot_be_read_refuses_in_a_run",
         "test_plan_gate.TheResumeCheckOnEveryWrite.test_a_diff_outside_the_plans_scope_refuses_the_write",
+        "test_planacts.ResumeOnWrite.test_a_chain_the_ledger_does_not_cover_refuses",
         "test_plan_gate.TheResumeCheckOnEveryWrite.test_a_write_the_resume_check_refuses_is_refused",
         "test_planreview.E13.test_a_chain_that_does_not_end_at_the_head_refuses",
         "test_planreview.E13.test_a_chain_that_starts_elsewhere_refuses",

@@ -237,6 +237,20 @@ class PlanSupport:
         record = folder / hashlib.sha256(sid.encode()).hexdigest()
         return os.path.islink(record) or record.exists()
 
+    def branch_unreadable(self, cwd: Path | None = None) -> bool:
+        """Whether git failed to say which branch is checked out, as against there being none to name.
+
+        `head_branch` answers None for three different things: no repository here, a detached HEAD (the
+        checkout CI and a bisect leave behind), and a git that failed. Only the last is a refusal: a detached
+        HEAD is no `plan/*` branch (guard-paths already refuses a run's file writes off one), and refusing it
+        would stop a run from running even the command that switches back (review round 3)."""
+        where = cwd or self.cwd
+        if self.head_branch(where) is not None:
+            return False
+        if self._run(where, "rev-parse", "--git-dir") is not None:
+            return False  # git answers, so the checkout is simply detached
+        return self._is_repository(where)
+
     def in_repository(self, cwd: Path) -> bool:
         """Whether `cwd` is inside a git repository at all. A guard that could not read the branch tells
         "there is no repository here" (nothing to judge) from "git failed" (a refusal) with this."""

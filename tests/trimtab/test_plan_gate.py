@@ -83,6 +83,17 @@ class ReportsOnly(unittest.TestCase):
                 self.assertFalse(plan_gate.reports_only(command, self.code))
 
 
+def stable_install():
+    """Patches that fix the install digest, applied wherever a test arms a pass and wherever it checks one.
+
+    The digest covers every file under `hooks/` and `trimtab/`, and a fresh checkout has no `__pycache__`:
+    Python writes `.pyc` files as the test imports modules, so a digest taken before and after differs and a
+    pass armed first never holds. CI failed on exactly that while the suite passed in a populated tree. The
+    key's other elements (lock, base, head) stay real; the digest's own binding is tested in test_enforcement_gate."""
+    return [mock.patch.object(gate, "snapshot", lambda *a, **kw: object()),
+            mock.patch.object(gate, "install_digest", lambda install: "d" * 64)]
+
+
 class RealGate:
     """A real enforcement cache, armed or not, so a case is decided by `guardgate.holds` itself.
 
@@ -104,8 +115,15 @@ class RealGate:
         self.project = self.code if armed else self.tmp  # outside a checkout there is no origin: no pass
         self.pinned = ("e" * 40, gate.head_of(self.code))
         if armed:
-            armed_key = gate.pinned_key(self.REPOSITORY, self.project, self.instance, self.code,
-                                        self.config, head=self.head, pinned=self.pinned)
+            patches = stable_install()
+            for patch in patches:
+                patch.start()
+            try:
+                armed_key = gate.pinned_key(self.REPOSITORY, self.project, self.instance, self.code,
+                                            self.config, head=self.head, pinned=self.pinned)
+            finally:
+                for patch in reversed(patches):
+                    patch.stop()
             directory = gate.guardstate.directory(self.config, *gate.CACHE_PARTS, create=True)
             gate.guardstate.write(directory / gate.EPOCH, "f" * 32)
             gate.record_pass(self.config, self.REPOSITORY, armed_key, "f" * 32)
@@ -116,6 +134,7 @@ class RealGate:
         out = [mock.patch.dict(os.environ, env, clear=True)]
         if self.armed:  # the one read that would go to the network
             out.append(mock.patch.object(gate, "remote_head", lambda git, repo, auth=None: self.head))
+            out.extend(stable_install())
         return out
 
 
@@ -192,7 +211,9 @@ class TheResumeCheckOnEveryWrite(unittest.TestCase):
         self.addCleanup(plan_fixture.tear_down)
         self.branch, self.ledger = plan_fixture.own_part(self)
 
-    def decide(self, load, branch=None, facts=None, scope_ok=True):
+    NO_BRANCH = object()  # `branch=None` means "this test's own part"; this one means git named none
+
+    def decide(self, load, branch=None, facts=None, scope_ok=True, unreadable=True):
         from test_planchecks import AGENT, MB, FakeFacts
         from trimtab import planacts, planguard, planreview, planscope
 
@@ -200,7 +221,7 @@ class TheResumeCheckOnEveryWrite(unittest.TestCase):
         found = facts if facts is not None else FakeFacts(
             branch_commits=(H1,), activity=events, merge_base=MB,
             push_commits={(MB, H1): frozenset({H1})})
-        named = self.branch if branch is None else branch
+        named = None if branch is self.NO_BRANCH else (self.branch if branch is None else branch)
 
         class Stub:
             def __init__(self, where):
@@ -209,8 +230,8 @@ class TheResumeCheckOnEveryWrite(unittest.TestCase):
             def head_branch(self, cwd=None):
                 return named
 
-            def in_repository(self, cwd):
-                return True
+            def branch_unreadable(self, cwd=None):
+                return unreadable
 
         result = planscope.Result(planscope.Ref.PLAN, plan_fixture.PLAN,
                                   () if scope_ok else ("src/x.py: outside",))
@@ -245,11 +266,22 @@ class TheResumeCheckOnEveryWrite(unittest.TestCase):
         self.assertEqual(self.decide(payload(), branch="feat/x", facts=FakeFacts(raises="activity"))[0],
                          ALLOW)
 
+    def test_a_detached_head_is_no_plan_branch_and_judges_nothing(self):
+        # CI checks a pull request out detached, and so does a bisect; refusing it would stop a run from
+        # running even the command that switches back. File writes off a plan branch are guard-paths'
+        # own refusal (ADR 0041), and a git that fails to answer still refuses, below.
+        from test_planchecks import FakeFacts
+
+        code, _ = self.decide(payload(), branch=self.NO_BRANCH, unreadable=False,
+                              facts=FakeFacts(raises="activity"))
+
+        self.assertEqual(code, ALLOW)
+
     def test_a_checkout_whose_branch_cannot_be_read_refuses_in_a_run(self):
-        code, message = self.decide(payload(), branch=None)
+        code, message = self.decide(payload(), branch=self.NO_BRANCH)
 
         self.assertEqual(code, BLOCK)
-        self.assertIn("E13", message)
+        self.assertIn("cannot be read", message)
 
 
 class GuardGithubHalf(unittest.TestCase):
@@ -421,6 +453,9 @@ class TheKey(unittest.TestCase):
         self.code = roots.code_root()
         self.head = "d" * 40
         self.lock, self.base = "e" * 40, gate.head_of(self.code)
+        for patch in stable_install():
+            patch.start()
+            self.addCleanup(patch.stop)
 
     def key(self, **kw):
         return gate.pinned_key("owner/proj", self.code, self.code, self.code, self.config,

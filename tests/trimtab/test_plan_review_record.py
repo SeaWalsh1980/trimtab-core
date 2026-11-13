@@ -28,13 +28,17 @@ def tearDownModule():
 
 
 class Support:
-    def __init__(self, facts, branch=None, head=H1, plan_run=True):
+    def __init__(self, facts, branch=None, head=H1, plan_run=True, unreadable=False):
+        self._unreadable = unreadable
         branch = branch or BRANCH
         self.facts, self.cwd, self.plan_run = facts, Path(CWD), plan_run
         self._branch, self._head = branch, head
 
     def head_branch(self, cwd=None):
         return self._branch
+
+    def branch_unreadable(self, cwd=None):
+        return self._unreadable
 
     def head_sha(self, cwd=None):
         return self._head
@@ -122,6 +126,21 @@ class Recorder(unittest.TestCase):
 
         self.assertEqual(code, BLOCK)
         self.assertIn("checkout", message)
+
+    def test_a_detached_head_has_no_plan_part_to_count_a_round_for(self):
+        sup = self.support(FakeFacts(open_pr=None), branch=None, unreadable=False)
+        sup._branch = None
+
+        self.assertEqual(recorder.decide(payload(), sup)[0], ALLOW)
+
+    def test_a_branch_a_failing_git_cannot_name_blocks_the_round(self):
+        sup = self.support(FakeFacts(open_pr=None), unreadable=True)
+        sup._branch = None
+
+        code, message = recorder.decide(payload(), sup)
+
+        self.assertEqual(code, BLOCK)
+        self.assertIn("cannot be read", message)
 
     def test_a_head_that_cannot_be_read_blocks(self):
         code, message = recorder.decide(payload(), self.support(FakeFacts(), head=None))

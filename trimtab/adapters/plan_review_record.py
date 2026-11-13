@@ -66,12 +66,12 @@ def decide(payload: dict, support=None) -> tuple[int, str]:
     found = support or planguard.PlanSupport(where)
     branch = found.head_branch(where)
     if branch is None:
-        # None is both "no repository here" and "git failed or HEAD is detached". The second must not
-        # read as "no plan part": a round the guard cannot place is a refusal (SEC-2.5).
-        if not found.in_repository(where):
-            return ALLOW, ""
-        return BLOCK, ("guard-paths: blocked: a review pass whose branch cannot be read cannot be "
-                       "counted, so E11 and E23 could not hold (ADR 0063 §5)")
+        # No repository or a detached HEAD means no plan part to count a round for; a git that failed to
+        # answer is the case that must not read as that (SEC-2.5).
+        if found.branch_unreadable(where):
+            return BLOCK, ("guard-paths: blocked: a review pass whose branch cannot be read cannot be "
+                           "counted, so E11 and E23 could not hold (ADR 0063 §5)")
+        return ALLOW, ""
     if not planrows.plan_branch(branch):
         return ALLOW, ""  # not a plan part: E11 counts nothing and reads nothing
     head = found.head_sha(where)

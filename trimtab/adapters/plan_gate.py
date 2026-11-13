@@ -122,13 +122,12 @@ def _resume(where: Path, resume) -> tuple[int, str]:
     support = planguard.PlanSupport(where)
     branch = support.head_branch(where)
     if branch is None:
-        # `head_branch` answers None both for "no repository here" and for a git that failed or a
-        # detached HEAD, and the second must not read as "no plan branch, nothing to judge": in a run
-        # a checkout whose branch cannot be read is a refusal (SEC-2.5).
-        if not support.in_repository(where):
-            return ALLOW, ""
-        return BLOCK, ("BLOCKED by guard-paths: the checkout's branch cannot be read, so E13 cannot be "
-                       "judged; a plan run writes nothing until it can (ADR 0063 §5)")
+        # No branch to judge: no repository here, or a detached HEAD, which is no `plan/*` branch. A git that
+        # failed to answer is the one case that must not read as "nothing to judge" (SEC-2.5).
+        if support.branch_unreadable(where):
+            return BLOCK, ("BLOCKED by guard-paths: the checkout's branch cannot be read, so E13 cannot be "
+                           "judged; a plan run writes nothing until it can (ADR 0063 §5)")
+        return ALLOW, ""
     if not planrows.plan_branch(branch):
         return ALLOW, ""
     try:
