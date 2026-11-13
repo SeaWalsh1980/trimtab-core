@@ -22,7 +22,10 @@ from trimtab import guardstate
 VERSION = 1
 SUBDIR = "plan-runs"
 PASSES = ("trimtab-review", "security-review", "code-review")
-EVENT_TYPES = ("push", "round", "draft", "rerequest", "stop", "conflict")
+# `resume` is 2b's (ADR 0063 Amendment 3): E13's verdict for one head, so the plan-run layer runs the
+# resume check once per head rather than on every write. The head is part of the record, so a push
+# makes it stale by itself.
+EVENT_TYPES = ("push", "round", "draft", "rerequest", "stop", "conflict", "resume")
 SHA = re.compile(r"[0-9a-f]{40}")
 ZERO = "0" * 40
 # The fields each event type must carry, so a reader indexing one never meets a KeyError.
@@ -33,6 +36,7 @@ FIELDS = {
     "rerequest": {"head": str, "reason": str},
     "stop": {"reason": str},
     "conflict": {"head": str},
+    "resume": {"branch": str, "head": str},
 }
 
 
@@ -177,6 +181,13 @@ class Ledger:
     def conflict(self, head: str) -> None:
         """The push in hand answered a head that conflicted with the default branch (§5a, E12)."""
         self._append({"type": "conflict", "head": _sha(head, "head")}, once=("head",))
+
+    def resume(self, branch: str, head: str) -> None:
+        """E13 passed for this head, so the plan-run layer need not read it again until the head moves."""
+        self._append({"type": "resume", "branch": branch, "head": _sha(head, "head")}, once=("branch", "head"))
+
+    def resumed(self, head: str) -> bool:
+        return any(e["type"] == "resume" and e["head"] == head for e in self.events())
 
     def pre_draft_heads(self) -> list[str]:
         """Heads that carry any pass recorded before the draft opened, once each (E23's round count)."""

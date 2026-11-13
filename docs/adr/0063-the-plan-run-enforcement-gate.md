@@ -916,3 +916,126 @@ each decision function replaced by one that allows, at least one of its tests fa
   `capture/sources.py`.
 - A `cancelled` run counts as an E12 round, and the 6 s hook budget is unmeasured.
 - The ledger, E10, E11 and E23 rest on a file the session's account can write; the ADR 0028 residual stands.
+
+## Amendment 3: the wiring, 2b of the plan-run layer
+
+Amendments 1 and 2 are unchanged. 2b wires 2a's pure rows to live hooks: a row counts as shown only
+where a hook calls it (§2), so this is the part that earns the manifest entries. 2c still holds E22
+and its lock field, so the gate cannot pass yet.
+
+**2b ships.**
+
+- **The facts the review rows read** (`planfacts.GitHubFacts`): the branch-activity events, oldest
+  first, each with its actor, read through the Link cursor (`GhApi.cursor_pages`), which replaces
+  Amendment 1's one-page read; the part's updates now come from those events; a PR's review comments
+  and each comment's anchor commit from one read; each E3 facts run's log through
+  `planreview.parse_facts`, with every `Thread.commit` filled from the comment the thread names; the
+  merge-base and its tree; the anchored line's text for E8's key; the branch's commits; each ledger
+  entry's commits, bounded by the merge-base where it created the branch; the last commit answering a
+  CI review or a failing check; `on_default`; the progress-record names and every PR's head ref for
+  §6; and `Change.removed_lines`, which E18 judges.
+- **The checks** (`planchecks`): `ready` (E5, E7, E8, E9, E19-pending), `rerequest` (E6, E10), `push`
+  (E18 and E12 with the ledger's conflicts), `resume` (E13), `draft` and `round_start` (E23). Each
+  returns one `Verdict`: allowed, refused with the row's own words, or unreadable, and names what the
+  caller must record (the head an update answered while it conflicted, the reason a part stops).
+- **The subcommands** `trimtab plan-ready-check`, `plan-rerequest-check`, `plan-push-check` and
+  `plan-resume-check`: 0 allows, 1 refuses, 2 is a failed read. They report only.
+- **The acts** (`planacts`): what a hook calls. It builds the part's context from the branch, asks a
+  check, and writes what §1 gives the hooks — the update, `conflict`, `rerequest`, `round`, `stop`
+  and the new `resume` — and holds §1a's watch-only set.
+- **guard-github** reads the ready mark (`gh pr ready`, a REST `draft` edit, and the GraphQL
+  mutation), the re-request label in any spelling (`gh pr edit`/`gh issue edit`, the REST label
+  routes), a reply's outcome tag, returning the PR to draft, and E23 at `gh pr create`; and it
+  records every allowed `plan/*` ref write in the ledger.
+- **guard-paths** gains `hook_event_name` and `cwd` fields, a Skill branch for E11's recorder and
+  E23's sixth-round refusal, and the E21 branch: in a run session, unless the gate's pass holds for
+  the current key, it refuses every Edit, Write, MultiEdit and NotebookEdit and every Bash command
+  except `trimtab check-enforcement` as the whole command, and it refuses any write on a `plan/*`
+  branch whose resume check has not passed for its head.
+- **E21's key** (`gate.pinned_key`, `gate.pass_holds`, `enforcement.guardgate`): the default-branch
+  head by `git ls-remote … HEAD` under 3 s with only the pinned configuration, the lock and the
+  instance's base as git objects, and the install digest from local reads. A guard that finds no pass
+  starts one recorder, under a start lock, and refuses.
+- **The manifest** maps E5–E11, E13, E18, E20, E21 and E23, each to its hook, its decision function
+  and the refusal tests that fail when that function is replaced by one that allows. Only E22 is
+  still unmapped, so `trimtab check-enforcement` still fails, and no run starts.
+
+**Choices.**
+
+- **E20 gets its entry here**, not with E22's PR. It had none, and `entry_problem` refuses any base
+  row the manifest does not map, so the gate could never pass without it. Rejected: leaving it to 2c
+  with E22 — the entry is three lines, and forgetting it would read as a missing row rather than as
+  unfinished work. Its decision is `gate.decide`, whose refusal tests are the gate's own.
+- **E23 is read at `gh pr create` in guard-github**, and only its sixth-round half sits in
+  guard-paths. Rejected: both halves in guard-paths, which would have to read `gh pr create` out of a
+  Bash command that guard-github already parses.
+- **A ref write with no source commit refuses**, in a run as well as on a ready PR: `update-branch`,
+  a contents write and a ref update with no sha carry no commit, so no ledger entry could cover them
+  and E13 would then read the branch as holding work no run made. A broad write (`--all`, `--mirror`,
+  `--prune`) that touches a `plan/*` branch refuses for the same reason. Rejected: recording such a
+  write anyway, which would vouch for a head the ledger never saw. This tightens Amendment 1, where
+  those writes passed on a draft PR with a passing scan.
+- **A round is pre-draft when the branch has no open PR**, a server fact, rather than when the
+  ledger holds no `draft` entry. Rejected: the ledger's own entry — at the PreToolUse of
+  `gh pr create` the PR has no number yet, so nothing could write it there; `Ledger.draft` therefore
+  stays unused until something reads a PR number at a point where one exists.
+- **The ledger gains a seventh event, `resume`**, holding E13's verdict for one head, so the
+  plan-run layer reads E13 once per head instead of on every write; an update moves the head and
+  makes the record stale by itself. Rejected: running E13's reads on every guarded call (a GitHub
+  read per call, against the hook's 6 s budget), and a cache file of its own (state the record never
+  designed, for no stronger fact: both rest on guard-paths the same way).
+- **An act's lookup is read strictly only in a run.** Outside a plan run, a fact a lookup cannot read
+  (a PR's head branch, the branch a PR is opened from) is no plan row's business and the command
+  passes; inside a run it refuses. Rejected: refusing every unreadable lookup, which would block an
+  ordinary interactive `gh pr ready` whenever gh cannot answer, for a row that governs runs — and
+  E22 re-checks every server-side row at merge either way.
+- **E18's exception is read from the plan's item section** at the merge-base: the item's numbered
+  entry and the lines indented under it, or its heading and the lines under it; every non-empty line
+  counts, and so does the content of each inline code span, which is how a plan names a line inside a
+  sentence. Rejected: code spans alone, which would refuse a line the plan names in prose.
+- **E21 runs its adapter even for the report command.** `trimtab check-enforcement` is recognised in
+  Python, not in bash. Rejected: a bash-side match, which would duplicate the rule in a second
+  language where the two could drift apart.
+- **The guard-github half of E21 refuses every command the prefilter sent it**, not only the ones it
+  would otherwise judge as writes. guard-paths already refuses the whole shell in a run without a
+  pass, so this is the half that holds where only guard-github is registered, and it needs no
+  read-versus-write reading of its own.
+
+**Measurements (ENG-6.1).** 20 calls of `hooks/guard-paths.sh` per case on the workstation, against
+`main`'s hook as the baseline:
+
+| Case | Before | After |
+|---|---|---|
+| Read, interactive | 17.8 ms | 17.1 ms |
+| Bash, interactive | 17.6 ms | 19.5 ms |
+| Write, interactive | 17.7 ms | 20.6 ms |
+| Bash, run session, gate failing | 13.1 ms | 275.4 ms |
+| Bash, run session, the report command | 10.9 ms | 286.1 ms |
+
+So the E21 branch costs about 3 ms in an interactive session (one classifier call) and about 265 ms
+on a guarded call in a run, before any network read: a python start under `-I -S`, the local reads of
+the key, and the digest. The `ls-remote` is bounded at 3 s and the adapter at 8 s, inside the hook's
+10 s. The first write on each head also pays E13's reads. Amendment 1's 6 s budget for guard-github
+is still unmeasured.
+
+**Residuals (2b's own; the shell-spelling class of Amendment 1 and 2a's residuals stand).**
+
+- **E9's hunk is read by line number.** The E3 facts carry a path and a line, so a fixed commit
+  counts when one of its hunks for that path covers the thread's line. A finding whose line moved
+  between the reviewed commit and the fix is judged at the old number, and a fix that only moves the
+  line passes. The row says "changes lines in the thread's hunk"; the facts hold nothing finer.
+- **The activity read is bounded at 20 pages of 100 events.** Past that it is a failed read, so a
+  long-lived branch stops rather than being judged on part of its history.
+- **A label, a reply, a ready mark or a draft conversion spelt in GraphQL is refused in a run**
+  rather than read: each names the PR or the thread by an ID this guard cannot read. Outside a run
+  they are no plan row's business and pass.
+- **§6 reads every PR in the repository**, bounded at 2000; past that a new part refuses.
+- **`Ledger.draft` has no writer** (above), and `plan-resume-check`'s `--head` is the caller's, where
+  the guard uses the branch's remote head.
+- **The E11 recorder's registration is still the operator's control PR**, so E11 and E23 read as not
+  live until it lands, and `trimtab check-enforcement` says so.
+- **Every guarded call in a run costs the key's reads**, and the first write on each head costs
+  E13's. Neither is cached beyond the pass and the `resume` entry.
+- **A session that runs a review pass outside the Skill tool records nothing**, as E11 intends, so a
+  round run any other way does not count — and a session that cannot reach gh cannot record one
+  either, which is a stop rather than an uncounted round.

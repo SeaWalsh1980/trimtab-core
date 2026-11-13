@@ -215,6 +215,43 @@ def pushed(support, branch: str, source: str | None, **kw) -> None:
     ctx.ledger.push(branch, old, new, run_env="1" if support.plan_run else "")
 
 
+def resume_ok(support, branch: str, **kw) -> None:
+    """E13: the plan-run layer refuses every write on a branch whose resume check has not passed for its
+    head. The verdict is recorded against that head, so the check runs once per head rather than on every
+    write, and a push makes the record stale by itself (Amendment 3)."""
+    if not planrows.plan_branch(branch):
+        return
+    try:
+        ctx = _ctx(support, branch, limits=False, **kw)
+    except FactsError as err:
+        raise Refusal(f"a write on a plan/* branch cannot be judged ({err}); refusing (ADR 0063 §5)") from err
+    _with_ledger(ctx, "a write on the branch")
+    try:
+        head = ctx.facts.branch_head(branch)
+    except FactsError as err:
+        raise Refusal(f"the branch's head cannot be read ({err}), so E13 cannot pass; refusing "
+                      "(ADR 0063 §5)") from err
+    if head is None:
+        return  # the branch is not on the remote yet: there is no history to vouch for
+    if ctx.ledger.resumed(head):
+        return
+    _refuse(planchecks.resume(ctx, head, scope_ok=_scope_ok(ctx, head)), ctx)
+    ctx.ledger.resume(branch, head)
+
+
+def _scope_ok(ctx: planchecks.Context, head: str) -> bool:
+    """`planscope`'s verdict on the branch's diff from the merge-base (E13's fourth condition)."""
+    try:
+        default = ctx.facts.default_branch()
+        found = planscope.check(str(ctx.repo), base=ctx.facts.merge_base(ctx.branch), head=head,
+                                head_ref=f"{planscope.HEADS}{ctx.branch}",
+                                base_ref=f"{planscope.HEADS}{default}", default_branch=default)
+    except (planscope.PlanScopeError, FactsError) as err:
+        raise Refusal(f"the branch's diff from the merge-base cannot be judged ({err}); refusing "
+                      "(ADR 0063 §5)") from err
+    return found.ref is planscope.Ref.PLAN and not found.problems
+
+
 def round_recorded(support, branch: str, head: str, pass_name: str, *, before_draft: bool | None = None,
                    **kw) -> None:
     """E11: one review pass completed on `head`. A sixth pre-draft round refuses (E23).

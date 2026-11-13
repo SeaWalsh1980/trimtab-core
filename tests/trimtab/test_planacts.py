@@ -283,6 +283,72 @@ class NextPart(Base):
         self.assertEqual(planledger.parts_of(self.config, "owner/proj", "0009-other"), ())
 
 
+class ResumeOnWrite(Base):
+    """E13 through `resume_ok`: once per head, recorded against it, and a failed read refuses."""
+
+    def facts(self, **kw):
+        events = (planreview.Activity(MB, H1, AGENT, "2026-11-12T11:00:00Z"),)
+        base = {"branch_commits": (H1,), "activity": events, "merge_base": MB,
+                "push_commits": {(MB, H1): frozenset({H1})}}
+        return FakeFacts(**{**base, **kw})
+
+    def act_resume(self, facts, scope_ok=True, **kw):
+        scope = planacts.planscope.check
+        planacts.planscope.check = lambda *a, **k: planacts.planscope.Result(
+            planacts.planscope.Ref.PLAN, PLAN, () if scope_ok else ("src/x.py: outside",))
+        try:
+            return self.act("resume_ok", facts, **kw)
+        finally:
+            planacts.planscope.check = scope
+
+    def test_a_branch_whose_history_the_ledger_vouches_for_passes_and_is_recorded(self):
+        ledger = self.ledger()
+        ledger.push(BRANCH, MB, H1, run_env="1")
+
+        self.act_resume(self.facts())
+
+        self.assertEqual([(e["type"], e["head"]) for e in ledger.events() if e["type"] == "resume"],
+                         [("resume", H1)])
+
+    def test_a_recorded_head_is_not_read_again(self):
+        ledger = self.ledger()
+        ledger.resume(BRANCH, H1)
+
+        self.act_resume(FakeFacts(raises="activity"))  # no read of the chain: the head is recorded
+
+        self.assertEqual(len([e for e in ledger.events() if e["type"] == "resume"]), 1)
+
+    def test_a_chain_the_ledger_does_not_cover_refuses_and_records_nothing(self):
+        ledger = self.ledger()
+
+        with self.assertRaisesRegex(planrows.Refusal, "E13"):
+            self.act_resume(self.facts())
+
+        self.assertEqual([e for e in ledger.events() if e["type"] == "resume"], [])
+
+    def test_a_diff_outside_the_plans_scope_refuses(self):
+        ledger = self.ledger()
+        ledger.push(BRANCH, MB, H1, run_env="1")
+
+        with self.assertRaisesRegex(planrows.Refusal, "E13"):
+            self.act_resume(self.facts(), scope_ok=False)
+
+    def test_a_branch_not_on_the_remote_has_no_history_to_vouch_for(self):
+        self.ledger()
+
+        self.assertIsNone(self.act_resume(self.facts(branch_head=None)))
+
+    def test_a_part_with_no_ledger_refuses_the_write(self):
+        with self.assertRaisesRegex(planrows.Refusal, "§1"):
+            self.act_resume(self.facts())
+
+    def test_a_head_that_cannot_be_read_refuses(self):
+        self.ledger()
+
+        with self.assertRaisesRegex(planrows.Refusal, "E13"):
+            self.act_resume(self.facts(raises="branch_head"))
+
+
 class Rounds(Base):
     def test_a_recorded_pass_lands_in_the_ledger(self):
         ledger = self.ledger()

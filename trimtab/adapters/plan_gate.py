@@ -21,6 +21,7 @@ import signal
 import sys
 from pathlib import Path
 
+from trimtab import planacts, planguard, planledger, planrows
 from trimtab.enforcement import guardgate
 
 ALLOW, BLOCK = 0, 2
@@ -50,7 +51,7 @@ def reports_only(command: str) -> bool:
         not re.search(r"[;&|`$<>()\n]", command)
 
 
-def decide(payload: dict, holds=guardgate.holds) -> tuple[int, str]:
+def decide(payload: dict, holds=guardgate.holds, resume=planacts.resume_ok) -> tuple[int, str]:
     """(exit code, message) for one call in a run session. The caller decides the session is a run."""
     tool = payload.get("tool_name")
     command = (payload.get("tool_input") or {}).get("command")
@@ -65,9 +66,30 @@ def decide(payload: dict, holds=guardgate.holds) -> tuple[int, str]:
     where = Path(cwd) if isinstance(cwd, str) and cwd.startswith("/") else None
     if where is None:
         return BLOCK, "guard-paths: blocked: a call in a plan run whose checkout cannot be read"
-    if holds(where):
+    if not holds(where):
+        return BLOCK, f"BLOCKED by guard-paths: {MESSAGE}"
+    return _resume(where, resume)
+
+
+def _resume(where: Path, resume) -> tuple[int, str]:
+    """E13: a write on a `plan/*` branch needs the resume check passed for the branch's head
+    (ADR 0063 §5). The branch comes from the checkout, so a call in another repository reads nothing."""
+    support = planguard.PlanSupport(where)
+    try:
+        branch = support.head_branch(where)
+    except Exception as err:  # noqa: BLE001 - a checkout this guard cannot read is a refusal
+        return BLOCK, f"BLOCKED by guard-paths: the checkout's branch cannot be read ({type(err).__name__})"
+    if branch is None or not planrows.plan_branch(branch):
         return ALLOW, ""
-    return BLOCK, f"BLOCKED by guard-paths: {MESSAGE}"
+    try:
+        resume(support, branch)
+    except planrows.Refusal as why:
+        return BLOCK, (f"BLOCKED by guard-paths: {why} The plan-run layer makes no write on a branch "
+                       "whose resume check has not passed for its head (ADR 0063 §5).")
+    except (planrows.FactsError, planledger.LedgerError) as why:
+        return BLOCK, (f"BLOCKED by guard-paths: the branch's resume check could not be read ({why}); "
+                       "refusing (ADR 0063 §5)")
+    return ALLOW, ""
 
 
 def _out_of_time(signum, frame):

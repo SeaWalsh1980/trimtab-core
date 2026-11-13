@@ -91,6 +91,45 @@ class GuardPathsHalf(unittest.TestCase):
         self.assertEqual(self.decide(load)[0], BLOCK)
 
 
+class TheResumeCheckOnEveryWrite(unittest.TestCase):
+    """E13: the plan-run layer makes no write on a branch whose resume check has not passed for its head."""
+
+    def decide(self, load, branch=BRANCH, refuse=None):
+        from trimtab import planguard, planrows
+
+        asked = []
+
+        def resume(support, name, **kw):
+            asked.append(name)
+            if refuse is not None:
+                raise planrows.Refusal(refuse)
+
+        with mock.patch.object(planguard.PlanSupport, "head_branch", lambda self, cwd=None: branch):
+            code, message = plan_gate.decide(load, holds=lambda *a, **kw: True, resume=resume)
+        return code, message, asked
+
+    def test_a_write_on_a_plan_branch_asks_the_resume_check(self):
+        code, _, asked = self.decide(payload())
+
+        self.assertEqual((code, asked), (ALLOW, [BRANCH]))
+
+    def test_a_refused_resume_check_refuses_the_write(self):
+        code, message, _ = self.decide(payload(), refuse="E13: the activity chain is broken")
+
+        self.assertEqual(code, BLOCK)
+        self.assertIn("E13", message)
+
+    def test_a_branch_that_is_not_a_plan_part_asks_nothing(self):
+        code, _, asked = self.decide(payload(), branch="feat/x")
+
+        self.assertEqual((code, asked), (ALLOW, []))
+
+    def test_a_checkout_with_no_branch_asks_nothing(self):
+        code, _, asked = self.decide(payload(), branch=None)
+
+        self.assertEqual((code, asked), (ALLOW, []))
+
+
 class GuardGithubHalf(unittest.TestCase):
     def decide(self, command, holds=False, run=True):
         from test_guard_github_plan_acts import GIT, answered_facts
