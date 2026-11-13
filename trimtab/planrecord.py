@@ -34,7 +34,8 @@ COMPLETE = re.compile(r"item ([0-9]+) complete")
 CONTINUES = re.compile(r"item ([0-9]+) part ([0-9]+) complete; item continues")
 UNFINISHED = re.compile(r"item ([0-9]+) part ([0-9]+) stopped unfinished")
 # An item of a plan's todo list, as `Item 3`, `### Item 3`, `- [ ] Item 3` or a numbered line `3.`.
-PLAN_ITEM = re.compile(r"^[ \t]*(?:#{1,6}[ \t]+|[-*][ \t]+(?:\[.\][ \t]+)?)?(?:\*\*)?(?:item[ \t-]*([0-9]+)\b"
+# A numbered line counts only at column 0: an indented one is a sub-step, not an item.
+PLAN_ITEM = re.compile(r"^(?:[ \t]*(?:#{1,6}[ \t]+|[-*][ \t]+(?:\[.\][ \t]+)?)?(?:\*\*)?item[ \t-]*([0-9]+)\b"
                        r"|([0-9]+)[.)][ \t])", re.IGNORECASE)
 MAX_RECORDS = 5000  # record paths git names in one answer; past it, an error rather than a partial list (ENG-6.2)
 
@@ -59,6 +60,7 @@ def latest(repo: str, plan: str, default: str) -> Latest:
     out = _git(planscope.log_added, repo, f"refs/remotes/origin/{default}", folder)
     # Newest merge first: a SHA line, then the paths that commit added, then a blank line.
     groups: list[tuple[str, list[str]]] = []
+    named = 0
     for line in out.splitlines():
         if planscope.SHA.fullmatch(line):
             groups.append((line, []))
@@ -66,8 +68,9 @@ def latest(repo: str, plan: str, default: str) -> Latest:
             if not groups:
                 raise PlanRecordError("git log named a path before any commit")
             groups[-1][1].append(line)
-        if sum(len(paths) for _, paths in groups) > MAX_RECORDS:
-            raise PlanRecordError(f"more than {MAX_RECORDS} records added; refusing to judge a partial list")
+            named += 1
+            if named > MAX_RECORDS:
+                raise PlanRecordError(f"more than {MAX_RECORDS} records added; refusing to judge a partial list")
     for sha, paths in groups:
         if not paths:
             continue  # a merge whose first-parent diff added nothing under the folder
@@ -82,8 +85,22 @@ def latest(repo: str, plan: str, default: str) -> Latest:
         if problems:
             return Latest(None, sha, 0, 0, tuple(problems))
         item, part, path = max(found)
+        # Only additions are listed, so a record deleted or moved since is still "latest" there.
+        if path not in _git(planscope.present, repo, f"refs/remotes/origin/{default}", [path]):
+            return Latest(None, sha, 0, 0, (f"{path} was added by {sha[:12]} but is not on {default}",))
         return Latest(path, sha, item, part)
     return Latest(None, None, 1, 1)
+
+
+def plan_problems(repo: str, default: str, plan: str) -> tuple[str, ...]:
+    """Why `plan` is not a plan on the fetched default branch, so that "no record yet" means a plan not started
+    and never a mistyped name. Authorisation itself is `check-plan-authorised`'s."""
+    if not planauth.PLAN.fullmatch(plan) or ".." in plan:
+        return (f"{plan!r} is not a plan name",)
+    held = _git(planscope.present, repo, f"refs/remotes/origin/{default}", [f"{planscope.AUTHORISED}/{plan}.md"])
+    if not held:
+        return (f"{plan} is not a plan on {default}",)
+    return ()
 
 
 def next_work(repo: str, default: str, record: Latest, plan_text: str) -> tuple[str, tuple[str, ...]]:
@@ -103,8 +120,11 @@ def next_work(repo: str, default: str, record: Latest, plan_text: str) -> tuple[
         return "", (f"{record.path}: {why}",)
     if kind == "continues":
         return f"item {record.item:02d} part {record.part + 1}", ()
+    items = plan_items(plan_text)
+    if record.item not in items:  # an item list that does not parse is a fault, never "plan complete"
+        return "", (f"the plan's item list does not name item {record.item}; it could not be read as a todo list",)
     following = record.item + 1
-    if following in plan_items(plan_text):
+    if following in items:
         return f"item {following:02d} part 1", ()
     return "plan complete", ()
 
@@ -154,7 +174,9 @@ def fetched(repo: str, repository: str, default: str | None = None, run: Run | N
     """The default branch's name, once origin's copy is whole and is where the server says the branch is."""
     api = GhApi(run)
     try:
-        name = default or planauth.default_branch(api, repository)
+        name = planauth.default_branch(api, repository)
+        if default and default != name:
+            raise PlanRecordError(f"{default} is not {repository}'s default branch ({name})")
         planauth.fetched_tip(repo, api, repository, name)
     except planauth.PlanAuthError as err:
         raise PlanRecordError(str(err)) from err

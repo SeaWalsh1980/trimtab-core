@@ -966,6 +966,9 @@ def cmd_check_plan_authorised(args) -> int:
 def cmd_latest_record(args) -> int:
     try:
         default = planrecord.fetched(args.repo, args.repository, args.default_branch)
+        problems = planrecord.plan_problems(args.repo, default, args.plan)
+        if problems:
+            return _print_problems(problems)
         record = planrecord.latest(args.repo, args.plan, default)
         if record.problems:
             return _print_problems(record.problems)

@@ -82,6 +82,32 @@ class LatestRecord(Records):
 
         self.assertEqual((result.item, result.part, result.commit), (2, 1, sha))
 
+    def test_records_fast_forwarded_one_commit_each_take_the_last_commit(self):
+        for part in (1, 2):
+            self.write(record_path(1, part), record_text("item 1 complete"))
+            sha = self.commit(f"record {part}")
+        self.publish()
+
+        result = self.latest()
+
+        self.assertEqual((result.part, result.commit), (2, sha))
+
+    def test_a_merge_adding_nothing_under_the_folder_does_not_hide_the_latest_record(self):
+        self.merge_record(1, 1)
+        self.merge_branch("unrelated", {"README.md": "later\n"})
+        self.publish()
+
+        self.assertEqual(self.latest().path, record_path(1, 1))
+
+    def test_a_record_deleted_since_it_was_added_is_a_named_problem(self):
+        self.merge_record(1, 1)
+        self.merge_branch("remove", {}, removed=[record_path(1, 1)])
+        self.publish()
+
+        result = self.latest()
+
+        self.assertEqual((result.path, len(result.problems)), (None, 1))
+
     def test_merge_order_wins_over_commit_dates(self):
         self.merge_record(1, 1, dated=NEW)
         self.merge_record(1, 2, dated=OLD)
@@ -167,6 +193,48 @@ class NextOnRestart(Records):
 
         self.assertEqual((work, len(problems)), ("", 1))
 
+    def test_a_status_section_with_no_line_is_a_named_problem(self):
+        for body in ("## Done\nx\n\n## Status\n\n## Next\ny\n", "## Done\nx\n\n## Status\n"):
+            with self.subTest(body=body):
+                self.merge_branch("empty-status", {record_path(1, 1): body})
+                self.publish()
+
+                work, problems = planrecord.next_work(str(self.repo), DEFAULT, self.latest(), PLAN_TEXT)
+
+                self.assertEqual((work, len(problems)), ("", 1))
+                tpa.git(self.repo, "reset", "-q", "--hard", "HEAD~1")
+                tpa.git(self.repo, "branch", "-q", "-D", "empty-status")
+                self.publish()
+
+    def test_a_plan_without_the_following_item_ends_even_if_a_later_one_exists(self):
+        self.assertEqual(planrecord.next_work(str(self.repo), DEFAULT, self.record_with("item 1 complete"),
+                                              "1. a\n3. c\n"), ("plan complete", ()))
+
+    def test_an_item_list_that_does_not_parse_is_a_named_problem_not_plan_complete(self):
+        for text in ("", "# a plan in prose\n", "1. a\n2. b\n"):
+            with self.subTest(text=text):
+                self.merge_record(5, 1, "item 5 complete")
+
+                work, problems = planrecord.next_work(str(self.repo), DEFAULT, self.latest(), text)
+
+                self.assertEqual((work, len(problems)), ("", 1))
+                tpa.git(self.repo, "reset", "-q", "--hard", "HEAD~1")
+                self.publish()
+
+    def test_numbered_sub_steps_are_not_items(self):
+        self.assertEqual(planrecord.plan_items("1. a\n   1. step\n   2. step\n2. b\n"), frozenset({1, 2}))
+
+    def test_a_record_that_is_not_a_regular_file_is_a_named_problem(self):
+        record = planrecord.Latest(record_path(7, 1), "a" * 40, 7, 1)
+
+        work, problems = planrecord.next_work(str(self.repo), DEFAULT, record, PLAN_TEXT)
+
+        self.assertEqual((work, len(problems)), ("", 1))
+
+    def record_with(self, status):
+        self.merge_record(1, 1, status)
+        return self.latest()
+
     def test_plan_items_read_headings_checklists_and_numbered_lines(self):
         text = "### Item 1\n- [ ] Item 2: x\n3. three\n- **Item 4** y\nnot an item 5\n"
 
@@ -246,6 +314,16 @@ class Cli(tpa.Cli):
 
         self.assertEqual((done.returncode, done.stdout, "notes.md" in done.stderr), (1, "", True), done.stderr)
 
+    def test_a_plan_that_does_not_exist_exits_1_not_a_first_run(self):
+        done = self.cli(command=("latest-record",), plan="0099-typo")
+
+        self.assertEqual((done.returncode, done.stdout, "not a plan" in done.stderr), (1, "", True), done.stderr)
+
+    def test_a_default_branch_override_that_is_not_the_default_exits_2(self):
+        done = self.run_cli("--default-branch", "feature")
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""), done.stderr)
+
     def test_a_stale_fetch_exits_2(self):
         self.answers[tpa.BRANCH_PATH] = json.dumps({"name": DEFAULT, "commit": {"sha": "f" * 40}})
 
@@ -262,6 +340,51 @@ class Cli(tpa.Cli):
         done = self.run_cli("--next-on-restart")
 
         self.assertEqual((done.returncode, done.stdout), (0, "item 02 part 1\n"), done.stderr)
+
+    def test_next_on_restart_with_no_record_needs_no_authorisation(self):
+        done = self.run_cli("--next-on-restart")
+
+        self.assertEqual((done.returncode, done.stdout), (0, "item 01 part 1\n"), done.stderr)
+
+    def test_next_on_restart_for_a_plan_the_admin_did_not_merge_exits_1_with_no_work(self):
+        self.merge_branch("rec", {record_path(1, 1): record_text("item 1 complete")})
+        self.publish()
+        self.answers[tpa.pulls_path(self.plan2_merge)] = json.dumps([tpa.listed_pull(tpa.LATER_PR)])
+        self.answers[tpa.pull_path(tpa.LATER_PR)] = tpa.pull_row(tpa.LATER_PR, self.plan2_merge,
+                                                                 merged_by=tpa.AGENT)
+
+        done = self.run_cli("--next-on-restart")
+
+        self.assertEqual((done.returncode, done.stdout, "check 2:" in done.stderr), (1, "", True), done.stderr)
+
+    def test_next_on_restart_for_a_plan_edited_after_its_merge_exits_1_with_no_work(self):
+        self.merge_branch("rec", {record_path(1, 1): record_text("item 1 complete")})
+        self.merge_branch("edit", {PLAN_FILE: PLAN_TEXT + "3. smuggled item\n"})
+        self.publish()
+        self.answers[tpa.pulls_path(self.plan2_merge)] = json.dumps([tpa.listed_pull(tpa.LATER_PR)])
+        self.answers[tpa.pull_path(tpa.LATER_PR)] = tpa.pull_row(tpa.LATER_PR, self.plan2_merge)
+
+        done = self.run_cli("--next-on-restart")
+
+        self.assertEqual((done.returncode, done.stdout, "check 3:" in done.stderr), (1, "", True), done.stderr)
+
+    def test_next_on_restart_with_an_unreadable_admin_variable_exits_2(self):
+        self.merge_branch("rec", {record_path(1, 1): record_text("item 1 complete")})
+        self.publish()
+        del self.answers[tpa.VARIABLE_PATH]
+
+        done = self.run_cli("--next-on-restart")
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""), done.stderr)
+
+    def test_an_unreadable_instance_exits_2_not_1(self):
+        self.merge_branch("rec", {record_path(1, 1): record_text("item 1 complete")})
+        self.publish()
+
+        done = self.cli("--next-on-restart", command=("latest-record",), plan=PLAN,
+                        env_extra={"TRIMTAB_INSTANCE": str(self.root / "no-such-instance")})
+
+        self.assertEqual((done.returncode, done.stdout), (2, ""), done.stderr)
 
     def test_next_on_restart_with_an_unparseable_status_exits_1(self):
         self.merge_branch("rec", {record_path(1, 1): record_text("nonsense")})

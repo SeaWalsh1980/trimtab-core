@@ -60,7 +60,16 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
   the plan's item list is read through it. When the latest record is item-complete and the plan
   names no following item, it prints `plan complete`.
 - The plan's item list is recognised by a pattern (`Item N`, a heading or checklist item, or a
-  numbered line). A plan written in another shape reads as having no next item; the answer is
-  `plan complete`, which the operator would notice. A fixed plan format is separate work.
+  numbered line at column 0; an indented numbered line is a sub-step, not an item). Both errors
+  are guarded: a record whose item the list does not name (including an empty or unrecognised
+  list) is a named problem (exit 1), never `plan complete`; and a nested step cannot invent an
+  item. A plan whose items are written in another shape therefore stops for the operator rather
+  than guessing. A fixed plan format is separate work.
+- Exit 2 is answered by fetching once and running the command again; a second exit 2 is a blocker.
+  This replaces the skill's earlier "a shallow clone is a stop" for the latest-record lookup,
+  because the command now detects the cut history itself and a fetch fixes it.
+- The plan must exist on the default branch (exit 1 otherwise), so a mistyped plan name is not read
+  as a plan that has not started. `--default-branch` must be the repository's default branch.
+- A record added and since deleted is a named problem, not the latest record.
 - `planauth` gains two thin public wrappers around the checks it already made, so the stale-fetch
   rule stays in one place.
