@@ -72,6 +72,7 @@ class Activity:
     before: str
     after: str
     actor: str
+    when: str = ""  # the event's RFC 3339 time, which E12 compares with the PR's opening
 
 
 @dataclass(frozen=True)

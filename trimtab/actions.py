@@ -58,6 +58,7 @@ class Job:
     runner_id: int | None
     runner_name: str
     steps: int
+    id: int | None = None  # the job's own id, which reads its log (ADR 0063 §4)
 
     @property
     def passed(self) -> bool:
@@ -89,7 +90,10 @@ def _job(row) -> Job:
     if not all(isinstance(v, str) for v in (name, head, status, conclusion, runner_name)) \
             or not isinstance(steps, list) or not (runner_id is None or _id(runner_id)):
         raise ActionsError("gh api actions jobs returned unexpected JSON")
-    return Job(name, head, status, conclusion, runner_id, runner_name, len(steps))
+    ident = row.get("id")
+    if not (ident is None or _id(ident)):
+        raise ActionsError("gh api actions jobs returned unexpected JSON")
+    return Job(name, head, status, conclusion, runner_id, runner_name, len(steps), ident)
 
 
 class Reader:

@@ -199,16 +199,19 @@ class GraphqlState(Cases):
                                    '{ clientMutationId } }', "t=hi", "state=CLOSED"), "E16", facts=NoFacts())
 
 
-class OnePageOfActivity(unittest.TestCase):
-    def test_the_read_does_not_page(self):
-        # `page=` is ignored by the endpoint, so a loop on it would re-read page one until its limit.
-        body = json.dumps([])
+class ActivityPaging(unittest.TestCase):
+    def test_the_read_follows_the_link_cursor_and_never_a_page_number(self):
+        # `page=` is ignored by the endpoint, so a loop on it would re-read page one until its limit; the
+        # rest of the list sits behind the Link header's `after=` cursor (ADR 0063 Amendment 1).
+        page = ("HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n" + json.dumps([]))
         fake = FakeGh({"repos/owner/proj/pulls": json.dumps([{"number": 7, "draft": True, "created_at": "2026-11-12T10:00:00Z",
                                                               "head": {"ref": BRANCH}, "base": {"ref": "main"}}]),
-                       "repos/owner/proj/activity": body})
+                       "repos/owner/proj/activity": page})
         f = planfacts.GitHubFacts("owner/proj", GhApi(fake), tools.Git(), Path("."), INSTANCE)
         f.pushes(BRANCH)
-        self.assertEqual(len([a for a in fake.argvs() if "activity" in a[4]]), 1)
+        calls = [a for a in fake.argvs() if "activity" in a[4]]
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("page=", calls[0][4].replace("per_page=", ""))
 
 
 if __name__ == "__main__":

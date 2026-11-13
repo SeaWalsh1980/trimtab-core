@@ -21,11 +21,12 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from trimtab import actions
+from trimtab import actions, planreview
 from trimtab.actions import ActionsError, Job
 from trimtab.capture.ghapi import GhApi, NotFound, SourceError
 from trimtab.enforcement.tools import Git, ToolError
@@ -37,10 +38,13 @@ ZERO = "0" * 40
 ORIGIN = re.compile(r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
                     r"(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?")
 FAILED = {"failure", "timed_out", "cancelled"}
-EVENT_LIMIT = 100  # branch-activity events one count reads (REST's largest page); a full page is an error
+EVENT_LIMIT = 100  # branch-activity events per page (REST's largest)
+EVENT_PAGES = 20  # pages of them one read follows through the Link cursor; past it, an error (Amendment 1)
 RUN_LIMIT = 500  # workflow runs on one branch, every page
 FILE_LIMIT = 2000  # changed paths one diff reads
+COMMENT_LIMIT = 2000  # review comments one PR reads; past it, an error
 MERGEABLE_WAITS = 3  # GitHub computes `mergeable` lazily: a null is asked again
+HUNK = re.compile(r"^@@ -(?P<old>[0-9]+)(,(?P<old_count>[0-9]+))? \+(?P<new>[0-9]+)(,(?P<new_count>[0-9]+))? @@")
 
 
 def _when(text: str) -> datetime:
@@ -88,6 +92,9 @@ class GitHubFacts(Facts):
         self._pulls: dict[tuple[str, int], dict | None] = {}
         self._run_rows: dict[str, list[dict]] = {}
         self._diffs: dict[tuple[str, str], tuple[Change, ...]] = {}
+        self._activity: dict[str, tuple[planreview.Activity, ...]] = {}
+        self._comment_rows: dict[int, tuple[tuple[planreview.Comment, ...], dict[int, str]]] = {}
+        self._default: str | None = None
 
     # -- GitHub --------------------------------------------------------------------------
 
@@ -189,29 +196,128 @@ class GitHubFacts(Facts):
             raise FactsError("the instance names no review key, so E12 cannot be counted")
         return {r["head_sha"] for r in self._rows(branch) if r["path"] == review.facts.workflow}
 
+    def activity(self, branch: str) -> tuple[planreview.Activity, ...]:
+        """Every branch-activity event, oldest first, each with its actor (E12, E13).
+
+        The endpoint pages by a cursor in a Link header and ignores `page=`, so every page is read through
+        `cursor_pages` (Amendment 1 replaced the one-page read). It answers newest first; an answer not in
+        that order, a deletion of the branch, or more pages than the limit is an error, so no chain is ever
+        guessed past a gap."""
+        if branch not in self._activity:
+            try:
+                rows = self._api.cursor_pages(f"repos/{self.repo}/activity", {"ref": f"refs/heads/{branch}"},
+                                              EVENT_PAGES, EVENT_LIMIT, "gh api activity")
+            except SourceError as err:
+                raise FactsError("the branch's activity events could not be read") from err
+            out: list[planreview.Activity] = []
+            newer: datetime | None = None
+            for row in rows:
+                before, after, stamp = (row.get(k) if isinstance(row, dict) else None
+                                        for k in ("before", "after", "timestamp"))
+                actor = row.get("actor") if isinstance(row, dict) else None
+                login = actor.get("login") if isinstance(actor, dict) else None
+                if not all(isinstance(v, str) for v in (before, after, stamp, login)):
+                    raise FactsError("gh api activity returned unexpected JSON")
+                if not SHA.fullmatch(before) or not SHA.fullmatch(after):
+                    raise FactsError("gh api activity returned a head that is not a full SHA")
+                if after == ZERO:
+                    raise FactsError("the branch's activity holds a deletion, so its chain cannot be read")
+                when = _when(stamp)
+                if newer is not None and when > newer:
+                    raise FactsError("the branch's activity events are not in the order this reader expects")
+                newer = when
+                out.append(planreview.Activity(before, after, login, stamp))
+            self._activity[branch] = tuple(reversed(out))
+        return self._activity[branch]
+
     def pushes(self, branch: str) -> Sequence[Push]:
+        """The branch's pushes since its PR opened: E12 counts no event before the draft (the creation among them)."""
         pr = self.open_pr(branch)
         if pr is None:
             return ()
-        out: list[Push] = []
         opened = _when(pr.created)
-        # The endpoint pages by a cursor in the Link header (`after=`), which `gh api` does not hand us, and it
-        # ignores `page=`. So one page is read, and a full one is refused rather than guessed past.
-        rows = self._json(f"repos/{self.repo}/activity", "gh api activity",
-                          {"ref": f"refs/heads/{branch}", "per_page": EVENT_LIMIT})
-        if not isinstance(rows, list):
-            raise FactsError("gh api activity returned unexpected JSON")
-        if len(rows) >= EVENT_LIMIT:
-            raise FactsError(f"the branch's activity holds {EVENT_LIMIT} events or more")
-        for row in rows:
-            before, after, stamp = (row.get(k) if isinstance(row, dict) else None
-                                    for k in ("before", "after", "timestamp"))
-            if not all(isinstance(v, str) for v in (before, after, stamp)):
-                raise FactsError("gh api activity returned unexpected JSON")
-            real = SHA.fullmatch(before) and SHA.fullmatch(after) and ZERO not in (before, after)
-            if real and _when(stamp) >= opened:  # not a creation or a deletion
-                out.append(Push(before, after))
+        return [Push(e.before, e.after) for e in self.activity(branch)
+                if ZERO not in (e.before, e.after) and _when(e.when) >= opened]
+
+    def _comments(self, number: int) -> tuple[tuple[planreview.Comment, ...], dict[int, str]]:
+        """The PR's review comments and each comment's anchor commit, from one read (ENG-6.2)."""
+        if number not in self._comment_rows:
+            try:
+                rows = self._api.all_pages(f"repos/{self.repo}/pulls/{number}/comments", {}, COMMENT_LIMIT,
+                                           "gh api review comments")
+            except SourceError as err:
+                raise FactsError("the PR's review comments could not be read") from err
+            comments: list[planreview.Comment] = []
+            commits: dict[int, str] = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise FactsError("gh api review comments returned unexpected JSON")
+                ident, body, commit = row.get("id"), row.get("body"), row.get("commit_id")
+                user = row.get("user")
+                login = user.get("login") if isinstance(user, dict) else None
+                parent = row.get("in_reply_to_id")
+                if type(ident) is not int or not isinstance(body, str) or not isinstance(login, str) \
+                        or not isinstance(commit, str) or not SHA.fullmatch(commit) \
+                        or not (parent is None or type(parent) is int):
+                    raise FactsError("gh api review comments returned unexpected JSON")
+                comments.append(planreview.Comment(ident, login, body, parent))
+                commits[ident] = commit
+            self._comment_rows[number] = (tuple(comments), commits)
+        return self._comment_rows[number]
+
+    def review_comments(self, number: int) -> tuple[planreview.Comment, ...]:
+        return self._comments(number)[0]
+
+    def comment_commits(self, number: int) -> dict[int, str]:
+        return dict(self._comments(number)[1])
+
+    def facts_runs(self, branch: str, number: int) -> list[tuple[planreview.Review, list[planreview.Thread]]]:
+        """Each E3 facts run on the branch, oldest first, as `parse_facts` reads its job's log.
+
+        Runs are ordered by id, which GitHub hands out in order for one repository. The facts job must be a
+        pass with a runner and steps, as E3 requires; its log is the only source for the lines (§4). Each
+        thread's `commit` is filled from the review comment the thread names, which the line does not carry,
+        so E9 has an anchor to measure a fixed reply's commit against (Amendment 2)."""
+        review = self._instance.review if self._instance else None
+        if review is None:
+            raise FactsError("the instance names no review key, so the E3 facts cannot be read")
+        anchors = self.comment_commits(number)
+        out = []
+        for row in sorted(self._rows(branch), key=lambda r: r.get("id") or 0):
+            if row["path"] != review.facts.workflow:
+                continue
+            if type(row.get("id")) is not int:
+                raise FactsError("gh api actions runs returned a run with no id")
+            try:
+                jobs = [j for j in self._reader.jobs(self.repo, row["id"]) if j.name == review.facts.job]
+            except (ActionsError, SourceError) as err:
+                raise FactsError("the facts job's records could not be read") from err
+            if len(jobs) != 1 or not jobs[0].passed or jobs[0].id is None:
+                raise FactsError("a facts run holds no single passing job of the name the instance gives")
+            found, threads = planreview.parse_facts(self._log(jobs[0].id))
+            filled = []
+            for thread in threads:
+                if thread.id not in anchors:
+                    raise FactsError("a facts thread names a comment that is not on this PR")
+                filled.append(replace(thread, commit=anchors[thread.id]))
+            out.append((found, filled))
         return out
+
+    def _log(self, job_id: int) -> str:
+        """One job's log, as text. Only the fixed lines of §4 are read from it, by `planreview.parse_facts`."""
+        try:
+            return self._api.call("GET", f"repos/{self.repo}/actions/jobs/{job_id}/logs")
+        except SourceError as err:
+            raise FactsError("the facts job's log could not be read") from err
+
+    def default_branch(self) -> str:
+        if self._default is None:
+            data = self._json(f"repos/{self.repo}", "gh api repo")
+            name = data.get("default_branch") if isinstance(data, dict) else None
+            if not isinstance(name, str) or not name:
+                raise FactsError("gh api repo returned no default branch")
+            self._default = name
+        return self._default
 
     def conflicted(self, number: int) -> bool:
         for attempt in range(MERGEABLE_WAITS):
@@ -287,6 +393,101 @@ class GitHubFacts(Facts):
     def pr_base(self, number: int, repo: str | None) -> str | None:
         return self._pull_ref(number, repo, "base")
 
+    def _text(self, *args: str) -> str:
+        try:
+            return self._git(self._checkout, *args)
+        except ToolError as err:
+            raise FactsError(str(err)) from err
+
+    def _ancestor(self, older: str, newer: str) -> bool:
+        """Whether `older` is `newer` or one of its ancestors, asked as a read rather than an exit code."""
+        return self._text("merge-base", "--end-of-options", older, newer).strip() == self._commit(older)
+
+    def merge_base(self, branch: str) -> str:
+        """The merge-base of the branch with the default branch, both as the remote has them (E8, E13)."""
+        default = self.default_branch()
+        base = self._text("merge-base", "--end-of-options", f"origin/{default}", f"origin/{branch}").strip()
+        if not SHA.fullmatch(base):
+            raise FactsError("the merge-base with the default branch could not be read")
+        return base
+
+    def tree_of(self, commit: str) -> str:
+        """A commit's tree, which E8 compares with the tree an E2 run reviewed."""
+        sha = self._text("rev-parse", "--verify", "--end-of-options", f"{commit}^{{tree}}").strip()
+        if not SHA.fullmatch(sha):
+            raise FactsError("a commit's tree could not be read")
+        return sha
+
+    def branch_commits(self, branch: str) -> tuple[str, ...]:
+        """`origin/<default>..origin/<branch>`, oldest first: the commits E13 must find inside ledger pushes."""
+        default = self.default_branch()
+        out = self._text("rev-list", "--reverse", "--end-of-options",
+                         f"origin/{default}..origin/{branch}").split()
+        if any(not SHA.fullmatch(c) for c in out):
+            raise FactsError("the branch's commits could not be read")
+        return tuple(out)
+
+    def push_commits(self, old: str, new: str, merge_base: str) -> frozenset[str]:
+        """The commits one ledger push introduced. A push that created the branch (`old` all zeros) is bounded
+        by the merge-base, so the default branch's own history is never counted as the run's (Amendment 2)."""
+        start = merge_base if old == ZERO else old
+        out = self._text("rev-list", "--end-of-options", f"{start}..{new}").split()
+        if any(not SHA.fullmatch(c) for c in out):
+            raise FactsError("a push's commits could not be read")
+        return frozenset(out)
+
+    def line_text(self, commit: str, path: str, line: int) -> str | None:
+        """The anchored line at the reviewed commit, for E8's key, or None where the path or line is not there."""
+        try:
+            blob = self._git.bytes(self._checkout, "show", "--end-of-options", f"{commit}:{path}")
+        except ToolError:
+            return None  # a path the reviewed commit does not hold: the key then matches nothing
+        lines = blob.decode("utf-8", "replace").split("\n")
+        return lines[line - 1] if 1 <= line <= len(lines) else None
+
+    def on_default(self, sha: str) -> bool:
+        """Whether a commit is on the default branch, so E13 reads it as none of the run's work."""
+        return self._ancestor(sha, f"origin/{self.default_branch()}")
+
+    def _hunks(self, *args: str) -> tuple[tuple[int, int], tuple[int, int]]:
+        """The old-side and new-side line ranges of each hunk a diff holds, as (start, end) pairs."""
+        old: list[tuple[int, int]] = []
+        new: list[tuple[int, int]] = []
+        for raw in self._text(*args).split("\n"):
+            found = HUNK.match(raw)
+            if found is None:
+                continue
+            for side, rows in (("old", old), ("new", new)):
+                start = int(found[side])
+                count = int(found[f"{side}_count"]) if found[f"{side}_count"] is not None else 1
+                if count:
+                    rows.append((start, start + count - 1))
+        return tuple(old), tuple(new)
+
+    def outside_diff(self, branch: str, head: str, path: str, line: int) -> bool:
+        """Whether a finding's line lies outside the head side of the diff from the merge-base (E8's deferral)."""
+        _, new = self._hunks("diff", "-U0", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
+                             f"{self.merge_base(branch)}..{head}", "--", path)
+        return not any(start <= line <= end for start, end in new)
+
+    def fix_valid(self, branch: str, thread: planreview.Thread, sha: str) -> bool:
+        """E9: the cited commit descends from the thread's commit, is on the branch, and changes a line in
+        the thread's hunk. The hunk is read as the commit's own change to the thread's path covering the
+        anchored line; nothing but the line number is in the E3 facts, so that is the measure."""
+        self._commit(sha)  # an unreadable commit is a failed read, not a `False`
+        if not self._ancestor(thread.commit, sha) or not self._ancestor(sha, f"origin/{branch}"):
+            return False
+        old, new = self._hunks("show", "-U0", "--first-parent", "--format=", "--no-ext-diff", "--no-textconv",
+                               "--no-color", "--no-renames", "--end-of-options", sha, "--", thread.path)
+        return any(start <= thread.line <= end for start, end in (*old, *new))
+
+    def last_answer(self, branch: str) -> str | None:
+        """The last commit answering a CI review or a failing check (E10): the head a push whose `before` was
+        a failing or reviewed head wrote. None where no push answers one."""
+        answered = self.failing_heads(branch) | self.facts_run_heads(branch)
+        found = [p.after for p in self.pushes(branch) if p.before in answered]
+        return found[-1] if found else None
+
     def repository(self) -> str:
         return self.repo
 
@@ -318,6 +519,7 @@ def _changes(status: bytes, patch: bytes) -> tuple[Change, ...]:
     binary: set[str] = set()
     added: dict[str, list[str]] = {n: [] for n in states}
     removed: dict[str, int] = dict.fromkeys(states, 0)
+    gone: dict[str, list[str]] = {n: [] for n in states}  # the removed lines' text (E18 judges it)
     current: str | None = None
     header = False  # from `diff --git` to the first hunk, `+++` and `---` are file names, not lines
     for raw in patch.decode("utf-8", "replace").split("\n"):
@@ -336,4 +538,6 @@ def _changes(status: bytes, patch: bytes) -> tuple[Change, ...]:
             added[current].append(raw[1:])
         elif raw.startswith("-"):
             removed[current] += 1
-    return tuple(Change(n, states[n], tuple(added[n]), removed[n], n in binary) for n in sorted(states))
+            gone[current].append(raw[1:])
+    return tuple(Change(n, states[n], tuple(added[n]), removed[n], n in binary, tuple(gone[n]))
+                 for n in sorted(states))
