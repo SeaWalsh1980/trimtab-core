@@ -1221,3 +1221,23 @@ right:
 - **The E9 hunk is read by line number, the activity read is bounded at 20 pages, and a round whose result
   the harness does not report still counts** (round 2's residuals, unchanged and re-judged by the security pass as
   accepted).
+
+**After the PR was ready (CI's `lint-test` and `claude-review`) changed these.**
+
+- **A detached HEAD is no plan branch; only a git that fails to answer refuses.** Round 3's E21 and review-recorder
+  arms refused any call where git named no branch inside a repository. CI checks a pull request out detached, so
+  `lint-test` refused everything a test did, and in a run it would stop even the command that switches back
+  (guard-paths already refuses a run's file writes off a `plan/*` branch, ADR 0041). `PlanSupport.branch_unreadable`
+  tells a detached HEAD, no repository and a failed git apart. Reproduced in a clean detached clone.
+- **E13 judges a file tool's own checkout, not only the session's.** An Edit or Write of a file in another
+  worktree or sibling clone that sits on a `plan/*` branch was judged by the session's `cwd`, so it went unjudged
+  while the session stood elsewhere. The directory is the file's nearest existing parent when the file is outside
+  the session's directory. A report command is also refused when the payload gives no usable directory, instead of
+  being resolved against the hook process's own.
+- **Residual: a Bash command's own `git -C other` or `cd` is still judged by the session's `cwd`.** guard-paths does
+  not confine Bash writes (ADR 0041), and resolving a directory from shell text is the open-ended spelling class
+  this record bounds with E22, so E13 does not follow it. The sentence in the PR body that "no write lands on a branch
+  whose resume check has not passed" holds for the file tools and for Bash run in the checkout it names.
+- **Tests no longer depend on `.pyc` files.** The install digest covers every file under `hooks/` and `trimtab/`,
+  and a fresh checkout has none, so a pass armed before Python wrote them never held. The arming helpers pin the
+  digest; its own binding is tested in `test_enforcement_gate`.

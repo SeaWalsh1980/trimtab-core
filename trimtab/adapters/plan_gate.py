@@ -15,6 +15,7 @@ it cannot read in a run session blocks.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import signal
@@ -99,21 +100,46 @@ def decide(payload: dict, holds=None, resume=planacts.resume_ok) -> tuple[int, s
     command = (payload.get("tool_input") or {}).get("command")
     if tool not in GATED_TOOLS:
         return ALLOW, ""
-    if tool == "Bash":
-        if not isinstance(command, str):
-            return BLOCK, "guard-paths: blocked: a Bash command that is not a string, in a plan run"
-        here = payload.get("cwd")
-        if reports_only(command, Path(here) if isinstance(here, str) and here.startswith("/") else None):
-            return ALLOW, ""
+    # The payload's directory first, for every tool: the report command is resolved against it, so a payload
+    # that gives none must not let a relative path resolve against the hook process's own directory.
     cwd = payload.get("cwd")
     where = Path(cwd) if isinstance(cwd, str) and cwd.startswith("/") else None
     if where is None:
         return BLOCK, "guard-paths: blocked: a call in a plan run whose checkout cannot be read"
+    if tool == "Bash":
+        if not isinstance(command, str):
+            return BLOCK, "guard-paths: blocked: a Bash command that is not a string, in a plan run"
+        if reports_only(command, where):
+            return ALLOW, ""
     if not holds(where):
         return BLOCK, f"BLOCKED by guard-paths: {MESSAGE}"
     if tool == "Skill":
         return ALLOW, ""  # it writes no file, so E13's resume check has nothing to judge for it
-    return _resume(where, resume)
+    return _resume(_checkout_of(payload, where), resume)
+
+
+def _checkout_of(payload: dict, where: Path) -> Path:
+    """The directory whose branch E13 judges: for a file tool, the file's own checkout, not the session's.
+
+    A file under the session's directory is judged by it. One elsewhere (a worktree or a sibling clone that
+    sits on a `plan/*` branch while the session stands on another) is judged by the nearest existing directory
+    above it, since the file may not exist yet. A Bash command's own `git -C other` or `cd` is not resolved:
+    guard-paths does not confine Bash writes (ADR 0041), which Amendment 3 names as a residual."""
+    if payload.get("tool_name") not in WRITE_TOOLS:
+        return where
+    given = payload.get("tool_input") or {}
+    raw = next((given[k] for k in ("file_path", "notebook_path", "path")
+                if isinstance(given.get(k), str) and given[k].startswith("/")), None)
+    if raw is None:
+        return where
+    here = Path(os.path.realpath(where))
+    target = Path(os.path.realpath(raw))
+    if target == here or here in target.parents:
+        return where
+    for parent in target.parents:
+        if parent.is_dir():
+            return parent
+    return where
 
 
 def _resume(where: Path, resume) -> tuple[int, str]:

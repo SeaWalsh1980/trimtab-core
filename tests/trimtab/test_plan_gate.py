@@ -213,7 +213,7 @@ class TheResumeCheckOnEveryWrite(unittest.TestCase):
 
     NO_BRANCH = object()  # `branch=None` means "this test's own part"; this one means git named none
 
-    def decide(self, load, branch=None, facts=None, scope_ok=True, unreadable=True):
+    def decide(self, load, branch=None, facts=None, scope_ok=True, unreadable=True, by_dir=None):
         from test_planchecks import AGENT, MB, FakeFacts
         from trimtab import planacts, planguard, planreview, planscope
 
@@ -228,6 +228,9 @@ class TheResumeCheckOnEveryWrite(unittest.TestCase):
                 self.cwd, self.facts, self.plan_run = where, found, True
 
             def head_branch(self, cwd=None):
+                for prefix, found_branch in (by_dir or {}).items():
+                    if str(cwd) == prefix or str(cwd).startswith(prefix + "/"):
+                        return found_branch
                 return named
 
             def branch_unreadable(self, cwd=None):
@@ -265,6 +268,55 @@ class TheResumeCheckOnEveryWrite(unittest.TestCase):
 
         self.assertEqual(self.decide(payload(), branch="feat/x", facts=FakeFacts(raises="activity"))[0],
                          ALLOW)
+
+    def test_a_file_written_in_another_checkout_of_a_plan_branch_is_judged_there(self):
+        # E13 followed `cwd` alone, so an Edit of a file in a worktree or sibling clone sitting on a plan
+        # branch went unjudged while the session stood on another branch (CI review).
+        import tempfile
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(tmp)])
+        (tmp / "here").mkdir()
+        (tmp / "other" / "src").mkdir(parents=True)
+        load = {"tool_name": "Write", "cwd": str(tmp / "here"),
+                "tool_input": {"file_path": str(tmp / "other" / "src" / "new.py")}}
+        branches = {str(tmp / "here"): "main", str(tmp / "other"): self.branch}
+
+        code, message = self.decide(load, by_dir=branches)  # nothing in the ledger covers that branch
+
+        self.assertEqual(code, BLOCK)
+        self.assertIn("E13", message)
+
+    def test_a_file_in_the_sessions_own_checkout_is_judged_by_that_checkout(self):
+        import tempfile
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(tmp)])
+        (tmp / "here" / "src").mkdir(parents=True)
+        load = {"tool_name": "Edit", "cwd": str(tmp / "here"),
+                "tool_input": {"file_path": str(tmp / "here" / "src" / "a.py")}}
+
+        self.assertEqual(self.decide(load, by_dir={str(tmp / "here"): "main"})[0], ALLOW)
+
+    def test_a_file_in_another_checkout_on_an_ordinary_branch_is_allowed(self):
+        import tempfile
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(tmp)])
+        (tmp / "here").mkdir()
+        (tmp / "other").mkdir()
+        load = {"tool_name": "Write", "cwd": str(tmp / "here"),
+                "tool_input": {"file_path": str(tmp / "other" / "new.py")}}
+
+        code, _ = self.decide(load, by_dir={str(tmp / "here"): "main", str(tmp / "other"): "feat/x"})
+
+        self.assertEqual(code, ALLOW)
+
+    def test_a_report_command_is_refused_when_the_payload_gives_no_usable_directory(self):
+        # `reports_only` used to resolve it against the hook process's own directory first.
+        report = f"{(roots.code_root() / 'bin' / 'trimtab').resolve()} check-enforcement"
+        for cwd in ("relative", "", None):
+            with self.subTest(cwd=cwd):
+                load = {"tool_name": "Bash", "tool_input": {"command": report}, "cwd": cwd}
+
+                self.assertEqual(self.decide(load)[0], BLOCK)
 
     def test_a_detached_head_is_no_plan_branch_and_judges_nothing(self):
         # CI checks a pull request out detached, and so does a bisect; refusing it would stop a run from
