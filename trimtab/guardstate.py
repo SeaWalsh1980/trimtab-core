@@ -7,14 +7,17 @@ the config dir by its physical path (ADR 0029); the residual is the one ADR 0028
 
 from __future__ import annotations
 
+import fcntl
 import os
 import stat
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = "guard-state"
 MAX_BYTES = 1 << 20
 TEMP_PREFIX = ".tmp-"
+LOCK_TRIES, LOCK_PAUSE = 200, 0.01
 READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 
 
@@ -73,6 +76,52 @@ def read(path: Path) -> str | None:
         return data.decode("utf-8")
     except UnicodeDecodeError as err:
         raise GuardStateError("a guard-state file is not UTF-8") from err
+
+
+def append(path: Path, text: str, *, create: bool = False) -> None:
+    """Append `text` to a private regular file, locked, never following a link, bounded in size.
+
+    The file must exist unless `create`. A planted link, a file open to others or one past
+    MAX_BYTES raises, so a ledger line is never written where it will not be read back.
+    """
+    flags = os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    if create:
+        flags |= os.O_CREAT | os.O_EXCL  # a file planted before the create is refused, not adopted
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError as err:
+        raise GuardStateError(f"a guard-state file cannot be opened for append ({type(err).__name__})") from err
+    try:
+        fh = os.fdopen(fd, "ab")
+    except OSError as err:
+        os.close(fd)
+        raise GuardStateError(f"a guard-state file cannot be opened for append ({type(err).__name__})") from err
+    with fh:
+        try:
+            _lock(fh.fileno())  # before the size is read, so parallel hooks cannot both pass it
+            st = os.fstat(fh.fileno())
+            if not stat.S_ISREG(st.st_mode) or not private(st):
+                raise GuardStateError("a guard-state file is not a private regular file")
+            data = text.encode("utf-8")
+            if st.st_size + len(data) > MAX_BYTES:
+                raise GuardStateError("a guard-state file would pass the size any this base reads")
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        except OSError as err:
+            raise GuardStateError(f"a guard-state file cannot be appended to ({type(err).__name__})") from err
+
+
+def _lock(fd: int) -> None:
+    """An exclusive lock, waited for at most about two seconds: a holder that never lets go must not stall a
+    hook past its deadline, where a timeout fails open."""
+    for _ in range(LOCK_TRIES):
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            time.sleep(LOCK_PAUSE)
+    raise GuardStateError("a guard-state file stayed locked by another process")
 
 
 def write(path: Path, text: str) -> None:

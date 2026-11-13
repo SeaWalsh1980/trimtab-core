@@ -91,6 +91,7 @@ class Change:
     added: tuple[str, ...] = ()
     removed: int = 0
     binary: bool = False  # git shows no lines for it, so its content cannot be judged
+    removed_lines: tuple[str, ...] = ()  # the removed lines' text (E18 judges test definitions and thresholds)
 
 
 class Facts:

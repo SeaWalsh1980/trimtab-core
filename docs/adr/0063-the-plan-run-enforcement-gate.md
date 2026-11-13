@@ -813,3 +813,106 @@ cost is that a command with a substitution starts python3 (about 50 ms), and a c
 substitution plus letters is refused. Still not read: a push whose every word is a bare substitution
 (`$(echo git) $(echo push) origin x`) and a substitution run through a shell string, which the first
 "state and strings" residual already names; E22 bounds both.
+
+## Amendment 2: the ledger and the pure review rows, 2a of the plan-run layer
+
+Amendment 1 is unchanged. The plan-run layer (this record's third PR) lands in three parts, 2a, 2b and
+2c, at the owner's choice of 2026-11-13; each cites this record. This amendment is appended as each part
+lands, and records what that part built and chose.
+
+**2a ships** the pieces with no caller yet, so each is tested on its own and nothing reads them until 2b:
+- **The ledger store** (`trimtab/planledger.py`, `guardstate.append`): the §1 path, six event types
+  (`push`, `round`, `draft`, `rerequest`, `stop`, `conflict`), a version and an injected clock on every
+  line. A file is opened without following a link, must be private and regular, is locked for the append
+  and is bounded at `guardstate.MAX_BYTES`. A malformed line, an unknown version or type is an error, never
+  skipped. `start` refuses when the part's branch is already on the remote and leaves an existing ledger as
+  it is. A repeated pass on a head, `stop` reason, `draft` or `conflict` is written once (REL-1).
+- **Cursor paging** (`GhApi.call_with_headers`, `GhApi.cursor_pages`): `gh api -i` and the `after=` cursor
+  of the Link header's `rel="next"`. `page=` is never sent. The page limit reached with a next link still
+  standing is an error, as is a next link with no cursor. E13 reads the activity events through it in 2b.
+- **`fix_limits`** in `instance.json` (E18): `markers` and `thresholds`, inline lists. Absent means no E18
+  rows are shown. Present with no `markers`, it takes `instance.DEFAULT_FIX_MARKERS`; `thresholds` are
+  patterns that must compile and have no default.
+- **The pure rows** (`trimtab/planreview.py`): `check_e5`, `check_e6`, `check_e7`, `check_e8`, `check_e9`,
+  `check_e10`, `check_e13`, `check_e18`, `check_e23` and `check_round_start`, one decision function each;
+  `parse_facts` for the E3 lines; `thread_key`; `next_part` for §6. A fact that could not be read is the
+  caller's `FactsError`.
+- **The E3 parser** reads only lines that begin with a facts marker, after an Actions timestamp. A marker
+  inside a longer line, such as a model's output echoed into the log, is not read.
+
+**Choices.**
+- **`fix_limits.markers` is inline**, not "a file of literal strings" (E18's text). Reading a file as an
+  object at `trimtab_sha` needs a second read for no gain: the list is the project's, merged by its admin.
+  Rejected: a path to a file in the instance repository. It can move to a file later without loosening.
+- **E9 also refuses a fixed reply whose thread is not yet closed** by a later E3 line from someone other than
+  the agent. The row says a thread "counts as closed only when" so; the check reads that as ready needing
+  it. Tighter than a looser reading, and E22 sees the same facts.
+- **E13's ledger-to-events agreement is exact:** the ordered `(before, after)` pairs must equal the ledger's
+  `(old, new)` pairs. A push the ledger did not see (a merge made on GitHub) breaks it, which is a stop.
+- **E18 judges added and removed line text**, so `planrows.Change` gains `removed_lines`. A removed
+  threshold line the plan's item section does not name refuses even where nothing replaces it.
+- **The rows are in `planreview.py`, not `planrows.py`**, so the write rows keep their size and `planrows`
+  stays the one module with the push reader. It imports `Change`, `FactsError` and `Refusal` from it.
+
+**Not in 2a (so the manifest has no entries for these rows yet).** A row is "shown" only with a hook that
+calls it, so E5-E11, E13, E18, E21 and E23 get their manifest entries in 2b, with the subcommands
+(`plan-ready-check`, `plan-rerequest-check`, `plan-push-check`, `plan-resume-check`), the facts readers and
+the guard wiring. 2c holds E22 and its lock field. The mutation check for 2a's rows was run by hand: with
+each decision function replaced by one that allows, at least one of its tests fails.
+
+**Review round 1 (three passes) changed these in 2a.**
+- **The E3 parser splits the log on `\n` only** (`str.splitlines()` also splits on U+2028, `\x0b`, `\x0c`,
+  `\x85` and a bare `\r`, which let a repository filename start a forged `resolved` line) and accepts a
+  `path` of `[A-Za-z0-9._/@+-]` only. A path that breaks either way fails the whole read.
+- **E18 pairs threshold lines by text with the numbers masked**, so an unrelated added line cannot stand in
+  for a removed one; a removed line with no replacement refuses; a replacement the plan names exactly may be
+  lower. Markers match without regard to case or spacing, the defaults are wider (`xfail`, `pytest.skip(`,
+  `if: false`, `--no-verify`, `# pyright: ignore`), and `fix_limits.markers: []` is refused rather than
+  switching the check off. Negative numbers are read as negative.
+- **E7 takes the latest verdict per head**, as E6 does. **E10** refuses when a ledger push is not on the
+  branch rather than leaving it uncounted. **E23** takes the heads, not a count. **E9** refuses a thread with
+  no anchor commit.
+- **The ledger** checks every directory level on read and append, requires each line's type fields, and
+  `guardstate.append` takes the lock before it reads the size. **Link headers** are read whole (repeated
+  headers joined, `rel` anywhere in an entry); a header that says `next` in a form this reader cannot place is
+  an error, as is a page limit below 1 or a caller-set `page`, `after` or `per_page`.
+
+**Review round 2 (three passes) changed these in 2a.**
+- **E18's number reading:** a hyphen is a minus only after a non-word character (`ubuntu-22.04` is a name and
+  a number); a decimal (one dot) compares as a number and a dotted version (two or more dots) part by part;
+  removals are matched strictest first, to the lowest replacement that still holds, named replacements last,
+  so the diff's order does not matter. A binary change to a test file, or to a path a threshold pattern
+  matches, refuses, because git shows no lines for it. `conftest.py` and `tests.py` are test files.
+- **E9** passes when any one fixed reply cites a valid commit, so a corrected reply can follow a bad one.
+- **The E3 parser** refuses a resolved thread with no resolver, an open one with a resolver, and a thread id
+  twice in one run.
+- **The ledger** refuses a line whose `head`, `old` or `new` is not a full SHA or whose `pass` is not one of
+  the three, a bool as a PR number, and a push to the zero SHA; `start` creates the file exclusively.
+  `guardstate.append` waits for the lock at most about two seconds and raises `GuardStateError` for every
+  `OSError`, so a hook never meets an untyped error or a lock held for good.
+- **Link headers:** `rel` is case-insensitive, and `next` is looked for outside the `<url>` parts, so a
+  repository named `nextjs-x` does not turn its last page into an error.
+
+**Residuals recorded here (not fixed in PR 166 or 2a); E22 bounds the shell-spelling ones.**
+- E18 judges "lowers a number", so a threshold where a lower number is stricter (`max-complexity`), and a
+  threshold line that is only added, are not caught; `fix_limits.thresholds` should name higher-is-stricter
+  limits. A binary change to a file that is neither a test nor path-matched is not judged. `elif: false`
+  matches the `if: false` marker (a false refusal, named lines fix it). E18 with no `fix_limits` key is "not
+  shown", which 2b's wiring must keep as a refusal. In 2b, `Ledger.push`'s `commits` for an `old` of zeros
+  must be bounded by the merge-base.
+- A `fix_limits.thresholds` pattern is the admin's and is only compiled; a catastrophic pattern would stall
+  the hook, which fails closed at the 6 s deadline. `Thread.commit` is not in the E3 line, so 2b fills it
+  from the review comment before E9 can pass. The `once` de-duplication reads outside the lock, so two
+  hooks at once can write one line twice; readers treat that as one.
+- The facts job is a separate job with no model step (§4), which is what keeps model output out of the
+  log's line starts; the parser's own checks above are a second layer, not a nonce binding.
+- A push spelled with a glob (`git pu?h` with a file named `push` in the directory), a push whose every
+  word is a bare substitution, a stored git alias, commands that run a string (`git rebase -x`,
+  `git submodule foreach`, `git bisect run`, `git filter-branch --exec`) and a legacy `.git/remotes` push
+  line are not read.
+- PR 166's third review round, medium and low: a bare push on a new branch under `push.default=current`;
+  `gh issue close <URL>` refused; GraphQL close and merge refused for every PR; a refusal text that names the
+  `-C` directory; two weak tests; the unused `before` parameter in `check_git`; unused imports in
+  `capture/sources.py`.
+- A `cancelled` run counts as an E12 round, and the 6 s hook budget is unmeasured.
+- The ledger, E10, E11 and E23 rest on a file the session's account can write; the ADR 0028 residual stands.
