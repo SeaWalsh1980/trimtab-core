@@ -121,14 +121,14 @@ def judge(repository: str, default: str, plan: str, record: planrecord.Latest, w
     if problems:
         return Verdict(problems, record=record.path, pr=pull.number, merged_by=pull.merged_by)
 
-    rows = _ma(mergeauthority._review_rows, api, repository, pull.number)
-    reviews = _ma(mergeauthority._reviews, rows)
+    rows = _ma(mergeauthority.review_rows, api, repository, pull.number)
+    reviews = _ma(mergeauthority.parse_reviews, rows)
     late = _late_approvals(rows, pull.merged_at)
     reviews = [r for r in reviews if r.id not in late]  # a request for changes or a dismissal still counts
     last = mergeauthority.last_reviews(reviews, (who.admin, who.approver))
-    problems = [f"code gate: {p}" for p in mergeauthority._changes_requested(who, last)]
+    problems = [f"code gate: {p}" for p in mergeauthority.changes_requested(who, last)]
     approved = [login for login in (who.admin, who.approver)
-                if login and mergeauthority._approves(last.get(login.casefold()), pull.head)]
+                if login and mergeauthority.approves(last.get(login.casefold()), pull.head)]
     if not approved:
         names = f"{who.admin} or {who.approver}" if who.approver else who.admin
         why = "; an approval submitted at or after the merge does not count" if late else ""
@@ -243,7 +243,7 @@ def _ruleset_problems(api: GhApi, repository: str, default: str, pull: _Pull) ->
         if any(c.get("context") == mergeauthority.CHECK_NAME
                and c.get("integration_id") == mergeauthority.ACTIONS_APP_ID for c in checks):
             ruleset = rule.get("ruleset_id")
-            if not mergeauthority._app_id(ruleset):
+            if not mergeauthority.is_server_id(ruleset):
                 raise RecordAuthError(f"{what} returned unexpected JSON")
             ids.add(ruleset)
     if not ids:

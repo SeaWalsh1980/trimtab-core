@@ -1178,3 +1178,12 @@ def check_action(repo: str, repository: str, number: int, base: str, head: str, 
 
     problems = action_problems(action, pull.pr, who, paths, checker_in_tree, reviews, runs, route, comments)
     return ActionResult(REFUSE, tuple(problems)) if problems else ActionResult(ACT, ())
+
+
+# The code gate's pieces, under public names: `planrecordauth` (ADR 0072) judges a record's merge with the same
+# rules, so the gate at merge and the check after it cannot disagree. Rename or change them only with that module.
+review_rows = _review_rows
+parse_reviews = _reviews
+approves = _approves
+changes_requested = _changes_requested
+is_server_id = _app_id
