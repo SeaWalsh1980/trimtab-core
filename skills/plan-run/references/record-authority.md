@@ -35,7 +35,9 @@ indented or sits behind a blockquote or list marker anywhere in the record or th
 markdown renders it as a heading this reader would not see. A second line under the `## Status`
 heading, a `###` included, is refused too. A CRLF file reads normally; any other carriage return
 is refused.
-Nothing outside the section is read. `plan complete` means the record's item is the section's last.
+A heading named Status or Items in a form the reader does not recognise (`# Status`, `## Items ##`, a
+setext underline, an HTML heading tag) is refused too. Apart from those whole-text checks, nothing
+outside the section is read. `plan complete` means the record's item is the section's last.
 A plan without that section is exit 1, which is a blocker on the restart path: report it rather than
 work out the next item by hand (trimtab-core ADR 0071).
 

@@ -71,6 +71,18 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
   is the status. The `## Status` section ends only at a `## ` heading, so a `###` or `#` line after
   the status line is that second line, and refused. One helper does the splitting for both readers
   so they cannot drift apart again.
+- A heading named `Status` (record) or `Items` (plan) in any form this reader does not recognise
+  is refused in both readers, over the whole text: another ATX level (`# Status`, `### Items`), a
+  closing sequence (`## Status ##`), a setext heading (the word alone over a `---` or `===`
+  underline), or an HTML heading tag (`<h1>` to `<h6>`). A second one of these ahead of the real
+  heading, or after its section ends, would show a reviewer a different answer from the one
+  printed. An indented `## Items` outside the section is refused too, as the record reader already
+  refused an indented heading anywhere. These whole-text checks (carriage return, prefixed,
+  indented and decoy headings) are the exceptions to "nothing outside the section is read": the file
+  has to be sound before the section can be located. Plain prose using the word is still read.
+  Rejected: a CommonMark parser, which would add a dependency (ENG-3) and still leave this reader
+  answering for a renderer it does not control; naming each shape is the cost, and a miss is the
+  next review round's finding, which is why the broad forms are refused rather than whitelisted.
 - A heading behind a blockquote marker (`>`, nested included) or a list marker (`-`, `*`, `+`,
   `N.`, `N)`), at any indentation, is refused in both readers, over the whole text of the record or
   plan. Markdown renders `> ## Status` and `- ## Status` as headings, so the reader would otherwise
