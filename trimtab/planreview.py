@@ -400,6 +400,56 @@ def check_round_start(head: str, pre_draft_heads: Sequence[str]) -> None:
 
 # ---- K+1 ---------------------------------------------------------------------------------------
 
+_ITEM_HEADING = re.compile(r"^(?P<hashes>#{1,6})\s*(?:item\s*)?0*(?P<item>[0-9]+)\b", re.I)
+_ITEM_ENTRY = re.compile(r"^(?P<indent>\s*)(?:[-*+]\s+)?(?:\[[ xX]\]\s+)?0*(?P<item>[0-9]+)[.)]\s")
+_CODE_SPAN = re.compile(r"`([^`\n]+)`")
+
+
+def _item_section(text: str, item: int) -> list[str]:
+    """The lines of the authorised plan that belong to item `item`: its numbered entry and the lines
+    indented under it, or its heading and the lines under it. An item the plan does not hold is no lines,
+    which names nothing, so E18 refuses more rather than less."""
+    lines = text.split("\n")
+    for n, line in enumerate(lines):
+        heading = _ITEM_HEADING.match(line)
+        entry = None if heading else _ITEM_ENTRY.match(line)
+        if heading is not None and int(heading["item"]) == item:
+            level = len(heading["hashes"])
+            rest = []
+            for later in lines[n + 1:]:
+                found = _ITEM_HEADING.match(later)
+                if found is not None and len(found["hashes"]) <= level:
+                    break
+                rest.append(later)
+            return [line, *rest]
+        if entry is not None and int(entry["item"]) == item:
+            indent = len(entry["indent"])
+            rest = []
+            for later in lines[n + 1:]:
+                if _ITEM_HEADING.match(later):
+                    break
+                found = _ITEM_ENTRY.match(later)
+                if found is not None and len(found["indent"]) <= indent:
+                    break
+                rest.append(later)
+            return [line, *rest]
+    return []
+
+
+def named_lines(text: str, item: int) -> frozenset[str]:
+    """E18's exception: the exact marker and threshold lines the plan's item section names.
+
+    Every non-empty line of the section counts (a fenced code block's lines among them), and so does the
+    content of each inline code span, which is how a line is named inside a sentence."""
+    out: set[str] = set()
+    for line in _item_section(text, item):
+        stripped = line.strip()
+        if stripped:
+            out.add(stripped)
+        out.update(span.strip() for span in _CODE_SPAN.findall(line) if span.strip())
+    return frozenset(out)
+
+
 def parts_in(names: Sequence[str], plan: str, item: int) -> set[int]:
     """The part numbers K in `item-NN-partK` names (a progress record, or a head ref `plan/<plan>/item-NN-partK`)."""
     found = re.compile(rf"(?:^|/){re.escape(plan)}/item-{item:02d}-part([0-9]+)(?:\.md|\.jsonl)?$"

@@ -375,10 +375,17 @@ def counted_heads(pushes: Iterable[Push], *, failing: set[str], facts: set[str],
     return {h for h in answered if (h in failing or h in facts) and h not in register_only}
 
 
-def check_e12(branch: str, head: str, facts: Facts, pr: PrState | None, register: Callable[[], bool]) -> None:
-    """E12: a push that would make the fourth CI-fix round is refused."""
+def check_e12(branch: str, head: str, facts: Facts, pr: PrState | None, register: Callable[[], bool],
+              conflicted_heads: frozenset[str] = frozenset()) -> None:
+    """E12: a push that would make the fourth CI-fix round is refused.
+
+    `conflicted_heads` holds the heads a ledger `conflict` event records (ADR 0063 §5a): a head that
+    conflicted with the default branch counts as a round, and the ledger is the only record of one
+    past the push that answered it. Empty, as it is for a caller with no ledger, the count is the
+    server-side one Amendment 1 shipped, which is weaker by conflict-only rounds."""
     pushes = list(facts.pushes(branch))
-    failing, reviewed = set(facts.failing_heads(branch)), set(facts.facts_run_heads(branch))
+    failing = set(facts.failing_heads(branch)) | set(conflicted_heads)
+    reviewed = set(facts.facts_run_heads(branch))
     candidates = {p.before for p in pushes} & (failing | reviewed)
     register_only = {h for h in candidates
                      if all(facts.register_answer(branch, p.before, p.after) for p in pushes if p.before == h)}
