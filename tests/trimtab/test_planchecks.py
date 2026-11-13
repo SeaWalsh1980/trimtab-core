@@ -70,6 +70,7 @@ class FakeFacts:
     def review_comments(self, number): return self._value("comments")
     def merge_base(self, branch): return self._value("merge_base")
     def merge_base_of(self, rev): return self._value("merge_base")
+    def branch_sha(self, branch): return self._value("branch_head")
     def parents(self, rev): return self._value("parents")
     def change_from(self, base, source):
         found = self._value("change_from")
@@ -168,6 +169,22 @@ class ReadyCheck(Base):
         # With the file named, E7 is satisfied and the next row decides; without it, E7 itself refuses.
         self.assertNotIn("E7", with_name.refusal or "")
         self.assertIn("E7", without.refusal)
+
+    def test_a_register_file_is_named_as_a_whole_path_not_as_a_piece_of_another(self):
+        entry = "docs/" + "plans/unauthorised/0008-slug/item-02-part1-01.md"
+        change = planrows.Change(entry, "A", ("[x](y)",), 0, False, ())
+        runs = [(review(head=H2), [thread(severity="low")]),
+                (review(head=H2, run="43"), [thread(severity="low", state="resolved", by=REVIEWER,
+                                                    run="43")])]
+        for naming in (f"see x/{entry}", f"{entry}.bak", f"{entry}x"):
+            with self.subTest(naming):
+                comments = [comment(11, REVIEWER, "a finding"),
+                            comment(13, AGENT, f"[deferred] recorded in {naming}", parent=11)]
+
+                got = planchecks.ready(self.context(self.facts(runs=runs, comments=comments,
+                                                               changes=(change,), register_answer=True)), H1)
+
+                self.assertIn("E7", got.refusal)
 
     def test_a_register_shaped_head_that_adds_no_register_file_is_not_an_answer(self):
         runs = [(review(head=H2), [])]

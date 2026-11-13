@@ -1043,7 +1043,7 @@ def cmd_plan_push_check(args) -> int:
     # Before the branch is on the remote there is no `origin/<branch>` to take the plan's merge-base
     # from, so the commit being sent stands in, as it does in the guard (ADR 0063 §5).
     creating = set(args.old) == {"0"}
-    at = (args.source or args.new) if creating else f"origin/{args.branch}"
+    at = (args.source or args.new) if creating else planacts.BRANCH_TIP
     return _plan_check(args, "plan-push-check",
                        lambda ctx: planchecks.push(ctx, old=args.old, new=args.new, source=args.source),
                        limits_at=at)

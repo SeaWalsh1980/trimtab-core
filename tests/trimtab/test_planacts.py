@@ -239,6 +239,22 @@ class Pushes(Base):
 
         self.assertEqual(ledger.events(), [])
 
+    def test_the_plan_is_read_at_the_verified_branch_tip_not_a_ref_name(self):
+        # `origin/<branch>` is a name a session can move; the server-checked SHA is not (round 2).
+        ledger = self.ledger()
+        asked = []
+
+        class Recording(FakeFacts):
+            def merge_base_of(self, rev):
+                asked.append(rev)
+                return super().merge_base_of(rev)
+
+        facts = Recording(changes=(self.change(),), commit_of=H2, branch_head=H1)
+        self.act("pushed", facts, source="HEAD")
+
+        self.assertEqual(asked[:1], [H1])
+        self.assertEqual([e["type"] for e in ledger.events()], ["push"])
+
     def test_a_push_with_no_source_commit_refuses(self):
         self.ledger()
 

@@ -15,6 +15,7 @@ it goes (`pushurl`, `url.<base>.insteadOf`).
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -28,6 +29,7 @@ from trimtab.enforcement import tools
 from trimtab.planrows import Change, Facts, FactsError, Push, PrState
 
 RUN_FLAG = "TRIMTAB_PLAN_RUN"
+SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")  # hooks/session-mode.sh: sm_valid_sid
 
 
 def build_facts(cwd: Path, environ: Mapping[str, str] = os.environ) -> Facts:
@@ -128,10 +130,11 @@ class PlanSupport:
     """One command's plan-run view: the flag, the facts, and how a bare push or `HEAD` resolves."""
 
     def __init__(self, cwd: Path, environ: Mapping[str, str] = os.environ, facts: Facts | None = None,
-                 git: tools.Git | None = None):
+                 git: tools.Git | None = None, session_id: str | None = None):
         self.cwd = cwd
         self.plan_run = environ.get(RUN_FLAG) == "1"
-        self._on_plan: bool | None = None
+        self.session_id = session_id
+        self._in_run: bool | None = None
         self._injected = facts is not None
         self.facts: Facts = facts or LazyFacts(cwd)
         self._by_dir: dict[str, Facts] = {str(cwd): self.facts}
@@ -174,17 +177,47 @@ class PlanSupport:
         return self._run(cwd or self.cwd, "symbolic-ref", "--short", "-q", "HEAD")
 
     def in_run(self, cwd: Path | None = None) -> bool:
-        """Whether this session is an autonomous plan run, by the signals the session-mode classifier uses
-        that a guard can read here: `TRIMTAB_PLAN_RUN=1`, or a checked-out `plan/*` branch (ADR 0041).
+        """Whether this session is an autonomous plan run, by the classifier's three signals (ADR 0041):
+        `TRIMTAB_PLAN_RUN=1`, a checked-out `plan/*` branch, or a record that this session was autonomous
+        earlier, which makes the mode only tighten (SEC-2.5).
 
-        guard-paths asks the classifier itself; guard-github asks this, so a session on a `plan/*` branch
-        launched without the flag is a run to both of them and not only to one (SEC-2.5)."""
-        if self.plan_run:
+        guard-paths asks the classifier itself; guard-github asks this, so a session is a run to both of
+        them or to neither. A git that cannot be read inside a repository counts as a run, never as
+        interactive: `tools.Git` refuses a shallow clone, alternates or a partial clone, and a session must
+        not be able to make itself interactive to one guard by breaking those reads."""
+        if self._in_run is None:
+            self._in_run = self.plan_run or self._on_plan_branch(cwd or self.cwd) or self._recorded()
+        return self._in_run
+
+    def _on_plan_branch(self, cwd: Path) -> bool:
+        branch = self._run(cwd, "symbolic-ref", "--short", "-q", "HEAD")
+        if branch is not None:
+            return branch.casefold().startswith(planrows.PLAN_PREFIX)
+        if self._run(cwd, "rev-parse", "--git-dir") is not None:
+            return False  # git answers, so there is simply no branch: a detached HEAD is no run by itself
+        return self._is_repository(cwd)  # git fails in a repository: fail closed
+
+    def _recorded(self) -> bool:
+        """Whether the session-mode hook recorded this session as autonomous, read as `sm_recorded` reads
+        it: a link anywhere on the record's path counts as recorded (a session could otherwise point it
+        where it can delete it), and no directory, no id or an id that is not a plain token is no record."""
+        sid = self.session_id
+        if not isinstance(sid, str) or not SESSION_ID.fullmatch(sid):
+            return False
+        base = self._environ.get("CLAUDE_CONFIG_DIR")
+        if base:
+            base_dir = Path(base.rstrip("/") or "/")
+        elif self._environ.get("HOME"):
+            base_dir = Path(self._environ["HOME"].rstrip("/") or "/") / ".claude"
+        else:
+            return False
+        folder = base_dir / "guard-state" / "session-mode"
+        if os.path.islink(folder.parent) or os.path.islink(folder):
             return True
-        if self._on_plan is None:
-            branch = self.head_branch(cwd or self.cwd)
-            self._on_plan = bool(branch and branch.casefold().startswith(planrows.PLAN_PREFIX))
-        return self._on_plan
+        if not folder.is_dir():
+            return False
+        record = folder / hashlib.sha256(sid.encode()).hexdigest()
+        return os.path.islink(record) or record.exists()
 
     def in_repository(self, cwd: Path) -> bool:
         """Whether `cwd` is inside a git repository at all. A guard that could not read the branch tells
@@ -313,6 +346,11 @@ def judge_push(args: Sequence[tuple[str, bool]], support: PlanSupport, cwd: Path
                 return f"a push to a repository other than {ours}, which this guard reads facts for"
     except FactsError as err:
         raise planrows.Refusal(f"a push cannot be judged ({err}); refusing (ADR 0063 §5)") from err
+    # A dry run writes nothing, so it is judged by every row like any push and simply not recorded: a
+    # ledger entry for it would vouch for a write that never happened, and E13 compares the ledger with the
+    # server's events (ADR 0063 §1, §5).
+    if found.dry:
+        record = None
     if found.broad:
         planrows.judge_broad(found.broad, plan_run=support.plan_run, facts=facts, force=found.force,
                              delete=found.delete)

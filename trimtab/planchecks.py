@@ -14,6 +14,7 @@ Standard library only: the hooks run Python with `-I -S` (ENG-3).
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -248,7 +249,13 @@ def _register_answer(ctx: Context, reviewed: str, head: str, threads: Sequence[p
     replies = [c.body for c in ctx.facts.review_comments(ctx.facts.open_pr(ctx.branch).number)
                if c.user.casefold() == agent.casefold() and c.in_reply_to in listed
                and deferral and planreview.first_word(c.body) == deferral]
-    return all(any(path in body for body in replies) for path in added)
+    return all(any(_names(body, path) for body in replies) for path in added)
+
+
+def _names(body: str, path: str) -> bool:
+    """Whether a reply names a path as a whole word, not as a piece of a longer one: `a/x.md` is not named
+    by `b/a/x.md`, nor `item-02-part1-01.md` by `item-02-part1-01.md.bak`."""
+    return re.search(rf"(?<![A-Za-z0-9_./-]){re.escape(path)}(?![A-Za-z0-9_/-])(?!\.[A-Za-z0-9])", body) is not None
 
 
 def _own_change(ctx: Context, remote: str, sent: str) -> Sequence[Change]:

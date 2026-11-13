@@ -24,6 +24,9 @@ ZERO = "0" * 40
 BLOCKED_LABEL = "plan:blocked"
 # A label write that names no label removes every one of them (a REST replacement or a bare delete).
 ALL_LABELS = "*"
+# `limits_at` for a branch already on the remote: the plan is read at the merge-base of the branch's
+# server-verified tip, never of a bare `origin/<branch>` name a session can move (review round 2).
+BRANCH_TIP = "@branch"
 CONTINUE_LABEL = "plan:continue"
 # §1a: a ledgerless session after ready may answer a thread only with one of these, since the other
 # two tags each need a push (a commit for fixed, a register entry for a deferral).
@@ -91,8 +94,9 @@ def context(repo: Path, facts, branch: str, *, instance_root: Path | None = None
                               item=item, part=part, facts=facts, ledger=ledger, agent=found.agent,
                               review_login=found.review.login, tags=dict(found.review.tags),
                               rerequest_label=found.review.rerequest_label, ledger_config=where,
-                              limits=None if limits_at is None
-                              else limits_for(Path(repo), facts, branch, found, item, limits_at))
+                              limits=None if limits_at is None else limits_for(
+                                  Path(repo), facts, branch, found, item,
+                                  facts.branch_sha(branch) if limits_at == BRANCH_TIP else limits_at))
 
 
 def _ctx(support, branch: str, **kw) -> planchecks.Context:
@@ -216,7 +220,7 @@ def pushed(support, branch: str, source: str | None, **kw) -> None:
         new = _commit_sent(support.facts, source)
         # The plan is read at the merge-base of what the branch holds. Before the branch is on the
         # remote there is no `origin/<branch>`, so that is the merge-base of the commit being sent.
-        ctx = _ctx(support, branch, limits_at=f"origin/{branch}" if old != ZERO else new, **kw)
+        ctx = _ctx(support, branch, limits_at=BRANCH_TIP if old != ZERO else new, **kw)
     except FactsError as err:
         raise Refusal(f"a plan/* write cannot be judged ({err}); refusing (ADR 0063 §5)") from err
     _start(ctx, old)

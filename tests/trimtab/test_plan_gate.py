@@ -452,19 +452,57 @@ class LsRemote(unittest.TestCase):
         git._raw = lambda cwd, *args, **kw: out.encode()
         return git
 
+    def recording(self, out=None):
+        """A Git whose `_raw` records each call as (cwd, args) and answers `out` for ls-remote."""
+        calls = []
+        git = tools.Git.__new__(tools.Git)
+        git._binary, git._env, git._timeout = "/bin/true", {}, 1
+
+        def raw(cwd, *args, **kw):
+            calls.append((Path(cwd), args))
+            return (out or f"{'a' * 40}\tHEAD\n").encode() if "ls-remote" in args else b""
+
+        git._raw = raw
+        return git, calls
+
     def test_the_pinned_credential_helper_is_given_when_an_auth_is(self):
-        seen = {}
-        git = self.git(f"{'a' * 40}\tHEAD\n")
-        git._raw = lambda cwd, *args, **kw: seen.setdefault("args", args) and b"" or (
-            f"{'a' * 40}\tHEAD\n".encode())
+        git, calls = self.recording()
 
         class Auth:
             binary = "/usr/bin/gh"
             env = {"GH_CONFIG_DIR": "/tmp/empty", "GH_HOST": "github.com", "GH_TOKEN": "x"}
 
-        git.ls_remote(Path("/"), "https://example.invalid/x.git", "HEAD", 1, Auth())
+        git.ls_remote(Path("/work"), "https://example.invalid/x.git", "HEAD", 1, Auth())
 
-        self.assertIn("credential.helper=!/usr/bin/gh auth git-credential", seen["args"])
+        listing = [args for _, args in calls if "ls-remote" in args][0]
+        self.assertIn("credential.helper=!/usr/bin/gh auth git-credential", listing)
+
+    def test_the_read_runs_inside_a_bare_repository_of_its_own(self):
+        # Git discovers a repository upward from its directory and reads that repository's config, so
+        # an `insteadOf` planted in a repository above the temp dir would answer for the key's head
+        # (review round 2). A bare repository made for the read is found first, with an empty config.
+        git, calls = self.recording()
+
+        git.ls_remote(Path("/work"), "https://example.invalid/x.git", "HEAD", 1)
+
+        made = [args for _, args in calls if "init" in args]
+        listing = [(cwd, args) for cwd, args in calls if "ls-remote" in args][0]
+        self.assertEqual(len(made), 1)
+        self.assertIn("--bare", made[0])
+        self.assertEqual(listing[0], Path("/work") / "ls-remote.git")
+        self.assertEqual(made[0][-1], str(Path("/work") / "ls-remote.git"))
+
+    def test_a_failed_init_is_a_failed_read(self):
+        git = tools.Git.__new__(tools.Git)
+        git._binary, git._env, git._timeout = "/bin/true", {}, 1
+
+        def raw(cwd, *args, **kw):
+            raise tools.ToolError("init failed")
+
+        git._raw = raw
+
+        with self.assertRaises(tools.ToolError):
+            git.ls_remote(Path("/work"), "https://example.invalid/x.git", "HEAD", 1)
 
     def test_the_named_refs_sha_is_returned(self):
         out = f"{'a' * 40}\tHEAD\n{'b' * 40}\trefs/heads/main\n"

@@ -156,11 +156,37 @@ class AllWithForce(Cases):
             with self.subTest(opt):
                 self.refused(f"git push --all {opt} origin", "E1", facts=FakeFacts(local=(BRANCH,), pr_state=DRAFT, head=H1))
 
-    def test_a_dry_run_is_unreadable_rather_than_judged(self):
+    def test_a_dry_run_is_judged_like_any_push_and_never_recorded(self):
+        # It writes nothing, so no ledger entry may vouch for it; every row still reads it, so a dry
+        # run of a push the rows would refuse is refused too (E14 here, with no plan run).
         for opt in ("-n", "--dry-run"):
             with self.subTest(opt):
-                self.refused(f"git push {opt} origin {BRANCH}", "dry run",
-                             facts=FakeFacts(local=(BRANCH,), pr_state=DRAFT, head=H1))
+                self.refused(f"git push {opt} origin {BRANCH}", "E14", run=False,
+                             facts=FakeFacts(pr_state=DRAFT, head=H1))
+                self.allowed(f"git push {opt} origin {BRANCH}", facts=FakeFacts(pr_state=DRAFT, head=H1))
+
+    def test_a_dry_run_reaches_the_record_callback_never_and_a_real_push_always(self):
+        from pathlib import Path
+        from test_planrows import FakeFacts as Facts
+        from trimtab import planguard
+
+        def judged(args):
+            seen = []
+            support = planguard.PlanSupport(Path("/work"), environ={"TRIMTAB_PLAN_RUN": "1"},
+                                            facts=Facts(pr_state=DRAFT, head=H1),
+                                            git=lambda cwd, *a: ON_PLAN[a])
+            planguard.judge_push([(w, False) for w in args], support, Path("/work"),
+                                 record=lambda sup, branch, source: seen.append(branch))
+            return seen
+
+        self.assertEqual(judged(["origin", BRANCH]), [BRANCH])
+        self.assertEqual(judged(["--dry-run", "origin", BRANCH]), [])
+        self.assertEqual(judged(["-n", "origin", BRANCH]), [])
+
+    def test_a_dry_run_of_another_branch_still_passes(self):
+        for opt in ("-n", "--dry-run"):
+            with self.subTest(opt):
+                self.allowed(f"git push {opt} origin feature/x", facts=NoFacts(), git=ON_MAIN)
 
     def test_all_is_refused_once_a_local_plan_branch_exists(self):
         # ADR 0063 §1: a broad write names refs this reading cannot list one by one, so no ledger entry

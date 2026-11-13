@@ -64,6 +64,7 @@ class PushRead:
     bare: bool = False  # no refspec was given, so configuration chooses what is pushed
     colonless: bool = False  # a refspec had no `:dst`, so `remote.<r>.push` can map it elsewhere
     head_ref: bool = False  # a destination was taken from HEAD, so the checked-out branch decides it
+    dry: bool = False  # `--dry-run` / `-n`: it writes nothing, so a ledger entry for it would vouch for nothing
 
 
 @dataclass(frozen=True)
@@ -158,7 +159,7 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
     `current` names the branch a bare push resolves to (git rev-parse --symbolic-full-name @{push}) and
     `head` the one a `HEAD` refspec does (the checked-out branch; `current` when not given). None, or any
     word the shell builds, makes the reading unreadable, which refuses."""
-    force = delete = tags = False
+    force = delete = tags = dry = False
     broad: str | None = None
     has_repo = False
     repo_value: str | None = None
@@ -202,15 +203,13 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
             elif kind == "all":
                 broad = broad or "all"
             elif kind == "dry":
-                # A dry run writes nothing, so a ledger entry for it would vouch for a write that never
-                # happened, and E13 compares the ledger with the server's events (ADR 0063 §1, §5).
-                return PushRead(unreadable="a dry run, which writes nothing the ledger could record")
+                dry = True
             continue
         letters = text[1:]
         for pos, ch in enumerate(letters):
             if ch == "n":
-                return PushRead(unreadable="a dry run, which writes nothing the ledger could record")
-            if ch == "f":
+                dry = True
+            elif ch == "f":
                 force = True
             elif ch == "d":
                 delete = True
@@ -278,7 +277,7 @@ def read_push(args: Sequence[tuple[str, bool]], current: Callable[[], str | None
     if maybe_option:  # an unquoted expansion splits into words: options, or refspecs of its own (`:plan/x`)
         return PushRead(unreadable="a remote built by the shell may be options or refspecs")
     return PushRead(writes=tuple(writes), broad=broad, remote=remote, bare=not refspecs, colonless=colonless,
-                    head_ref=head_ref)
+                    head_ref=head_ref, dry=dry)
 
 
 # ---- the diff shapes ---------------------------------------------------------------------

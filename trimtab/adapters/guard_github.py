@@ -1546,7 +1546,8 @@ def decide(payload: dict, plan: planguard.PlanSupport | None = None) -> tuple[in
     cwd_known = isinstance(cwd, str) and cwd.startswith("/") and not any(
         w.text in DIR_CHANGERS for s in parsed for w in s) and not _DIR_CHANGE_TEXT.search(command)
     where = Path(cwd) if isinstance(cwd, str) and cwd else Path("/")
-    support = plan or planguard.PlanSupport(where)
+    sid = payload.get("session_id")
+    support = plan or planguard.PlanSupport(where, session_id=sid if isinstance(sid, str) else None)
     # E21: in a run session nothing reaches GitHub until the gate has passed for the current lock, base
     # and default-branch head. Every command here is one the prefilter read as touching GitHub or a
     # remote ref, so each is refused while the gate fails — guard-paths refuses the whole shell anyway,

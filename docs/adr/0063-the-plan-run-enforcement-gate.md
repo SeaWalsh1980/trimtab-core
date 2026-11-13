@@ -950,7 +950,8 @@ and its lock field, so the gate cannot pass yet.
 - **guard-paths** gains `hook_event_name` and `cwd` fields, a Skill branch for E11's recorder and
   E23's sixth-round refusal, and the E21 branch: in a run session, unless the gate's pass holds for
   the current key, it refuses every Edit, Write, MultiEdit and NotebookEdit and every Bash command
-  except `trimtab check-enforcement` as the whole command, and it refuses any write on a `plan/*`
+  except the installed `bin/trimtab check-enforcement` as the whole command (named by a path that
+  resolves to it, as round 1 changed), and it refuses any write on a `plan/*`
   branch whose resume check has not passed for its head.
 - **E21's key** (`gate.pinned_key`, `gate.pass_holds`, `enforcement.guardgate`): the default-branch
   head by `git ls-remote … HEAD` under 3 s with only the pinned configuration, the lock and the
@@ -1001,8 +1002,10 @@ and its lock field, so the gate cannot pass yet.
   pass, so this is the half that holds where only guard-github is registered, and it needs no
   read-versus-write reading of its own.
 
-**Measurements (ENG-6.1).** 20 calls of `hooks/guard-paths.sh` per case on the workstation, against
-`main`'s hook as the baseline:
+**Measurements (ENG-6.1).** Taken before review round 1 and **not** repeated since: rounds 1 and 2 added a
+Skill gate, a rebuilt key, an `ls-remote` credential helper and a bare-repository probe, so the run-session
+rows below are a floor, and the figure is still to be re-taken. 20 calls of `hooks/guard-paths.sh` per case
+on the workstation, against `main`'s hook as the baseline:
 
 | Case | Before | After |
 |---|---|---|
@@ -1135,3 +1138,38 @@ right:
   Amendment 1 shipped (a ref, contents, a merge, a rename, a PR close) keep their unconditional
   refusals. Rejected: refusing them in every session, which would have turned the suite's pinned
   interactive reply from an allow into a block for a row that governs runs.
+
+**Review round 2 (the security pass reported; the other two passes were cut off) changed these.**
+
+- **`PlanSupport.in_run` reads the classifier's three signals.** The run flag, a checked-out `plan/*`
+  branch, and a record that the session was autonomous earlier (the record `sm_recorded` reads, with the same
+  rule that a link on its path counts as recorded). A git that fails inside a repository counts as a run,
+  never as interactive, since `tools.Git` refuses a shallow clone, alternates or a partial clone and a session
+  could otherwise make itself interactive to guard-github alone and mark its own PR ready by GraphQL. A
+  detached HEAD in a readable repository is no run by itself. guard-github hands the payload's `session_id`
+  to the support it builds.
+- **`ls-remote` runs inside a bare repository made for the read.** Git discovers a repository upward from its
+  directory and reads that repository's configuration, so a read in a plain temp directory took an
+  `insteadOf` planted in any repository above it, and with it the one server-verified element of E21's key.
+  Rejected: `GIT_CEILING_DIRECTORIES` alone, which stops the search but not a parent that is itself the
+  temp directory.
+- **A dry run is judged and not recorded**, where round 1 had refused it. That refusal reached every dry-run
+  push of any branch, which the guard allowed before 2b and which writes nothing. Every row still reads it.
+- **The plan is read at the merge-base of the branch's server-verified tip**, not of a bare `origin/<branch>`
+  name a session can move; and E7's register-file naming matches a whole path, not a piece of one.
+
+**Residuals added by round 2, not fixed here.**
+
+- **The ledger entry for a push is written at PreToolUse, before the push runs.** A denied prompt or a failed
+  push leaves an entry the server never saw, and E13's pair equality and E10's "a ledger entry is not on the
+  branch" then refuse every later write on the part. Round 1 reported it at MEDIUM and round 2's code review at
+  HIGH. A fix tolerates ledger entries that no server event matches (E13) and no branch commit holds (E10);
+  both loosen 2a's owner-reviewed exactness decisions (Amendment 2), so it is the owner's call.
+- **The `resume` entry is a line the session's account can write**, like the ledger it sits in. Round 2's
+  security pass graded it above §1's existing list. It is no wider than a forged ledger line for a push, which
+  already satisfies E13's first condition when copied from the server's events, so it is recorded as the same
+  class.
+- **Every guarded write in a run costs a GitHub read for the branch head and a `gh auth token` spawn**, on top
+  of the key's `ls-remote`, against the adapter's 8 s deadline. Neither is cached beyond the pass.
+- **Round 2's `/trimtab-review` and `/code-review` passes did not complete** (a usage limit cut them off), so
+  round 2 is the security pass plus a later code review of the same head, and no third round has been run.

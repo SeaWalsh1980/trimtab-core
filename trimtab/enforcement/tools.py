@@ -242,7 +242,13 @@ class Git:
             env.update({k: auth.env[k] for k in ("GH_CONFIG_DIR", "GH_HOST", "GH_TOKEN")})
             pins += ["-c", "credential.helper=",
                      "-c", f"credential.helper=!{auth.binary} auth git-credential"]
-        out = self._raw(cwd, *pins, "ls-remote", "--", url, ref, env=env,
+        # Git finds a repository by searching upward from its directory and then reads that repository's
+        # configuration, so a read made in a plain temp directory would take an `insteadOf` planted in any
+        # repository above it. A bare repository made here is found first and holds no configuration but
+        # what the pins give (the same shape `fetch_clean` uses).
+        probe = Path(cwd) / "ls-remote.git"
+        self._raw(Path(cwd), "init", "-q", "--bare", str(probe), env=env)
+        out = self._raw(probe, *pins, "ls-remote", "--", url, ref, env=env,
                         timeout=timeout).decode("utf-8", "replace")
         for line in out.split("\n"):
             sha, _, name = line.partition("\t")

@@ -66,6 +66,10 @@ class FakeFacts(Facts):
         self._read("merge_base")
         return H5
 
+    def branch_sha(self, branch):
+        self._read("branch_sha")
+        return self.head or H1
+
     def parents(self, rev):
         self._read("parents")
         return (H5,)
