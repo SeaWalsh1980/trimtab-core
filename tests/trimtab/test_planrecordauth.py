@@ -64,8 +64,8 @@ def pull(merged_by=ADMIN, head_ref=HEAD_REF, head_repo=REPOSITORY, base=DEFAULT,
             else changed_files}
 
 
-def review(login, state="APPROVED", commit=HEAD, id=1):
-    return {"id": id, "user": {"login": login}, "state": state, "commit_id": commit}
+def review(login, state="APPROVED", commit=HEAD, id=1, at=BEFORE_MERGE):
+    return {"id": id, "user": {"login": login}, "state": state, "commit_id": commit, "submitted_at": at}
 
 
 def file_row(name, previous=None):
@@ -189,6 +189,34 @@ class CodeGate(unittest.TestCase):
         verdict = judge(answers(reviews=[review(ADMIN, id=1), review(ADMIN, "DISMISSED", id=2)]))
 
         self.assertIn("code gate: no approval", verdict.problems[0])
+
+    def test_an_approval_submitted_after_the_merge_does_not_count(self):
+        verdict = judge(answers(reviews=[review(ADMIN, at=AFTER_MERGE)]))
+
+        self.assertEqual(len(verdict.problems), 1)
+        self.assertIn("submitted at or after the merge", verdict.problems[0])
+
+    def test_an_approval_in_the_merges_own_second_does_not_count(self):
+        verdict = judge(answers(reviews=[review(ADMIN, at=MERGED_AT)]))
+
+        self.assertIn("code gate: no approval", verdict.problems[0])
+
+    def test_an_earlier_approval_stands_beside_a_later_one(self):
+        verdict = judge(answers(reviews=[review(ADMIN, id=1), review(ADMIN, id=2, at=AFTER_MERGE)]))
+
+        self.assertEqual(verdict.problems, ())
+
+    def test_a_request_for_changes_after_the_merge_still_voids_the_approval(self):
+        verdict = judge(answers(reviews=[review(ADMIN, id=1), review(ADMIN, "CHANGES_REQUESTED", id=2,
+                                                                      at=AFTER_MERGE)]))
+
+        self.assertIn("requested changes", verdict.problems[0])
+
+    def test_an_approval_with_no_readable_time_is_an_error(self):
+        for at in (None, "yesterday"):
+            with self.subTest(at=at):
+                with self.assertRaises(RecordAuthError):
+                    judge(answers(reviews=[review(ADMIN, at=at)]))
 
     def test_a_comment_after_an_approval_does_not_hide_it(self):
         verdict = judge(answers(reviews=[review(ADMIN, id=1), review(ADMIN, "COMMENTED", id=2)]))

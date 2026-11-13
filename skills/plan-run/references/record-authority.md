@@ -72,7 +72,8 @@ What it holds, so a `FAIL` line reads clearly:
   in the last one, fails here).
 - **The code gate**, whoever merged: the approver's and the admin's last review each, ignoring
   `COMMENTED` ones (a `DISMISSED` last review means no review, never an earlier one), shows at least
-  one `APPROVED` on the PR's final head, and neither is `CHANGES_REQUESTED`.
+  one `APPROVED` on the PR's final head, submitted before the merge (an approval at or after it does
+  not count), and neither is `CHANGES_REQUESTED`.
 - **The merger:** the admin's merge counts with the code gate. The approver's counts only when, as
   well, the head is `plan/<plan>/item-NN-partK` for this plan and this record, in this repository,
   against the default branch; every `plan-scope` job on the final head, every attempt, is a finished,

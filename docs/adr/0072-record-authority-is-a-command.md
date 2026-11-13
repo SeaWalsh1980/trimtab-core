@@ -42,7 +42,10 @@ in `trimtab/planrecordauth.py`.
   an error) that is merged into the default branch. Zero or several is a named problem. Its own row
   must also be merged, target the default branch, and have the record's commit as its merge commit.
 - **The code gate** reuses `mergeauthority.last_reviews`, `_approves` and `_changes_requested`, so
-  the gate at merge and this check cannot disagree.
+  the gate at merge and this check cannot disagree. One rule is added: an approval counts only if
+  its `submitted_at` is earlier than the PR's `merged_at`, since a review posted after the merge
+  cannot have gated it. A request for changes or a dismissal still counts whenever it came, and an
+  approval with no readable time is an error.
 - **The merger.** The admin: pass with the code gate. The approver: every one of the following is
   judged and every failure named. The head is `plan/<plan>/<record's item-NN-partK>`; the head is in
   this repository and the PR targets the default branch (`mergeauthority.admin_reason`); the PR's

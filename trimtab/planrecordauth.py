@@ -118,14 +118,19 @@ def judge(repository: str, default: str, plan: str, record: planrecord.Latest, w
     if problems:
         return Verdict(problems, record=record.path, pr=pull.number, merged_by=pull.merged_by)
 
-    reviews = _ma(mergeauthority.read_reviews, api, repository, pull.number)
+    rows = _ma(mergeauthority._review_rows, api, repository, pull.number)
+    reviews = _ma(mergeauthority._reviews, rows)
+    late = _late_approvals(rows, pull.merged_at)
+    reviews = [r for r in reviews if r.id not in late]  # a request for changes or a dismissal still counts
     last = mergeauthority.last_reviews(reviews, (who.admin, who.approver))
     problems = [f"code gate: {p}" for p in mergeauthority._changes_requested(who, last)]
     approved = [login for login in (who.admin, who.approver)
                 if login and mergeauthority._approves(last.get(login.casefold()), pull.head)]
     if not approved:
         names = f"{who.admin} or {who.approver}" if who.approver else who.admin
-        problems.append(f"code gate: no approval from {names} on PR #{pull.number}'s final head {pull.head[:12]}")
+        why = "; an approval submitted at or after the merge does not count" if late else ""
+        problems.append(f"code gate: no approval from {names} on PR #{pull.number}'s final head "
+                        f"{pull.head[:12]}{why}")
 
     wait = False
     merger = pull.merged_by.casefold()
@@ -277,6 +282,21 @@ def _merged_pr(api: GhApi, repository: str, default: str, sha: str) -> int | str
         listed = f" (#{', #'.join(map(str, sorted(merged)))})" if merged else ""
         return f"the record's commit {sha[:12]} belongs to {len(merged)} PRs merged into {default}{listed}, not one"
     return merged[0]
+
+
+def _late_approvals(rows: list, merged_at: str) -> frozenset[int]:
+    """Ids of the approvals submitted at or after the merge: a merge cannot be code-gated by a review that came
+    later. An approval with no readable time is an error, never counted as early."""
+    late = set()
+    for row in rows:
+        if row.get("state") != "APPROVED":
+            continue
+        at = row.get("submitted_at")
+        if not (isinstance(at, str) and mergeauthority.TIME.fullmatch(at)):
+            raise RecordAuthError("gh api pulls reviews returned unexpected JSON")
+        if at >= merged_at:
+            late.add(row["id"])
+    return frozenset(late)
 
 
 def _read_pull(api: GhApi, repository: str, number: int) -> _Pull:
