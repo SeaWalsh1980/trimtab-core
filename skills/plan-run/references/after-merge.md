@@ -19,15 +19,18 @@ names as left behind is the operator's to remove, so report it.
 
 This applies when this session did the merged work. Hand over instead, so the next work starts
 clean, and stop after the report. The brief is the merged record's `## Next`, plus "run the
-authorisation check first". End in the first way that applies:
+authorisation check first". End in the first row that applies:
 
-1. **Started by a parent session:** stop. The parent clears this session and sends it the brief.
-2. **Desktop app:** tell the user the next turn starts from that `## Next`, then clear this session
-   (`clear_session` with `"self"`), if the tool is available.
-3. **Otherwise (plain CLI):** give a paste-ready line — you cannot run `/compact` yourself — of the
-   form
-   `/compact Focus on <plan> item NN part Y. Run the authorisation check first; the next work is the latest merged record's ## Next.`
-   plus the plan path, and nothing about the finished PR beyond its number and merge SHA.
+| How this session runs | End it this way |
+|---|---|
+| Started by a parent session | Stop. The parent clears this session and sends it the brief. |
+| Desktop app, with the `clear_session` tool available | Tell the user the next turn starts from that `## Next`, then clear this session (`clear_session` with `"self"`). |
+| Desktop app without `clear_session`, or plain CLI | Give a paste-ready line — you cannot run `/compact` yourself — of the form `/compact Focus on <plan> item NN part Y. Run the authorisation check first; the next work is the latest merged record's ## Next.` plus the plan path, and nothing about the finished PR beyond its number and merge SHA. |
+
+A hand-over moves only what comes next, at a part boundary: the merged part's state stays in its
+record and PR. Within a part, work does not move between sessions before ready, except to a later
+session on the same machine and config dir, which holds the part's round ledger (trimtab-core ADR
+0063 §1b); plan-item/SKILL.md says how to size a part so that it need not.
 
 In the cloud there is nothing to hand over: the next merge, labelled `plan:continue`, starts the
 next session.

@@ -2,7 +2,8 @@
 
 Paths such as `plan-run/SKILL.md` are relative to the skills directory, two levels above this file.
 
-Part of plan-run/SKILL.md section 3 ("Next"). Section numbers below are plan-run/SKILL.md's.
+Part of plan-run/SKILL.md section 3 ("Next"). Section numbers in this file are
+plan-run/SKILL.md's.
 
 ## Which record is the latest
 
@@ -54,7 +55,17 @@ ADR 0043).
   listing `plan-scope` (`gh api repos/{owner}/{repo}/rules/branches/<default>`), then its ruleset
   (`gh api repos/{owner}/{repo}/rulesets/<ruleset_id>`); its `updated_at` must be earlier than the
   PR's `merged_at`. A ruleset changed since the merge cannot show what it required then, so the test
-  fails, even for an unrelated edit; the admin's removal of `plan:blocked` is the way past it;
+  fails, even for an unrelated edit; the admin's removal of `plan:blocked` is the way past it. That
+  false stop has a cost: any ruleset edit after an approver merge (a new required check, a renamed
+  bypass actor) stops the run at the next session and holds the plan until the admin acts, even
+  though the merge was sound. Accepted, because the API keeps no history of a ruleset's rules;
+- for a PR from a plan run, the job the pinned base names for the enforcement command on the
+  server (E22: `plan-gate`, trimtab-core ADR 0063 §7) passed on the PR's final head, read from job
+  records the same way as `plan-scope`: every attempt finished and passed, from the pinned workflow
+  path and the `pull_request` event. A pinned base that names no such job, or a job that did not
+  pass or cannot be read, fails this test, so only an admin merge counts then. Until the base ships
+  the `plan-gate` template and the project adopts it, this test fails for every approver merge:
+  each one stops the next session, and the admin's removal of `plan:blocked` accepts it;
 - the PR changes neither `.github/` nor the code the `plan-scope` check runs
   (`gh api repos/{owner}/{repo}/pulls/<n>/files --paginate`): no file's `filename`, nor for a rename
   its `previous_filename`, is under `.github/`, is either root file that can pin the checker,
@@ -71,5 +82,5 @@ ADR 0043).
 A record without the code gate, merged by any other account, or merged by the approver without every
 condition authorises nothing: stop and label that PR `plan:blocked`. Never fall back to an earlier
 record; it points at work already merged. The admin's removal of `plan:blocked` from that PR accepts
-its merge (see "Restarting after a stop"). That is plan-run/references/restart.md. If you cannot
-read it, no session is a restart: the stop stands.
+its merge: plan-run/references/restart.md. If you cannot read it, no session is a restart: the
+stop stands.

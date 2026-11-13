@@ -338,7 +338,7 @@ class AgreesWithTheSkill(unittest.TestCase):
         """Checks 1-3 of the skill's authorisation check, which a plan run types (ADR 0059)."""
         skill = (ROOT / "skills" / "plan-run" / "references" / "authorisation.md").read_text(encoding="utf-8")
         start = skill.index("1. **The plan and its declaration are on the default branch.**")
-        return skill[start:skill.index("4. **The enforcement is live.**", start)]
+        return skill[start:skill.index("4. **The enforcement is live", start)]
 
     def test_the_skills_plan_check_runs_check_plan_authorised_as_a_command_of_its_own(self):
         section = " ".join(self.plan_checks().split())
@@ -373,9 +373,10 @@ class AgreesWithTheSkill(unittest.TestCase):
         self.assertEqual([verb for verb in ("git ls-tree", "git log", "git diff", "gh api") if verb in section], [])
 
     def test_the_skills_in_flight_test_names_where_the_agents_login_comes_from(self):
-        skill = (ROOT / "skills" / "plan-run" / "SKILL.md").read_text(encoding="utf-8")
-        start = skill.index("- **In flight:**")
-        section = skill[start:skill.index("- **Next:**", start)]
+        # The in-flight test moved to its own reference (ADR 0070).
+        skill = (ROOT / "skills" / "plan-run" / "references" / "in-flight.md").read_text(encoding="utf-8")
+        start = skill.index("## Resumed or not")
+        section = skill[start:skill.index("## \"Only the plan run's own in-scope pushes\"", start)]
 
         self.assertIn("`accounts.agent` from `trimtab instance --json`", section)
 

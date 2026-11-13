@@ -5,6 +5,9 @@
 Accepted on merge. Changes `wrap-merged`'s "Working a plan item" steps 4-5 and its paragraph on
 sessions started for CI review. The CI review itself does not change.
 
+Amended by [ADR 0070](0070-plan-skills-follow-the-run-owns-its-pr-flow.md): rounds now gate the
+draft (one to five), with one round per CI fix and at most three CI fix rounds per item part.
+
 ## Context
 
 `wrap-merged` step 4 said "at most three review rounds in session, then at most two CI fix

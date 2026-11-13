@@ -1,9 +1,9 @@
 ---
 name: plan-pr
-description: Review and ready a plan item's PR — the one to three in-session review rounds, when to mark it ready or return it to draft, CI fix rounds, and who may merge it. Use before marking an item PR ready, before each later return to ready, and in a session started for an item PR's CI review; not for PRs outside an authorised plan, and not for opening the item's branch and record (plan-item).
+description: Take a plan item's draft PR to merge — wait for the CI review the draft starts, reply to every thread with an outcome tag, CI fix rounds with one in-session round each, the named re-request, when to mark it ready or return it to draft, the watch to merge, and who may merge it. Use once a plan item's draft is open, and in a session started for an item PR it did not open; not for PRs outside an authorised plan, and not for the branch, record and in-session rounds before the draft (plan-item).
 ---
 
-# Review and ready a plan item's PR
+# Take a plan item's PR to merge
 
 Paths such as `plan-run/references/stops.md` are relative to the skills directory, the parent of
 this skill's own directory.
@@ -11,45 +11,112 @@ this skill's own directory.
 **If you cannot read a file this skill links to, that is a stop:** follow
 plan-run/references/stops.md. If you cannot read that either, make no file write; in a plan run,
 label `plan:blocked` and remove any `plan:continue` on the open item PR or, with none open, on the
-merged PR that started the session; and report the blocker, naming the file, with one to three ways
-forward. Where a link below says more about an unreadable file, that adds to this rule.
+merged PR whose progress record supplied the next work (the plan's own PR for item 01, or the
+merged PR that started the session if you have not found that record yet); and report the
+blocker, naming the file, with one to three ways forward. The record's `## Next` is not updated
+then, so where it and the label disagree, the label is authoritative. Where a link below says more
+about an unreadable file, that adds to this rule.
 
-This is step 4 of plan-item/SKILL.md. Section numbers below are plan-run/SKILL.md's; other step
-numbers are plan-item/SKILL.md's. Every stop follows plan-run/references/stops.md.
+This is step 7 of plan-item/SKILL.md. Section numbers in this file are plan-run/SKILL.md's; step
+numbers are this file's. Every stop follows plan-run/references/stops.md.
 
-## In-session review rounds
+## Who owns the PR
 
-**Review in session**, in one to three rounds before you mark the PR ready and again before each
-later return to ready (trimtab-core ADRs 0060, 0062). A round runs `/trimtab-review`,
-`/security-review` and `/code-review` on the PR's current head, in parallel, folded into one report;
-a pass that fails or returns nothing usable is named in it, and the round is incomplete until it
-runs. Grade each finding at the higher of the pass's own severity and the doctrine's
-finding-severity rule: raise a pass's grade, never lower it. Record each finding outside the item's
-scope as its own register entry in this PR (step 2), unless one in this PR already records it; one
-graded CRITICAL or HIGH is also a stop (step 5), in any round.
+The session that opened the draft owns the PR until it merges or a stop applies. When that session
+ends first, a session started for the PR (by the operator, or a routine on review events as a
+fallback) takes ownership after running plan-run's sections 2–4 for the PR's item:
 
-- After round 1 or 2, fix every finding within scope, whatever its severity, push, and start the
-  next round. The authorised plan covers these fixes: `/trimtab-review`'s "never auto-remediate"
-  does not apply to them. A round with no finding within scope ends the review.
-- Round 3's findings are not fixed in session: a CRITICAL or HIGH is a stop, and each MEDIUM or LOW
-  becomes its own register entry.
+| The new owner | It may |
+|---|---|
+| Holds the part's round ledger (same machine and config dir) | Everything in this skill. |
+| Holds no ledger, and the PR is ready | Only watch: plan-pr/references/watch.md, "Watch-only". |
+| Holds no ledger, and the PR is a draft | Nothing: a stop. |
 
-## Ready
+A ledger the session cannot read counts as none.
 
-The rounds gate ready, not the draft. **Mark the PR ready** once the last round left no CRITICAL or
-HIGH finding, in scope or out, every MEDIUM or LOW it left is a register entry, and the local checks
-pass, through what the guards permit (`gh pr ready`, or `update_pull_request` with `draft` false
-where `gh pr` is blocked). Ready describes one head: return the PR to draft before pushing anything
-more (`gh pr ready --undo`, or `update_pull_request` with `draft` true where `gh pr` is blocked),
-and mark it ready again only after reviewing the new head. The one exception is the commit that only
-adds the last round's register entries and the progress record's links to them, touching nothing
-outside the plan's register folder and this PR's progress record: it needs no further round. If a
-guard refuses, stop as in step 5.
+## 1. Wait for the CI review
 
-## CI fix rounds and the merge
+Opening the draft starts the CI review. Wait for its verdict and threads, within the bound the
+project's instruction file names, or 60 minutes per review where it names none. Which review counts,
+how to read it, and what a verdict means: plan-pr/references/ci-review.md.
 
-Then fix CI review findings within scope, at most two CI fix rounds per PR; each fix goes back
-through these rounds before ready. An infrastructure failure is re-run once and does not count. The
-item PR needs an approving review from the approver or the admin on its final head commit, and is
-merged by the admin, or by the approver when the conditions in section 3 hold. The agent account
-never merges. Those conditions are in plan-run/references/record-authority.md.
+Take the first row that applies:
+
+| What arrives within the bound | Then |
+|---|---|
+| No CI review of the current head, or no readable verdict | A stop. |
+| A `fail-closed` verdict on the current head that posted no thread | Request it again once, through the named mechanism (step 3). That is not a round. A second on the same head is a stop. |
+| A `fail-closed` verdict that posted threads | Step 2, and handle it like a `fail`: its threads open a CI fix round as usual. |
+| Any other readable verdict on the current head | Step 2. |
+
+After step 2: a `fail` verdict that leaves nothing to fix within scope is a stop, since ready needs
+`pass` and a re-request needs a new head.
+
+## 2. Reply to every thread
+
+Every thread any CI review run posted on the PR gets a reply from you opening with the project's
+outcome tag for what you did. Which tag, for which finding: the table in
+plan-pr/references/ci-review.md. A CRITICAL or HIGH thread takes only the fixed tag; anything else
+there is a stop. An out-of-scope finding becomes a register entry and gets the deferral tag and the
+entry's path. Scope is decided only as plan-item/references/scope.md says.
+
+## 3. CI fix rounds
+
+When a verdict or thread needs a fix within scope:
+
+1. Fix every in-scope finding, within the fix limits (plan-item/references/scope.md), write the CI
+   fix round into the progress record in the same commit, and push.
+2. Run the one in-session round on the new head and act on it as plan-item/references/rounds.md
+   says for the round after a CI fix. Its outcome, and any register entries it writes, go into the
+   record in the same push as its fixes; when it finds nothing to fix, that record line is the one
+   push after the round's head. No other push follows the round's head before the re-request: the
+   guard allows exactly one (E10).
+3. Reply to the threads (step 2).
+4. Request a re-review of the new head, only through the mechanism the project's instruction file
+   names and the guards permit, never one that marks the PR ready or toggles it. Re-request only a
+   new head (the one fail-closed re-request apart). Where none is named, or the guard refuses it,
+   that is a stop.
+5. Back to step 1 (wait for the CI review of the new head).
+
+**At most three CI fix rounds per item part**, counted across every PR and branch the part has had,
+from server facts (E12). One round is the push after the draft opened that answers a CI review or a
+failing check, together with the push that fixes its in-session round. Not rounds: the review the
+draft's opening starts, the fail-closed re-request, and the register-only commit (step 4). An
+infrastructure failure is re-run once and does not count; a second failure is then an ordinary
+failing check. Where your token may not re-run it, name it for the operator in a PR comment. A
+fourth round needed is a stop.
+
+## 4. Ready
+
+**Mark the PR ready** only when all of these hold, through what the guards permit (`gh pr ready`,
+or `update_pull_request` with `draft` false where `gh pr` is blocked):
+
+- the latest CI verdict on the exact head is `pass` (or, for the register-only commit below, on the
+  commit it follows), and no CI verdict on the head reports a CRITICAL or HIGH finding, in scope or
+  out;
+- every thread any CI review run posted on the PR has your reply opening with an outcome tag;
+- every MEDIUM or LOW finding the in-session rounds left is a register entry in the PR;
+- the local checks pass.
+
+**Ready describes one head.** Return the PR to draft before any further commit (`gh pr ready
+--undo`, or `update_pull_request` with `draft` true where `gh pr` is blocked), and mark it ready
+again only once a CI review of the new head, run while it is a draft, meets the list above. The one
+exception is the commit that only adds register entries for the last CI review's out-of-scope
+findings and the progress record's links to them, touching nothing outside the plan's register
+folder and this PR's progress record: it needs no further review, and the verdict on the commit it
+follows stands for it. If a guard refuses, stop.
+
+## 5. Watch to merge
+
+After ready, watch every check you can read on the PR's head, and every CI thread, until the PR
+merges or a stop applies, within the bound the project's instruction file names, or 24 hours from
+ready where it names none. What each event means — a failing check in or out of scope, a check you
+cannot read, a new thread, a conflict with the default branch, the bound running out — is the table
+in plan-pr/references/watch.md. Whatever needs a commit goes back to draft first.
+
+## 6. The merge
+
+The item PR needs an approving review from the approver or the admin on its final head commit, and
+is merged by the admin, or by the approver when every condition in
+plan-run/references/record-authority.md holds. If you cannot read it, the record authorises nothing:
+stop. The agent account never merges. When it merges, plan-run/SKILL.md takes over.
