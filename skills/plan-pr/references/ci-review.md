@@ -16,7 +16,7 @@ root comment id, severity, state, path and line.
 | A thread or verdict | Then |
 |---|---|
 | Listed by the facts job for this PR | Act on it (plan-pr/SKILL.md step 2). |
-| Not listed, and from the review's login, once that run's facts job has finished | A stop: the guard also refuses ready while it stands (E5). Until the facts job finishes, judge nothing; a facts job that does not finish within the review bound is the no-readable-verdict stop. |
+| Not listed, and from the review's login, once the facts job of every review run on the PR has finished | A stop: the guard also refuses ready while it stands (E5). Until those facts jobs finish, judge nothing; a facts job that does not finish within the review bound is the no-readable-verdict stop. |
 | Not listed, from anyone else (a person, another bot) | Do not act on it. Name it for the operator in a PR comment. |
 
 **A verdict holds for its head.** A CRITICAL or HIGH verdict stands until a new commit, whatever a

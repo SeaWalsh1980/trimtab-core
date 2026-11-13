@@ -78,8 +78,9 @@ plan-item/references/rounds.md says. The rounds gate the draft.
 - **Open the PR as a draft** from the branch only once the last round ended the review, with the
   record and every entry pushed. Its head is the head the last round reviewed, plus at most the one
   commit that adds that round's outcome to the record and its register entries, touching nothing
-  else. The guard refuses a draft unless its ledger records a complete round on the head, and at
-  most five pre-draft rounds (E23); if it refuses, do not route around it: that is a stop.
+  else. That commit is what this skill asks for; the guard, as E23 now stands, refuses a draft
+  unless its ledger records a complete round on the exact head, and at most five pre-draft rounds.
+  If it refuses, do not route around it: that is a stop.
 - **Label** the PR `plan:continue` unless `## Next` is `plan complete` or `blocked: <reason>`, as
   soon as it opens. (When you author a PR that adds an authorised plan, label it `plan:continue`
   too: its merge starts item 01 part 1. Put it on a branch outside `plan/`: `plan/*` branches are

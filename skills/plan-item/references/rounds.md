@@ -25,7 +25,7 @@ ledger (E11); the record is the run's account, the ledger the count.
 | After round | In-scope findings | Then |
 |---|---|---|
 | 1 to 4 | None | The review ends. Open the draft (plan-item/SKILL.md step 6). |
-| 1 to 4 | Any, whatever their severity | Fix every one (within the fix limits), push, and start the next round. The authorised plan covers these fixes: `/trimtab-review`'s "never auto-remediate" does not apply to them. |
+| 1 to 4 | Any, whatever their severity | Fix every one (within the fix limits), push, and start the next round. The authorised plan covers these fixes: `/trimtab-review`'s "never auto-remediate" does not apply to them. An in-scope finding the fix limits forbid fixing is a stop, never a register entry. |
 | 5 | A CRITICAL or HIGH | Not fixed in session: a stop. |
 | 5 | Only MEDIUM or LOW | Not fixed in session: each becomes its own register entry. Then open the draft. |
 
@@ -38,7 +38,7 @@ before a re-review is requested or the PR is marked ready:
 
 | The round finds | Then |
 |---|---|
-| Nothing within scope | Request the re-review. |
-| In-scope findings it can fix | Fix them, push, and request the re-review. Those fixes get no further round: the next CI review alone covers them. |
-| A CRITICAL or HIGH it cannot fix | A stop. |
-| Out-of-scope findings | Register entries; a CRITICAL or HIGH among them is a stop. |
+| Nothing within scope | Push the round's outcome line (and any register entries it wrote) as the one push after its head, then request the re-review. |
+| In-scope findings it can fix | Fix them, with the outcome line and any register entries, in that one push, then request the re-review. Those fixes get no further round: the next CI review alone covers them. |
+| An in-scope finding it cannot fix (any severity) | A stop. |
+| Out-of-scope findings | Register entries, in the same one push; a CRITICAL or HIGH among them is a stop. |

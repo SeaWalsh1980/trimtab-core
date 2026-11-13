@@ -42,4 +42,5 @@ round's finding, a CI review's finding or a failing check.
   push allowed after it is one touching only the part's progress record.
 
 The guard refuses a push that breaks a limit (E18, E19). If it refuses, do not route around it: a
-fix that needs the limit broken is not made, and the finding stays open as a stop or an entry.
+fix that needs the limit broken is not made. An in-scope finding left so is a stop; an
+out-of-scope one is a register entry.
