@@ -16,7 +16,7 @@ No records yet → it prints `item 01 part 1`. It names no plans-folder path, so
 | Exit | Meaning | What you do |
 |---|---|---|
 | 0 | the line above | Use it. |
-| 1 | a record name that is not `item-NN-partK.md` | A blocker: stop and report the name. |
+| 1 | a named problem: a malformed record name, a plan name not on the default branch, a record added and since deleted, or (with `--next-on-restart`) an unreadable `## Status` or item list | A blocker: stop and report stderr. |
 | 2 | a failed read, a stale fetch, a shallow clone or a grafts file | Run `git fetch origin` (and `git fetch --unshallow origin` for a shallow clone) once, then run it again. A second exit 2 is a blocker. |
 
 On a restart whose latest record's `## Next` is `blocked:`, add `--next-on-restart`: it prints the next work, `item NN part K` or `plan complete`, taken only from the record's file name

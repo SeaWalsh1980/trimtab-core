@@ -126,6 +126,9 @@ def next_work(repo: str, default: str, record: Latest, plan_text: str) -> tuple[
     following = record.item + 1
     if following in items:
         return f"item {following:02d} part 1", ()
+    higher = max(items)
+    if higher > record.item:  # a gap, or a next item written in a shape the pattern misses: never "plan complete"
+        return "", (f"the plan's item list skips from item {record.item} to item {higher}",)
     return "plan complete", ()
 
 

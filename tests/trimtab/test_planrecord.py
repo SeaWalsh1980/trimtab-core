@@ -1,5 +1,7 @@
 """The latest progress record and a restart's next work, from real git and a faked gh (ADR 0071)."""
 
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -8,7 +10,7 @@ from unittest import mock
 
 import test_planauth as tpa
 from gh_fake import FakeGh
-from trimtab import planrecord, planscope
+from trimtab import cli, planrecord, planscope
 from trimtab.planrecord import PlanRecordError
 
 PLAN = "0002-items"
@@ -206,9 +208,12 @@ class NextOnRestart(Records):
                 tpa.git(self.repo, "branch", "-q", "-D", "empty-status")
                 self.publish()
 
-    def test_a_plan_without_the_following_item_ends_even_if_a_later_one_exists(self):
-        self.assertEqual(planrecord.next_work(str(self.repo), DEFAULT, self.record_with("item 1 complete"),
-                                              "1. a\n3. c\n"), ("plan complete", ()))
+    def test_a_gap_in_the_item_list_is_a_named_problem_not_plan_complete(self):
+        work, problems = planrecord.next_work(str(self.repo), DEFAULT, self.record_with("item 1 complete"),
+                                              "1. a\n3. c\n")
+
+        self.assertEqual((work, len(problems)), ("", 1))
+        self.assertIn("skips from item 1 to item 3", problems[0])
 
     def test_an_item_list_that_does_not_parse_is_a_named_problem_not_plan_complete(self):
         for text in ("", "# a plan in prose\n", "1. a\n2. b\n"):
@@ -239,6 +244,34 @@ class NextOnRestart(Records):
         text = "### Item 1\n- [ ] Item 2: x\n3. three\n- **Item 4** y\nnot an item 5\n"
 
         self.assertEqual(planrecord.plan_items(text), frozenset({1, 2, 3, 4}))
+
+
+class Guards(Records):
+    def test_a_plan_name_that_is_not_a_plan_name_is_a_named_problem(self):
+        for name in ("..", "a/../b", "../x", "", "-x", "a b"):
+            with self.subTest(name=name):
+                self.assertEqual(len(planrecord.plan_problems(str(self.repo), DEFAULT, name)), 1)
+
+    def test_more_records_than_the_cap_is_an_error_not_a_partial_list(self):
+        self.merge_branch("many", {record_path(1, p): record_text("item 1 complete") for p in (1, 2)})
+        self.publish()
+
+        with mock.patch.object(planrecord, "MAX_RECORDS", 1), self.assertRaisesRegex(PlanRecordError, "partial"):
+            self.latest()
+
+    def test_a_path_before_any_commit_is_an_error(self):
+        with mock.patch.object(planscope, "log_added", return_value=f"{record_path(1, 1)}\n"):
+            with self.assertRaisesRegex(PlanRecordError, "before any commit"):
+                self.latest()
+
+    def test_an_answer_git_cannot_decode_is_an_error(self):
+        err = UnicodeDecodeError("ascii", b"\xff", 0, 1, "bad")
+        def log_added(*_args):
+            raise err
+
+        with mock.patch.object(planscope, "log_added", log_added):
+            with self.assertRaisesRegex(PlanRecordError, "could not be parsed"):
+                self.latest()
 
 
 class ReadFailures(Records):
@@ -376,6 +409,36 @@ class Cli(tpa.Cli):
         done = self.run_cli("--next-on-restart")
 
         self.assertEqual((done.returncode, done.stdout), (2, ""), done.stderr)
+
+    def test_next_on_restart_with_an_admin_the_repository_variable_disagrees_with_exits_1(self):
+        self.merge_branch("rec", {record_path(1, 1): record_text("item 1 complete")})
+        self.publish()
+        self.answers[tpa.VARIABLE_PATH] = json.dumps({"name": "TRIMTAB_ADMIN", "value": tpa.AGENT})
+
+        done = self.run_cli("--next-on-restart")
+
+        self.assertEqual((done.returncode, done.stdout, tpa.AGENT in done.stderr), (1, "", True), done.stderr)
+
+    def test_next_on_restart_with_an_instance_naming_no_admin_exits_1(self):
+        self.merge_branch("rec", {record_path(1, 1): record_text("item 1 complete")})
+        self.publish()
+        path = self.inst / "instance.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        path.write_text(json.dumps({k: v for k, v in data.items() if k != "accounts"}), encoding="utf-8")
+
+        done = self.run_cli("--next-on-restart")
+
+        self.assertEqual((done.returncode, done.stdout), (1, ""), done.stderr)
+
+    def test_an_unexpected_failure_exits_2_not_1(self):
+        argv = ["latest-record", "--repository", tpa.REPOSITORY, "--plan", PLAN, "--repo", str(self.repo)]
+        err = io.StringIO()
+
+        with mock.patch.object(planrecord, "fetched", side_effect=RuntimeError("boom")), \
+                contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()) as out:
+            code = cli.main(argv)
+
+        self.assertEqual((code, out.getvalue(), "RuntimeError" in err.getvalue()), (2, "", True))
 
     def test_an_unreadable_instance_exits_2_not_1(self):
         self.merge_branch("rec", {record_path(1, 1): record_text("item 1 complete")})

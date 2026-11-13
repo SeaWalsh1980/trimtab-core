@@ -63,8 +63,12 @@ Add `trimtab latest-record --repository <owner>/<name> --plan <plan> [--default-
   numbered line at column 0; an indented numbered line is a sub-step, not an item). Both errors
   are guarded: a record whose item the list does not name (including an empty or unrecognised
   list) is a named problem (exit 1), never `plan complete`; and a nested step cannot invent an
-  item. A plan whose items are written in another shape therefore stops for the operator rather
-  than guessing. A fixed plan format is separate work.
+  item (an indented `- Item N` bullet does still count, so a stray one can add an item, which
+  only makes the command stop or name an item the gate then checks against the plan). When the
+  record's item is not the highest the list names and `item + 1` is missing, the answer is a named
+  problem ("skips from N to M"), never `plan complete`. Rejected: jumping to the next recognised
+  number, which would run an item out of the plan's order on a list the command half-reads. A plan
+  whose items are written in another shape therefore stops for the operator rather than guessing. A fixed plan format is separate work.
 - Exit 2 is answered by fetching once and running the command again; a second exit 2 is a blocker.
   This replaces the skill's earlier "a shallow clone is a stop" for the latest-record lookup,
   because the command now detects the cut history itself and a fetch fixes it.
