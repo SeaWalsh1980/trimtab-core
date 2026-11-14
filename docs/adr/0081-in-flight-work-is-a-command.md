@@ -65,9 +65,12 @@ failure is named separately:
 **A branch with no PR** is a branch `plan/<plan>/item-*` that no PR of this repository has as its
 head in any state. A closed PR from a fork that happens to share the name does not count as a PR of
 the branch. It is resumable only if its shape is right (otherwise refused, named) and the plan's
-newest stop anywhere was cleared or there is none: the `--restart` judgement, where one problem
-that opens `nothing to restart` means no stop. That prefix is now a constant
-(`planlabels.NOTHING_TO_RESTART`) both the message and the classifier use.
+newest stop anywhere was cleared or there is none: the `--restart` judgement. "There is none" is
+the typed flag `Verdict.no_stop`, which the judgement sets; the command never matches message text
+(a prefix match was built first and rejected in review: it couples a verdict to wording).
+`planlabels.NOTHING_TO_RESTART` stays as the human-readable opening of that message. Branches under
+`plan/<plan>/` that do not start `item-` are not in flight and are not reported, as the skill defines
+in-flight work.
 
 **Verdict.** Exactly one resumable thing prints `resume pr <n> <branch> <sha>` or `resume branch
 <branch> <sha>` (the head commit the server reported) and exits 0. Nothing in flight prints `none in

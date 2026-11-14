@@ -262,6 +262,24 @@ class Refusals(Inflight):
 
         self.assertIn("no removal", self.inflight().problems[1])
 
+    def test_two_removals_after_one_stop_on_an_open_pr_are_refused(self):
+        self.open_pr(8, events=[event(1, "labeled", BLOCKED, AGENT), event(2, "unlabeled", BLOCKED, ADMIN),
+                                event(3, "unlabeled", BLOCKED, ADMIN)])
+
+        verdict = self.inflight()
+
+        self.assertEqual(verdict.resume, None)
+        self.assertIn("2 events follow the stop of PR #8", verdict.problems[0])
+
+    def test_an_open_fork_pr_beside_a_same_named_branch_is_a_refusal_not_a_resume(self):
+        self.open_pr(8, repo="someone/fork")
+        self.push()
+
+        verdict = self.inflight()
+
+        self.assertEqual(verdict.resume, None)
+        self.assertIn("PR #8: head is in someone/fork", verdict.problems[0])
+
     def test_the_label_present_with_no_event_to_explain_it_is_refused(self):
         self.open_pr(8, labels=(BLOCKED,))
 
