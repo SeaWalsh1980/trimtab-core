@@ -1,4 +1,4 @@
-# 0079. Actions allow-list: GitHub's own actions plus `anthropics/claude-code-action`
+# 0079. Actions allow-list: GitHub's own actions, `anthropics/claude-code-action` and `oven-sh/setup-bun`
 
 ## Status
 
@@ -23,10 +23,12 @@ The repository's workflows use three actions, each pinned by full commit SHA (ch
 (`.github/dependabot.yml`).
 
 `claude-code-action` is a composite action and has a nested `uses:`. Read from its `action.yml`
-at the pinned SHA 4fa93a8: `oven-sh/setup-bun@0c5077e` (v2.2.0). It is not GitHub's and is not on
-the list below. GitHub applies the allow-list to actions nested in a composite action as well
-(from GitHub's documentation, not tried here), so `claude-review` is likely to fail at job start
-until the operator adds `oven-sh/setup-bun@*`.
+at the pinned SHA 4fa93a8: `oven-sh/setup-bun@0c5077e` (v2.2.0), pinned by SHA at that action's
+own pin. It is not GitHub's. GitHub's allow-list applies to such transitive actions too, and
+that is now confirmed live. Trimtab's first `claude-review` failed at setup with
+"oven-sh/setup-bun not allowed" until the operator listed it (Trimtab ADR 0038, merged in its
+#217). Here, `claude-review` run 43575848775 on this PR then downloaded and ran
+`oven-sh/setup-bun@0c5077e` successfully, so this repository's list includes it.
 
 The repository is public and owned by a personal account on GitHub Pro.
 
@@ -38,7 +40,8 @@ Set, as the operator reported them:
   reusable workflows".
 - "Allow actions created by GitHub": on.
 - "Allow actions by Marketplace verified creators": off.
-- Allow list: `anthropics/claude-code-action@*`.
+- Allow list: `anthropics/claude-code-action@*`, `oven-sh/setup-bun@*` (the second added by
+  the operator for the transitive use above; the first run's success is the evidence).
 - "Require actions to be pinned to a full-length commit SHA": **unconfirmed**. The task
   was given as "on, if the setting was offered"; the operator did not report it either way.
   Nothing below depends on it. Today's pins are full SHAs by convention and Dependabot.
@@ -63,10 +66,9 @@ the `actions/permissions` endpoints and cannot read them.
 
 Accepted:
 
-- `oven-sh/setup-bun` (nested in `claude-code-action`) is likely to need adding by the admin,
-  and a `claude-code-action` bump can add or change nested actions, which fails `claude-review`
-  until each is listed. Dependabot bumps of the listed actions keep working only while their
-  nested actions stay on the list.
+- A `claude-code-action` bump that adds a new nested action fails `claude-review` at setup
+  until the admin lists it. Dependabot bumps of the listed actions keep working only while
+  their nested actions stay on the list.
 - Adding a new third-party action needs the admin to add it to the list first. Until then a
   workflow using it fails at job start with an "action is not allowed" error.
 
