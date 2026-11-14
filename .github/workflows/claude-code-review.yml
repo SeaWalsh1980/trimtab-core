@@ -189,9 +189,13 @@ jobs:
           # taken inside jq is one number per page and a PR with more than 30
           # comments yields several lines. Emit one id per match and count the
           # lines here, so the count is a single integer across all pages.
+          # The run link is matched exactly: split on the literal URL (no regex
+          # escaping) and require at least one occurrence to be followed by a
+          # non-digit or the end of the body, so run 123 never matches a comment
+          # that links only run 1234 (ADR 0081).
           finished=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
             --jq '.[] | select(.created_at >= env.SINCE) | select(.user.type == "Bot")
-                   | select(.body | contains(env.RUN_URL))
+                   | select(.body | split(env.RUN_URL) | .[1:] | any(test("^([^0-9]|$)")))
                    | select(.body | startswith("**Claude finished "))
                    | select(.body | contains("Claude Code is working") | not)
                    | .id' | wc -l | tr -d '[:space:]')

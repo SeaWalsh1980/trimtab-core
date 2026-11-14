@@ -76,3 +76,7 @@ prompt and of `--allowedTools`, so read the check asymmetrically: green carries 
 information, because the same diff could weaken or delete what produces it, while red
 still means this step found no review. The admin's CODEOWNERS review of the diff is the
 only gate there.
+
+## Amendment (2026-11-14)
+
+Condition 2 links the run by an exact match, not a prefix: see ADR 0081.
