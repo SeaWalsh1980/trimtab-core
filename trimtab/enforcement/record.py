@@ -54,6 +54,24 @@ class Row:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+@dataclass(frozen=True)
+class DerivedRow:
+    """A row as the lock's derived field holds it: the owner and the digest of the text as merged, which is all
+    `--server` judges a manifest entry by (`entry_problem`). `sha256` is stored, where `Row`'s is computed."""
+
+    id: str
+    owner: str
+    sha256: str
+
+    @property
+    def side(self) -> str:
+        return OWNERS[self.owner][0]
+
+    @property
+    def hooks(self) -> frozenset[str]:
+        return OWNERS[self.owner][1]
+
+
 def _cells(line: str) -> list[str]:
     body = line.strip()
     if not (body.startswith("|") and body.endswith("|")) or len(body) < 2:

@@ -1,0 +1,161 @@
+name: plan-gate
+
+# E22 (trimtab-core ADR 0063 §7): the server-side half of the plan-run enforcement gate. A project adopts this
+# template at `.github/workflows/plan-gate.yml`, which is a change to a security control and so the operator's.
+# The approver reads the job `plan-gate` the way it reads `plan-scope` (trimtab-core ADR 0058): every attempt on the PR's head
+# passed, from this workflow's path, on the `pull_request` event. A draft's run passes without the ready check, so
+# the approver must also require one attempt on the head whose payload had draft=false, or whose plan-ready-check
+# step concluded success; "every attempt passed" alone would accept a head that only ever had a draft run. A
+# skipped `plan-gate` (a head not under plan/, or no run at all) vouches for nothing: the approver treats it as not
+# passed. It must also require, at merge, that the PR's base is the default branch: a retarget starts no run, so a
+# pass earned against the default branch would otherwise survive a move to another one.
+#
+# Two commands run, both from the base the project's lock pins and never from the PR's tree:
+# - `trimtab check-enforcement --server`: every row E1-E23 is shown, read from the lock's derived field
+#   (`trimtab bump` writes it) with no instance checkout;
+# - `trimtab plan-ready-check --server`: E5, E7, E8, E9, E12, E14, E15, E16, E18 on the whole diff, and E19, from
+#   server facts alone: the review's comments and facts job, the branch's activity events, and the job records.
+#
+# Properties held here, each pinned by tests/trimtab/test_plan_gate_template.py:
+# - The project is checked out at the PR's BASE commit, so the lock that is read, and the base it names, are the
+#   admin-merged ones. The PR's head is fetched as objects, never checked out: nothing from it runs.
+# - A draft's run judges the gate and not the ready check. A failed run on a head the PR later marks ready would
+#   void the approver's pass, since every attempt on the head counts; the ready check runs when the PR is ready,
+#   and `ready_for_review` starts a run for it.
+# - `edited` is not a trigger (trimtab-core ADR 0047), and the condition is on the job, not a trigger filter: a filtered-out
+#   PR would get no run, and a required check would wait on it for ever.
+# - The base repository is public, or this workflow's token can read it. A private base needs the project to
+#   change the checkout's `token` (a control change of its own).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# The job reads pull requests, review comments, branch activity, workflow runs and their logs; it writes nothing.
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+jobs:
+  # The ruleset and the approver look the job up by name. Rename here, in the ruleset and in the approver together.
+  plan-gate:
+    name: plan-gate
+    if: ${{ startsWith(github.event.pull_request.head.ref, 'plan/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # The PR's base commit, with full history: the checker needs the merge-base and the default branch.
+      - name: "checkout: the project at the PR's base commit"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+
+      # The lock names the base this project was reviewed against: its commit and its repository. Both are read
+      # from the base commit's tree and checked for shape before either is used.
+      - name: "lock: which base the lock pins"
+        id: lock
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          # A PR aimed at any other branch carries a lock of its own choosing, which would pick the code that
+          # judges it; a retarget to the default branch starts no run. So only the default branch's PRs are judged.
+          if [[ "$BASE_REF" != "$DEFAULT_BRANCH" ]]; then
+            echo "::error::the PR is aimed at $BASE_REF, not the default branch $DEFAULT_BRANCH; nothing is vouched for"
+            exit 1
+          fi
+          checked_out=$(git rev-parse HEAD)
+          if [[ "$checked_out" != "$BASE_SHA" ]]; then
+            echo "::error::checkout is $checked_out, not the base $BASE_SHA; nothing is vouched for"
+            exit 2
+          fi
+          python3 -I - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, re, sys
+          lock = json.load(open(".claude/trimtab.json", encoding="utf-8"))
+          sha = lock.get("base_sha")
+          repo = (lock.get("enforcement") or {}).get("base_repo")
+          if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha)):
+              sys.exit("the lock has no full base_sha; run /trimtab-bump")
+          if not (isinstance(repo, str) and re.fullmatch(r"(?!\.{1,2}/)[A-Za-z0-9_.-]+/(?!\.{1,2}$)[A-Za-z0-9_.-]+", repo)):
+              sys.exit("the lock has no derived enforcement.base_repo; run /trimtab-bump")
+          print(f"base_sha={sha}")
+          print(f"base_repo={repo}")
+          PY
+
+      # The code that judges: the base the lock pins, in a directory of its own.
+      - name: "checkout: the base the lock pins"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.lock.outputs.base_repo }}
+          ref: ${{ steps.lock.outputs.base_sha }}
+          path: .trimtab-base
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The launcher runs `python3 -I`, and the CLI imports PyYAML. Pinned by hash, written from this workflow, as
+      # ci.yml does and for its reasons; test_workflow_pins-style checks fail if the blocks differ.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+
+      - name: "python: PyYAML for the checker"
+        run: |
+          set -euo pipefail
+          req="$RUNNER_TEMP/checker-requirements.txt"
+          cat > "$req" <<'EOF'
+          pyyaml==6.0.3 \
+              --hash=sha256:b8bb0864c5a28024fac8a632c443c87c5aa6f215c0b126c449ae1a150412f31d \
+              --hash=sha256:10892704fc220243f5305762e276552a0395f7beb4dbf9b14ec8fd43b57f126c
+          EOF
+          python3 -I -m pip install --require-hashes --only-binary=:all: -r "$req"
+
+      # The default branch's head and the PR's head, as objects. Every input comes from the event through the
+      # environment and is never spliced into a script, so a branch name cannot inject shell.
+      - name: "fetch: the default branch and the PR's head"
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "$HEAD_REF" != plan/* ]]; then
+            echo "::error::head branch is not under plan/ (case matters); a run here must judge, never skip"
+            exit 1
+          fi
+          if [[ "$HEAD_REPO" != "$THIS_REPO" ]]; then
+            echo "::error::the head is in $HEAD_REPO, not $THIS_REPO; a plan run's branch lives in the project"
+            exit 1
+          fi
+          git fetch --no-tags --no-recurse-submodules origin \
+            "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH" \
+            "+refs/heads/$HEAD_REF:refs/remotes/origin/$HEAD_REF"
+          fetched=$(git rev-parse --verify --end-of-options "origin/$HEAD_REF^{commit}")
+          if [[ "$fetched" != "$HEAD_SHA" ]]; then
+            echo "::error::origin/$HEAD_REF is $fetched, not the event's head $HEAD_SHA; push again or re-run"
+            exit 2
+          fi
+
+      - name: "check-enforcement: every row is shown (E20 on the server)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          .trimtab-base/bin/trimtab check-enforcement --server --repository "$REPOSITORY" --repo .
+
+      - name: "plan-ready-check: the server-fact rows on the whole branch (E5-E9, E12, E14-E16, E18, E19)"
+        if: ${{ !github.event.pull_request.draft }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          .trimtab-base/bin/trimtab plan-ready-check --server --repository "$REPOSITORY" --repo . \
+            --branch "$HEAD_REF" --head "$HEAD_SHA"

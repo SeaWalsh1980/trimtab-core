@@ -367,7 +367,7 @@ class Gathers(World):
 
         self.assertEqual(self.found(), {})
 
-    def test_server_mode_fails_until_e22_lands(self):
+    def test_server_mode_refuses_a_lock_without_the_derived_field(self):
         with self.assertRaises(GateError):
             self.gather(server=True)
 

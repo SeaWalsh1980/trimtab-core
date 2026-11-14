@@ -19,7 +19,8 @@ iteration 4) are separate PRs. Do not mix them.
 
 ```bash
 BODY=$(mktemp --suffix=.md)
-trimtab bump --dry-run --to "${ARGUMENTS:-HEAD}" --body-file "$BODY"
+REPO=$(gh api 'repos/{owner}/{repo}' --jq .full_name)
+trimtab bump --dry-run --to "${ARGUMENTS:-HEAD}" --repository "$REPO" --body-file "$BODY"
 ```
 
 `--to` is resolved in the **installed Trimtab checkout**, so a ref it does not
@@ -33,6 +34,12 @@ item, and a confirmation token. It writes nothing but the PR body.
 cannot read the instance runs the base the project is reviewed against
 (trimtab-core ADR 0017). Never edit it by hand. If the dry run cannot read it,
 stop and report.
+
+Where the instance names a doctrine record, the apply step also writes the
+lock's derived `enforcement` field (the rows, this project's jobs and the
+instance keys the server job reads, trimtab-core ADR 0063 Amendment 4), which is why the
+dry run needs `--repository`. The dry run says whether the field is rewritten.
+Never edit it by hand; a lock edited by hand fails the local check.
 
 Stop and report if it says the lock is already current, or if an item was
 `removed` (a vanished ID without a withdrawal stub is a Trimtab defect: raise it
@@ -57,7 +64,8 @@ dropped and, if the project cannot comply, raised upstream.
 On a new branch from the default branch (`trimtab/bump-<new short SHA>`):
 
 ```bash
-trimtab bump --apply --confirm <token from step 1> --to <new SHA>
+REPO=$(gh api 'repos/{owner}/{repo}' --jq .full_name)
+trimtab bump --apply --confirm <token from step 1> --to <new SHA> --repository "$REPO"
 trimtab lint overrides
 trimtab check-pr --body-file "$BODY"
 git add .claude/trimtab.json

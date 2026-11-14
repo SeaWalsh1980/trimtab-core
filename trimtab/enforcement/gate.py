@@ -37,13 +37,14 @@ from trimtab.capture.ghapi import GhApi, Run, SourceError
 from trimtab.enforcement import manifest as manifest_mod
 from trimtab.enforcement import record as record_mod
 from trimtab.enforcement import tools
-from trimtab.enforcement.record import BASE, BOTH, PROJECT, Row
+from trimtab.enforcement.record import BASE, BOTH, PROJECT, DerivedRow, Row
 
 REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 SHA = re.compile(r"[0-9a-f]{40}")
 BASE_WORKFLOW = ".github/workflows/ci.yml"
 BASE_JOB = "lint-test"
 BASE_BRANCH = "main"
+SERVER_JOB_ROW = "E22"  # the row whose project half is the server job itself
 CHECKED_DIRS = ("hooks", "trimtab")
 CACHE_PARTS = ("enforcement",)
 CACHE_SCHEMA = 4
@@ -63,7 +64,7 @@ class GateError(Exception):
 class Facts:
     """What `gather` read; `decide` judges it."""
 
-    rows: tuple[Row, ...]
+    rows: tuple[Row | DerivedRow, ...]
     entries: Mapping[str, manifest_mod.Entry]
     base_ci: str | None  # why this base's lint-test on the pinned base is not a pass, or None
     checkout: str | None  # why this checkout is not the pinned base, or None; None in --server
@@ -346,7 +347,7 @@ def _lock(reads: _Reads, source: Path, head: str, shallow: bool) -> lock_config.
     found, problems = lock_config.parse(reads.file(source, head, lock_config.PATH, "the project", shallow))
     if found is None:
         raise GateError(f"the lock at the default-branch head: {problems[0].message if problems else 'unreadable'}")
-    if not lock_config.FULL_SHA.match(found.trimtab_sha):
+    if not lock_config.FULL_SHA.fullmatch(found.trimtab_sha):
         raise GateError("the lock's trimtab_sha must be a full SHA for the gate")
     return found
 
@@ -473,13 +474,114 @@ def gather(repository: str, project: Path, instance_root: Path, code: Path, conf
            fetch_into: Path | None = None) -> Facts:
     if not REPOSITORY.fullmatch(repository) or ".." in repository:
         raise GateError(f"{repository!r} is not owner/name")
-    if server:
-        raise GateError("--server reads the lock's derived rows, which are added with E22's PR")
     reads = _Reads(run, git)
     try:
+        if server:
+            return _gather_server(reads, repository, project, code, fetch_into)
         return _gather(reads, repository, project, instance_root, code, config, fetch_into)
     finally:
         reads.close()
+
+
+def _no_network(*_args, **_kwargs):
+    raise GateError("this read makes no network call")
+
+
+def _plan_keys(reads: _Reads, root: Path, sha: str) -> dict:
+    """The instance keys the plan-run rows read (`lock_config.PLAN_KEYS`), as written at `sha`: the lock carries
+    them so the server job, which has no instance checkout, judges by the same agent, review and limits."""
+    try:
+        raw = json.loads(reads.file(root, sha, instance.FILE, "the instance"))
+    except ValueError as err:
+        raise GateError("the instance file is not valid JSON") from err
+    return {k: raw[k] for k in lock_config.PLAN_KEYS if isinstance(raw, dict) and k in raw}
+
+
+def _derived(held: instance.InstanceFile, rows: tuple[Row, ...], repository: str, keys: dict) -> dict:
+    named = next((jobs for repo, jobs in held.enforcement_jobs.items() if repo.casefold() == repository.casefold()),
+                 None)
+    if named is None:  # as `_gather` refuses: a typo must not write a lock whose rows all fail, in CI only
+        raise GateError(f"the instance file names no enforcement jobs for {repository}")
+    return {"base_repo": held.base_repo,
+            "rows": {r.id: {"owner": r.owner, "sha256": r.sha256} for r in rows},
+            "jobs": {rid: {"workflow": ref.workflow, "job": ref.job} for rid, ref in named.items()},
+            "instance": keys}
+
+
+def derive_lock_enforcement(instance_root: Path, trimtab_sha: str, repository: str,
+                            git: tools.Git | None = None) -> dict | None:
+    """The lock's derived `enforcement` field for `repository` at `trimtab_sha`, or None when the instance there
+    names no doctrine record. Read as `gather` reads, from verified objects in the instance checkout, the record
+    at the commit that added it; no network. `trimtab bump` writes this and `--server` trusts it (ADR 0063 §7)."""
+    if not REPOSITORY.fullmatch(repository) or ".." in repository:
+        raise GateError(f"{repository!r} is not owner/name")
+    if not lock_config.is_commit_sha(trimtab_sha):
+        raise GateError(f"{trimtab_sha!r} is not a commit name")
+    reads = _Reads(_no_network, git)
+    try:
+        held = _instance(reads, instance_root, trimtab_sha)
+        if held.enforcement_record is None:
+            return None
+        return _derived(held, _record_rows(reads, instance_root, trimtab_sha, held.enforcement_record), repository,
+                        _plan_keys(reads, instance_root, trimtab_sha))
+    finally:
+        reads.close()
+
+
+def server_instance(repository: str, project: Path, code: Path, run: Run | None = None,
+                    git: tools.Git | None = None, fetch_into: Path | None = None) -> instance.InstanceFile:
+    """The instance's plan-run keys (agent, review, secret scan, fix limits) as the lock holds them, for the
+    server job's plan checks. Read exactly as `--server` reads the rows: the lock at the default-branch head, as
+    the server reports it, and `code` the commit its `base_sha` names (ADR 0063 §7)."""
+    if not REPOSITORY.fullmatch(repository) or ".." in repository:
+        raise GateError(f"{repository!r} is not owner/name")
+    reads = _Reads(run, git)
+    try:
+        lock = _server_lock(reads, repository, project, code, fetch_into)[0]
+        body = {"schema_version": instance.SCHEMA_VERSION, "repo": repository,
+                "base": {"repo": lock.enforcement["base_repo"], "sha": lock.base_sha},
+                **lock.enforcement["instance"]}
+        try:
+            return instance.parse(body)
+        except instance.InstanceFileError as err:
+            raise GateError(f"the lock's instance keys: {err}") from err
+    finally:
+        reads.close()
+
+
+def _server_lock(reads: _Reads, repository: str, project: Path, code: Path, fetch_into: Path | None):
+    """(lock, default branch, its head): the lock `--server` trusts, after its derived field is known to be there
+    and `code` to be the base it names."""
+    default, head = _default_head(reads, repository)
+    source, shallow = _head_source(reads, repository, project, default, head, fetch_into)
+    lock = _lock(reads, source, head, shallow)
+    if lock.enforcement is None or lock.base_sha is None:
+        raise GateError("the lock has no derived enforcement field; run /trimtab-bump, which writes it")
+    if reads.text(code, "rev-parse", "--verify", "--end-of-options", "HEAD^{commit}").strip() != lock.base_sha:
+        raise GateError("this checkout is not at the lock's base_sha, so it is not the base the rows are judged by")
+    return lock, default, head
+
+
+def _gather_server(reads: _Reads, repository: str, project: Path, code: Path, fetch_into: Path | None) -> Facts:
+    """`--server`: the rows come from the lock's derived field, since CI has no instance checkout (ADR 0015).
+
+    The lock is the default-branch head's, which only an admin's merge moves; `code` must be the pinned base
+    itself, so the manifest is read, and the commands run, from the base the project was reviewed against."""
+    lock, default, head = _server_lock(reads, repository, project, code, fetch_into)
+    field = lock.enforcement
+    rows = tuple(DerivedRow(rid, row["owner"], row["sha256"]) for rid, row in field["rows"].items())
+    entries = _entries(reads, code, lock.base_sha)
+    base_ci = reads.job_problem(field["base_repo"], lock.base_sha, BASE_WORKFLOW, BASE_JOB,
+                                branch=BASE_BRANCH) if entries else None
+    if base_ci:
+        base_ci = f"this base's CI on the pinned base: {base_ci}"
+    project_side = {r.id for r in rows if r.side in (PROJECT, BOTH)}
+    project_jobs = {rid: reads.job_problem(repository, head, ref["workflow"], ref["job"], branch=default)
+                    for rid, ref in field["jobs"].items() if rid in project_side and rid != SERVER_JOB_ROW}
+    # E22's project half is the job running this very check, which runs on `pull_request` and so has no push run
+    # on the default branch to be judged by; the base half of the row is still judged (ADR 0063 Amendment 4).
+    project_jobs[SERVER_JOB_ROW] = None
+    return Facts(rows, entries, base_ci, None, None, project_jobs, (lock.trimtab_sha, lock.base_sha, head, "server"))
 
 
 def _gather(reads: _Reads, repository: str, project: Path, instance_root: Path, code: Path, config: Path,
@@ -497,6 +599,10 @@ def _gather(reads: _Reads, repository: str, project: Path, instance_root: Path, 
     if named is None:
         raise GateError(f"the instance file names no enforcement jobs for {repository}")
     rows = _record_rows(reads, instance_root, lock.trimtab_sha, held.enforcement_record)
+    if lock.enforcement is not None and lock.enforcement != _derived(
+            held, rows, repository, _plan_keys(reads, instance_root, lock.trimtab_sha)):
+        raise GateError("the lock's derived enforcement field is not what the instance and record at its "
+                        "trimtab_sha give; run /trimtab-bump")
     entries = _entries(reads, code, held.base_sha)
     base_ci = reads.job_problem(held.base_repo, held.base_sha, BASE_WORKFLOW, BASE_JOB,
                                 branch=BASE_BRANCH) if entries else None

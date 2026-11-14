@@ -73,6 +73,7 @@ class Activity:
     after: str
     actor: str
     when: str = ""  # the event's RFC 3339 time, which E12 compares with the PR's opening
+    kind: str = ""  # the event's `activity_type` (push, force_push, ...); E22 reads E15 and E16 from it
 
 
 @dataclass(frozen=True)
