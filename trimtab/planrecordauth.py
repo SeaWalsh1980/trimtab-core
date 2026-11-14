@@ -96,7 +96,7 @@ class _Pull:
     head_repo: str
     base_ref: str
     changed_files: int
-    base_sha: str = ""
+    base_sha: str
 
 
 def check(repo: str, repository: str, plan: str, who: mergeauthority.Accounts, run: Run | None = None,
@@ -120,11 +120,9 @@ def check(repo: str, repository: str, plan: str, who: mergeauthority.Accounts, r
             return Verdict(())
         # The checker's own code is admin-only where the repository runs it from its tree. Which tree the merge was
         # judged against is not certain after a rebase merge (the record commit's first parent may be one of the
-        # PR's own commits), so the code is held admin-only if ANY of these trees holds `bin/trimtab`: the record
-        # commit, its first parent, the default branch's tip, and (in `judge`) the PR's base commit. A true answer
-        # only adds refusals.
-        # The default branch's tip is a fourth tree: GitHub's `base.sha` can lag the base at merge time, so a
-        # checker added to the branch since then would otherwise be missed by all three.
+        # PR's own commits), so the code is held admin-only if ANY of four trees holds `bin/trimtab`: the record
+        # commit, its first parent, the default branch's tip, and (in `judge`) the PR's base commit. The tip is
+        # there because GitHub's `base.sha` can lag the base at merge time. A true answer only adds refusals.
         checker_in_tree = (checker_at(repo, record.commit) or checker_at(repo, f"{record.commit}^1")
                            or checker_at(repo, fetched.tip))
     except (planrecord.PlanRecordError, planscope.PlanScopeError) as err:

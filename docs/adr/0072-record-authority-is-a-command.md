@@ -136,6 +136,7 @@ not a single-parent merge (it would refuse every squash merge too); walking the 
 back to the first one's parent (more git reads to answer a question the union already answers on
 the safe side). Residual: a checker added to the branch after the merge and removed again before
 the fetch is missed by all four.
-Accepted cost: in a repository that has the checker in its tree at any of the three, a path under
+
+Accepted cost: in a repository that has the checker in its tree at any of the four, a path under
 `bin/`, `trimtab/` or `hooks/run_module.py` stops an approver merge, as it already did there. A
 commit git does not hold (a base force-pushed away) is exit 2.

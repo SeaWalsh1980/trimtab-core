@@ -104,14 +104,14 @@ def answers(merged_by=ADMIN, reviews=None, files=None, pull_changes=None, listed
     return found
 
 
-def NO_CHECKER(sha):
+def no_checker(sha):
     return False
 
 
 def judge(found=None, who=WHO, record=RECORD, checker_in_tree=False, plan_gate=None, plan=PLAN, gh=None):
     return planrecordauth.judge(REPOSITORY, DEFAULT, plan, record, who, checker_in_tree,
                                 gh or FakeGh(answers() if found is None else found), plan_gate,
-                                checker_at_base=NO_CHECKER)
+                                checker_at_base=no_checker)
 
 
 def approver_merge(**changes):
@@ -639,7 +639,7 @@ class FailedReads(unittest.TestCase):
             with self.subTest(repository=repository, plan=plan):
                 with self.assertRaises(RecordAuthError):
                     planrecordauth.judge(repository, DEFAULT, plan, RECORD, WHO, False, gh,
-                                         checker_at_base=NO_CHECKER)
+                                         checker_at_base=no_checker)
 
         self.assertEqual(gh.calls, [])
 
