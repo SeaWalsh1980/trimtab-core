@@ -239,7 +239,7 @@ class Refusals(Inflight):
         self.assertIn("no removal of plan:blocked follows its stop on PR #8", verdict.problems[1])
 
     def test_a_removal_by_someone_other_than_the_admin_leaves_the_stop_standing(self):
-        for remover in (STRANGER, AGENT, APPROVER, None):
+        for remover in (STRANGER, AGENT, APPROVER):
             with self.subTest(remover=remover):
                 self.pulls.clear()
                 self.open_pr(8, events=[event(1, "labeled", BLOCKED, AGENT),
@@ -248,7 +248,27 @@ class Refusals(Inflight):
                 verdict = self.inflight()
 
                 self.assertEqual((len(verdict.problems), verdict.resume), (1, None))
-                self.assertIn("not the admin", verdict.problems[0])
+                self.assertIn(f"by {remover}, not the admin", verdict.problems[0])
+
+    def test_a_removal_by_a_deleted_account_is_named_as_one(self):
+        self.open_pr(8, events=[event(1, "labeled", BLOCKED, AGENT), event(2, "unlabeled", BLOCKED, None)])
+
+        verdict = self.inflight()
+
+        self.assertEqual(verdict.resume, None)
+        self.assertIn("by a deleted account, not the admin", verdict.problems[0])
+
+    def test_two_stops_in_the_same_second_keep_a_branch_with_no_pr_refused(self):
+        self.pulls.append(pull(9, SECOND_REF, state="closed"))
+        self.put(9, [event(1, "labeled", BLOCKED, AGENT, at(3)), event(2, "unlabeled", BLOCKED, ADMIN, at(3))])
+        self.pulls.append(pull(10, f"plan/{PLAN}/item-03-part1", state="closed"))
+        self.put(10, [event(5, "labeled", BLOCKED, AGENT, at(3)), event(6, "unlabeled", BLOCKED, ADMIN, at(3))])
+        self.push()
+
+        verdict = self.inflight()
+
+        self.assertEqual(verdict.resume, None)
+        self.assertIn("same second", verdict.problems[0])
 
     def test_the_label_still_on_the_pr_after_the_admins_removal_is_refused(self):
         self.open_pr(8, events=[event(1, "labeled", BLOCKED, AGENT), event(2, "unlabeled", BLOCKED, ADMIN)],
@@ -417,6 +437,13 @@ class ReadFailures(Inflight):
 
         with mock.patch.object(planinflight, "PULLS_LIMIT", 2):
             self.assertEqual(self.inflight().resume, Resume(ITEM_REF, HEAD, 8))
+
+    def test_exactly_the_branch_bound_is_read(self):
+        self.push()
+        self.push(f"plan/{PLAN}/notes")
+
+        with mock.patch.object(planinflight, "REFS_LIMIT", 2):
+            self.assertEqual(self.inflight().resume, Resume(ITEM_REF, HEAD, None))
 
     def test_a_pr_listed_twice_raises(self):
         self.open_pr(8)
