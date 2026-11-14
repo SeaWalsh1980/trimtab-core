@@ -31,7 +31,10 @@ from pathlib import Path
 if __name__ == "__main__":  # run as a script: import the package from this checkout
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from hook_fixture import without_hook_overrides  # noqa: E402
+try:  # as a script or from tests/trimtab, hook_fixture is a sibling module; tests/bootstrap-env-tests.sh imports the package form
+    from hook_fixture import without_hook_overrides  # noqa: E402
+except ModuleNotFoundError:
+    from tests.trimtab.hook_fixture import without_hook_overrides  # noqa: E402
 from trimtab import roots  # noqa: E402
 
 ENV = "TRIMTAB_INSTANCE"
