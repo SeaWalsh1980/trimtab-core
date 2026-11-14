@@ -80,6 +80,9 @@ def _next_cursor(link: str | None, what: str) -> str | None:
     return values[0]
 
 
+default_run = _subprocess_run  # the runner GhApi uses when given none, for a caller that wraps it (a memo)
+
+
 class GhApi:
     """`gh api` on repository-scoped REST paths, never GraphQL or another REST path."""
 

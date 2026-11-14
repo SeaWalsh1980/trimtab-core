@@ -94,7 +94,8 @@ Everything comes from the default branch, open PRs and pushed branches, never fr
   resumed: plan-run/references/in-flight.md.
 - **Next:** the `## Next` section of the **most recently merged** record
   (`<plans>/progress/<plan>/item-NN-partK.md`). Which record that is, and the test its PR must pass
-  (the code gate, and a merge by the admin, or by the approver with every condition met): read
+  (the code gate, and a merge by the admin, or by the approver with every condition met, judged by
+  `trimtab check-record-authorised`, whose exit codes it lists): read
   plan-run/references/record-authority.md. If you cannot read it, the record authorises nothing:
   stop.
 - **Done:** the `## Status` lines of the merged records.
