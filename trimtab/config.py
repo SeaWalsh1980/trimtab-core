@@ -119,7 +119,8 @@ def check_enforcement(value) -> str | None:
 
     if not isinstance(value, dict) or set(value) != FIELD_KEYS:
         return f"must be an object with exactly {', '.join(sorted(FIELD_KEYS))}"
-    if not isinstance(value["base_repo"], str) or not REPO.fullmatch(value["base_repo"]):
+    if (not isinstance(value["base_repo"], str) or not REPO.fullmatch(value["base_repo"])
+            or any(part.startswith(".") for part in value["base_repo"].split("/"))):  # no `..`, no dot segment
         return "base_repo must be owner/name"
     rows, jobs = value["rows"], value["jobs"]
     if not isinstance(rows, dict) or tuple(rows) != ROW_IDS:
@@ -128,7 +129,7 @@ def check_enforcement(value) -> str | None:
     for rid, row in rows.items():
         if not isinstance(row, dict) or set(row) != ROW_KEYS:
             return f"{rid} must be an object with owner and sha256"
-        if row["owner"] not in OWNERS:
+        if not isinstance(row["owner"], str) or row["owner"] not in OWNERS:
             return f"{rid}: owner is not one the base knows"
         if not isinstance(row["sha256"], str) or not DIGEST.fullmatch(row["sha256"]):
             return f"{rid}: sha256 must be a 64-character lower-case digest"
@@ -157,6 +158,8 @@ def _check_instance_keys(keys) -> str | None:
                         "base": {"repo": placeholder, "sha": "0" * 40}, **keys})
     except instance.InstanceFileError as err:
         return f"instance: {err}"
+    except (TypeError, ValueError, AttributeError, KeyError) as err:  # an odd value type is a bad lock, not a crash
+        return f"instance: unexpected value ({type(err).__name__})"
     return None
 
 

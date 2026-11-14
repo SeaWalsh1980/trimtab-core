@@ -497,7 +497,10 @@ def _plan_keys(reads: _Reads, root: Path, sha: str) -> dict:
 
 
 def _derived(held: instance.InstanceFile, rows: tuple[Row, ...], repository: str, keys: dict) -> dict:
-    named = next((jobs for repo, jobs in held.enforcement_jobs.items() if repo.casefold() == repository.casefold()), {})
+    named = next((jobs for repo, jobs in held.enforcement_jobs.items() if repo.casefold() == repository.casefold()),
+                 None)
+    if named is None:  # as `_gather` refuses: a typo must not write a lock whose rows all fail, in CI only
+        raise GateError(f"the instance file names no enforcement jobs for {repository}")
     return {"base_repo": held.base_repo,
             "rows": {r.id: {"owner": r.owner, "sha256": r.sha256} for r in rows},
             "jobs": {rid: {"workflow": ref.workflow, "job": ref.job} for rid, ref in named.items()},

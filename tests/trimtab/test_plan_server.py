@@ -70,6 +70,24 @@ class ServerCheck(Base):
 
         self.assertIn("E15", self.refused(self.facts(activity=events)))
 
+    def test_an_event_of_a_kind_nobody_listed_refuses_through_e15(self):
+        for kind in ("merge_queue_merge", "pr_merge", ""):
+            events = (planreview.Activity(MB, H1, AGENT, WHEN, kind),)
+
+            self.assertIn("E15", self.refused(self.facts(activity=events)), kind)
+
+    def test_only_the_first_event_may_be_a_branch_creation(self):
+        events = (planreview.Activity(ZERO, H1, AGENT, WHEN, "branch_creation"),
+                  planreview.Activity(H1, H2, AGENT, WHEN, "branch_creation"))
+
+        self.assertIn("E15", self.refused(self.facts(head=H2, activity=events), H2))
+
+    def test_a_branch_created_then_pushed_is_a_chain(self):
+        events = (planreview.Activity(ZERO, H1, AGENT, WHEN, "branch_creation"),
+                  planreview.Activity(H1, H2, AGENT, WHEN, "push"))
+
+        self.assertIsNone(self.check(self.facts(head=H2, activity=events), H2).refusal)
+
     def test_a_broken_chain_refuses_through_e15(self):
         events = (planreview.Activity(MB, H2, AGENT, WHEN, "push"), planreview.Activity(H3, H1, AGENT, WHEN, "push"))
 

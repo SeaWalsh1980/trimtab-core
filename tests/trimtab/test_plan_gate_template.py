@@ -112,6 +112,23 @@ class WhichCodeRuns(unittest.TestCase):
         self.assertRegex(run, r"\[0-9a-f\]\{40\}")
         self.assertIn("GITHUB_OUTPUT", run)
 
+    def test_a_pr_not_aimed_at_the_default_branch_is_refused_before_any_base_code_is_chosen(self):
+        # Otherwise a PR against a branch of the agent's own carries a lock of its own choosing, the job passes,
+        # and a retarget to the default branch (no trigger) keeps the pass.
+        step = step_named("which base")
+
+        self.assertEqual(step["env"]["BASE_REF"], "${{ github.event.pull_request.base.ref }}")
+        self.assertEqual(step["env"]["DEFAULT_BRANCH"], "${{ github.event.repository.default_branch }}")
+        self.assertRegex(step["run"], r'"\$BASE_REF" != "\$DEFAULT_BRANCH"')
+        self.assertLess(step["run"].index("BASE_REF"), step["run"].index("python3"))
+
+    def test_the_base_repository_is_held_to_a_plain_owner_and_name(self):
+        run = step_named("which base")["run"]
+        match = re.search(r're\.fullmatch\(r"(\[A-Za-z0-9_-\]\[A-Za-z0-9_\.-\]\*)/(\[A-Za-z0-9_-\]\[A-Za-z0-9_\.-\]\*)", repo\)',
+                          run)
+
+        self.assertIsNotNone(match, "each segment must open with a character that is not a dot")
+
     def test_both_commands_run_from_the_pinned_base_checkout(self):
         for line in (l for l in commands().splitlines() if "trimtab" in l and "--server" in l):
             self.assertIn(".trimtab-base/bin/trimtab", line)
@@ -132,6 +149,12 @@ class WhatItRuns(unittest.TestCase):
         # so the draft's run judges only the rows that do not wait for a review.
         self.assertIn("pull_request.draft", str(step_named("plan-ready-check").get("if")))
         self.assertNotIn("draft", str(step_named("check-enforcement").get("if", "")))
+
+    def test_the_header_tells_the_approver_a_draft_pass_is_not_enough(self):
+        header = TEXT.split("\non:")[0]
+
+        self.assertIn("draft=false", header)
+        self.assertIn("plan-ready-check", header)
 
     def test_the_gate_runs_before_the_ready_check(self):
         names = [s.get("name", "") for s in STEPS]

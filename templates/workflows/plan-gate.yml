@@ -3,7 +3,9 @@ name: plan-gate
 # E22 (trimtab-core ADR 0063 §7): the server-side half of the plan-run enforcement gate. A project adopts this
 # template at `.github/workflows/plan-gate.yml`, which is a change to a security control and so the operator's.
 # The approver reads the job `plan-gate` the way it reads `plan-scope` (ADR 0058): every attempt on the PR's head
-# passed, from this workflow's path, on the `pull_request` event.
+# passed, from this workflow's path, on the `pull_request` event. A draft's run passes without the ready check, so
+# the approver must also require one attempt on the head whose payload had draft=false, or whose plan-ready-check
+# step concluded success; "every attempt passed" alone would accept a head that only ever had a draft run.
 #
 # Two commands run, both from the base the project's lock pins and never from the PR's tree:
 # - `trimtab check-enforcement --server`: every row E1-E23 is shown, read from the lock's derived field
@@ -52,8 +54,16 @@ jobs:
         id: lock
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+          # A PR aimed at any other branch carries a lock of its own choosing, which would pick the code that
+          # judges it; a retarget to the default branch starts no run. So only the default branch's PRs are judged.
+          if [[ "$BASE_REF" != "$DEFAULT_BRANCH" ]]; then
+            echo "::error::the PR is aimed at $BASE_REF, not the default branch $DEFAULT_BRANCH; nothing is vouched for"
+            exit 1
+          fi
           checked_out=$(git rev-parse HEAD)
           if [[ "$checked_out" != "$BASE_SHA" ]]; then
             echo "::error::checkout is $checked_out, not the base $BASE_SHA; nothing is vouched for"
@@ -66,7 +76,7 @@ jobs:
           repo = (lock.get("enforcement") or {}).get("base_repo")
           if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha)):
               sys.exit("the lock has no full base_sha; run /trimtab-bump")
-          if not (isinstance(repo, str) and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo)):
+          if not (isinstance(repo, str) and re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*", repo)):
               sys.exit("the lock has no derived enforcement.base_repo; run /trimtab-bump")
           print(f"base_sha={sha}")
           print(f"base_repo={repo}")

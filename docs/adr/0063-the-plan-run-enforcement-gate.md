@@ -1317,3 +1317,29 @@ a manifest entry and `trimtab check-enforcement` can show all of them. What is s
 ControlTower); registering E11's recorder in `settings.base.json`; Amendment 3's residuals; the hook-cost re-measure;
 `HOOK_ALLOW_HARNESS` for E21's guard-paths half. Until the project adopts the workflow and its lock carries the field,
 `--server` fails closed.
+
+**Review round 1 (three passes) changed these.** No CRITICAL; one HIGH from each of two passes.
+
+- **Only a PR aimed at the default branch is judged.** The job took `base_sha` and `base_repo` from the lock at the PR's
+  base commit, so a PR aimed at a branch of the agent's own carried a lock of its choosing, ran code of its choosing,
+  passed, and was then retargeted to the default branch, which starts no run (ADR 0047). The lock step now refuses any
+  other base branch, and `base_repo` may not open a segment with a dot.
+- **E15 on the server is an allowlist.** An event is a `push`, or the first is a `branch_creation`; any other kind
+  refuses, and a row with no `activity_type` is a failed read. A rewrite still chains, so the kind was E15's only signal
+  and a denylist let an unknown kind through.
+- **`bump` refuses a repository the instance names no jobs for**, as `check-enforcement` does, so a typo cannot write a
+  lock whose project rows all fail in CI only. An unhashable row owner is a bad lock, not a crash.
+- **The template's header states the approver's contract**: a draft run passes without the ready check, so the approver
+  also needs one attempt on the head with `draft=false`, or whose `plan-ready-check` step passed.
+- **`commands/trimtab-bump.md`** passes `--repository`.
+
+**Residuals named by round 1.**
+
+- **The derived field is shape-checked on the server and re-derived only where an instance exists.** A hand-edited
+  lock that weakens E14 or E18 is caught by the local `check-enforcement`, not by the server job. The lock is
+  admin-merged and refused to agents; the admin should merge lock edits only from `/trimtab-bump`.
+- **A failed `plan-gate` run counts toward E12's rounds**, since E12 counts every failed run on the branch. Transient
+  failures (the default branch moving mid-run, activity lag) can spend rounds. Excluding the job's own runs is E12's
+  to decide, not this PR's.
+- **The first checkout keeps the token** so the later fetch can use it; it is read-only.
+- **E12's count is written twice** (`check_e12` and `planchecks.server`); a change to one must change both.

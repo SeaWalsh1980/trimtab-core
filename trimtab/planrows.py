@@ -437,6 +437,11 @@ def check_server_history(events: Sequence, *, agent: str, merge_base: str, head:
         raise Refusal("E15: the branch's activity holds a force push (ADR 0063 §5, §7)")
     if not events:
         raise Refusal("E15: the branch has no activity events to chain (ADR 0063 §5, §7)")
+    # An allowlist, not a denylist: a kind this base does not know could be a rewrite, and a rewrite still chains.
+    for i, e in enumerate(events):
+        if e.kind != "push" and not (i == 0 and e.kind == "branch_creation"):
+            raise Refusal(f"E15: the branch's activity holds an event of kind {e.kind!r}, which is not a push "
+                          "(ADR 0063 §5, §7)")
     first = events[0].before
     if first != ZERO and first != merge_base and not on_default(first):
         raise Refusal("E15: the activity chain does not start at the merge-base (ADR 0063 §5, §7)")

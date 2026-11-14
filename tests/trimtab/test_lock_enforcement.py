@@ -223,10 +223,31 @@ class Derivation(unittest.TestCase):
 
         self.assertEqual(field["instance"], {"secret_scan": body["secret_scan"]})
 
-    def test_a_repository_the_instance_does_not_name_gets_no_jobs(self):
-        field = gate.derive_lock_enforcement(self.base, self.v1, "owner/other")
+    def test_a_repository_the_instance_does_not_name_fails_loudly(self):
+        # A typo would otherwise write a lock with no jobs, which fails every project row only in CI.
+        with self.assertRaises(gate.GateError):
+            gate.derive_lock_enforcement(self.base, self.v1, "owner/other")
 
-        self.assertEqual(field["jobs"], {})
+    def test_bump_refuses_a_repository_the_instance_does_not_name(self):
+        with self.assertRaises(bump.BumpError):
+            bump.plan(self.project, self.base, self.v1, "owner/other")
+
+    def test_an_unhashable_row_owner_is_a_bad_lock_not_a_crash(self):
+        field = good_field()
+        field["rows"]["E1"]["owner"] = ["Guard"]
+
+        found, _ = project_config.parse(lock_text(field))
+
+        self.assertIsNone(found)
+
+    def test_a_base_repository_with_a_dot_segment_is_refused(self):
+        for bad in ("owner/..", "owner/.", "../name", "./name"):
+            field = good_field()
+            field["base_repo"] = bad
+
+            found, _ = project_config.parse(lock_text(field))
+
+            self.assertIsNone(found, bad)
 
     def test_the_project_name_compares_without_case(self):
         field = gate.derive_lock_enforcement(self.base, self.v1, "OWNER/Project")

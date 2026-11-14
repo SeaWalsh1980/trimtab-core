@@ -242,7 +242,10 @@ class GitHubFacts(Facts):
                     raise FactsError("the branch's activity events are not in the order this reader expects")
                 newer = when
                 kind = row.get("activity_type")
-                out.append(planreview.Activity(before, after, login, stamp, kind if isinstance(kind, str) else ""))
+                if not isinstance(kind, str) or not kind:
+                    # E22 reads E15 from the kind: a row without one must not pass as an ordinary push.
+                    raise FactsError("gh api activity returned an event with no activity_type")
+                out.append(planreview.Activity(before, after, login, stamp, kind))
             self._activity[branch] = tuple(reversed(out))
         return self._activity[branch]
 
