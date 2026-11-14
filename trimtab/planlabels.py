@@ -33,7 +33,7 @@ from trimtab.capture.sources import GhApi, Run, SourceError
 CONTINUE_LABEL = "plan:continue"
 BLOCKED_LABEL = "plan:blocked"
 ACTOR_LABELS = (CONTINUE_LABEL,)  # the labels whose adder mode 1 judges
-NOTHING_TO_RESTART = "nothing to restart"  # opens the one problem of a plan that has no stop at all
+NOTHING_TO_RESTART = "nothing to restart"  # opens the one problem of a plan that has no stop at all (for people)
 EVENTS_LIMIT = 1000  # issue events one PR is read for; past it, an error rather than a partial list
 PULLS_LIMIT = 5000  # PRs a restart lists to find the plan's item PRs; past it, an error
 EVENTS_PAGE = 100  # rows per page of the repository-wide issue events (REST's largest)
@@ -54,6 +54,7 @@ class Verdict:
     problems: tuple[str, ...]
     pr: int | None = None  # mode 1: the PR checked; mode 2: the stopped PR
     actor: str = ""  # the login that set (mode 1) or cleared (mode 2) the label
+    no_stop: bool = False  # mode 2: no `plan:blocked` event anywhere since the plan merged (the one problem says so)
 
 
 @dataclass(frozen=True)
@@ -160,8 +161,7 @@ def check_stops(repo: str, repository: str, plan: str, who: mergeauthority.Accou
     branch: tuple[str, ...] = ()
     if branches:
         verdict = _restart(api, repository, plan, who, found)
-        none = len(verdict.problems) == 1 and verdict.problems[0].startswith(NOTHING_TO_RESTART)
-        branch = () if none else verdict.problems
+        branch = () if verdict.no_stop else verdict.problems
     return Stops((), prs, branch)
 
 
@@ -196,7 +196,8 @@ def _restart(api: GhApi, repository: str, plan: str, who: mergeauthority.Account
         raise LabelCheckError(f"the PRs or label events of plan {plan} changed while they were read; run it again")
     stops = {n: i for n, es in marked.items() if (i := _last_labeled(es)) is not None}  # PR -> its stop's index
     if not stops:
-        return Verdict((f"{NOTHING_TO_RESTART}: none of the PRs {_listed(candidates)} has a {BLOCKED_LABEL} event",))
+        return Verdict((f"{NOTHING_TO_RESTART}: none of the PRs {_listed(candidates)} has a {BLOCKED_LABEL} event",),
+                       no_stop=True)
     newest = max(marked[n][i].at for n, i in stops.items())
     tied = sorted(n for n, i in stops.items() if marked[n][i].at == newest)
     if len(tied) > 1:

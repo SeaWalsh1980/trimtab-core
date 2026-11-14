@@ -110,6 +110,13 @@ class WhatToResume(Inflight):
 
         self.assertEqual(self.inflight().resume, Resume(ITEM_REF, HEAD, None))
 
+    def test_a_closed_pr_whose_head_repository_was_deleted_does_not_hide_a_branch(self):
+        self.pulls.append(pull(8, ITEM_REF, state="closed", repo=None))
+        self.put(8, [])
+        self.push()
+
+        self.assertEqual(self.inflight().resume, Resume(ITEM_REF, HEAD, None))
+
     def test_a_branch_an_open_pr_has_is_the_pr_not_a_second_thing(self):
         self.open_pr(8)
         self.push()

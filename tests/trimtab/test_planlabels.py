@@ -415,6 +415,7 @@ class RestartRefused(Restart):
         # in-flight.md relies on this: the one problem, opening the line
         self.assertEqual((verdict.pr, len(verdict.problems), verdict.problems[0].startswith("nothing to restart")),
                          (None, 1, True))
+        self.assertTrue(verdict.no_stop)  # check-inflight reads this flag, not the message
 
     def test_two_stops_in_the_same_second_cannot_be_ordered_and_are_refused(self):
         self.put(8, [event(1, "labeled", BLOCKED, AGENT, at(3)), event(2, "unlabeled", BLOCKED, ADMIN, at(3))],
