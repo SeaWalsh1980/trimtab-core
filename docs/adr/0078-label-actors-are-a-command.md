@@ -78,8 +78,9 @@ Fail-closed rules shared by both modes:
   an older stop pass for the newest. Time ties are named instead.
 - **Read the repository-wide events list (`issues/events`) once instead of one events read per
   candidate PR.** Rejected: the doctrine's rule against a request per row points at it, but the list
-  is newest first (so the per-PR order check does not carry over), and it grows with every event on
-  every issue and PR in the repository, not with the plan. Measured on this repository: 1,455 events
+  grows with every event on every issue and PR in the repository, not with the plan. (A batched
+  GraphQL read of the candidates' timelines is out too: `GhApi` allows repository-scoped REST only,
+  because cloud sessions refuse GraphQL.) Measured on this repository: 1,455 events
   over 15 pages for about 180 PRs. A per-candidate read grows with the plan and is bounded by
   `CANDIDATES_LIMIT` (100 reads, each usually one page), so a busy repository would make the batched
   read exit 2 on its bound for good. The per-candidate loop is therefore kept as a bounded fan-out,
