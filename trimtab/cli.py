@@ -1573,7 +1573,7 @@ def build_parser() -> argparse.ArgumentParser:
     ra.set_defaults(func=cmd_check_record_authorised)
 
     la = sub.add_parser("check-label-actor", parents=[common],
-                        help="who set or cleared a plan label, read from the issue events (ADR 0079). With --label "
+                        help="who set or cleared a plan label, read from the issue events (ADR 0080). With --label "
                              "and --pr: plan:continue is on the PR and its latest labeled event was by the agent, "
                              "approver or admin. With --restart and --plan: the plan's most recent plan:blocked stop "
                              "was cleared by the admin and the label is gone, and its PR number is printed. Exits 0 "

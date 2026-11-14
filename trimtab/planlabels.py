@@ -1,4 +1,4 @@
-"""Who set or cleared a plan label, read from the server's issue events (ADR 0079).
+"""Who set or cleared a plan label, read from the server's issue events (ADR 0080).
 
 plan-run used to have the model read `gh api .../issues/<n>/events` by hand and
 decide who added `plan:continue`, and which PR a restart is about. This module
@@ -38,7 +38,7 @@ EVENTS_PAGE = 100  # rows per page of the repository-wide issue events (REST's l
 # Pages of the repository-wide events a restart reads, newest first, looking for the plan's merge time. This
 # repository's whole history is 15 pages; 50 is over three times that, so a plan merged in a repository ten times
 # as busy as the one measured is still reached, and a read stays about 50 calls at most (twice, with the
-# snapshot). Past it the command exits 2 (ADR 0079).
+# snapshot). Past it the command exits 2 (ADR 0080).
 WINDOW_PAGES_LIMIT = 50
 LABEL_EVENTS = ("labeled", "unlabeled")
 
