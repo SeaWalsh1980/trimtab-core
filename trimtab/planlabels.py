@@ -24,6 +24,7 @@ which takes them from the instance, never from the PR.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from trimtab import mergeauthority, planauth, planrecord, planscope
@@ -32,6 +33,7 @@ from trimtab.capture.sources import GhApi, Run, SourceError
 CONTINUE_LABEL = "plan:continue"
 BLOCKED_LABEL = "plan:blocked"
 ACTOR_LABELS = (CONTINUE_LABEL,)  # the labels whose adder mode 1 judges
+NOTHING_TO_RESTART = "nothing to restart"  # opens the one problem of a plan that has no stop at all (for people)
 EVENTS_LIMIT = 1000  # issue events one PR is read for; past it, an error rather than a partial list
 PULLS_LIMIT = 5000  # PRs a restart lists to find the plan's item PRs; past it, an error
 EVENTS_PAGE = 100  # rows per page of the repository-wide issue events (REST's largest)
@@ -52,6 +54,7 @@ class Verdict:
     problems: tuple[str, ...]
     pr: int | None = None  # mode 1: the PR checked; mode 2: the stopped PR
     actor: str = ""  # the login that set (mode 1) or cleared (mode 2) the label
+    no_stop: bool = False  # mode 2: no `plan:blocked` event anywhere since the plan merged (the one problem says so)
 
 
 @dataclass(frozen=True)
@@ -119,18 +122,73 @@ def check_restart(repo: str, repository: str, plan: str, who: mergeauthority.Acc
     if not who.admin:
         raise LabelCheckError("no admin login to compare the removal with")
     api = GhApi(run)
+    found = _plan_pr(api, repo, repository, plan, run)
+    if not isinstance(found, _PlanPr):
+        return Verdict(found)
+    return _restart(api, repository, plan, who, found)
+
+
+@dataclass(frozen=True)
+class Stops:
+    """Which in-flight work a `plan:blocked` stop forbids resuming (ADR 0081)."""
+    problems: tuple[str, ...]  # nothing could be judged: the plan is not a plan, or its adding PR is not one
+    prs: Mapping[int, tuple[str, ...]]  # each open PR asked about: why its stop stands; () when it may resume
+    branch: tuple[str, ...]  # why a branch with no PR may not resume (asked for on request); () when it may
+
+
+def check_stops(repo: str, repository: str, plan: str, who: mergeauthority.Accounts,
+                open_prs: Mapping[int, frozenset[str]], branches: bool, run: Run | None = None) -> Stops:
+    """The `plan:blocked` half of the in-flight check. For each open item PR in `open_prs` (number -> the labels it
+    carries now, casefolded): whether its newest stop was cleared, by the admin alone, and the label is gone. When
+    `branches` is set, the same for a branch that has no PR, which has no events of its own: it is stopped unless the
+    plan's newest stop anywhere was cleared or there was none. Every PR's events come from one bounded read of the
+    repository-wide issue events, never one request per PR."""
+    problems = name_problems(repository, plan=plan)
+    problems += tuple(f"{n!r} is not a PR number" for n in open_prs if type(n) is not int or n < 1)
+    if problems:
+        return Stops(problems, {}, ())
+    if not who.admin:
+        raise LabelCheckError("no admin login to compare the removal with")
+    api = GhApi(run)
+    found = _plan_pr(api, repo, repository, plan, run)
+    if not isinstance(found, _PlanPr):
+        return Stops(found, {}, ())
+    prs: dict[int, tuple[str, ...]] = {}
+    if open_prs:
+        window = _window(api, repository, found.since, frozenset(open_prs), found.number)
+        prs = {n: _blocked_problems(n, window[n], frozenset(x.casefold() for x in open_prs[n]), who.admin)
+               for n in sorted(open_prs)}
+    branch: tuple[str, ...] = ()
+    if branches:
+        verdict = _restart(api, repository, plan, who, found)
+        branch = () if verdict.no_stop else verdict.problems
+    return Stops((), prs, branch)
+
+
+@dataclass(frozen=True)
+class _PlanPr:
+    number: int  # the PR that added the plan
+    since: str  # when it merged: nothing the plan could have labelled is older
+
+
+def _plan_pr(api: GhApi, repo: str, repository: str, plan: str, run: Run | None) -> _PlanPr | tuple[str, ...]:
+    """The PR that added the plan and its merge time, or why `plan` is not a plan whose adding PR can be named."""
     try:
         fetched = planrecord.fetched(repo, repository, run=run)
         problems = planrecord.plan_problems(repo, fetched.tip, plan)
         if problems:
-            return Verdict(problems)
+            return problems
         added = planscope.added_by(repo, fetched.tip, f"{planscope.AUTHORISED}/{plan}.md")
     except (planrecord.PlanRecordError, planscope.PlanScopeError, UnicodeDecodeError, ValueError) as err:
         raise LabelCheckError(str(err)) from err
     plan_pr = _adding_pr(api, repository, fetched.default, added)
     if isinstance(plan_pr, str):
-        return Verdict((plan_pr,))
-    since = _merged_at(api, repository, plan_pr)
+        return (plan_pr,)
+    return _PlanPr(plan_pr, _merged_at(api, repository, plan_pr))
+
+
+def _restart(api: GhApi, repository: str, plan: str, who: mergeauthority.Accounts, found: _PlanPr) -> Verdict:
+    plan_pr, since = found.number, found.since
     # Read twice and require the same answer: a PR opened or a stop labelled while the first read ran would be
     # missed, and the newest stop would then be an older, cleared one.
     candidates, marked = _snapshot(api, repository, plan, plan_pr, since)
@@ -138,32 +196,55 @@ def check_restart(repo: str, repository: str, plan: str, who: mergeauthority.Acc
         raise LabelCheckError(f"the PRs or label events of plan {plan} changed while they were read; run it again")
     stops = {n: i for n, es in marked.items() if (i := _last_labeled(es)) is not None}  # PR -> its stop's index
     if not stops:
-        return Verdict((f"nothing to restart: none of the PRs {_listed(candidates)} has a {BLOCKED_LABEL} event",))
+        return Verdict((f"{NOTHING_TO_RESTART}: none of the PRs {_listed(candidates)} has a {BLOCKED_LABEL} event",),
+                       no_stop=True)
     newest = max(marked[n][i].at for n, i in stops.items())
     tied = sorted(n for n, i in stops.items() if marked[n][i].at == newest)
     if len(tied) > 1:
         return Verdict((f"PRs {_listed(tied)} were labelled {BLOCKED_LABEL} in the same second, {newest}; which "
                         "stopped last cannot be read",))
     stopped = tied[0]
-    stop = marked[stopped][stops[stopped]]
-    after = marked[stopped][stops[stopped] + 1:]  # only `unlabeled` events: the stop is the last `labeled` one
     present = _labels_now(api, repository, stopped)
+    problems, actor = _removal_problems(stopped, marked[stopped][stops[stopped]], marked[stopped][stops[stopped] + 1:],
+                                        present, who.admin)
+    return Verdict(problems, stopped, actor)
 
+
+def _blocked_problems(number: int, events: list[_Event], present: frozenset[str], admin: str) -> tuple[str, ...]:
+    """Why an open PR's `plan:blocked` stop still stands, from its events since the plan merged and the labels it
+    carries now; () when it has no stop, or the admin cleared the newest one and the label is gone. A label with no
+    event to explain it, or a removal with no stop before it, is a PR whose history cannot be read in full."""
+    stop = _last_labeled(events)
+    if stop is None:
+        if events:
+            return (f"PR #{number} has {BLOCKED_LABEL} removals but no labeled event since the plan merged; its "
+                    "stop cannot be read",)
+        if BLOCKED_LABEL in present:
+            return (f"{BLOCKED_LABEL} is on PR #{number}, but it has no labeled event since the plan merged: the "
+                    "events and the label disagree",)
+        return ()
+    return _removal_problems(number, events[stop], events[stop + 1:], present, admin)[0]
+
+
+def _removal_problems(number: int, stop: _Event, after: list[_Event], present: frozenset[str], admin: str
+                      ) -> tuple[tuple[str, ...], str]:
+    """Why the stop `stop` on PR `number` was not validly cleared, and the login that removed the label (""
+    when none did). `after` holds only `unlabeled` events: the stop is the newest `labeled` one."""
     problems = []
     if BLOCKED_LABEL in present:
-        problems.append(f"{BLOCKED_LABEL} is still on PR #{stopped}")
+        problems.append(f"{BLOCKED_LABEL} is still on PR #{number}")
     if not after:
-        problems.append(f"no removal of {BLOCKED_LABEL} follows its stop on PR #{stopped} at {stop.at}")
-        return Verdict(tuple(problems), stopped)
+        problems.append(f"no removal of {BLOCKED_LABEL} follows its stop on PR #{number} at {stop.at}")
+        return tuple(problems), ""
     if len(after) > 1:
-        problems.append(f"{len(after)} events follow the stop of PR #{stopped}; a label is removed once")
-        return Verdict(tuple(problems), stopped)
+        problems.append(f"{len(after)} events follow the stop of PR #{number}; a label is removed once")
+        return tuple(problems), ""
     removal = after[0]
     if removal.actor is None:
-        problems.append(f"{BLOCKED_LABEL} was removed from PR #{stopped} by a deleted account, not the admin")
-    elif removal.actor.casefold() != who.admin.casefold():
-        problems.append(f"{BLOCKED_LABEL} was removed from PR #{stopped} by {removal.actor}, not the admin")
-    return Verdict(tuple(problems), stopped, removal.actor or "")
+        problems.append(f"{BLOCKED_LABEL} was removed from PR #{number} by a deleted account, not the admin")
+    elif removal.actor.casefold() != admin.casefold():
+        problems.append(f"{BLOCKED_LABEL} was removed from PR #{number} by {removal.actor}, not the admin")
+    return tuple(problems), removal.actor or ""
 
 
 def _snapshot(api: GhApi, repository: str, plan: str, plan_pr: int, since: str

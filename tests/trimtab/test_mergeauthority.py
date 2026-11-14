@@ -373,12 +373,16 @@ class AgreesWithTheSkill(unittest.TestCase):
         self.assertEqual([verb for verb in ("git ls-tree", "git log", "git diff", "gh api") if verb in section], [])
 
     def test_the_skills_in_flight_test_names_where_the_agents_login_comes_from(self):
-        # The in-flight test moved to its own reference (ADR 0070).
+        # The in-flight test moved to its own reference (ADR 0070), and the command decides it (ADR 0081): the
+        # session no longer reads the agent's login itself, so the reference says the command takes it from the
+        # instance and the session reads no PR by hand.
         skill = (ROOT / "skills" / "plan-run" / "references" / "in-flight.md").read_text(encoding="utf-8")
         start = skill.index("## Resumed or not")
-        section = skill[start:skill.index("## \"Only the plan run's own in-scope pushes\"", start)]
+        section = " ".join(skill[start:skill.index("## \"Only the plan run's own in-scope pushes\"", start)].split())
 
-        self.assertIn("`accounts.agent` from `trimtab instance --json`", section)
+        self.assertIn("the logins come only from instance configuration, never from a PR", section)
+        self.assertIn("its author is the agent or the admin account", section)
+        self.assertNotIn("gh api", section)
 
     def test_the_skills_label_check_runs_the_command_that_reads_the_logins_from_the_instance(self):
         # The command reads accounts.agent, accounts.approver and the admin itself (ADR 0080).

@@ -10,30 +10,40 @@ plan-run/SKILL.md's.
 Either of these, for this plan:
 
 - **An open PR** whose head branch is `plan/<plan>/item-*`.
-- **A pushed branch** `plan/<plan>/item-*` that has never had a PR: no PR in any state has it as
-  its head (`gh api 'repos/{owner}/{repo}/pulls?state=all&head=<owner>:<branch>'`).
+- **A pushed branch** `plan/<plan>/item-*` that has never had a PR: no PR of this repository, in any
+  state, has it as its head.
 
 A branch is named `plan/<plan>/item-NN-partK` from its first push, so it is recognisable before any
 record or PR exists. The name alone proves nothing.
 
 ## Resumed or not
 
-Take the first row that applies:
+Run `trimtab check-inflight --repository <owner>/<name> --plan <plan>`, as a command of its own, and
+act on its exit code. It reads the plan's PRs and its pushed branches from the server and decides
+the whole table by itself; the logins come only from instance configuration, never from a PR. It
+resumes a PR only if its head branch is exactly `plan/<plan>/item-NN-partK`, its head is in this
+repository (never a fork), its author is the agent or the admin account (a file naming no agent
+leaves only the admin), and any `plan:blocked` stop on it was cleared by the admin and the label is
+gone. It resumes a branch with no PR only if its name has that shape and the plan's newest stop
+anywhere was cleared or there was none. Do not read the PRs, their authors, their labels or the
+branch list yourself.
 
-| What you find | Then |
+| Exit | Then |
 |---|---|
-| Any read this table needs fails (the PR, its author, its labels, the label events, the branch's updates) | Stop and report it. Never resume on a read you could not make. |
-| The PR's head is in a fork, or its author is neither the agent nor the admin account (`accounts.agent` from `trimtab instance --json`, and the admin login `check-plan-authorised` printed on its verdict line; a file naming no agent leaves only the admin) | Stop and report it. Never resume or build on it. |
-| An open PR with a `plan:blocked` label event and no later removal by the admin (read from its label events, never from the label's presence alone) | A stop: report it, and start no new part for its item. Only a valid restart resumes it: plan-run/references/restart.md. If you cannot read it, no session is a restart: the stop stands. |
-| A branch with no PR, while the plan's most recent `labeled` event for `plan:blocked` has no later removal by the admin (`trimtab check-label-actor --repository <owner>/<name> --restart --plan <plan>` judges that event. Exit 0: the stop was validly cleared, so this row does not apply. Exit 1 whose only problem starts `nothing to restart`: the plan has no stop, so this row does not apply. Any other exit 1 is a stop; on exit 2 run `git fetch origin` once (adding `--unshallow` for a shallow clone) and run it once more, and a second exit 2 is a stop) | A stop, as in the row above; only a valid restart resumes it. |
-| The PR or branch holds anything but the plan run's own in-scope pushes (below), or any read below fails | Stop and report it. |
-| Otherwise | Resume it, through the gate in section 4, applied to the item and part its branch names, and keep its part and its round counts. |
+| 0, printing `none in flight` | Nothing is in flight. The next work is the latest authorised record's `## Next` (section 3). |
+| 0, printing `resume pr <n> <branch> <sha>` or `resume branch <branch> <sha>` | The one thing to resume: that PR (or that branch, which has no PR), at that head. Check that it holds nothing but the plan run's own in-scope pushes (below), then resume it through the gate in section 4, applied to the item and part its branch names, keeping its part and its round counts. |
+| 1 | A stop: report **every** problem the command names, and start no new part. It names more than one thing in flight (a run resumes one and cannot tell which), a fork head, an author that is neither the agent nor the admin, a branch or head of the wrong shape, and a `plan:blocked` stop that is not cleared. Only a valid restart resumes a stopped PR or branch: plan-run/references/restart.md. If you cannot read it, no session is a restart: the stop stands. |
+| 2 | A read failed, a list was cut off at its bound, a reply was not the shape expected, or the fetch is stale: run `git fetch origin` once (adding `--unshallow` for a shallow clone) and run it once more. A second exit 2 is a stop. Never resume on a read you could not make. |
+
+Exit 0 says only that the one thing is not refused by what the command reads. It does not say the
+work is the plan run's own: that is the next section's.
 
 ## "Only the plan run's own in-scope pushes"
 
 The guards enforce this (E13–E15 in trimtab-core ADR 0063); the session checks it too, so that it
 stops before building on work it cannot vouch for. Until a tested `trimtab` command does the check,
-read it from the API:
+read it from the API. If the PR or branch holds anything else, or any read here fails, stop and
+report it:
 
 - **Every commit on the branch that is not on the default branch** reached it through an unbroken
   chain of branch-update events ending at the current head
