@@ -26,7 +26,8 @@ Read back after the change from `gh api .../rulesets/24363463`, enforcement acti
   `plan-scope`, `merge-authority`.
 - `strict_required_status_checks_policy: false`. "Require branches to be up to date" is
   OFF. It was turned off on 2026-11-12 for the approver work, not in this change; it is
-  recorded here because this is the first record to state the full ruleset.
+  recorded here because this is the first record to state the full ruleset. No record of
+  that change for this repository was found: ADR 0065 covers only ControlTower's `main`.
 
 ## Options considered
 

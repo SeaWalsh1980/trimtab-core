@@ -7,13 +7,14 @@ access is a SEC-7 control, so the decision is recorded.
 
 ## Context
 
-Since ADR 0071 the `claude-review` workflow passes the job's `github.token`, so no
+Since ADR 0071 (`0071-claude-review-uses-the-job-token.md`) the `claude-review` workflow passes the job's `github.token`, so no
 workflow in this repository takes the Claude GitHub App's token. The App still matters
 elsewhere: cloud sessions started from the browser, routines and Projects threads clone
 private repositories only through the App, and Auto-fix needs it. The operator runs cloud
 automation that uses trimtab-core and Trimtab as reference projects. The operator also
 states that the only active repositories are ones that use the App. The App holds
-read/write on workflows and repository hooks wherever it is installed (ADR 0071).
+read/write on workflows and repository hooks wherever it is installed (same record). That record left uninstalling the App as a
+separate follow-up; this record settles it.
 
 ## Decision
 

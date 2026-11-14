@@ -44,10 +44,10 @@ by in-flight sessions.
   change it should stop.
 - **A `pull_request_target` workflow doing the path check.** Rejected: it runs with
   secrets next to untrusted PR code.
-- **Make Trimtab public** (trimtab-core already is). Rejected: publishes a private harness
-  to close a gap that CODEOWNERS already covers at merge. Not verified: whether the push
-  ruleset is offered on a public repository on Pro; the operator reports it is not offered
-  for trimtab-core, and the agent cannot see the UI.
+- **Make Trimtab public** (trimtab-core already is). Rejected: trimtab-core, already public
+  on Pro, is reported by the operator as not offered push rulesets (the agent cannot see
+  the UI), so going public likely would not close the gap. Second reason: it publishes a
+  private harness to close a gap that CODEOWNERS already covers at merge.
 - **Add the branch-deletion ruleset now.** Rejected for now: it would refuse in-flight
   sessions' branch deletions; there is no matching security gain while the default-branch
   ruleset already blocks deleting `main`.
