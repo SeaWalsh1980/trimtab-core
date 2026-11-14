@@ -116,8 +116,10 @@ def _check_repository(repository: str) -> None:
 
 
 def merged_prs_of(api: GhApi, repository: str, default: str, sha: str) -> list[int]:
-    """The numbers of the PRs merged into `default` that the commit belongs to, from one page of the commit's pulls;
-    a full page, or a row of an unexpected shape, raises. The caller judges how many there should be."""
+    """The numbers of the PRs merged into `default` that the commit belongs to, from one page of the commit's pulls.
+    A full page raises, as does a row that is not an object with a `base` object. Only a row merged into `default`
+    has its `number` checked (it must be a positive integer): the others are not used, so their number is not read.
+    The caller judges how many there should be."""
     rows = _json(api, f"repos/{repository}/commits/{sha}/pulls", "gh api commit pulls", {"per_page": PULLS_LIMIT})
     if not isinstance(rows, list):
         raise PlanAuthError("gh api commit pulls returned unexpected JSON")

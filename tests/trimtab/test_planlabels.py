@@ -768,6 +768,13 @@ class AddingPr(Restart):
         with self.assertRaises(LabelCheckError):
             self.check()
 
+    def test_only_a_merged_row_has_its_number_read(self):
+        self.stopped_and_cleared()
+        unmerged_without_a_number = {"merged_at": None, "base": {"ref": tpa.DEFAULT}}  # never the plan's PR
+        self.listed([tpa.listed_pull(PLAN_PR), unmerged_without_a_number])
+
+        self.assertEqual(self.check().problems, ())
+
     def test_a_full_page_raises(self):
         self.listed([tpa.listed_pull(PLAN_PR), tpa.listed_pull(99, merged_at=None)])
 
