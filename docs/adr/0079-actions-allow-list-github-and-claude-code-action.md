@@ -28,7 +28,7 @@ own pin. It is not GitHub's. GitHub's allow-list applies to such transitive acti
 that is now confirmed live. Trimtab's first `claude-review` failed at setup with
 "oven-sh/setup-bun not allowed" until the operator listed it (Trimtab ADR 0038, merged in its
 #217). Here, `claude-review` run 43575848775 on this PR then downloaded and ran
-`oven-sh/setup-bun@0c5077e` successfully, so this repository's list includes it.
+`oven-sh/setup-bun@0c5077e` successfully, which is consistent with it being listed here given the operator-reported restriction. It is not independent proof that the restriction is active: the agent token gets 403 on `actions/permissions`.
 
 The repository is public and owned by a personal account on GitHub Pro.
 
@@ -41,7 +41,7 @@ Set, as the operator reported them:
 - "Allow actions created by GitHub": on.
 - "Allow actions by Marketplace verified creators": off.
 - Allow list: `anthropics/claude-code-action@*`, `oven-sh/setup-bun@*` (the second added by
-  the operator for the transitive use above; the first run's success is the evidence).
+  the operator for the transitive use above; run 43575848775's success is the evidence).
 - "Require actions to be pinned to a full-length commit SHA": **unconfirmed**. The task
   was given as "on, if the setting was offered"; the operator did not report it either way.
   Nothing below depends on it. Today's pins are full SHAs by convention and Dependabot.
@@ -57,7 +57,7 @@ the `actions/permissions` endpoints and cannot read them.
 
 | Option | Why it lost |
 |---|---|
-| Allow all actions and reusable workflows | Any action from anywhere runs with the job's token and secrets. It admits the whole Marketplace for the sake of three actions. |
+| Allow all actions and reusable workflows | Any action from anywhere runs with the job's token and secrets. It admits the whole Marketplace for the sake of three direct actions plus one nested. |
 | Allow only actions in this account (no GitHub, no third party) | Breaks all three used actions: `actions/checkout`, `actions/setup-python` and `anthropics/claude-code-action` are not this account's. |
 | GitHub's actions plus Marketplace verified creators | Verified means GitHub knows the publisher, not that an action is safe, and it admits every action from every verified creator, far more than is used. The non-GitHub actions needed are named instead. |
 | Disable Actions | The required checks (`lint-test`, `claude-review`, `plan-scope`, `merge-authority`) run on it; no PR could merge. |
@@ -79,12 +79,13 @@ What this does NOT do:
   limits which actions load, not what the workflow's own steps do.
 - It does not stop a compromised new release of an allowed action. The new release arrives
   through a Dependabot bump of the pin, and the list admits every ref of
-  `anthropics/claude-code-action`. Review of that bump is the control.
+  `anthropics/claude-code-action`; `oven-sh/setup-bun@*` is likewise admitted at every ref, and its ref changes only through a `claude-code-action` bump. Review of that bump covers both.
 - It is therefore supply-chain hygiene, not a fix for gap 2a (a changed workflow reaching a
   branch). Gap 2a stays deferred to the organization move
   ([0077](0077-defer-push-and-branch-deletion-rulesets.md)); CODEOWNERS admin review of
   `.github/` at merge remains the gate meanwhile.
 
-To verify: on the next workflow runs, every job must start. This PR's own runs are the first
-live check. A blocked action fails at job start with "not allowed"; if one does, add the
-action to the list (admin) or revert the setting.
+Verified: run 43575848775 (this PR's `claude-review`) was the first live check, and every job
+started, including the nested `oven-sh/setup-bun`. What remains is that later runs keep
+starting. A blocked action fails at job start with "not allowed"; if one does, add the action
+to the list (admin) or revert the setting.
