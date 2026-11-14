@@ -55,10 +55,8 @@ in `trimtab/planrecordauth.py`.
   judged and every failure named. The head is `plan/<plan>/<record's item-NN-partK>`; the head is in
   this repository and the PR targets the default branch (`mergeauthority.admin_reason`); the PR's
   files, a rename's `previous_filename` included, touch no admin-only path
-  (`mergeauthority.admin_only`, with the checker's code held if any of the record commit, its
-  first parent and the PR's base commit holds `bin/trimtab`: after a rebase merge the first parent
-  may be one of the PR's own commits, so the tree the merge was judged against is not certain, and a
-  true answer from any of the three only adds refusals; a commit git does not hold is exit 2), read in full: `changed_files` over 3,000 fails without
+  (`mergeauthority.admin_only`, with the checker's code held where the merge's base, the record
+  commit's first parent, holds `bin/trimtab`; see Amendment 1), read in full: `changed_files` over 3,000 fails without
   a read, and a list whose length is not `changed_files` fails as partial; every `plan-scope` job
   passes (`mergeauthority.plan_scope_job_result`, which also checks the ruleset binds the check to
   GitHub Actions); an active ruleset requiring `plan-scope` bound to GitHub Actions has an
@@ -122,3 +120,18 @@ in `trimtab/planrecordauth.py`.
 - The check reads the server over several calls, not one snapshot. A review or ruleset changed
   between its reads is not detected; a session re-runs it at the start of every run, so the next run
   sees the change.
+
+## Amendment 1 (2026-11-14): which tree holds the checker
+
+The decision above judged `bin/trimtab` at the record commit's first parent. After a rebase merge of
+several commits that parent can be one of the PR's own commits, so the tree the merge was judged
+against is not certain, and a wrong answer would leave the checker's paths open to an approver merge.
+
+The checker's code is now held admin-only if any of three trees holds `bin/trimtab`: the record
+commit, its first parent, and the PR's `base.sha`. A true answer from any of them only adds
+refusals. Rejected: the first parent alone (the case above); `base.sha` alone (it is the base at
+the PR's last update, not at merge, so a base change since could be missed); failing with exit 2
+whenever the record commit is not a single-parent merge (it would refuse every squash merge too).
+Accepted cost: in a repository that has the checker in its tree at any of the three, a path under
+`bin/`, `trimtab/` or `hooks/run_module.py` stops an approver merge, as it already did there. A
+commit git does not hold (a base force-pushed away) is exit 2.
