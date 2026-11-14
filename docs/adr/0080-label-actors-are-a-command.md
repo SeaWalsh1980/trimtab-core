@@ -61,7 +61,10 @@ Fail-closed rules shared by both modes:
 - A short page ends the events list only if the list is whole back to the plan's merge: the plan
   PR's own `merged` event, which the server stamps with exactly the PR's `merged_at` (checked on
   five real merges here), must have been read. A list that ends without it, a page that is short
-  without being the last, or a list missing its tail is exit 2, never a shorter window. Reaching an
+  without being the last, or a list missing its tail is exit 2, never a shorter window. If every
+  restart in a repository exits 2 with "ended before the plan's merge event", the assumption
+  that the server stamps the `merged` event with exactly `merged_at` has broken (a second apart,
+  say): it is not a transient error, and the check needs changing, not re-running. Reaching an
   event older than the merge is also a proof, since every older row was then seen.
 - The ids of the repository-wide list fall strictly from the newest row to the oldest across
   issues, and its times never rise: measured over all 1,475 rows of this repository's list (the same run, 15
