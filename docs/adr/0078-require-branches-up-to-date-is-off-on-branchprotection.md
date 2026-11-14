@@ -65,12 +65,14 @@ none changed here):
   `check-approver-route`'s freshness read. 0065 states it for ControlTower; the code reads
   freshness on every ruleset, so it holds here too. The admin route has no such check and
   judges on the pass as it stands.
-- [0057](0057-merge-authority-closes-the-approver-route-on-server-facts.md): the approver's
-  containment once asked for strict; `containment_problems` in `trimtab/mergeauthority.py`
-  no longer does (0065).
-- `.github/workflows/plan-scope.yml` (lines 18-27): its comment says plan-scope is not re-run
-  when `main` moves and that strict closes that gap. With strict off, that gap is covered
-  only by the 0065 freshness read, and so only on the approver route. A SEC-7 file: not edited.
+- [0057](0057-merge-authority-closes-the-approver-route-on-server-facts.md): per 0065, its containment
+  asked for strict; `containment_problems` in `trimtab/mergeauthority.py` no longer does (0065). 0057's
+  own text does not name strict.
+- `.github/workflows/plan-scope.yml` (lines 18-27): the comment already covers both cases. Where
+  the ruleset has strict, a push re-runs the job against the new base; where it does not, only the
+  approver route's freshness read (0065) closes the gap. This repository is the second case, so a
+  plan-scope pass that stands alone, with the approver route not involved, is only as fresh as its
+  base. A SEC-7 file: not edited.
 - `merge-authority-rerun.yml` and 0044's wait on plan-scope: a plan-scope pass judged against an
   older base can stand on a PR whose head has not taken newer `main`. On the approver route the
   0065 freshness read refuses it; the admin route does not read it.
