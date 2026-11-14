@@ -78,6 +78,14 @@ good PR is still a refusal, never "resume the good one".
 The plan is always checked to be a plan on the fetched default branch, even when nothing is in
 flight, so a mistyped plan name is a named problem and never `none in flight`.
 
+Two scopes of stop, kept as the skill has them: an open PR is judged against **its own**
+`plan:blocked` events only, and a branch with no PR (which has no events of its own) against the
+plan's newest stop anywhere. So an uncleared stop on a closed PR or on the plan's own PR refuses a
+branch but not an unrelated open PR with no stop of its own. That is the skill's two rows, not a new
+rule; narrowing or widening it is a change to the run-flow, not to this command. A branch that a
+closed PR once had is not in flight and is not reported: the skill's definition is "never had a PR".
+The branch list is read before the PR list, so a PR opened between the reads is judged as a PR.
+
 ## Differences from the skill text it replaces
 
 - **Branches with a PR in any state are read from one list, not one request per branch.** The skill

@@ -31,7 +31,6 @@ HEAD = "c" * 40
 OTHER_HEAD = "d" * 40
 REFS_PATH = f"repos/{REPOSITORY}/git/matching-refs/heads/plan/{PLAN}/"
 PULLS_PATH = f"repos/{REPOSITORY}/pulls"
-NO_AUTHOR = object()
 
 
 def pull(number, ref, author=AGENT, repo=REPOSITORY, labels=(), state="open", sha=HEAD):
@@ -330,6 +329,16 @@ class Refusals(Inflight):
         self.assertEqual(verdict.resume, None)
         self.assertIn("0009-nope is not a plan", verdict.problems[0])
 
+    def test_pr_problems_are_listed_with_the_plan_problem_not_dropped(self):
+        self.answers[f"repos/{REPOSITORY}/git/matching-refs/heads/plan/0009-nope/"] = "[]"
+        self.pulls.append(pull(8, "plan/0009-nope/item-01-part1", repo="someone/fork"))
+        self.put(8, [])
+
+        verdict = planinflight.check(str(self.repo), REPOSITORY, "0009-nope", WHO, FakeGh(self.answers))
+
+        self.assertIn("PR #8: head is in someone/fork", verdict.problems[0])
+        self.assertIn("0009-nope is not a plan", verdict.problems[1])
+
     def test_a_name_that_is_not_one_is_refused_before_any_read(self):
         gh = FakeGh(self.answers)
 
@@ -497,6 +506,11 @@ class Stops(Inflight):
 
         self.assertEqual((stops.problems, gh.calls), (("0 is not a PR number",), []))
 
+    def test_no_admin_login_raises_from_check_stops_itself(self):
+        with self.assertRaises(planlabels.LabelCheckError):
+            planlabels.check_stops(str(self.repo), REPOSITORY, PLAN, tpl.Accounts("", APPROVER, AGENT), {}, False,
+                                   FakeGh(self.answers))
+
     def test_no_pr_and_no_branch_still_checks_the_plan(self):
         stops = planlabels.check_stops(str(self.repo), REPOSITORY, "0009-nope", WHO, {}, False,
                                        FakeGh(self.answers))
@@ -508,6 +522,14 @@ class Stops(Inflight):
 
         stops = planlabels.check_stops(str(self.repo), REPOSITORY, PLAN, WHO, {8: frozenset({BLOCKED})}, False,
                                        FakeGh(self.answers))
+
+        self.assertIn("events and the label disagree", stops.prs[8][0])
+
+    def test_a_label_the_caller_did_not_casefold_is_still_a_stop(self):
+        self.put(8, [], labels=("Plan:Blocked",))
+
+        stops = planlabels.check_stops(str(self.repo), REPOSITORY, PLAN, WHO, {8: frozenset({"Plan:Blocked"})},
+                                       False, FakeGh(self.answers))
 
         self.assertIn("events and the label disagree", stops.prs[8][0])
 
@@ -633,6 +655,31 @@ class Cli(Inflight):
         code, out, err = self.run_cli()
 
         self.assertEqual((code, out, "git fetch origin" in err), (2, "", True))
+
+    def test_an_instance_that_cannot_be_read_exits_2(self):
+        (self.inst / "instance.json").write_text("not json", encoding="utf-8")
+
+        code, out, err = self.run_cli()
+
+        self.assertEqual((code, out), (2, ""), err)
+        self.assertIn("nothing is resumed", err)
+
+    def test_an_admin_and_approver_that_are_the_same_account_exit_2(self):
+        path = self.inst / "instance.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        path.write_text(json.dumps({**data, "accounts": {"admin": ADMIN, "agent": AGENT, "approver": ADMIN}}),
+                        encoding="utf-8")
+
+        code, out, err = self.run_cli()
+
+        self.assertEqual((code, out), (2, ""), err)
+
+    def test_a_failure_nobody_foresaw_exits_2_never_1(self):
+        with mock.patch.object(planinflight, "check", side_effect=RuntimeError("boom")):
+            code, out, err = self.run_cli()
+
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("RuntimeError while reading what is in flight; nothing is resumed", err)
 
     def test_a_bad_name_exits_1_before_any_read(self):
         for repository, plan in (("nope", PLAN), (REPOSITORY, "a/b")):

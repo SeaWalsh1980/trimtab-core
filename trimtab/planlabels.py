@@ -155,7 +155,8 @@ def check_stops(repo: str, repository: str, plan: str, who: mergeauthority.Accou
     prs: dict[int, tuple[str, ...]] = {}
     if open_prs:
         window = _window(api, repository, found.since, frozenset(open_prs), found.number)
-        prs = {n: _blocked_problems(n, window[n], open_prs[n], who.admin) for n in sorted(open_prs)}
+        prs = {n: _blocked_problems(n, window[n], frozenset(x.casefold() for x in open_prs[n]), who.admin)
+               for n in sorted(open_prs)}
     branch: tuple[str, ...] = ()
     if branches:
         verdict = _restart(api, repository, plan, who, found)

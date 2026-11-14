@@ -84,8 +84,10 @@ def check(repo: str, repository: str, plan: str, who: mergeauthority.Accounts, r
 def _check(api: GhApi, repo: str, repository: str, plan: str, who: mergeauthority.Accounts, run: Run | None
            ) -> Verdict:
     prefix = f"plan/{plan}/"
-    opened, headed = _pulls(api, repository, prefix + "item-")
+    # Branches first: a PR opened in the gap is then seen on the later PR list and judged as a PR, where the other
+    # order would call its branch one that never had a PR. A branch pushed in the gap is merely missed, not resumed.
     branches = _branches(api, repository, plan)
+    opened, headed = _pulls(api, repository, prefix + "item-")
     problems: list[str] = []
     allowed = {a.casefold() for a in (who.agent, who.admin) if a}
 
