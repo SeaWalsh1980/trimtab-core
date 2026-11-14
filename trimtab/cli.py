@@ -16,7 +16,7 @@ from trimtab import bump
 from trimtab import config as project_config
 from trimtab import dependabot
 from trimtab import guardstate, instance, mergeauthority, planacts, planauth, planchecks, planguard
-from trimtab import planledger, planrecord, planrecordauth
+from trimtab import planlabels, planledger, planrecord, planrecordauth
 from trimtab import planscope, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
@@ -1034,6 +1034,40 @@ def cmd_check_record_authorised(args) -> int:
     return 0
 
 
+def cmd_check_label_actor(args) -> int:
+    restart = args.restart
+    if restart and (args.plan is None or args.label is not None or args.pr is not None):
+        print("error: --restart takes --plan and no --label or --pr; nothing is vouched for", file=sys.stderr)
+        return 2
+    if not restart and (args.label is None or args.pr is None or args.plan is not None):
+        print("error: give --label and --pr, or --restart and --plan; nothing is vouched for", file=sys.stderr)
+        return 2
+    problems = planlabels.name_problems(args.repository, pr=args.pr, plan=args.plan, label=args.label)
+    if problems:  # before any read: no re-run fixes a typo
+        return _print_problems(problems)
+    try:
+        loaded = instance.load(_instance(args))
+        problems = mergeauthority.plan_admin_problems(loaded.admin, args.repository)
+        if problems:
+            return _print_problems(problems)
+        who = mergeauthority.accounts(loaded.admin or "", loaded.approver, loaded.agent)
+        verdict = (planlabels.check_restart(args.repo, args.repository, args.plan, who) if restart
+                   else planlabels.check_actor(args.repository, args.pr, args.label, who))
+    except (instance.InstanceFileError, mergeauthority.MergeAuthorityError, planlabels.LabelCheckError) as err:
+        print(f"error: {err}; nothing is vouched for", file=sys.stderr)
+        return 2
+    except Exception as err:  # noqa: BLE001 - reported; exit 1 would read as a verdict the session doesn't re-run
+        print(f"error: {type(err).__name__} while checking the label; nothing is vouched for", file=sys.stderr)
+        return 2
+    if verdict.problems:
+        return _print_problems(verdict.problems)
+    if restart:
+        print(verdict.pr)  # the stopped PR, alone on stdout
+    else:
+        print(f"PR #{verdict.pr}: {args.label} added by {verdict.actor}")
+    return 0
+
+
 def cmd_check_plan_scope_job(args) -> int:
     try:
         result = mergeauthority.plan_scope_job_result(args.repository, args.head)
@@ -1507,6 +1541,20 @@ def build_parser() -> argparse.ArgumentParser:
     ra.add_argument("--plan", required=True, metavar="NAME", help="the plan's name, as its plan/<name>/ branches spell it")
     ra.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout, fetched (default: .)")
     ra.set_defaults(func=cmd_check_record_authorised)
+
+    la = sub.add_parser("check-label-actor", parents=[common],
+                        help="who set or cleared a plan label, read from the issue events (ADR 0078). With --label "
+                             "and --pr: plan:continue is on the PR and its latest labeled event was by the agent, "
+                             "approver or admin. With --restart and --plan: the plan's most recent plan:blocked stop "
+                             "was cleared by the admin and the label is gone, and its PR number is printed. Exits 0 "
+                             "if so, 1 on named problems, 2 on a failed read. For sessions only")
+    la.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository the PR is in")
+    la.add_argument("--label", metavar="LABEL", help="the label whose adder to check (plan:continue)")
+    la.add_argument("--pr", type=int, metavar="N", help="the PR the label is on")
+    la.add_argument("--restart", action="store_true", help="check a restart's plan:blocked removal instead")
+    la.add_argument("--plan", metavar="NAME", help="the plan's name, as its plan/<name>/ branches spell it")
+    la.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout, fetched (default: .)")
+    la.set_defaults(func=cmd_check_label_actor)
 
     pj = sub.add_parser("check-plan-scope-job",
                         help="whether a head's plan-scope jobs are all real and passing, on a ruleset binding the check "
