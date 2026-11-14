@@ -20,6 +20,7 @@ from unittest import mock
 
 from instance_fixture import (CHECKOUT, ENV, InstanceCheckRefused, InstanceMismatch,
                               InstanceRequired, env_for, make_instance, real_instance)
+from hook_fixture import without_hook_overrides
 from trimtab import roots
 
 # Run in a child whose imported `trimtab` is a scratch copy, so the package's
@@ -158,6 +159,14 @@ class TheSpawnedEnvironment(unittest.TestCase):
 
         self.assertEqual([k for k in env if k.startswith("HOOK_ALLOW_")], [])
         self.assertEqual(env["KEEP_ME"], "yes")
+
+    def test_a_given_mapping_is_filtered_by_prefix_and_left_unchanged(self):
+        given = {"HOOK_ALLOW_PATHS": "1", "HOOK_ALLOWED": "a", "XHOOK_ALLOW_PATHS": "b", "PATH": "/bin"}
+
+        env = without_hook_overrides(given)
+
+        self.assertEqual(env, {"HOOK_ALLOWED": "a", "XHOOK_ALLOW_PATHS": "b", "PATH": "/bin"})
+        self.assertIn("HOOK_ALLOW_PATHS", given)
 
 
 if __name__ == "__main__":
