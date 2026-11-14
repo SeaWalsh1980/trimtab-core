@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import test_planauth as tpa
-from gh_fake import FakeGh
+from gh_fake import FakeGh, path_of, query_of
 from instance_fixture import make_instance
 from trimtab import cli, mergeauthority, planlabels
 from trimtab.mergeauthority import Accounts
@@ -346,7 +346,8 @@ class RestartRefused(Restart):
 
         verdict = self.check()
 
-        self.assertEqual((verdict.pr, len(verdict.problems), "nothing to restart" in verdict.problems[0]),
+        # in-flight.md relies on this: the one problem, opening the line
+        self.assertEqual((verdict.pr, len(verdict.problems), verdict.problems[0].startswith("nothing to restart")),
                          (None, 1, True))
 
     def test_two_stops_in_the_same_second_cannot_be_ordered_and_are_refused(self):
@@ -473,6 +474,33 @@ class RestartSnapshot(Restart):
             self.check(gh=run)
 
 
+class RestartBoundaries(Restart):
+    def test_exactly_the_candidate_limit_is_read(self):
+        self.stopped_and_cleared()  # candidates: the plan PR and PR 8
+
+        with mock.patch.object(planlabels, "CANDIDATES_LIMIT", 2):
+            verdict = self.check()
+
+        self.assertEqual((verdict.problems, verdict.pr), ((), 8))
+
+    def test_the_admin_removal_is_compared_without_case(self):
+        self.stopped_and_cleared(remover=ADMIN.upper())
+
+        self.assertEqual(self.check().problems, ())
+
+    def test_every_pull_is_listed_oldest_first_whatever_its_state(self):
+        self.stopped_and_cleared()
+        gh = FakeGh(self.answers)
+
+        self.check(gh=gh)
+
+        listed = [query_of(argv) for argv in gh.argvs() if path_of(argv) == f"repos/{REPOSITORY}/pulls"]
+        self.assertTrue(listed)
+        for query in listed:
+            self.assertEqual({k: query[k] for k in ("state", "sort", "direction")},
+                             {"state": "all", "sort": "created", "direction": "asc"})
+
+
 class AddingPr(Restart):
     def listed(self, rows):
         self.answers[tpa.pulls_path(self.merge)] = json.dumps(rows)
@@ -575,6 +603,14 @@ class SkillAgreement(unittest.TestCase):
         self.assertIn("On exit 2 run `git fetch origin` once", text)
         self.assertNotIn("gh api repos/{owner}/{repo}/issues", text)
 
+    def test_in_flight_reference_says_what_each_exit_code_means_for_a_branch_with_no_pr(self):
+        ref = Path(__file__).resolve().parents[2] / "skills" / "plan-run" / "references" / "in-flight.md"
+        text = " ".join(ref.read_text(encoding="utf-8").split())
+
+        self.assertIn("trimtab check-label-actor --repository <owner>/<name> --restart --plan <plan>", text)
+        self.assertIn("Exit 1 whose only problem starts `nothing to restart`: the plan has no stop", text)
+        self.assertIn("a second exit 2 is a stop", text)
+
 
 class Cli(Restart):
     """`trimtab check-label-actor`: the real CLI, real git and a scripted gh on PATH."""
@@ -588,7 +624,7 @@ class Cli(Restart):
                         encoding="utf-8")
         self.answers[tpa.VARIABLE_PATH] = json.dumps({"name": "TRIMTAB_ADMIN", "value": ADMIN})
 
-    def run_cli(self, *argv):
+    def run_cli(self, *argv, repository=REPOSITORY):
         bin_dir = self.root / "bin"
         bin_dir.mkdir(exist_ok=True)
         (self.root / "answers.json").write_text(json.dumps(self.answers), encoding="utf-8")
@@ -605,7 +641,7 @@ class Cli(Restart):
                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.dict("os.environ", env), contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
-            code = cli.main(["check-label-actor", "--repository", REPOSITORY, *argv])
+            code = cli.main(["check-label-actor", "--repository", repository, *argv])
         return code, out.getvalue(), err.getvalue()
 
     def actor(self, *extra, **kw):
@@ -665,24 +701,26 @@ class Cli(Restart):
         self.assertEqual((code, out), (2, ""), err)
 
     def test_a_bad_repository_exits_1_before_any_read(self):
-        with mock.patch.object(cli.planlabels, "check_actor") as check, \
-                contextlib.redirect_stderr(io.StringIO()) as err:
-            code = cli.main(["check-label-actor", "--repository", "nope", "--label", CONTINUE, "--pr", "1"])
+        self.continue_label(AGENT)  # a read of any real path would answer; only a read of "nope" would 404 to exit 2
 
-        self.assertEqual((code, check.called, "owner/name" in err.getvalue()), (1, False, True))
+        code, out, err = self.run_cli("--label", CONTINUE, "--pr", str(PR), repository="nope")
 
-    def test_the_two_modes_together_exit_2(self):
+        self.assertEqual((code, out, "owner/name" in err), (1, "", True))
+
+    def test_the_two_modes_together_exit_2_naming_the_restart_rule(self):
         code, out, err = self.run_cli("--label", CONTINUE, "--pr", str(PR), "--restart", "--plan", PLAN)
 
-        self.assertEqual((code, out), (2, ""), err)
+        self.assertEqual((code, out, "--restart takes" in err), (2, "", True))
 
-    def test_every_mixed_or_incomplete_argument_set_exits_2(self):
-        for argv in (("--restart",), ("--restart", "--plan", PLAN, "--pr", "3"),
-                     ("--restart", "--plan", PLAN, "--label", CONTINUE), ("--label", CONTINUE),
-                     ("--pr", "3"), ("--label", CONTINUE, "--pr", "3", "--plan", PLAN)):
+    def test_every_mixed_or_incomplete_argument_set_exits_2_naming_its_rule(self):
+        restart_rule, actor_rule = "--restart takes", "give --label and --pr"
+        for argv, rule in ((("--restart",), restart_rule), (("--restart", "--plan", PLAN, "--pr", "3"), restart_rule),
+                           (("--restart", "--plan", PLAN, "--label", CONTINUE), restart_rule),
+                           (("--label", CONTINUE), actor_rule), (("--pr", "3"), actor_rule),
+                           (("--label", CONTINUE, "--pr", "3", "--plan", PLAN), actor_rule)):
             with self.subTest(argv=argv):
                 code, out, err = self.run_cli(*argv)
-                self.assertEqual((code, out), (2, ""), err)
+                self.assertEqual((code, out, rule in err), (2, "", True), err)
 
     def test_every_bad_name_exits_1_through_the_cli(self):
         for argv in (("--label", BLOCKED, "--pr", "3"), ("--label", CONTINUE, "--pr", "0"),
@@ -702,10 +740,10 @@ class Cli(Restart):
 
         self.assertEqual((code, out.getvalue(), "RuntimeError" in err.getvalue()), (2, "", True))
 
-    def test_neither_mode_exits_2(self):
+    def test_neither_mode_exits_2_naming_the_actor_rule(self):
         code, out, err = self.run_cli()
 
-        self.assertEqual((code, out), (2, ""), err)
+        self.assertEqual((code, out, "give --label and --pr" in err), (2, "", True))
 
     def test_an_admin_the_repository_variable_disagrees_with_exits_1(self):
         self.answers[tpa.VARIABLE_PATH] = json.dumps({"name": "TRIMTAB_ADMIN", "value": STRANGER})

@@ -96,6 +96,11 @@ Fail-closed rules shared by both modes:
   `in-flight.md` still has the model read label events by hand, for an open PR with an older stop
   that is not the plan's newest. That gap is accepted here and is a follow-up: it needs a command
   that judges a named PR, not the newest stop.
+- "The plan has no stop" is exit 1 whose one problem opens with `nothing to restart`, and
+  `in-flight.md` tells a session to read it that way. That is matching a message prefix where a
+  typed exit code would be firmer, and it is accepted because the exit codes follow
+  `check-plan-authorised` (0, 1, 2). A test pins the prefix and the skill's wording together; a
+  dedicated exit code is the change to make if the wording ever drifts.
 - A restart reads the PR list and every candidate's events twice and exits 2 if they differ, so a
   stop labelled during the read cannot be missed. This doubles the reads.
 - A repository with more than 5,000 PRs, or a plan with more than 100 candidate PRs, makes
