@@ -20,7 +20,8 @@ the move until their other in-flight sessions on these repositories finish.
 
 Defer both rulesets to that move. When the push ruleset lands:
 
-- Rule "Restrict file paths" on `.github/**/*`, with `**/*` since `dir/**` is not recursive.
+- Rule "Restrict file paths" with the pattern `.github/**/*`, because `.github/**` alone
+  does not match recursively.
 - Bypass: Repository admin, plus Dependabot (operator's decision, so GitHub Actions
   version bumps keep arriving). Dependabot's behaviour is fixed by
   `.github/dependabot.yml`, which the ruleset itself locks.

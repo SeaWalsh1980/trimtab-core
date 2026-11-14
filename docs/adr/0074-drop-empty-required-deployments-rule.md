@@ -3,7 +3,9 @@
 ## Status
 
 Accepted. Changed by the operator in the GitHub UI on 2026-11-13/14. Repository
-protection is a SEC-7 control; this record documents the operator's change.
+protection is a SEC-7 control; this record documents the operator's change. It states the
+strict-off setting as current state only; the 2026-11-12 decision to turn it off has no
+record of its own for this repository and is not made here.
 
 ## Context
 
@@ -40,5 +42,4 @@ Read back after the change from `gh api .../rulesets/24363463`, enforcement acti
 
 - No change to merge behaviour; the rule required nothing.
 - Accepted: with strict off, a PR can merge on checks that ran against an older base. The
-  window is accepted for now (turned off 2026-11-12 for the approver work); revisit if a
-  stale-base merge breaks main.
+  window is accepted for now; revisit if a stale-base merge breaks main.
