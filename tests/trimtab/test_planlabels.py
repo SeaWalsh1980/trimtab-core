@@ -198,8 +198,25 @@ class Actor(unittest.TestCase):
                 self.check([row])
 
     def test_a_mode_1_repeated_event_id_raises(self):
+        first = event(1, "labeled", CONTINUE, AGENT)
         with self.assertRaisesRegex(LabelCheckError, "not in the order"):
-            self.check([event(1, "labeled", CONTINUE, AGENT), {**event(2, "unlabeled", CONTINUE, AGENT), "id": 101}])
+            self.check([first, {**event(2, "unlabeled", CONTINUE, AGENT), "id": first["id"]}])
+
+    def test_mode_1_events_in_the_same_second_are_read_in_id_order(self):
+        events = [event(1, "labeled", CONTINUE, STRANGER, at(1)), event(2, "unlabeled", CONTINUE, STRANGER, at(1)),
+                  event(3, "labeled", CONTINUE, AGENT, at(1))]
+
+        verdict = self.check(events)
+
+        self.assertEqual((verdict.problems, verdict.actor), ((), AGENT))
+
+    def test_exactly_the_events_limit_is_read(self):
+        events = [event(i, "labeled", "bug", AGENT) for i in range(1, 3)] + [event(3, "labeled", CONTINUE, AGENT)]
+
+        with mock.patch.object(planlabels, "EVENTS_LIMIT", 3):
+            verdict = self.check(events)
+
+        self.assertEqual(verdict.problems, ())
 
     def test_a_label_event_with_no_label_name_raises(self):
         bad = {"id": 1, "event": "labeled", "created_at": at(1), "label": {}, "actor": {"login": AGENT}}
@@ -358,6 +375,25 @@ class RestartRefused(Restart):
         verdict = self.check()
 
         self.assertEqual(verdict.pr, 8)
+        self.assertTrue(any("no removal" in p for p in verdict.problems))
+
+    def test_a_lower_numbered_pr_stopped_later_is_the_stopped_pr(self):
+        self.put(9, [event(1, "labeled", BLOCKED, AGENT), event(2, "unlabeled", BLOCKED, ADMIN)],
+                 ref=f"plan/{PLAN}/item-02-part1")  # the higher number, stopped and cleared earlier
+        self.put(8, [event(3, "labeled", BLOCKED, AGENT)], labels=(BLOCKED,), ref=ITEM_REF)  # stopped later
+
+        verdict = self.check()
+
+        self.assertEqual(verdict.pr, 8)
+        self.assertTrue(any("no removal" in p for p in verdict.problems))
+
+    def test_the_plan_pr_stopped_after_an_item_pr_is_the_stopped_pr(self):
+        self.put(8, [event(1, "labeled", BLOCKED, AGENT), event(2, "unlabeled", BLOCKED, ADMIN)], ref=ITEM_REF)
+        self.put(PLAN_PR, [event(3, "labeled", BLOCKED, AGENT)], labels=(BLOCKED,))
+
+        verdict = self.check()
+
+        self.assertEqual(verdict.pr, PLAN_PR)
         self.assertTrue(any("no removal" in p for p in verdict.problems))
 
     def test_the_newest_stop_is_the_one_judged_not_an_older_cleared_one(self):
