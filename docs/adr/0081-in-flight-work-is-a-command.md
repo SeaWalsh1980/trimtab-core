@@ -145,6 +145,11 @@ The branch list is read before the PR list, so a PR opened between the reads is 
   makes the command exit 2 until the bound is raised, and the cost grows with the repository's PR
   count. A plan merged long ago in a busy repository reaches the events cap; exit 2, never a shorter
   window.
+- The plan-wide "no stop" for a branch with no PR is `--restart`'s: a stop labelled before the plan
+  merged is outside the window, so a removal after the merge with no stop before it counts as an
+  older, dropped stop (ADR 0080 has a test that pins this). Open PRs are stricter: a removal with no
+  stop before it, or a label with no event, is refused. The looser rule applies to closed PRs and the
+  plan's own PR only, and a branch with no PR also needs the exact shape.
 - A PR opened while the list is read lands on a later page (oldest first); a PR that appears twice
   because pages shifted is exit 2, run it again.
 - A fork head, a foreign author and a standing stop are exit 1 and block a run from starting new
