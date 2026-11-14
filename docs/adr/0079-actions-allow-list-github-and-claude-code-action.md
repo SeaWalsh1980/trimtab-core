@@ -42,9 +42,8 @@ Set, as the operator reported them:
 - "Allow actions by Marketplace verified creators": off.
 - Allow list: `anthropics/claude-code-action@*`, `oven-sh/setup-bun@*` (the second added by
   the operator for the transitive use above; run 43575848775's success is the evidence).
-- "Require actions to be pinned to a full-length commit SHA": **unconfirmed**. The task
-  was given as "on, if the setting was offered"; the operator did not report it either way.
-  Nothing below depends on it. Today's pins are full SHAs by convention and Dependabot.
+- "Require actions to be pinned to a full-length commit SHA": **on** (corrected 2026-11-14,
+  see Correction). It was first recorded here as unconfirmed.
 
 Unchanged: default workflow permissions are read-only, Actions cannot create or approve
 pull requests, and fork PR workflows need approval for all external contributors
@@ -85,7 +84,23 @@ What this does NOT do:
   ([0077](0077-defer-push-and-branch-deletion-rulesets.md)); CODEOWNERS admin review of
   `.github/` at merge remains the gate meanwhile.
 
-Verified: run 43575848775 (this PR's `claude-review`) was the first live check, and every job
-started, including the nested `oven-sh/setup-bun`. What remains is that later runs keep
-starting. A blocked action fails at job start with "not allowed"; if one does, add the action
-to the list (admin) or revert the setting.
+Verified: run 43575848775 (this PR's `claude-review`) shows only that the allowed actions,
+including the nested `oven-sh/setup-bun`, work under the list. It does not show the restriction
+is active (corrected 2026-11-14, see Correction). The proof the list is enforced is Trimtab's
+first `claude-review` run failing at setup with "oven-sh/setup-bun not allowed" until the
+operator listed it (Trimtab ADR 0038, merged in its #217). A blocked action fails at job start
+with "not allowed"; if one does, add the action to the list (admin) or revert the setting.
+
+## Correction
+
+2026-11-14. Two points amended; the two sentences were edited in place (the "Require actions
+to be pinned" bullet in Decision, and the "Verified" paragraph), because leaving them would
+make this record contradict itself. Nothing else changed.
+
+1. SHA pinning: the operator confirmed in chat on 2026-11-14 that the setting was offered and
+   is ticked on this repository. It was recorded as unconfirmed. Every action the workflows use,
+   including the nested `oven-sh/setup-bun`, is already pinned by full SHA, so nothing broke.
+2. "Verified": the text said every job started under the allow-list, as if that showed the
+   restriction is active. A passing run shows only that the allowed actions work. The
+   enforcement proof is Trimtab's first `claude-review` failing at setup with
+   "oven-sh/setup-bun not allowed" (Trimtab ADR 0038, #217).
