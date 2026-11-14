@@ -90,8 +90,9 @@ Everything comes from the default branch, open PRs and pushed branches, never fr
 - **In flight:** an open PR whose head branch is `plan/<plan>/item-*`, or a pushed
   `plan/<plan>/item-*` branch that has never had a PR. Either is resumed before anything else, but
   only when it holds nothing but the plan run's own in-scope pushes, and only through the gate in
-  section 4, applied to the item its branch names. How to tell, and which in-flight work is not
-  resumed: plan-run/references/in-flight.md.
+  section 4, applied to the item its branch names. Run `trimtab check-inflight --repository
+  <owner>/<name> --plan <plan>`, as a command of its own: it says what to resume or why to stop,
+  and plan-run/references/in-flight.md says what each exit code means.
 - **Next:** the `## Next` section of the **most recently merged** record
   (`<plans>/progress/<plan>/item-NN-partK.md`). Which record that is, and the test its PR must pass
   (the code gate, and a merge by the admin, or by the approver with every condition met, judged by

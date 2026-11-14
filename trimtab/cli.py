@@ -16,7 +16,7 @@ from trimtab import bump
 from trimtab import config as project_config
 from trimtab import dependabot
 from trimtab import guardstate, instance, mergeauthority, planacts, planauth, planchecks, planguard
-from trimtab import planlabels, planledger, planrecord, planrecordauth
+from trimtab import planinflight, planlabels, planledger, planrecord, planrecordauth
 from trimtab import planscope, propose, roots, routines, scrub, upstream
 from trimtab.capture import citations, ingest
 from trimtab.capture.prblock import check_pr_body, parse_applied, run_references
@@ -1073,6 +1073,29 @@ def cmd_check_label_actor(args) -> int:
     return 0
 
 
+def cmd_check_inflight(args) -> int:
+    problems = planlabels.name_problems(args.repository, plan=args.plan)
+    if problems:  # before any read: no re-run fixes a typo
+        return _print_problems(problems)
+    try:
+        loaded = instance.load(_instance(args))
+        problems = mergeauthority.plan_admin_problems(loaded.admin, args.repository)
+        if problems:
+            return _print_problems(problems)
+        who = mergeauthority.accounts(loaded.admin or "", loaded.approver, loaded.agent)
+        verdict = planinflight.check(args.repo, args.repository, args.plan, who)
+    except (instance.InstanceFileError, mergeauthority.MergeAuthorityError, planinflight.InflightError) as err:
+        print(f"error: {err}; nothing is resumed", file=sys.stderr)
+        return 2
+    except Exception as err:  # noqa: BLE001 - reported; exit 1 would read as a verdict the session doesn't re-run
+        print(f"error: {type(err).__name__} while reading what is in flight; nothing is resumed", file=sys.stderr)
+        return 2
+    if verdict.problems:
+        return _print_problems(verdict.problems)
+    print(verdict.resume.line() if verdict.resume else planinflight.NONE_IN_FLIGHT)
+    return 0
+
+
 def cmd_check_plan_scope_job(args) -> int:
     try:
         result = mergeauthority.plan_scope_job_result(args.repository, args.head)
@@ -1585,6 +1608,19 @@ def build_parser() -> argparse.ArgumentParser:
     la.add_argument("--plan", metavar="NAME", help="the plan's name, as its plan/<name>/ branches spell it")
     la.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout, fetched (default: .)")
     la.set_defaults(func=cmd_check_label_actor)
+
+    fl = sub.add_parser("check-inflight", parents=[common],
+                        help="what the plan has in flight and what to resume (ADR 0081): the plan's open PRs whose "
+                             "head is plan/<plan>/item-NN-partK in this repository, by the agent or admin, with any "
+                             "plan:blocked stop cleared by the admin, and its pushed branches that never had a PR. "
+                             "Exactly one resumable thing prints as `resume pr <n> <branch> <sha>` or `resume branch "
+                             "<branch> <sha>`; none prints `none in flight`; both exit 0. Exits 1 on more than one "
+                             "or on any refusal (all named), 2 on a failed read or a list cut off at its bound. "
+                             "For sessions only")
+    fl.add_argument("--repository", required=True, metavar="OWNER/NAME", help="the repository the plan is in")
+    fl.add_argument("--plan", required=True, metavar="NAME", help="the plan's name, as its plan/<name>/ branches spell it")
+    fl.add_argument("--repo", default=".", metavar="DIR", help="the repository checkout, fetched (default: .)")
+    fl.set_defaults(func=cmd_check_inflight)
 
     pj = sub.add_parser("check-plan-scope-job",
                         help="whether a head's plan-scope jobs are all real and passing, on a ruleset binding the check "

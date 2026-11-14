@@ -873,13 +873,14 @@ class SkillAgreement(unittest.TestCase):
         self.assertIn("On exit 2 run `git fetch origin` once", text)
         self.assertNotIn("gh api repos/{owner}/{repo}/issues", text)
 
-    def test_in_flight_reference_says_what_each_exit_code_means_for_a_branch_with_no_pr(self):
+    def test_in_flight_reference_leaves_the_restart_judgement_of_a_branch_with_no_pr_to_check_inflight(self):
+        # The `nothing to restart` rule moved into `trimtab check-inflight` (ADR 0081); the reference runs that.
         ref = Path(__file__).resolve().parents[2] / "skills" / "plan-run" / "references" / "in-flight.md"
         text = " ".join(ref.read_text(encoding="utf-8").split())
 
-        self.assertIn("trimtab check-label-actor --repository <owner>/<name> --restart --plan <plan>", text)
-        self.assertIn("Exit 1 whose only problem starts `nothing to restart`: the plan has no stop", text)
-        self.assertIn("a second exit 2 is a stop", text)
+        self.assertIn("trimtab check-inflight --repository <owner>/<name> --plan <plan>", text)
+        self.assertIn("the plan's newest stop anywhere was cleared or there was none", text)
+        self.assertNotIn("check-label-actor", text)
 
 
 class Cli(Restart):
