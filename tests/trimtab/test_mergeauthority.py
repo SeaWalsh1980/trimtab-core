@@ -381,7 +381,7 @@ class AgreesWithTheSkill(unittest.TestCase):
         self.assertIn("`accounts.agent` from `trimtab instance --json`", section)
 
     def test_the_skills_label_check_runs_the_command_that_reads_the_logins_from_the_instance(self):
-        # The command reads accounts.agent, accounts.approver and the admin itself (ADR 0078).
+        # The command reads accounts.agent, accounts.approver and the admin itself (ADR 0079).
         skill = (ROOT / "skills" / "plan-run" / "SKILL.md").read_text(encoding="utf-8")
         start = skill.index("**A session started by the `plan:continue` label**")
         section = skill[start:skill.index("**Restarting after a stop**", start)]

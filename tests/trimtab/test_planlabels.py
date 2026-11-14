@@ -1,4 +1,4 @@
-"""Who set or cleared a plan label, from a faked gh and, for a restart, real git (ADR 0078)."""
+"""Who set or cleared a plan label, from a faked gh and, for a restart, real git (ADR 0079)."""
 
 import contextlib
 import io

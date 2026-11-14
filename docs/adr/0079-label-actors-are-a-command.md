@@ -1,4 +1,4 @@
-# 0078. Who set or cleared a plan label is decided by a command
+# 0079. Who set or cleared a plan label is decided by a command
 
 ## Status
 

@@ -1,4 +1,4 @@
-"""Who set or cleared a plan label, read from the server's issue events (ADR 0078).
+"""Who set or cleared a plan label, read from the server's issue events (ADR 0079).
 
 plan-run used to have the model read `gh api .../issues/<n>/events` by hand and
 decide who added `plan:continue`, and which PR a restart is about. This module
