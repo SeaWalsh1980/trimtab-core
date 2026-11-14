@@ -535,10 +535,13 @@ class AddingPr(Restart):
                 with self.assertRaises(LabelCheckError):
                     self.check()
 
-    def test_a_plan_file_git_cannot_place_raises(self):
-        with mock.patch.object(planlabels.planscope, "added_by", side_effect=planlabels.planscope.PlanScopeError("x")), \
-                self.assertRaises(LabelCheckError):
-            self.check()
+    def test_a_plan_file_git_cannot_place_or_answer_readably_raises(self):
+        for failure in (planlabels.planscope.PlanScopeError("x"), ValueError("x"),
+                        UnicodeDecodeError("ascii", b"\xff", 0, 1, "x")):
+            with self.subTest(failure=type(failure).__name__):
+                with mock.patch.object(planlabels.planscope, "added_by", side_effect=failure), \
+                        self.assertRaises(LabelCheckError):
+                    self.check()
 
 
 class Shapes(Restart):
@@ -547,7 +550,10 @@ class Shapes(Restart):
         bad_rows = {"id zero": event(0, "labeled", BLOCKED, AGENT), "negative id": event(-1, "labeled", BLOCKED, AGENT),
                     "not a row": "x", "actor with no login": {**good, "actor": {}},
                     "empty label name": {**good, "label": {"name": ""}},
-                    "label not an object": {**good, "label": "x"}}
+                    "label not an object": {**good, "label": "x"},
+                    "no event kind": {k: v for k, v in good.items() if k != "event"},
+                    "event kind not a string": {**good, "event": 3},
+                    "no time": {k: v for k, v in good.items() if k != "created_at"}}
         for name, row in bad_rows.items():
             with self.subTest(name):
                 self.put(8, [row], ref=ITEM_REF)
@@ -752,6 +758,19 @@ class Cli(Restart):
         code, out, err = self.actor()
 
         self.assertEqual((code, out, "TRIMTAB_ADMIN" in err), (1, "", True))
+
+    def test_an_instance_naming_no_admin_exits_1_in_both_modes(self):
+        path = self.inst / "instance.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data.pop("accounts", None)
+        path.write_text(json.dumps(data), encoding="utf-8")
+        self.continue_label(AGENT)
+        self.stopped_and_cleared()
+
+        for argv in (("--label", CONTINUE, "--pr", str(PR)), ("--restart", "--plan", PLAN, "--repo", str(self.repo))):
+            with self.subTest(argv=argv):
+                code, out, err = self.run_cli(*argv)
+                self.assertEqual((code, out, "names no admin" in err), (1, "", True), err)
 
     def test_a_malformed_instance_exits_2(self):
         path = self.inst / "instance.json"
