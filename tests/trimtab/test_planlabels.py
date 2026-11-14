@@ -30,8 +30,13 @@ BLOCKED = planlabels.BLOCKED_LABEL
 ITEM_REF = f"plan/{PLAN}/item-01-part1"
 
 
+ALL_EVENTS = f"repos/{REPOSITORY}/issues/events"
+BEFORE_MERGE = "2026-11-01T10:00:00Z"  # the plan PR merged at tpa.MERGED_AT, 2026-11-03
+
+
 def at(n):
-    return f"2026-11-{n:02d}T10:00:00Z"
+    """A time after the plan merged, rising with `n` (under a minute's worth)."""
+    return f"2026-11-10T10:00:{n:02d}Z"
 
 
 def event(ident, action, label, actor, when=None):
@@ -211,9 +216,13 @@ class Restart(tpa.GitRepository):
 
     def sync(self):
         self.answers[f"repos/{REPOSITORY}/pulls"] = json.dumps(self.pulls)
+        rows = []
         for number, events in self.events.items():
-            self.answers[events_path(number)] = json.dumps(events)
+            rows += [{**e, "issue": {"number": number}} for e in events]
+            self.answers[events_path(number)] = json.dumps(events)  # mode 1 reads one PR's events
             self.answers[issue_path(number)] = issue(number, self.labels.get(number, ()))
+        # The repository-wide list: every PR's events together, newest first.
+        self.answers[ALL_EVENTS] = json.dumps(sorted(rows, key=lambda r: -r["id"]))
 
     def put(self, number, events, labels=(), ref=None):
         """PR `number`, with its head ref (none: the plan PR, which is not in the pulls this lists) and events."""
@@ -413,14 +422,26 @@ class RestartReadFailures(Restart):
         with self.assertRaises(LabelCheckError):
             self.check()
 
-    def test_more_candidates_than_can_be_read_raises(self):
+    def test_events_out_of_order_raise(self):
         self.stopped_and_cleared()
+        rows = [{**event(1, "labeled", BLOCKED, AGENT), "issue": {"number": 8}},
+                {**event(2, "unlabeled", BLOCKED, ADMIN), "issue": {"number": 8}}]  # oldest first: not newest first
+        self.answers[ALL_EVENTS] = json.dumps(rows)
 
-        with mock.patch.object(planlabels, "CANDIDATES_LIMIT", 1), self.assertRaises(LabelCheckError):
+        with self.assertRaises(LabelCheckError):
             self.check()
 
-    def test_events_out_of_order_raise(self):
-        self.put(8, [event(2, "labeled", BLOCKED, AGENT), event(1, "unlabeled", BLOCKED, ADMIN)], ref=ITEM_REF)
+    def test_a_time_that_rises_down_the_list_raises(self):
+        self.stopped_and_cleared()
+        rows = [{**event(2, "unlabeled", BLOCKED, ADMIN, at(1)), "issue": {"number": 8}},
+                {**event(1, "labeled", BLOCKED, AGENT, at(2)), "issue": {"number": 8}}]
+        self.answers[ALL_EVENTS] = json.dumps(rows)
+
+        with self.assertRaises(LabelCheckError):
+            self.check()
+
+    def test_a_plan_pr_with_no_merge_time_raises(self):
+        self.answers[tpa.pull_path(PLAN_PR)] = json.dumps({"number": PLAN_PR, "merged_at": None})
 
         with self.assertRaises(LabelCheckError):
             self.check()
@@ -444,12 +465,13 @@ class RestartSnapshot(Restart):
         base = FakeGh(self.answers)
 
         def run(argv, stdin):
-            if argv[4].split("?")[0] == events_path(8):
+            if argv[4].split("?")[0] == ALL_EVENTS:
                 reads.append(argv)
-                if len(reads) > 1:  # the second read of the stopped PR shows a newer, uncleared stop
-                    base.answers[events_path(8)] = json.dumps([
-                        event(1, "labeled", BLOCKED, AGENT), event(2, "unlabeled", BLOCKED, ADMIN),
-                        event(3, "labeled", BLOCKED, AGENT)])
+                if len(reads) > 1:  # the second read shows a newer, uncleared stop
+                    base.answers[ALL_EVENTS] = json.dumps(sorted([
+                        {**e, "issue": {"number": 8}} for e in (
+                            event(1, "labeled", BLOCKED, AGENT), event(2, "unlabeled", BLOCKED, ADMIN),
+                            event(3, "labeled", BLOCKED, AGENT))], key=lambda r: -r["id"]))
             return base(argv, stdin)
 
         with self.assertRaises(LabelCheckError):
@@ -466,7 +488,9 @@ class RestartSnapshot(Restart):
                 if len(lists) > 1:
                     base.answers[f"repos/{REPOSITORY}/pulls"] = json.dumps(
                         [*self.pulls, pull_row(9, f"plan/{PLAN}/item-02-part1")])
-                    base.answers[events_path(9)] = json.dumps([event(5, "labeled", BLOCKED, AGENT)])
+                    base.answers[ALL_EVENTS] = json.dumps(sorted(
+                        [*json.loads(base.answers[ALL_EVENTS]),
+                         {**event(5, "labeled", BLOCKED, AGENT), "issue": {"number": 9}}], key=lambda r: -r["id"]))
                     base.answers[issue_path(9)] = issue(9, (BLOCKED,))
             return base(argv, stdin)
 
@@ -475,11 +499,84 @@ class RestartSnapshot(Restart):
 
 
 class RestartBoundaries(Restart):
-    def test_exactly_the_candidate_limit_is_read(self):
-        self.stopped_and_cleared()  # candidates: the plan PR and PR 8
+    def pages(self, *pages):
+        """The repository-wide list as the server pages it (two rows a page here), served for both snapshot reads.
+        A last page that is full is followed by an empty one, as the server answers."""
+        self.answers[ALL_EVENTS] = [*(json.dumps(p) for p in pages), "[]"] * 2
 
-        with mock.patch.object(planlabels, "CANDIDATES_LIMIT", 2):
+    def row(self, ident, action, number, actor=AGENT, label=BLOCKED, when=None):
+        return {**event(ident, action, label, actor, when), "issue": {"number": number}}
+
+    def test_a_stop_on_the_second_page_is_found(self):
+        self.stopped_and_cleared()
+        filler = [self.row(9, "labeled", 50, label="bug"), self.row(8, "labeled", 51, label="bug")]
+        self.pages(filler, [self.row(2, "unlabeled", 8, ADMIN), self.row(1, "labeled", 8)])
+
+        with mock.patch.object(planlabels, "EVENTS_PAGE", 2):
             verdict = self.check()
+
+        self.assertEqual((verdict.problems, verdict.pr), ((), 8))
+
+    def test_an_event_older_than_the_plans_merge_stops_the_paging(self):
+        self.stopped_and_cleared()
+        old = [self.row(3, "labeled", 8, when=BEFORE_MERGE), self.row(2, "labeled", 8, when=BEFORE_MERGE)]
+        self.answers[ALL_EVENTS] = [json.dumps([self.row(5, "unlabeled", 8, ADMIN), self.row(4, "labeled", 8)]),
+                                    json.dumps(old)] * 2
+        gh = FakeGh(self.answers)
+
+        with mock.patch.object(planlabels, "EVENTS_PAGE", 2):
+            verdict = self.check(gh=gh)
+
+        reads = [query_of(argv) for argv in gh.argvs() if path_of(argv) == ALL_EVENTS]
+        self.assertEqual((verdict.problems, [q["page"] for q in reads]), ((), ["1", "2", "1", "2"]))
+
+    def test_events_older_than_the_plans_merge_are_not_the_stop(self):
+        self.put(8, [event(1, "labeled", BLOCKED, AGENT, BEFORE_MERGE)], labels=(BLOCKED,), ref=ITEM_REF)
+
+        verdict = self.check()
+
+        self.assertTrue(verdict.problems[0].startswith("nothing to restart"))
+
+    def test_a_stop_just_at_the_merge_time_counts(self):
+        self.put(8, [event(1, "labeled", BLOCKED, AGENT, tpa.MERGED_AT)], labels=(BLOCKED,), ref=ITEM_REF)
+
+        self.assertTrue(any("no removal" in p for p in self.check().problems))
+
+    def test_reaching_the_page_cap_before_the_plans_merge_raises(self):
+        self.stopped_and_cleared()
+        full = [self.row(9, "labeled", 50, label="bug"), self.row(8, "labeled", 51, label="bug")]
+        self.answers[ALL_EVENTS] = [json.dumps(full)] * 4
+
+        with mock.patch.object(planlabels, "EVENTS_PAGE", 2), mock.patch.object(planlabels, "WINDOW_PAGES_LIMIT", 1), \
+                self.assertRaises(LabelCheckError):
+            self.check()
+
+    def test_a_row_with_a_bad_time_or_no_issue_number_raises(self):
+        self.stopped_and_cleared()
+        good = self.row(2, "unlabeled", 8, ADMIN)
+        for name, row in {"bad time": {**good, "created_at": "yesterday"},
+                          "no time": {k: v for k, v in good.items() if k != "created_at"},
+                          "no issue": {k: v for k, v in good.items() if k != "issue"},
+                          "issue without a number": {**good, "issue": {}},
+                          "number 0": {**good, "issue": {"number": 0}}}.items():
+            with self.subTest(name):
+                self.answers[ALL_EVENTS] = json.dumps([row])
+                with self.assertRaises(LabelCheckError):
+                    self.check()
+
+    def test_a_label_row_of_a_pr_that_is_not_a_candidate_is_not_judged(self):
+        self.stopped_and_cleared()
+        stranger = {**self.row(9, "labeled", 77), "label": "x"}  # a malformed label event on an unrelated issue
+        self.answers[ALL_EVENTS] = json.dumps(
+            sorted([stranger, *json.loads(self.answers[ALL_EVENTS])], key=lambda r: -r["id"]))
+
+        self.assertEqual(self.check().problems, ())
+
+    def test_a_non_candidate_prs_stop_is_ignored(self):
+        self.stopped_and_cleared()
+        self.put(77, [event(9, "labeled", BLOCKED, AGENT)], labels=(BLOCKED,))  # not a candidate: no plan head ref
+
+        verdict = self.check()
 
         self.assertEqual((verdict.problems, verdict.pr), ((), 8))
 
@@ -546,22 +643,32 @@ class AddingPr(Restart):
 
 class Shapes(Restart):
     def test_event_rows_that_are_not_the_expected_shape_raise(self):
-        good = event(1, "labeled", BLOCKED, AGENT)
-        bad_rows = {"id zero": event(0, "labeled", BLOCKED, AGENT), "negative id": event(-1, "labeled", BLOCKED, AGENT),
+        self.stopped_and_cleared()
+        good = {**event(1, "labeled", BLOCKED, AGENT), "issue": {"number": 8}}
+        bad_rows = {"id zero": {**good, "id": 0}, "negative id": {**good, "id": -1},
                     "not a row": "x", "actor with no login": {**good, "actor": {}},
                     "empty label name": {**good, "label": {"name": ""}},
                     "label not an object": {**good, "label": "x"},
                     "no event kind": {k: v for k, v in good.items() if k != "event"},
-                    "event kind not a string": {**good, "event": 3},
-                    "no time": {k: v for k, v in good.items() if k != "created_at"}}
+                    "event kind not a string": {**good, "event": 3}}
         for name, row in bad_rows.items():
             with self.subTest(name):
-                self.put(8, [row], ref=ITEM_REF)
+                self.answers[ALL_EVENTS] = json.dumps([row])
                 with self.assertRaises(LabelCheckError):
                     self.check()
 
     def test_a_repeated_event_id_raises(self):
-        self.put(8, [event(1, "labeled", BLOCKED, AGENT), event(1, "unlabeled", BLOCKED, ADMIN)], ref=ITEM_REF)
+        self.stopped_and_cleared()
+        rows = [{**event(1, "labeled", BLOCKED, AGENT), "issue": {"number": 8}},
+                {**event(1, "unlabeled", BLOCKED, ADMIN), "issue": {"number": 8}}]
+        self.answers[ALL_EVENTS] = json.dumps(rows)
+
+        with self.assertRaises(LabelCheckError):
+            self.check()
+
+    def test_a_reply_that_is_not_a_list_raises(self):
+        self.stopped_and_cleared()
+        self.answers[ALL_EVENTS] = json.dumps({"message": "x"})
 
         with self.assertRaises(LabelCheckError):
             self.check()

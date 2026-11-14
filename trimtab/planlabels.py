@@ -10,7 +10,9 @@ does it as one command, from the server alone, in two modes:
 2. **a restart**: across every PR whose head is `plan/<plan>/item-*`, open or
    closed, and the PR that added the plan, the most recent `labeled` event for
    `plan:blocked` marks the stopped PR; the restart is valid only if the admin's
-   `unlabeled` event for it follows, and the label is absent now.
+   `unlabeled` event for it follows, and the label is absent now. Their events come from one
+   read of the repository-wide issue events, newest first, back to the plan's merge, never one
+   request per PR.
 
 Every failure is named, not just the first. A read that fails, a list cut off
 at its bound, an event that is not the shape this expects, or events that are
@@ -32,7 +34,12 @@ BLOCKED_LABEL = "plan:blocked"
 ACTOR_LABELS = (CONTINUE_LABEL,)  # the labels whose adder mode 1 judges
 EVENTS_LIMIT = 1000  # issue events one PR is read for; past it, an error rather than a partial list
 PULLS_LIMIT = 5000  # PRs a restart lists to find the plan's item PRs; past it, an error
-CANDIDATES_LIMIT = 100  # PRs a restart reads events for; past it, an error
+EVENTS_PAGE = 100  # rows per page of the repository-wide issue events (REST's largest)
+# Pages of the repository-wide events a restart reads, newest first, looking for the plan's merge time. This
+# repository's whole history is 15 pages; 50 is over three times that, so a plan merged in a repository ten times
+# as busy as the one measured is still reached, and a read stays about 50 calls at most (twice, with the
+# snapshot). Past it the command exits 2 (ADR 0079).
+WINDOW_PAGES_LIMIT = 50
 LABEL_EVENTS = ("labeled", "unlabeled")
 
 
@@ -123,10 +130,11 @@ def check_restart(repo: str, repository: str, plan: str, who: mergeauthority.Acc
     plan_pr = _adding_pr(api, repository, fetched.default, added)
     if isinstance(plan_pr, str):
         return Verdict((plan_pr,))
+    since = _merged_at(api, repository, plan_pr)
     # Read twice and require the same answer: a PR opened or a stop labelled while the first read ran would be
     # missed, and the newest stop would then be an older, cleared one.
-    candidates, marked = _snapshot(api, repository, plan, plan_pr)
-    if _snapshot(api, repository, plan, plan_pr) != (candidates, marked):
+    candidates, marked = _snapshot(api, repository, plan, plan_pr, since)
+    if _snapshot(api, repository, plan, plan_pr, since) != (candidates, marked):
         raise LabelCheckError(f"the PRs or label events of plan {plan} changed while they were read; run it again")
     latest = [(es[_last(es, "labeled")], n) for n, es in marked.items() if any(e.action == "labeled" for e in es)]
     if not latest:
@@ -158,14 +166,11 @@ def check_restart(repo: str, repository: str, plan: str, who: mergeauthority.Acc
     return Verdict(tuple(problems), stopped, removal.actor or "")
 
 
-def _snapshot(api: GhApi, repository: str, plan: str, plan_pr: int) -> tuple[list[int], dict[int, list[_Event]]]:
-    """Every candidate PR, and each one's `plan:blocked` events, as read now."""
+def _snapshot(api: GhApi, repository: str, plan: str, plan_pr: int, since: str
+              ) -> tuple[list[int], dict[int, list[_Event]]]:
+    """Every candidate PR, and each one's `plan:blocked` events since the plan merged, as read now."""
     candidates = sorted({plan_pr, *_item_prs(api, repository, plan)})
-    if len(candidates) > CANDIDATES_LIMIT:
-        raise LabelCheckError(f"{len(candidates)} PRs could hold the plan's labels; more than {CANDIDATES_LIMIT} "
-                              "cannot all be read")
-    marked = {n: [e for e in _events(api, repository, n) if e.label.casefold() == BLOCKED_LABEL] for n in candidates}
-    return candidates, marked
+    return candidates, _window(api, repository, since, frozenset(candidates))
 
 
 def _last(events: list[_Event], action: str) -> int:
@@ -207,15 +212,69 @@ def _events(api: GhApi, repository: str, number: int) -> list[_Event]:
         if ident <= last_id or at < last_at:
             raise LabelCheckError(f"{what} are not in the order this reads them in (event {ident})")
         last_id, last_at = ident, at
-        if kind not in LABEL_EVENTS:
-            continue
-        label, actor = row.get("label"), row.get("actor", ...)
-        name = label.get("name") if isinstance(label, dict) else None
-        login = actor.get("login") if isinstance(actor, dict) else None
-        if not isinstance(name, str) or not name or not (actor is None or isinstance(login, str) and login):
-            raise LabelCheckError(f"{what} returned unexpected JSON")
-        found.append(_Event(ident, at, kind, name, login))
+        if kind in LABEL_EVENTS:
+            found.append(_label_event(row, ident, at, kind, what))
     return found
+
+
+def _label_event(row: dict, ident: int, at: str, kind: str, what: str) -> _Event:
+    """A `labeled` or `unlabeled` row as an event. The label's name and the actor key must be there; an actor of
+    null is a deleted account, and a missing key is an unexpected shape."""
+    label, actor = row.get("label"), row.get("actor", ...)
+    name = label.get("name") if isinstance(label, dict) else None
+    login = actor.get("login") if isinstance(actor, dict) else None
+    if not isinstance(name, str) or not name or not (actor is None or isinstance(login, str) and login):
+        raise LabelCheckError(f"{what} returned unexpected JSON")
+    return _Event(ident, at, kind, name, login)
+
+
+def _window(api: GhApi, repository: str, since: str, candidates: frozenset[int]) -> dict[int, list[_Event]]:
+    """Each candidate PR's `plan:blocked` events, oldest first, taken from the repository-wide issue events (one
+    list, newest first) read page by page until an event older than `since` (the plan's merge) is seen or the list
+    ends. Events older than `since` are dropped, and so are other PRs' events. Whole-list rules, since this is one
+    list: every row needs an id, a time and an issue number; ids must fall and times must not rise from row to
+    row. Past the page cap without reaching `since` is an error, never a shorter window."""
+    what = "gh api repository issue events"
+    found: dict[int, list[_Event]] = {n: [] for n in candidates}
+    last_id, last_at = None, None
+    for page in range(1, WINDOW_PAGES_LIMIT + 1):
+        rows = _json(api, f"repos/{repository}/issues/events", what, {"per_page": EVENTS_PAGE, "page": page})
+        if not isinstance(rows, list):
+            raise LabelCheckError(f"{what} returned unexpected JSON")
+        reached = False
+        for row in rows:
+            ident = row.get("id") if isinstance(row, dict) else None
+            at = row.get("created_at") if isinstance(row, dict) else None
+            kind = row.get("event") if isinstance(row, dict) else None
+            issue = row.get("issue") if isinstance(row, dict) else None
+            number = issue.get("number") if isinstance(issue, dict) else None
+            if not (type(ident) is int and ident > 0 and isinstance(kind, str) and isinstance(at, str)
+                    and mergeauthority.TIME.fullmatch(at) and type(number) is int and number > 0):
+                raise LabelCheckError(f"{what} returned unexpected JSON")
+            if last_id is not None and (ident >= last_id or at > last_at):
+                raise LabelCheckError(f"{what} are not in the order this reads them in (event {ident}); a new "
+                                      "event shifted the pages, run it again")
+            last_id, last_at = ident, at
+            if at < since:
+                reached = True
+            elif kind in LABEL_EVENTS and number in candidates:
+                event = _label_event(row, ident, at, kind, what)
+                if event.label.casefold() == BLOCKED_LABEL:
+                    found[number].insert(0, event)  # newest first in, oldest first out
+        if reached or len(rows) < EVENTS_PAGE:
+            return found
+    raise LabelCheckError(f"{what} holds more than {WINDOW_PAGES_LIMIT} pages since the plan merged at {since}; "
+                          "refusing to work from a partial list")
+
+
+def _merged_at(api: GhApi, repository: str, number: int) -> str:
+    """When the PR was merged, as the server reports it."""
+    row = _json(api, f"repos/{repository}/pulls/{number}", "gh api pull")
+    at = row.get("merged_at") if isinstance(row, dict) else None
+    if not (isinstance(row, dict) and row.get("number") == number and isinstance(at, str)
+            and mergeauthority.TIME.fullmatch(at)):
+        raise LabelCheckError(f"gh api pull returned unexpected JSON, or PR #{number} has no merge time")
+    return at
 
 
 def _item_prs(api: GhApi, repository: str, plan: str) -> list[int]:

@@ -41,7 +41,11 @@ shape. Names are validated before any REST call; the admin must match the reposi
    `plan:continue` is accepted as `--label`.
 2. **`--repository <o/n> --restart --plan <plan>`.** Candidates are every PR, open or closed, whose
    head ref starts `plan/<plan>/item-`, and the one PR that added the plan file (found from the
-   adding commit in first-parent order, as `check-plan-authorised` does). The newest `labeled`
+   adding commit in first-parent order, as `check-plan-authorised` does). Their events come from
+   **one** read of the repository-wide issue events (`issues/events`, newest first), paged from the
+   newest until an event older than the plan PR's merge time is seen: nothing the plan could have
+   labelled is older. Events older than the merge are dropped, and so are events of any other
+   issue. The newest `labeled`
    event for `plan:blocked` among them marks the stopped PR. It passes only if exactly one
    `unlabeled` event follows that event, its actor is the admin, and the label is absent now. No
    such event anywhere is exit 1, `nothing to restart`. The stopped PR's number is printed alone.
@@ -49,10 +53,17 @@ shape. Names are validated before any REST call; the admin must match the reposi
 Fail-closed rules shared by both modes:
 
 - Every list is read in full with a bound; more rows than the bound is exit 2, never a short list.
-  The PR list is read oldest first, so a PR opened during the read lands on a later page.
-- Events must have rising ids and non-falling times across the whole list, and each label event
-  must name its label and carry an `actor` key (a null actor is a deleted account and a named
-  problem, a missing key is exit 2). A list not in order is not read.
+  The PR list is read oldest first, so a PR opened during the read lands on a later page. The
+  repository-wide events are capped at 50 pages of 100: this repository's whole history is 15
+  pages, so 50 is over three times that, a plan merged in a repository about ten times as busy as
+  the one measured is still reached, and a read is at most 50 calls (twice, with the snapshot).
+  Hitting the cap before an event older than the plan's merge is exit 2, named.
+- One PR's events (mode 1) must have rising ids and non-falling times; the repository-wide list
+  (mode 2) must have falling ids and non-rising times, newest first, across every page. Every row
+  of the latter needs an id, a time and an issue number, or it is exit 2; a duplicate or misordered
+  row, which a new event shifting the pages causes, is exit 2 too (run it again). A label event of a
+  candidate must name its label and carry an `actor` key (a null actor is a deleted account and a
+  named problem, a missing key is exit 2). A list not in order is not read.
 - Two stops on different PRs in the same second cannot be ordered: a named problem, never a guess.
 - The newest stop is the one judged: an older stop that was never cleared does not block a newer,
   cleared one, and an older admin removal does not clear a newer stop.
@@ -76,15 +87,17 @@ Fail-closed rules shared by both modes:
 - **Order stops across PRs by event id.** Rejected as the rule, kept as a within-PR check: event
   ids are one sequence, but nothing documents that they order across issues, and a guess here lets
   an older stop pass for the newest. Time ties are named instead.
-- **Read the repository-wide events list (`issues/events`) once instead of one events read per
-  candidate PR.** Rejected: the doctrine's rule against a request per row points at it, but the list
-  grows with every event on every issue and PR in the repository, not with the plan. (A batched
-  GraphQL read of the candidates' timelines is out too: `GhApi` allows repository-scoped REST only,
-  because cloud sessions refuse GraphQL.) Measured on this repository: 1,455 events
-  over 15 pages for about 180 PRs. A per-candidate read grows with the plan and is bounded by
-  `CANDIDATES_LIMIT` (100 reads, each usually one page), so a busy repository would make the batched
-  read exit 2 on its bound for good. The per-candidate loop is therefore kept as a bounded fan-out,
-  and the rule's wording is raised upstream as feedback rather than treated as met.
+- **Read each candidate PR's own events (`issues/<n>/events`), one request per candidate.**
+  Rejected, and replaced in this PR: it is a request per row inside a loop, which the doctrine's
+  rule against that pattern (a PROHIBIT, so not one an ADR can accept) forbids. It was first built
+  and defended as a bounded fan-out (at most 100 candidates, one page each); the rule's own
+  alternative, one batched read fetched once, exists under REST-only access and is the decision
+  above, so the defence fell. A batched GraphQL read of the candidates' timelines is out:
+  `GhApi` allows repository-scoped REST only, because cloud sessions refuse GraphQL.
+- **Read the whole repository-wide events list and filter.** Rejected as the rule, kept as the
+  fallback shape: measured on this repository it is 1,455 events over 15 pages for about 180 PRs,
+  and it grows with the repository for ever, where the window the plan's merge opens grows only
+  with activity since that merge.
 - **Judge every PR that ever carried `plan:blocked`.** Rejected for this command: it asks one
   question, whether the plan's most recent stop was validly cleared. An older stop left uncleared is
   the in-flight check's concern (`plan-run/references/in-flight.md`).
@@ -102,11 +115,17 @@ Fail-closed rules shared by both modes:
   typed exit code would be firmer, and it is accepted because the exit codes follow
   `check-plan-authorised` (0, 1, 2). A test pins the prefix and the skill's wording together; a
   dedicated exit code is the change to make if the wording ever drifts.
-- A restart reads the PR list and every candidate's events twice and exits 2 if they differ, so a
-  stop labelled during the read cannot be missed. This doubles the reads.
-- A repository with more than 5,000 PRs, or a plan with more than 100 candidate PRs, makes
-  `--restart` exit 2 until the bounds are raised. The cost of a restart check is the PR list pages
-  plus one events read per candidate.
+- A restart reads the PR list and the events window twice and exits 2 if they differ, so a stop
+  labelled during the read cannot be missed. This doubles the reads.
+- The cost of a restart check grows with repository activity since the plan merged: one page of
+  events per 100 events anywhere in the repository (a comment or a subscription counts), plus the
+  PR list pages. A plan merged long ago in a busy repository reaches the 50-page cap and `--restart`
+  exits 2 until the cap is raised; so does a PR list over 5,000. The per-candidate reads are gone, so
+  the cost no longer grows with the number of candidate PRs.
+- An event arriving anywhere in the repository during the read shifts the pages and can make a row
+  repeat or misorder: exit 2, and a re-run answers. In a very busy repository this can recur.
+- Mode 1 (`--label --pr`) reads `issues/<N>` and `issues/<N>/events`: one PR, so two reads, not a
+  request inside a loop over a growing set.
 - A restart check needs a fetched checkout of the default branch, as the other plan checks do, and a
   stale fetch is exit 2.
 - Two stops in the same second block a restart until one is cleared by hand. This is accepted: it
