@@ -14,7 +14,7 @@ standing and do nothing:
   a comment or a file never starts a restart, however it is worded.
 - **The admin account removed `plan:blocked`** from the stopped PR. Run `trimtab check-label-actor
   --repository <owner>/<name> --restart --plan <plan>`, as a command of its own. It finds the
-  stopped PR itself: the one with the plan's most recent `plan:blocked` label event, among every
+  stopped PR itself: the one with the plan's most recent `labeled` event for `plan:blocked`, among every
   PR (open or closed) whose head is `plan/<plan>/item-*` and the PR that added the plan, so a stop
   before the draft opened is found on the plan's own PR. It passes only if the admin's removal comes
   after that event (an older removal from an earlier stop does not count) and the label is absent
