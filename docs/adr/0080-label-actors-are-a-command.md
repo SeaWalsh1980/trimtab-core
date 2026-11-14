@@ -54,10 +54,21 @@ Fail-closed rules shared by both modes:
 
 - Every list is read in full with a bound; more rows than the bound is exit 2, never a short list.
   The PR list is read oldest first, so a PR opened during the read lands on a later page. The
-  repository-wide events are capped at 50 pages of 100: this repository's whole history is 15
-  pages, so 50 is over three times that, a plan merged in a repository about ten times as busy as
-  the one measured is still reached, and a read is at most 50 calls (twice, with the snapshot).
+  repository-wide events are capped at 50 pages of 100, about 5,000 events since the plan merged:
+  3.3 times this repository's whole measured history (15 pages), so a busier repository is reached
+  only while the plan is recent enough, and a read is at most 50 calls (twice, with the snapshot).
   Hitting the cap before an event older than the plan's merge is exit 2, named.
+- A short page ends the events list only if the list is whole back to the plan's merge: the plan
+  PR's own `merged` event, which the server stamps with exactly the PR's `merged_at` (checked on
+  five real merges here), must have been read. A list that ends without it, a page that is short
+  without being the last, or a list missing its tail is exit 2, never a shorter window. Reaching an
+  event older than the merge is also a proof, since every older row was then seen.
+- The ids of the repository-wide list fall strictly from the newest row to the oldest across
+  issues, and its times never rise: measured over all 1,475 rows of this repository's list (15
+  pages), 0 breaks of either. That is a property of this server read, not a documented guarantee,
+  so a list that breaks it makes `--restart` exit 2 until the check changes. Ids are still never
+  used to order stops across PRs (see the options below): the order check only refuses a list that
+  is out of order, and the stopped PR is chosen by time.
 - One PR's events (mode 1) must have rising ids and non-falling times; the repository-wide list
   (mode 2) must have falling ids and non-rising times, newest first, across every page. Every row
   of the latter needs an id, a time and an issue number, or it is exit 2; a duplicate or misordered
