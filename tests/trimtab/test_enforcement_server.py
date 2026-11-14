@@ -2,6 +2,7 @@
 
 Real git in temporary repositories; gh, a true external system, faked (TST-2)."""
 
+import dataclasses
 import io
 import json
 import os
@@ -102,6 +103,17 @@ class ServerGathers(ServerWorld):
         self.commit_server_lock(field=field)
 
         self.assertEqual(self.shown(), {})
+
+    def test_e22s_base_half_is_still_judged_in_server_mode(self):
+        self.assertIn("E22", self.shown(self.gh(base_job="failure")))
+
+    def test_e22_is_not_shown_without_its_manifest_entry_in_server_mode(self):
+        entries = dict(self.server().entries)
+        del entries["E22"]
+
+        results = gate.decide(dataclasses.replace(self.server(), entries=entries))
+
+        self.assertEqual([r.id for r in results if r.problem], ["E22"])
 
     def test_the_exemption_is_e22s_alone(self):
         self.assertEqual(list(self.shown(self.gh(failing="E21"))), [])  # E21 is a base row: no project job to fail

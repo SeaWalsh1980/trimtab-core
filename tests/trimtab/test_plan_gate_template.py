@@ -159,6 +159,7 @@ class WhatItRuns(unittest.TestCase):
 
         self.assertIn("draft=false", header)
         self.assertIn("base is the default branch", header)
+        self.assertIn("vouches for nothing", header)
         self.assertIn("plan-ready-check", header)
 
     def test_the_gate_runs_before_the_ready_check(self):

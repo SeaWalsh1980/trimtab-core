@@ -5,9 +5,10 @@ name: plan-gate
 # The approver reads the job `plan-gate` the way it reads `plan-scope` (trimtab-core ADR 0058): every attempt on the PR's head
 # passed, from this workflow's path, on the `pull_request` event. A draft's run passes without the ready check, so
 # the approver must also require one attempt on the head whose payload had draft=false, or whose plan-ready-check
-# step concluded success; "every attempt passed" alone would accept a head that only ever had a draft run. It
-# must also require, at merge, that the PR's base is the default branch: a retarget starts no run, so a pass
-# earned against the default branch would otherwise survive a move to another one.
+# step concluded success; "every attempt passed" alone would accept a head that only ever had a draft run. A
+# skipped `plan-gate` (a head not under plan/, or no run at all) vouches for nothing: the approver treats it as not
+# passed. It must also require, at merge, that the PR's base is the default branch: a retarget starts no run, so a
+# pass earned against the default branch would otherwise survive a move to another one.
 #
 # Two commands run, both from the base the project's lock pins and never from the PR's tree:
 # - `trimtab check-enforcement --server`: every row E1-E23 is shown, read from the lock's derived field
