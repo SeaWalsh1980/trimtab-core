@@ -634,6 +634,8 @@ def cmd_bump(args) -> int:
         if todo.enforcement_new is not None:
             print(f"enforcement field: {'rewritten' if todo.enforcement_old != todo.enforcement_new else 'unchanged'}"
                   f" ({len(todo.enforcement_new['rows'])} rows, {len(todo.enforcement_new['jobs'])} jobs)")
+            for line in bump.field_changes(todo.enforcement_old, todo.enforcement_new):
+                print(f"  {line}")
         print(f"changed items: {len(todo.changes)}")
         for c in todo.changes:
             print(f"  {c.id:<10} {c.what:<10} {c.detail}")

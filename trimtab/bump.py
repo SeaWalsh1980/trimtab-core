@@ -140,6 +140,54 @@ def _with_base(text: str, base: str) -> str:
 
 
 ENFORCEMENT_KEY = re.compile(r'"enforcement"\s*:\s*')
+SHOWN = 200  # characters of an old or new value in a PR body: enough to read, not enough to bury a diff
+
+
+def _shown(value) -> str:
+    text = "(none)" if value is None else json.dumps(value, sort_keys=True)
+    return text if len(text) <= SHOWN else text[:SHOWN] + "…"
+
+
+def field_changes(old: dict | None, new: dict | None) -> list[str]:
+    """What the derived enforcement field changes, one line each, for the dry run and the bump PR's body.
+
+    The field decides the keys the server job judges by (the agent, the fix limits, the review's login, the scan
+    job) and the rows' text and owners, and the admin merges a lock edit only from this PR, so this is what they
+    can review it by. Pure."""
+    if new is None:
+        return [] if old is None else ["the field is removed"]
+    if old is None:
+        return [f"the field is new: {len(new['rows'])} rows, {len(new['jobs'])} jobs, "
+                f"instance keys {', '.join(sorted(new['instance'])) or 'none'}"]
+    out = []
+    if old["base_repo"] != new["base_repo"]:
+        out.append(f"base_repo: {old['base_repo']} -> {new['base_repo']}")
+    for rid in new["rows"]:
+        was, now = old["rows"].get(rid), new["rows"][rid]
+        if was is None:
+            out.append(f"row {rid}: added")
+            continue
+        if was["owner"] != now["owner"]:
+            out.append(f"row {rid}: owner {was['owner']!r} -> {now['owner']!r}")
+        if was["sha256"] != now["sha256"]:
+            out.append(f"row {rid}: its text changed")
+    for rid in sorted(set(old["jobs"]) | set(new["jobs"]), key=lambda r: int(r[1:])):
+        was, now = old["jobs"].get(rid), new["jobs"].get(rid)
+        if was != now:
+            out.append(f"job {rid}: {_shown(was)} -> {_shown(now)}")
+    for key in sorted(set(old["instance"]) | set(new["instance"])):
+        was, now = old["instance"].get(key), new["instance"].get(key)
+        if was != now:
+            out.append(f"instance {key}: {_shown(was)} -> {_shown(now)}")
+    return out
+
+
+def _field_section(todo: "BumpPlan") -> str:
+    if todo.enforcement_new is None and todo.enforcement_old is None:
+        return ""
+    changes = field_changes(todo.enforcement_old, todo.enforcement_new)
+    body = "\n".join(f"- {c}" for c in changes) or "Unchanged."
+    return f"## Derived enforcement field\n\n{body}\n\n"
 
 
 def _with_enforcement(text: str, value: dict) -> str:
@@ -167,7 +215,10 @@ def apply(project: Path, todo: BumpPlan, confirm: str) -> None:
     if match is None or match.group(2) != todo.old or (base.group(2) if base else None) != todo.base_old:
         raise BumpError("the lock changed since the dry run; run --dry-run again")
     held, _ = project_config.parse(text, where=str(path))
-    if held is None or held.enforcement != todo.enforcement_old:
+    if held is None:
+        raise BumpError("the lock does not parse now, so it is not the one the dry run read; "
+                        "run --dry-run again")
+    if held.enforcement != todo.enforcement_old:
         raise BumpError("the lock changed since the dry run; run --dry-run again")
     text = _with_base(SHA_VALUE.sub(lambda m: m.group(1) + todo.new + m.group(3), text, count=1), todo.base_new)
     if todo.enforcement_new is not None:
@@ -210,6 +261,7 @@ def pr_body(todo: BumpPlan, repo: str) -> str:
         f"{_base_line(todo)}\n\n"
         f"## Changed items\n\n| ID | Change | Detail |\n|---|---|---|\n{rows}\n\n"
         f"## Overrides to re-confirm\n\n{flags or 'None: no override cites a changed item.'}\n\n"
+        f"{_field_section(todo)}"
         "## Harness items applied\n```yaml\n- id: none\n"
         '  why: "moving the lock; every override citing a changed item is re-confirmed or dropped"\n'
         "  files: [.claude/trimtab.json]\n```\n\n"

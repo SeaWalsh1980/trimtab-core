@@ -9,6 +9,7 @@ from pathlib import Path
 from enforcement_fixture import OWNERS, record_text
 from trimtab import bump
 from trimtab import config as project_config
+from trimtab.capture.prblock import check_body
 from trimtab import instance as instance_file
 from trimtab.enforcement import gate
 from trimtab.enforcement import record as record_mod
@@ -257,6 +258,12 @@ class Derivation(unittest.TestCase):
 
         self.assertEqual((problems, found.enforcement["base_repo"]), ([], "acme/.github"))
 
+    def test_full_sha_refuses_a_prefix_a_suffix_and_a_newline_with_match_as_with_fullmatch(self):
+        for bad in (BASE_SHA + "; rm", BASE_SHA + "\n", "x" + BASE_SHA, BASE_SHA[:-1]):
+            self.assertIsNone(project_config.FULL_SHA.match(bad), bad)
+            self.assertIsNone(project_config.FULL_SHA.fullmatch(bad), bad)
+        self.assertIsNotNone(project_config.FULL_SHA.match(BASE_SHA))
+
     def test_a_base_sha_with_a_trailing_newline_is_refused(self):
         found, _ = project_config.parse(lock_text(None, base_sha=BASE_SHA + "\n"))
 
@@ -343,14 +350,145 @@ class Derivation(unittest.TestCase):
 
         self.assertNotIn("enforcement", self.lock.read_text())
 
-    def test_apply_refuses_when_the_field_moved_since_the_dry_run(self):
-        todo = bump.plan(self.project, self.base, self.v1, REPOSITORY)
-        self.lock.write_text(self.lock.read_text().rstrip().rstrip("}").rstrip()
-                             + ',\n  "enforcement": %s\n}\n' % json.dumps(good_field()))
+    def moved_lock(self, field):
+        """The lock as another bump left it: a valid base_sha and `field`, so it parses and only the field differs."""
+        self.lock.write_text(json.dumps({"trimtab_sha": self.v1, "id_prefix": "SCR", "schema_version": 2,
+                                         "base_sha": BASE_SHA, "enforcement": field}, indent=2) + "\n")
 
-        with self.assertRaises(bump.BumpError):
+    def test_apply_refuses_when_the_field_moved_since_the_dry_run(self):
+        first = bump.plan(self.project, self.base, self.v1, REPOSITORY)
+        bump.apply(self.project, first, bump.confirmation(first))
+        todo = bump.plan(self.project, self.base, self.v1, REPOSITORY)
+        moved = good_field()
+        moved["rows"]["E5"]["sha256"] = "1" * 64
+        self.moved_lock(moved)
+        self.assertIsNotNone(project_config.load(self.project)[0])  # it parses: only the field differs
+
+        with self.assertRaises(bump.BumpError) as raised:
             bump.apply(self.project, todo, bump.confirmation(todo))
 
+        self.assertIn("changed since the dry run", str(raised.exception))
+
+    def test_apply_refuses_a_lock_that_no_longer_parses_and_says_so(self):
+        todo = bump.plan(self.project, self.base, self.v1, REPOSITORY)
+        self.lock.write_text('{"trimtab_sha": "%s", "id_prefix": "SCR", "schema_version": 2, '
+                             '"enforcement": %s}' % (self.v1, json.dumps(good_field())))  # no base_sha
+
+        with self.assertRaises(bump.BumpError) as raised:
+            bump.apply(self.project, todo, bump.confirmation(todo))
+
+        self.assertIn("does not parse", str(raised.exception))
+
+class FieldChanges(unittest.TestCase):
+    """What the bump PR shows the admin of the derived field, which is the only review surface it has."""
+
+    def old_new(self):
+        old, new = good_field(), good_field()
+        return old, new
+
+    def test_an_unchanged_field_lists_nothing(self):
+        old, new = self.old_new()
+
+        self.assertEqual(bump.field_changes(old, new), [])
+
+    def test_a_lock_with_no_field_lists_every_row_as_added(self):
+        _, new = self.old_new()
+
+        got = bump.field_changes(None, new)
+
+        self.assertEqual(len(got), 1)
+        self.assertIn("new", got[0])
+        self.assertIn("23 rows", got[0])
+
+    def test_a_changed_row_text_names_the_row(self):
+        old, new = self.old_new()
+        new["rows"]["E7"]["sha256"] = "2" * 64
+
+        self.assertEqual(bump.field_changes(old, new), ["row E7: its text changed"])
+
+    def test_a_changed_row_owner_names_both_owners(self):
+        old, new = self.old_new()
+        new["rows"]["E7"]["owner"] = "Consuming project"
+
+        got = bump.field_changes(old, new)
+
+        self.assertEqual(len(got), 1)
+        self.assertIn("E7", got[0])
+        self.assertIn("Guard", got[0])
+        self.assertIn("Consuming project", got[0])
+
+    def test_an_added_removed_and_changed_job_are_each_named(self):
+        old, new = self.old_new()
+        new["jobs"]["E2"] = {"workflow": ".github/workflows/a.yml", "job": "a"}
+        del new["jobs"]["E1"]
+        old["jobs"]["E3"] = {"workflow": ".github/workflows/b.yml", "job": "b"}
+        new["jobs"]["E3"] = {"workflow": ".github/workflows/b.yml", "job": "b2"}
+
+        got = bump.field_changes(old, new)
+
+        self.assertEqual(sorted(g.split(":")[0] for g in got), ["job E1", "job E2", "job E3"])
+
+    def test_a_changed_instance_key_shows_its_old_and_new_values(self):
+        old, new = self.old_new()
+        old["instance"] = {"fix_limits": {"markers": ["pytest.skip("], "thresholds": ["fail_under"]}}
+        new["instance"] = {"fix_limits": {"markers": ["pytest.skip("], "thresholds": []}}
+
+        got = bump.field_changes(old, new)
+
+        self.assertEqual(len(got), 1)
+        self.assertIn("fix_limits", got[0])
+        self.assertIn("fail_under", got[0])
+
+    def test_a_removed_instance_key_is_named(self):
+        old, new = self.old_new()
+        old["instance"] = {"secret_scan": {"workflow": ".github/workflows/s.yml", "job": "s"}}
+
+        self.assertIn("secret_scan", bump.field_changes(old, new)[0])
+
+    def test_a_changed_base_repository_is_named(self):
+        old, new = self.old_new()
+        new["base_repo"] = "owner/other-base"
+
+        self.assertIn("base_repo", bump.field_changes(old, new)[0])
+
+    def test_a_long_value_is_cut_so_the_body_stays_readable(self):
+        old, new = self.old_new()
+        new["instance"] = {"fix_limits": {"markers": ["x" * 5000]}}
+
+        self.assertLess(len(bump.field_changes(old, new)[0]), 600)
+
+
+class TheBumpBodyShowsTheField(unittest.TestCase):
+    def todo(self, old, new):
+        return bump.BumpPlan("a" * 40, "c" * 40, (), (), BASE_SHA, BASE_SHA, "owner/base", old, new)
+
+    def test_the_body_lists_each_change_of_the_field(self):
+        old, new = good_field(), good_field()
+        new["rows"]["E7"]["sha256"] = "2" * 64
+
+        body = bump.pr_body(self.todo(old, new), "owner/inst")
+
+        self.assertIn("## Derived enforcement field", body)
+        self.assertIn("row E7: its text changed", body)
+
+    def test_a_bump_with_no_field_says_nothing_of_one(self):
+        self.assertNotIn("Derived enforcement field", bump.pr_body(self.todo(None, None), "owner/inst"))
+
+    def test_an_unchanged_field_says_so(self):
+        body = bump.pr_body(self.todo(good_field(), good_field()), "owner/inst")
+
+        self.assertIn("unchanged", body.split("## Derived enforcement field")[1].lower())
+
+    def test_the_body_still_passes_check_pr(self):
+        old, new = good_field(), good_field()
+        new["rows"]["E7"]["sha256"] = "2" * 64
+
+        result = check_body(bump.pr_body(self.todo(old, new), "owner/inst"), {})
+
+        self.assertEqual(result.problems, ())
+
+
+class OwnersTheFixtureUses(unittest.TestCase):
     def test_the_owners_the_fixture_uses_are_ones_the_record_reader_knows(self):
         self.assertTrue(set(OWNERS.values()) <= set(record_mod.OWNERS))
 

@@ -1370,3 +1370,26 @@ ControlTower); registering E11's recorder in `settings.base.json`; Amendment 3's
 - **`server()` takes the PR's draft state and base from the workflow**, not from the code.
 - **A deleted-and-recreated branch is an unreadable fact (exit 2), not E16's refusal (exit 1)**, since the reader
   raises on a deletion first; the job fails either way.
+
+**Review round 3 (three passes) changed these.** No CRITICAL or HIGH; three MEDIUM, fixed.
+
+- **The bump PR shows what the derived field changes** (`bump.field_changes`): each row whose text or owner changed,
+  each job added, removed or changed, each changed instance key with its old and new value (cut at 200 characters),
+  and a changed `base_repo`. The admin merges a lock edit only from that PR, so it is their only review surface; the
+  dry run prints the same lines.
+- **`FULL_SHA` is anchored with `\A…\Z`**, so it refuses a prefix, a suffix and a trailing newline with `match` as
+  with `fullmatch`, for any caller.
+- **`bump.apply` says a lock that no longer parses is not the one the dry run read**, apart from a field that moved,
+  and the staleness test now exercises the field comparison with a parseable lock (it passed before for the wrong
+  reason).
+
+**Residuals named by round 3.**
+
+- **A plan branch created at another branch's tip hides earlier rounds from server-side E12.** The chain accepts a
+  creation at any commit, as a part's first push is one; E18 on the whole diff bounds what it can carry.
+- **`--server` shows E22's project half whichever job runs it.** Adoption of `plan-gate` is evidenced only by the
+  approver reading that job by name and path.
+- **`bump` asks for a hand removal of the field** where the new instance names no record, which the command doc
+  otherwise forbids; the case is rare and the removal passes the local check.
+- **`COMMIT_SHA` still accepts a trailing newline.** It reaches git only as an argument, so it fails closed.
+- **`_plan_ready_server` exits 1, not 2, on an exception outside the four it names**; the job fails either way.

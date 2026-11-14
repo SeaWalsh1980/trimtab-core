@@ -18,7 +18,7 @@ RETIRED = ("source", "routines")
 COMMIT_SHA = re.compile(r"^[0-9a-f]{7,40}$")
 # `base_sha` is read by consumers' CI to choose which base code runs there, so
 # only a full SHA: a short one can become ambiguous, and a ref can move.
-FULL_SHA = re.compile(r"[0-9a-f]{40}")  # used with `fullmatch`: `$` would also accept a trailing newline
+FULL_SHA = re.compile(r"\A[0-9a-f]{40}\Z")  # `\Z`, not `$`: a trailing newline is no SHA, with match or fullmatch
 
 
 def is_commit_sha(value) -> bool:
