@@ -17,8 +17,8 @@ posted. The same defect is being fixed in Trimtab by a sibling change.
 
 ## Decision
 
-Match the link exactly: split the body on the literal run URL and require every occurrence
-to be followed by a non-digit or the end of the body
+Match the link exactly: split the body on the literal run URL and require at least one
+occurrence to be followed by a non-digit or the end of the body
 (`split(env.RUN_URL) | .[1:] | any(test("^([^0-9]|$)"))`). Nothing else in the step changes.
 
 ## Options considered
@@ -39,3 +39,6 @@ to be followed by a non-digit or the end of the body
 - `tests/trimtab/test_draft_ci_workflow.py` runs the workflow's own filter under `jq`
   against sample bodies, so a prefix match fails a test. The tests need `jq` on the machine.
 - Trimtab's step stays on `contains` until its sibling change lands.
+- The tests run the filter under system `jq`; CI runs it under `gh --jq` (gojq). The
+  constructs used (`split`, `.[1:]`, `any`, `test`, `env.`) are common to both, but a future
+  divergence would not be caught by these tests. Not run under gojq before this PR.
