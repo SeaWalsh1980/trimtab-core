@@ -55,8 +55,10 @@ in `trimtab/planrecordauth.py`.
   judged and every failure named. The head is `plan/<plan>/<record's item-NN-partK>`; the head is in
   this repository and the PR targets the default branch (`mergeauthority.admin_reason`); the PR's
   files, a rename's `previous_filename` included, touch no admin-only path
-  (`mergeauthority.admin_only`, with the checker's code held where the merge's base, the record
-  commit's first parent, holds `bin/trimtab`), read in full: `changed_files` over 3,000 fails without
+  (`mergeauthority.admin_only`, with the checker's code held if any of the record commit, its
+  first parent and the PR's base commit holds `bin/trimtab`: after a rebase merge the first parent
+  may be one of the PR's own commits, so the tree the merge was judged against is not certain, and a
+  true answer from any of the three only adds refusals; a commit git does not hold is exit 2), read in full: `changed_files` over 3,000 fails without
   a read, and a list whose length is not `changed_files` fails as partial; every `plan-scope` job
   passes (`mergeauthority.plan_scope_job_result`, which also checks the ruleset binds the check to
   GitHub Actions); an active ruleset requiring `plan-scope` bound to GitHub Actions has an

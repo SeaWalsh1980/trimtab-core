@@ -96,6 +96,7 @@ class _Pull:
     head_repo: str
     base_ref: str
     changed_files: int
+    base_sha: str = ""
 
 
 def check(repo: str, repository: str, plan: str, who: mergeauthority.Accounts, run: Run | None = None,
@@ -117,19 +118,33 @@ def check(repo: str, repository: str, plan: str, who: mergeauthority.Accounts, r
             return Verdict(record.problems)
         if record.path is None:
             return Verdict(())
-        # The checker's own code is admin-only where the repository runs it from its tree: as the merge gate has
-        # it, judged by the base the PR merged into, the record commit's first parent on the default branch.
-        base = planscope.commit(repo, f"{record.commit}^1")
-        checker_in_tree = mergeauthority.CHECKER_MARK in planscope.present(repo, base, [mergeauthority.CHECKER_MARK])
+        # The checker's own code is admin-only where the repository runs it from its tree. Which tree the merge was
+        # judged against is not certain after a rebase merge (the record commit's first parent may be one of the
+        # PR's own commits), so the code is held admin-only if ANY of these trees holds `bin/trimtab`: the record
+        # commit, its first parent, and (in `judge`) the PR's base commit. A true answer only adds refusals.
+        checker_in_tree = (checker_at(repo, record.commit) or checker_at(repo, f"{record.commit}^1"))
     except (planrecord.PlanRecordError, planscope.PlanScopeError) as err:
         raise RecordAuthError(str(err)) from err
-    return judge(repository, fetched.default, plan, record, who, checker_in_tree, run, plan_gate)
+    return judge(repository, fetched.default, plan, record, who, checker_in_tree, run, plan_gate,
+                 lambda sha: checker_at(repo, sha))
+
+
+def checker_at(repo: str, rev: str) -> bool:
+    """Whether the commit's tree holds the checker (`bin/trimtab`). A commit git does not hold is an error."""
+    try:
+        sha = planscope.commit(repo, rev)
+        return mergeauthority.CHECKER_MARK in planscope.present(repo, sha, [mergeauthority.CHECKER_MARK])
+    except planscope.PlanScopeError as err:
+        raise RecordAuthError(str(err)) from err
 
 
 def judge(repository: str, default: str, plan: str, record: planrecord.Latest, who: mergeauthority.Accounts,
-          checker_in_tree: bool, run: Run | None = None, plan_gate: PlanGateRead | None = None) -> Verdict:
+          checker_in_tree: bool, run: Run | None = None, plan_gate: PlanGateRead | None = None,
+          checker_at_base: Callable[[str], bool] | None = None) -> Verdict:
     """Judge `record`'s merge from the server alone. `plan_gate` reads the base's server-side plan-gate job; None,
-    the only value while the base ships no such job (trimtab-core ADR 0063 section 7), fails every approver merge."""
+    the only value while the base ships no such job (trimtab-core ADR 0063 section 7), fails every approver merge.
+    `checker_at_base` says whether a commit's tree holds the checker; it is asked about the PR's base commit and
+    may only turn `checker_in_tree` on."""
     _check_names(repository, plan)
     if record.path is None or record.commit is None or not planauth.SHA.fullmatch(record.commit):
         raise RecordAuthError("no record commit to judge")
@@ -165,6 +180,8 @@ def judge(repository: str, default: str, plan: str, record: planrecord.Latest, w
     if merger and merger == who.admin.casefold():
         pass
     elif merger and who.approver and merger == who.approver.casefold():
+        if checker_at_base is not None and not checker_in_tree:
+            checker_in_tree = checker_at_base(pull.base_sha)
         route, wait = _approver_problems(api, repository, default, plan, record, pull, checker_in_tree, run, plan_gate)
         problems += route
     else:
@@ -288,6 +305,7 @@ def _ruleset_problems(api: GhApi, repository: str, default: str, pull: _Pull) ->
         enforcement = row.get("enforcement") if isinstance(row, dict) else None
         if not (isinstance(updated, str) and mergeauthority.TIME.fullmatch(updated) and isinstance(enforcement, str)):
             raise RecordAuthError("gh api ruleset returned unexpected JSON")
+        # A string comparison, which is time order only because TIME pinned both sides to one format.
         if enforcement == "active" and updated < pull.merged_at:
             return []
         seen.append(f"{ruleset} ({enforcement}, updated {updated})")
@@ -343,12 +361,13 @@ def _read_pull(api: GhApi, repository: str, number: int) -> _Pull:
         by = row["merged_by"]
         login = "" if by is None else by["login"]
         pull = _Pull(number, row["merged_at"] or "", row["merge_commit_sha"] or "", login, head["ref"], head["sha"],
-                     (head["repo"] or {}).get("full_name") or "", base["ref"], row["changed_files"])
+                     (head["repo"] or {}).get("full_name") or "", base["ref"], row["changed_files"], base["sha"])
     except (KeyError, TypeError, AttributeError) as err:
         raise RecordAuthError(f"{what} returned unexpected JSON") from err
     if not (all(isinstance(v, str) for v in (pull.merged_at, pull.merge_commit, pull.merged_by, pull.head_ref,
                                               pull.head, pull.head_repo, pull.base_ref))
             and type(pull.changed_files) is int and pull.changed_files >= 0 and planauth.SHA.fullmatch(pull.head)
+            and planauth.SHA.fullmatch(pull.base_sha)
             and (not pull.merged_at or mergeauthority.TIME.fullmatch(pull.merged_at))):
         raise RecordAuthError(f"{what} returned unexpected JSON")
     return pull

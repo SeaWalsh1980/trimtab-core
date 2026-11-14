@@ -27,6 +27,7 @@ RECORD_SHA = "d" * 40
 RECORD = planrecord.Latest(RECORD_PATH, RECORD_SHA, 1, 1)
 HEAD = tma.HEAD
 EARLIER = tma.EARLIER
+BASE_SHA = tma.BASE
 NUMBER = 7
 OTHER_PR = 9
 ADMIN = tma.ADMIN
@@ -58,12 +59,12 @@ def listed(number=NUMBER, merged_at=MERGED_AT, base=DEFAULT):
 
 
 def pull(merged_by=ADMIN, head_ref=HEAD_REF, head_repo=REPOSITORY, base=DEFAULT, merged_at=MERGED_AT,
-         merge_commit=RECORD_SHA, changed_files=None, files=None, number=NUMBER):
+         merge_commit=RECORD_SHA, changed_files=None, files=None, number=NUMBER, base_sha=BASE_SHA):
     return {"number": number, "merged_at": merged_at, "merge_commit_sha": merge_commit,
             "merged_by": None if merged_by is None else {"login": merged_by},
             "head": {"ref": head_ref, "sha": HEAD, "repo": None if head_repo is None else {"full_name": head_repo}},
-            "base": {"ref": base}, "changed_files": len(files or [SOURCE_FILE]) if changed_files is None
-            else changed_files}
+            "base": {"ref": base, "sha": base_sha}, "changed_files": len(files or [SOURCE_FILE])
+            if changed_files is None else changed_files}
 
 
 def review(login, state="APPROVED", commit=HEAD, id=1, at=BEFORE_MERGE):
@@ -345,6 +346,68 @@ class ApproverMerge(unittest.TestCase):
 
         self.assertEqual((len(held.problems), elsewhere.problems), (1, ()))
 
+    def test_the_checker_is_admin_only_when_only_the_prs_base_commit_holds_it(self):
+        """After a rebase merge the record commit's parent may be one of the PR's own commits, so the base counts."""
+        asked = []
+
+        def holds_checker(sha):
+            asked.append(sha)
+            return True
+
+        found = approver_merge(files=[file_row("trimtab/cli.py")])
+
+        verdict = planrecordauth.judge(REPOSITORY, DEFAULT, PLAN, RECORD, WHO, False, FakeGh(found), PASSING_GATE,
+                                       holds_checker)
+
+        self.assertEqual((asked, len(verdict.problems)), ([BASE_SHA], 1))
+        self.assertIn("admin-only paths: trimtab/cli.py", verdict.problems[0])
+
+    def test_a_base_without_the_checker_leaves_the_checkers_paths_open(self):
+        found = approver_merge(files=[file_row("trimtab/cli.py")])
+
+        verdict = planrecordauth.judge(REPOSITORY, DEFAULT, PLAN, RECORD, WHO, False, FakeGh(found), PASSING_GATE,
+                                       lambda sha: False)
+
+        self.assertEqual(verdict.problems, ())
+
+    def test_the_base_is_not_asked_when_the_checker_is_already_held_or_the_admin_merged(self):
+        asked = []
+
+        def holds_checker(sha):
+            asked.append(sha)
+            return False
+
+        planrecordauth.judge(REPOSITORY, DEFAULT, PLAN, RECORD, WHO, True, FakeGh(approver_merge()), PASSING_GATE,
+                             holds_checker)
+        planrecordauth.judge(REPOSITORY, DEFAULT, PLAN, RECORD, WHO, False, FakeGh(answers()), PASSING_GATE,
+                             holds_checker)
+
+        self.assertEqual(asked, [])
+
+    def test_a_base_commit_that_cannot_be_read_is_an_error(self):
+        def unreadable(sha):
+            raise RecordAuthError("git rev-parse exited 128")
+
+        with self.assertRaises(RecordAuthError):
+            planrecordauth.judge(REPOSITORY, DEFAULT, PLAN, RECORD, WHO, False, FakeGh(approver_merge()),
+                                 PASSING_GATE, unreadable)
+
+    def test_a_pull_whose_base_sha_is_not_a_commit_id_is_an_error(self):
+        with self.assertRaises(RecordAuthError):
+            judge(approver_merge(pull_changes={"base_sha": "main"}), plan_gate=PASSING_GATE)
+
+    def test_the_approvers_login_is_compared_without_case(self):
+        verdict = judge(answers(merged_by=APPROVER.upper(), reviews=[review(APPROVER.upper())]),
+                        plan_gate=PASSING_GATE)
+
+        self.assertEqual(verdict.problems, ())
+
+    def test_more_files_than_the_prs_count_is_a_named_problem(self):
+        verdict = judge(approver_merge(pull_changes={"changed_files": 1},
+                                       files=[file_row("a.md"), file_row("b.md")]), plan_gate=PASSING_GATE)
+
+        self.assertIn("refusing a partial list", verdict.problems[0])
+
     def test_more_files_than_github_lists_is_a_named_problem_without_reading_them(self):
         gh = FakeGh(approver_merge(pull_changes={"changed_files": planrecordauth.FILES_LIMIT + 1}))
 
@@ -585,7 +648,8 @@ class Wiring(tpr.Records):
         self.answers.update({
             f"repos/{tpa.REPOSITORY}/commits/{sha}/pulls": json.dumps([listed()]),
             f"repos/{tpa.REPOSITORY}/pulls/{NUMBER}": json.dumps(
-                pull(merged_by=merged_by, head_ref=f"plan/{tpr.PLAN}/item-01-part1", merge_commit=sha, files=files)),
+                pull(merged_by=merged_by, head_ref=f"plan/{tpr.PLAN}/item-01-part1", merge_commit=sha, files=files,
+                     base_sha=tpa.git(self.repo, "rev-parse", f"{sha}^1"))),
             f"repos/{tpa.REPOSITORY}/pulls/{NUMBER}/reviews": json.dumps([review(tpa.ADMIN)]),
             f"repos/{tpa.REPOSITORY}/pulls/{NUMBER}/files": json.dumps(files),
         })
@@ -617,6 +681,16 @@ class Wiring(tpr.Records):
         verdict = self.check()
 
         self.assertIn("notes.md", verdict.problems[0])
+
+    def test_a_commit_git_does_not_hold_is_an_error_when_asking_for_the_checker(self):
+        with self.assertRaises(RecordAuthError):
+            planrecordauth.checker_at(str(self.repo), "f" * 40)
+
+    def test_the_checker_is_found_in_a_commits_tree(self):
+        with_checker = self.merge_branch("checker", {mergeauthority.CHECKER_MARK: "#!/bin/sh\n"})
+
+        self.assertEqual((planrecordauth.checker_at(str(self.repo), with_checker),
+                          planrecordauth.checker_at(str(self.repo), f"{with_checker}^1")), (True, False))
 
     def test_a_stale_fetch_is_an_error(self):
         late = self.merge_branch("late", {"README.md": "changed\n"})  # the server moves; origin's copy does not
@@ -687,7 +761,8 @@ class Cli(tpa.GitRepository):
         self.answers.update({
             f"repos/{tpa.REPOSITORY}/commits/{sha}/pulls": json.dumps([listed()]),
             f"repos/{tpa.REPOSITORY}/pulls/{NUMBER}": json.dumps(
-                pull(merged_by=merged_by, head_ref=f"plan/{tpr.PLAN}/item-01-part1", merge_commit=sha)),
+                pull(merged_by=merged_by, head_ref=f"plan/{tpr.PLAN}/item-01-part1", merge_commit=sha,
+                     base_sha=tpa.git(self.repo, "rev-parse", f"{sha}^1"))),
             f"repos/{tpa.REPOSITORY}/pulls/{NUMBER}/reviews": json.dumps([review(tpa.ADMIN)]),
         })
         return sha
