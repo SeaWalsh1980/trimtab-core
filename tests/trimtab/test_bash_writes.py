@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hook_fixture import hooks_with_path
+from hook_fixture import hooks_with_path, without_hook_overrides
 from trimtab import planscope
 from trimtab.adapters import bash_writes as bw
 
@@ -278,8 +278,8 @@ class Hook(unittest.TestCase):
         subprocess.run(["git", "clone", "-q", str(origin), str(self.repo)], check=True, capture_output=True)
         self.config = top / "config"
         self.config.mkdir(mode=0o700)
-        self.env = {k: v for k, v in os.environ.items()
-                    if k not in ("HOOK_ALLOW_HARNESS", "TRIMTAB_PLAN_RUN", "TRIMTAB_INSTANCE")}
+        self.env = {k: v for k, v in without_hook_overrides().items()
+                    if k not in ("TRIMTAB_PLAN_RUN", "TRIMTAB_INSTANCE")}
         self.env["CLAUDE_CONFIG_DIR"] = str(self.config)
         self.calls = 0
 

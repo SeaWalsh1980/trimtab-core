@@ -31,6 +31,10 @@ from pathlib import Path
 if __name__ == "__main__":  # run as a script: import the package from this checkout
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+try:  # as a script or from tests/trimtab, hook_fixture is a sibling module; tests/bootstrap-env-tests.sh imports the package form
+    from hook_fixture import without_hook_overrides  # noqa: E402
+except ModuleNotFoundError:
+    from tests.trimtab.hook_fixture import without_hook_overrides  # noqa: E402
 from trimtab import roots  # noqa: E402
 
 ENV = "TRIMTAB_INSTANCE"
@@ -107,8 +111,8 @@ def add_rule(instance: Path, filename: str, prefix: str) -> None:
 
 
 def env_for(instance: Path | None) -> dict[str, str]:
-    """This process's environment with the instance set, or with it removed when `instance` is None."""
-    env = {k: v for k, v in os.environ.items() if k != ENV}
+    """This process's environment, minus HOOK_ALLOW_* overrides, with the instance set, or removed when `instance` is None."""
+    env = {k: v for k, v in without_hook_overrides().items() if k != ENV}
     if instance is not None:
         env[ENV] = str(instance)
     return env

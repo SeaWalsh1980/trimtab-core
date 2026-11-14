@@ -16,9 +16,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from instance_fixture import (CHECKOUT, ENV, InstanceCheckRefused, InstanceMismatch,
                               InstanceRequired, env_for, make_instance, real_instance)
+from hook_fixture import without_hook_overrides
 from trimtab import roots
 
 # Run in a child whose imported `trimtab` is a scratch copy, so the package's
@@ -148,6 +150,23 @@ class RealInstance(unittest.TestCase):
         err = raised({ENV: str(bare)})
 
         self.assertIsInstance(err, roots.InstanceInvalid)
+
+
+class TheSpawnedEnvironment(unittest.TestCase):
+    def test_it_carries_no_hook_override_from_the_operators_shell(self):
+        with mock.patch.dict(os.environ, {"HOOK_ALLOW_PATHS": "1", "HOOK_ALLOW_PATHS_X": "1", "KEEP_ME": "yes"}):
+            env = env_for(None)
+
+        self.assertEqual([k for k in env if k.startswith("HOOK_ALLOW_")], [])
+        self.assertEqual(env["KEEP_ME"], "yes")
+
+    def test_a_given_mapping_is_filtered_by_prefix_and_left_unchanged(self):
+        given = {"HOOK_ALLOW_PATHS": "1", "HOOK_ALLOWED": "a", "XHOOK_ALLOW_PATHS": "b", "PATH": "/bin"}
+
+        env = without_hook_overrides(given)
+
+        self.assertEqual(env, {"HOOK_ALLOWED": "a", "XHOOK_ALLOW_PATHS": "b", "PATH": "/bin"})
+        self.assertIn("HOOK_ALLOW_PATHS", given)
 
 
 if __name__ == "__main__":

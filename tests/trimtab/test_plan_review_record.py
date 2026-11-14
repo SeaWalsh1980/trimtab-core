@@ -9,8 +9,10 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import plan_fixture
+from hook_fixture import without_hook_overrides
 from test_planchecks import BRANCH, FakeFacts, H1, PLAN
 from trimtab import planledger, roots
 from trimtab.adapters import plan_review_record as recorder
@@ -172,7 +174,8 @@ class TheHookBranch(unittest.TestCase):
 
     def run_hook(self, load):
         hook = roots.code_root() / "hooks" / "guard-paths.sh"
-        return subprocess.run(["bash", str(hook)], input=json.dumps(load), capture_output=True, text=True)
+        return subprocess.run(["bash", str(hook)], input=json.dumps(load), capture_output=True, text=True,
+                              env=without_hook_overrides())
 
     def test_a_skill_call_on_no_plan_branch_passes_through(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -190,6 +193,15 @@ class TheHookBranch(unittest.TestCase):
     def test_a_skill_call_whose_checkout_cannot_be_read_blocks(self):
         done = self.run_hook({"hook_event_name": "PostToolUse", "tool_name": "Skill",
                               "tool_input": {"skill": "code-review"}, "cwd": "nowhere"})
+
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("guard-paths", done.stderr)
+
+    def test_an_operators_override_in_the_environment_does_not_lift_the_block(self):
+        # The operator's shell exports HOOK_ALLOW_* before claude launches; the suite must not inherit it.
+        with mock.patch.dict("os.environ", {"HOOK_ALLOW_PATHS": "1", "HOOK_ALLOW_HARNESS": "1"}):
+            done = self.run_hook({"hook_event_name": "PostToolUse", "tool_name": "Skill",
+                                  "tool_input": {"skill": "code-review"}, "cwd": "nowhere"})
 
         self.assertEqual(done.returncode, 2)
         self.assertIn("guard-paths", done.stderr)

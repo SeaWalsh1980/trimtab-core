@@ -8,7 +8,9 @@ package beside hooks/, is linked. tests/guard-tests.sh has the same helper in
 bash (`path_hooks`).
 """
 
+import os
 import shlex
+from collections.abc import Mapping
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -16,6 +18,21 @@ PATH_RESET = "export PATH=/usr/bin:/bin"
 # session-mode.sh sets PATH again from this variable when it runs as the hook,
 # so a copy that names a stub PATH has to change it too.
 SYSTEM_PATH_LITERAL = "SM_SYSTEM_PATH=/usr/bin:/bin"
+
+
+OVERRIDE_PREFIX = "HOOK_ALLOW_"
+
+
+def without_hook_overrides(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """<environ> (default: this process's) minus every HOOK_ALLOW_* key.
+
+    The operator exports those overrides before launching claude (rules/ConfigInspection.md),
+    so they are in the shell that runs the suite. A hook a test spawns with that environment
+    allows what the test expects it to block. Read os.environ at call time, so a test that
+    patches it is honoured. A case that wants an override sets it after this call.
+    """
+    source = os.environ if environ is None else environ
+    return {k: v for k, v in source.items() if not k.startswith(OVERRIDE_PREFIX)}
 
 
 class NoCanonicalReset(AssertionError):
