@@ -155,12 +155,12 @@ Then what matters is whether **this session's context holds the merged PR's work
 | Did not do the merged work: a routine or Action fired on the merge, a parent sent the brief, or a cleared session picked it up | The context is already clean. If sections 3 and 4 passed, do the next work now — the in-flight PR or branch if there is one, otherwise `## Next` — as plan-item/SKILL.md says. |
 | Did the merged work | Hand over as plan-run/references/after-merge.md says. A part boundary is the one place a part's work moves between sessions. |
 
-**A session started by the `plan:continue` label** first checks who added it
-(`gh api repos/{owner}/{repo}/issues/<n>/events`, the `labeled` event for `plan:continue`). Unless
-the agent, approver or admin account added it, stop at once. Those logins come only from instance
-configuration: `accounts.agent` and `accounts.approver` from `trimtab instance --json`, and the
-admin's from `trimtab check-plan-admin`. The label only starts a session; it never authorises: the
-session still runs section 2 and reads only an authorised record.
+**A session started by the `plan:continue` label** first runs `trimtab check-label-actor
+--repository <owner>/<name> --label plan:continue --pr <n>`, as a command of its own. Exit 0: the
+label is on the PR and the agent, approver or admin account added it (the logins come only from
+instance configuration, never from the PR). Exit 1 (each problem is named, the actor among them where there is one) or exit 2 (a read
+failed): stop at once. The label only starts a session; it never authorises: the session still runs
+section 2 and reads only an authorised record.
 
 **Restarting after a stop** takes the operator's act: a session they start for the plan (locally, or
 the routine's run-now). A PR they merge to fix the blocker carries no record and no `plan:continue`,

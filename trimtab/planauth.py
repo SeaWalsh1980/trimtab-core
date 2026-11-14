@@ -115,15 +115,22 @@ def _check_repository(repository: str) -> None:
         raise PlanAuthError(f"{repository!r} is not owner/name")
 
 
-def _merged_by_admin(api: GhApi, repository: str, default: str, added: str, admin: str) -> tuple[int, str] | str:
-    """The (PR, merge commit) of the PR the adding commit belongs to, when the admin merged it; otherwise why not."""
-    rows = _json(api, f"repos/{repository}/commits/{added}/pulls", "gh api commit pulls",
-                 {"per_page": PULLS_LIMIT})
+def merged_prs_of(api: GhApi, repository: str, default: str, sha: str) -> list[int]:
+    """The numbers of the PRs merged into `default` that the commit belongs to, from one page of the commit's pulls.
+    A full page raises, as does a row that is not an object with a `base` object. Only a row merged into `default`
+    has its `number` checked (it must be a positive integer): the others are not used, so their number is not read.
+    The caller judges how many there should be."""
+    rows = _json(api, f"repos/{repository}/commits/{sha}/pulls", "gh api commit pulls", {"per_page": PULLS_LIMIT})
     if not isinstance(rows, list):
         raise PlanAuthError("gh api commit pulls returned unexpected JSON")
     if len(rows) >= PULLS_LIMIT:
-        raise PlanAuthError(f"{PULLS_LIMIT} or more PRs list {added[:12]}; refusing to judge a partial list")
-    merged = [_listed_number(row) for row in rows if _merged_into(row, default)]
+        raise PlanAuthError(f"{PULLS_LIMIT} or more PRs list {sha[:12]}; refusing to judge a partial list")
+    return [_listed_number(row) for row in rows if _merged_into(row, default)]
+
+
+def _merged_by_admin(api: GhApi, repository: str, default: str, added: str, admin: str) -> tuple[int, str] | str:
+    """The (PR, merge commit) of the PR the adding commit belongs to, when the admin merged it; otherwise why not."""
+    merged = merged_prs_of(api, repository, default, added)
     if len(merged) != 1:
         return f"{added[:12]} belongs to {len(merged)} PRs merged into {default}, not one"
     number = merged[0]
