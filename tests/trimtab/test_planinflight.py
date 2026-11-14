@@ -229,7 +229,7 @@ class Refusals(Inflight):
                 self.assertEqual(len(verdict.problems), 1)
                 self.assertIn(f"head branch {ref} is not plan/{PLAN}/item-NN-partK", verdict.problems[0])
 
-    def test_an_open_pr_with_a_stop_and_no_removal_is_refused_and_a_branch_does_not_replace_it(self):
+    def test_an_open_pr_with_a_stop_and_no_removal_is_refused(self):
         self.open_pr(8, events=[event(1, "labeled", BLOCKED, AGENT)], labels=(BLOCKED,))
 
         verdict = self.inflight()
