@@ -415,6 +415,31 @@
         "allow": true
       }
     },
+    "E22": {
+      "row_sha256": "0f19977c814052bcd4799238db91f9ef92c3b9e458fe9e24dd9e2af963cc1efb",
+      "hooks": [],
+      "tests": [
+        "test_plan_server.Command.test_exits_1_naming_the_row_that_refuses",
+        "test_plan_server.ServerCheck.test_a_branch_with_no_events_refuses",
+        "test_plan_server.ServerCheck.test_a_broken_chain_refuses_through_e15",
+        "test_plan_server.ServerCheck.test_a_chain_that_ends_before_the_head_refuses_through_e15",
+        "test_plan_server.ServerCheck.test_a_chain_that_starts_off_the_default_branch_refuses_through_e15",
+        "test_plan_server.ServerCheck.test_a_deletion_event_refuses_through_e16",
+        "test_plan_server.ServerCheck.test_a_deleted_test_file_in_the_whole_diff_refuses_through_e18",
+        "test_plan_server.ServerCheck.test_a_force_push_refuses_through_e15",
+        "test_plan_server.ServerCheck.test_a_fourth_answered_failing_head_refuses_through_e12",
+        "test_plan_server.ServerCheck.test_a_head_that_was_reviewed_counts_as_a_round",
+        "test_plan_server.ServerCheck.test_a_push_by_another_account_refuses_through_e14",
+        "test_plan_server.ServerCheck.test_an_added_skip_marker_in_the_whole_diff_refuses_through_e18",
+        "test_plan_server.ServerCheck.test_an_event_of_a_kind_nobody_listed_refuses_through_e15",
+        "test_plan_server.ServerCheck.test_an_instance_with_no_fix_limits_refuses_e18",
+        "test_plan_server.ServerCheck.test_only_the_first_event_may_be_a_branch_creation"
+      ],
+      "decision": {
+        "function": "trimtab.planchecks:check_server_rows",
+        "allow": null
+      }
+    },
     "E23": {
       "row_sha256": "2ab06f88957188b1004aa168821543635f60c528bbf4055a98024c0618e4f7a0",
       "hooks": [

@@ -69,6 +69,21 @@ class ActivityEvents(unittest.TestCase):
         self.assertEqual([(e.before, e.after, e.actor) for e in got],
                          [(ZERO, A, AGENT), (A, B, AGENT)])
 
+    def test_an_event_with_no_activity_type_is_unreadable_not_a_push(self):
+        # E22 reads E15 from the kind, so a row without one must not pass as an ordinary push.
+        row = event(ZERO, A, "2026-11-12T11:00:00Z")
+        del row["activity_type"]
+
+        with self.assertRaises(FactsError):
+            facts({ACTIVITY: Pages([reply([row])])}).activity(BRANCH)
+
+    def test_an_events_activity_type_is_kept_for_the_server_rows(self):
+        rows = [event(A, B, "2026-11-12T12:00:00Z", kind="force_push"), event(ZERO, A, "2026-11-12T11:00:00Z")]
+
+        got = facts({ACTIVITY: Pages([reply(rows)])}).activity(BRANCH)
+
+        self.assertEqual([e.kind for e in got], ["push", "force_push"])
+
     def test_every_page_is_read_through_the_link_cursor_never_a_page_number(self):
         f = facts({ACTIVITY: Pages([reply([event(A, B, "2026-11-12T12:00:00Z")], link=next_link("c1")),
                                     reply([event(ZERO, A, "2026-11-12T11:00:00Z")])])})

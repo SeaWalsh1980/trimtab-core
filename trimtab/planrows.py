@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import posixpath
 import re
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 
 PLAN_PREFIX = "plan/"
@@ -408,6 +408,50 @@ def check_e12(branch: str, head: str, facts: Facts, pr: PrState | None, register
     total = len(counted | ({head} if current and not register() else set()))
     if total > MAX_ROUNDS:
         raise Refusal(f"E12: this push would be CI-fix round {total}; the limit is {MAX_ROUNDS} "
+                      "(ADR 0063 §5, AGW-4)")
+
+
+# ---- E22: the same rows, read from the whole branch's activity on the server --------------------
+
+ZERO = "0" * 40
+FORCE_KINDS = frozenset({"force_push"})
+DELETE_KINDS = frozenset({"branch_deletion"})
+
+
+def check_server_history(events: Sequence, *, agent: str, merge_base: str, head: str,
+                         on_default: Callable[[str], bool], counted: Collection[str]) -> None:
+    """E22's server-side reading of E12, E14, E15 and E16: no hook ran for a push, so the branch-activity events
+    (oldest first) and the job records are the whole record (ADR 0063 §7).
+
+    - E16: no event deletes the branch.
+    - E14: every event is the agent account's, which is how the server shows a plan run made it.
+    - E15: no event is a force push, and the events chain unbroken from the merge-base (or the branch's
+      creation) to the head under judgment, so no rewrite hides between two events.
+    - E12: no more than `MAX_ROUNDS` heads were each answered by a later push while failing or reviewed;
+      `counted` is that set, which the caller computes with `counted_heads`."""
+    if any(e.kind in DELETE_KINDS or e.after == ZERO for e in events):
+        raise Refusal("E16: the branch's activity holds a deletion (ADR 0063 §5, §7)")
+    if any(e.actor.casefold() != agent.casefold() for e in events):
+        raise Refusal("E14: a push on the branch was not made by the agent account (ADR 0063 §5, §7)")
+    if any(e.kind in FORCE_KINDS for e in events):
+        raise Refusal("E15: the branch's activity holds a force push (ADR 0063 §5, §7)")
+    if not events:
+        raise Refusal("E15: the branch has no activity events to chain (ADR 0063 §5, §7)")
+    # An allowlist, not a denylist: a kind this base does not know could be a rewrite, and a rewrite still chains.
+    for i, e in enumerate(events):
+        if e.kind != "push" and not (i == 0 and e.kind == "branch_creation"):
+            raise Refusal(f"E15: the branch's activity holds an event of kind {e.kind!r}, which is not a push "
+                          "(ADR 0063 §5, §7)")
+    first = events[0].before
+    if first != ZERO and first != merge_base and not on_default(first):
+        raise Refusal("E15: the activity chain does not start at the merge-base (ADR 0063 §5, §7)")
+    if any(prev.after != nxt.before for prev, nxt in zip(events, events[1:])):
+        raise Refusal("E15: the activity chain is broken, so a push is missing or a branch was rewritten "
+                      "(ADR 0063 §5, §7)")
+    if events[-1].after != head:
+        raise Refusal("E15: the activity chain does not end at the head under judgment (ADR 0063 §5, §7)")
+    if len(counted) > MAX_ROUNDS:
+        raise Refusal(f"E12: the branch holds {len(counted)} CI-fix rounds; the limit is {MAX_ROUNDS} "
                       "(ADR 0063 §5, AGW-4)")
 
 

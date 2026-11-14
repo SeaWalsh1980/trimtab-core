@@ -1241,3 +1241,155 @@ right:
 - **Tests no longer depend on `.pyc` files.** The install digest covers every file under `hooks/` and `trimtab/`,
   and a fresh checkout has none, so a pass armed before Python wrote them never held. The arming helpers pin the
   digest; its own binding is tested in `test_enforcement_gate`.
+
+## Amendment 4: E22, the server-side job and the lock's derived field, 2c of the plan-run layer
+
+Amendments 1 to 3 are unchanged. 2c ships E22 and the lock field §2 deferred to it, so every row E5 to E23 now has
+a manifest entry and `trimtab check-enforcement` can show all of them. What is still the operator's is named under
+"Not in this PR".
+
+**2c ships.**
+
+- **The lock's derived field** (`enforcement` in `.claude/trimtab.json`, `config.check_enforcement`), written by
+  `trimtab bump` as it writes `base_sha`, and nowhere else. It holds, as the instance and the doctrine record give
+  them at `trimtab_sha`: `base_repo`; `rows`, each of E1 to E23 with its owner and the SHA-256 of its text as merged;
+  `jobs`, this project's job for each row it names; and `instance`, the instance keys the plan-run rows read
+  (`accounts`, `secret_scan`, `review`, `fix_limits`). The lock reader refuses a field of any other shape, a field
+  with no `base_sha`, and an instance key the instance's own reader refuses. `bump` needs `--repository owner/name`
+  wherever the instance names a record, since the jobs are per project; its confirmation token covers the field, so
+  a dry run cannot be applied to a different one; `apply` refuses a lock whose field moved since the dry run and reads
+  the rewrite back.
+- **`check-enforcement --server`** (`gate._gather_server`) reads its rows from that field, with no instance checkout.
+  The lock is the default-branch head's, as the server reports it (the same check as outside `--server`); the code
+  checkout must be the commit the lock's `base_sha` names, or nothing is vouched for. The manifest is read at that
+  commit, the base's `lint-test` is read from `base_repo`, and the project's jobs from the field. Liveness and the
+  checkout comparison are skipped, as §2 says. Outside `--server` the field, where the lock has one, must equal what
+  the instance and record derive, so a lock edited by hand fails the local check too.
+- **`plan-ready-check --server`** (`planchecks.server`) runs the ready mark's own rows (E5, E7, E8, E9, E19), then
+  reads E12, E14, E15 and E16 from the branch-activity events and E18 on the diff from the merge-base to the head. The
+  instance's keys come from the lock (`gate.server_instance`). Each activity event now carries its `activity_type`.
+  The decision is `planchecks.check_server_rows`, which is E22's manifest function.
+  - E14: every event is the agent account's, which is how the server shows a plan run made the push.
+  - E15: no event is a force push, and the events chain unbroken from the merge-base (or the branch's creation) to the head.
+  - E16: no event deletes the branch, and the PR is open.
+  - E12: no more than three heads, each answered by a later push while failing or reviewed, as `check_e12` counts them.
+- **`templates/workflows/plan-gate.yml`**: job `plan-gate`, on `pull_request` (opened, synchronize, reopened,
+  ready_for_review), read-only permissions, every action pinned by SHA. It checks the project out at the PR's base
+  commit, reads `base_sha` and `base_repo` from that lock, checks the base out at `base_sha` in its own directory, and
+  runs both commands from it. The PR's head is fetched as objects and never checked out. The template sits under
+  `templates/`, so it is not a live workflow here; the project adopts it as its own control change.
+
+**Choices.**
+
+- **The lock carries the instance's plan keys.** The server job has no instance, and E5 to E9, E18 and E19 need the
+  agent, the review's login and tags, the fix limits and the scan job. Rejected: fetching the instance in CI, which
+  the project's token cannot read (ADR 0015). Rejected: asking the project to repeat the keys in its own workflow,
+  which is a second copy to drift and a file an agent's PR could edit. Cost: the lock grows, and a change to those keys
+  in the instance needs a bump to reach the server.
+- **A draft's run judges the gate and not the ready check.** Every attempt on a head must pass, so a failing
+  ready check on a draft would void the pass of the same head once the PR is marked ready. `ready_for_review` is a
+  trigger so the ready run exists. Rejected: skipping the whole job on a draft, which leaves a skipped run on the head.
+- **The base is the lock's, not the default branch's.** The code that judges is the commit `base_sha` names, in a
+  checkout of `base_repo`, so a project is judged by the base it was reviewed against. Rejected: running the PR's
+  own tree, which could change what judges it, as plan-scope also refuses.
+- **E12, E14, E15, E16 and E18 are one decision function.** `check_server_rows` calls each row's own function, so
+  the manifest names one and the mutation test replaces it. Rejected: one entry per row, since the server reads them
+  together and a second E22 entry cannot exist.
+- **E6, E10, E11, E13 and E23 are not re-checked.** They rest on the ledger, which a CI runner does not have (§1).
+  E13's server half, who made each push and that the chain is unbroken, is E14 and E15 above.
+
+**Residuals.**
+
+- **Conflict-only CI-fix rounds are not counted on the server**, since the conflict fact is recorded by the push check
+  into a ledger the job does not have; E12's server count is weaker by those rounds, as Amendment 1 already said.
+- **E14 on the server is the actor, not the environment.** An agent account pushing with `TRIMTAB_PLAN_RUN` unset
+  is indistinguishable from one with it set. The ledger half of E13 covers that where a session exists.
+- **E18 on the whole diff judges main's own changes after a merge only through the merge-base**, so a branch that
+  has not merged the default branch while it moved is judged against the old base. That diff is the run's own.
+- **The base repository must be readable by the workflow's token.** A private base needs the project to change the
+  checkout's `token`, which is a control change.
+- **The server job and `check-enforcement` read the activity endpoint once per run**, bounded at 20 pages like every
+  reader here; a branch past that stops rather than being judged on a part of its history.
+- **The job's cost is unmeasured** (ENG-6.1): it makes one gate read, one ready-check read and the E5 to E9 reads, in
+  CI where no session waits on it.
+
+**Not in this PR (the operator's).** Adopting `plan-gate.yml` in a project, and the approver reading the job (SEC-7,
+ControlTower); registering E11's recorder in `settings.base.json`; Amendment 3's residuals; the hook-cost re-measure;
+`HOOK_ALLOW_HARNESS` for E21's guard-paths half. Until the project adopts the workflow and its lock carries the field,
+`--server` fails closed.
+
+**Review round 1 (three passes) changed these.** No CRITICAL; one HIGH from each of two passes.
+
+- **Only a PR aimed at the default branch is judged.** The job took `base_sha` and `base_repo` from the lock at the PR's
+  base commit, so a PR aimed at a branch of the agent's own carried a lock of its choosing, ran code of its choosing,
+  passed, and was then retargeted to the default branch, which starts no run (ADR 0047). The lock step now refuses any
+  other base branch, and `base_repo` may not open a segment with a dot.
+- **E15 on the server is an allowlist.** An event is a `push`, or the first is a `branch_creation`; any other kind
+  refuses, and a row with no `activity_type` is a failed read. A rewrite still chains, so the kind was E15's only signal
+  and a denylist let an unknown kind through.
+- **`bump` refuses a repository the instance names no jobs for**, as `check-enforcement` does, so a typo cannot write a
+  lock whose project rows all fail in CI only. An unhashable row owner is a bad lock, not a crash.
+- **The template's header states the approver's contract**: a draft run passes without the ready check, so the approver
+  also needs one attempt on the head with `draft=false`, or whose `plan-ready-check` step passed.
+- **`commands/trimtab-bump.md`** passes `--repository`.
+
+**Residuals named by round 1.**
+
+- **The derived field is shape-checked on the server and re-derived only where an instance exists.** A hand-edited
+  lock that weakens E14 or E18 is caught by the local `check-enforcement`, not by the server job. The lock is
+  admin-merged and refused to agents; the admin should merge lock edits only from `/trimtab-bump`.
+- **A failed `plan-gate` run counts toward E12's rounds**, since E12 counts every failed run on the branch. Transient
+  failures (the default branch moving mid-run, activity lag) can spend rounds. Excluding the job's own runs is E12's
+  to decide, not this PR's.
+- **The first checkout keeps the token** so the later fetch can use it; it is read-only.
+- **E12's count is written twice** (`check_e12` and `planchecks.server`); a change to one must change both.
+
+**Review round 2 (three passes) changed these.** No CRITICAL; one HIGH.
+
+- **E22's project half is the running job, in `--server`.** E22 is a BOTH row, so `decide` wants a project job with a
+  passing `push` run on the default branch. `plan-gate` runs on `pull_request` only, so it has none, and the gate would
+  have failed on every run. In `--server` the row's project half is not read from job records (`gate.SERVER_JOB_ROW`);
+  its base half (the manifest entry, the base's CI) still is. Outside `--server` the row still needs a named project job
+  with a push run, which the project may satisfy with any push-triggered job that stands for adopting the workflow.
+  Rejected: excluding E22 from the command's exit decision, which would let a failed base half through; and loosening
+  the push-run rule for every project row, which the doctrine does not allow.
+- **The `base_repo` rule is the instance reader's**: only the segments `.` and `..` are refused, so `acme/.github` is a
+  valid base, and `base_sha` is matched whole (`fullmatch`), so a trailing newline is not a SHA.
+- **The template's header adds that the approver requires the PR's base to be the default branch at merge**, since a
+  retarget starts no run.
+
+**Residuals named by round 2.**
+
+- **A `ready_for_review` attempt can fail if the review or the scan job has not finished at the moment of ready.** The
+  agent marks ready only after E7 and E19 hold (E7, E19 and the ready check itself), so this is a sequencing fault of a
+  careless caller, not a bypass, but the approver's rule for telling a transient attempt from a real one is the
+  operator's.
+- **`bump --repository` is not compared with the project's origin.** A repository the instance also lists writes that
+  project's jobs into this lock; the server then fails closed, and the admin merges the bump.
+- **The code checkout's repository is compared by SHA only**, not by `base_repo`.
+- **`server()` takes the PR's draft state and base from the workflow**, not from the code.
+- **A deleted-and-recreated branch is an unreadable fact (exit 2), not E16's refusal (exit 1)**, since the reader
+  raises on a deletion first; the job fails either way.
+
+**Review round 3 (three passes) changed these.** No CRITICAL or HIGH; three MEDIUM, fixed.
+
+- **The bump PR shows what the derived field changes** (`bump.field_changes`): each row whose text or owner changed,
+  each job added, removed or changed, each changed instance key with its old and new value (cut at 200 characters),
+  and a changed `base_repo`. The admin merges a lock edit only from that PR, so it is their only review surface; the
+  dry run prints the same lines.
+- **`FULL_SHA` is anchored with `\A…\Z`**, so it refuses a prefix, a suffix and a trailing newline with `match` as
+  with `fullmatch`, for any caller.
+- **`bump.apply` says a lock that no longer parses is not the one the dry run read**, apart from a field that moved,
+  and the staleness test now exercises the field comparison with a parseable lock (it passed before for the wrong
+  reason).
+
+**Residuals named by round 3.**
+
+- **A plan branch created at another branch's tip hides earlier rounds from server-side E12.** The chain accepts a
+  creation at any commit, as a part's first push is one; E18 on the whole diff bounds what it can carry.
+- **`--server` shows E22's project half whichever job runs it.** Adoption of `plan-gate` is evidenced only by the
+  approver reading that job by name and path.
+- **`bump` asks for a hand removal of the field** where the new instance names no record, which the command doc
+  otherwise forbids; the case is rare and the removal passes the local check.
+- **`COMMIT_SHA` still accepts a trailing newline.** It reaches git only as an argument, so it fails closed.
+- **`_plan_ready_server` exits 1, not 2, on an exception outside the four it names**; the job fails either way.
