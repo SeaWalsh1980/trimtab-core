@@ -403,7 +403,8 @@ class RestartRefused(Restart):
         verdict = self.check()
 
         self.assertEqual(verdict.pr, 9)
-        self.assertTrue(verdict.problems)
+        self.assertEqual(verdict.problems[0], f"{BLOCKED} is still on PR #9")
+        self.assertIn("no removal of plan:blocked follows its stop on PR #9", verdict.problems[1])
 
     def test_no_stop_anywhere_is_nothing_to_restart(self):
         self.put(8, [event(1, "labeled", "bug", AGENT)], ref=ITEM_REF)

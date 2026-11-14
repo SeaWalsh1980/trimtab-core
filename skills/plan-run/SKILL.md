@@ -158,7 +158,7 @@ Then what matters is whether **this session's context holds the merged PR's work
 **A session started by the `plan:continue` label** first runs `trimtab check-label-actor
 --repository <owner>/<name> --label plan:continue --pr <n>`, as a command of its own. Exit 0: the
 label is on the PR and the agent, approver or admin account added it (the logins come only from
-instance configuration, never from the PR). Exit 1 (the problems name the actor) or exit 2 (a read
+instance configuration, never from the PR). Exit 1 (each problem is named, the actor among them where there is one) or exit 2 (a read
 failed): stop at once. The label only starts a session; it never authorises: the session still runs
 section 2 and reads only an authorised record.
 

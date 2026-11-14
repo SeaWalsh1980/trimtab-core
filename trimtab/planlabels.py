@@ -136,17 +136,17 @@ def check_restart(repo: str, repository: str, plan: str, who: mergeauthority.Acc
     candidates, marked = _snapshot(api, repository, plan, plan_pr, since)
     if _snapshot(api, repository, plan, plan_pr, since) != (candidates, marked):
         raise LabelCheckError(f"the PRs or label events of plan {plan} changed while they were read; run it again")
-    latest = [(es[_last(es, "labeled")], n) for n, es in marked.items() if any(e.action == "labeled" for e in es)]
-    if not latest:
+    stops = {n: i for n, es in marked.items() if (i := _last_labeled(es)) is not None}  # PR -> its stop's index
+    if not stops:
         return Verdict((f"nothing to restart: none of the PRs {_listed(candidates)} has a {BLOCKED_LABEL} event",))
-    newest = max(e.at for e, _ in latest)
-    tied = sorted(n for e, n in latest if e.at == newest)
+    newest = max(marked[n][i].at for n, i in stops.items())
+    tied = sorted(n for n, i in stops.items() if marked[n][i].at == newest)
     if len(tied) > 1:
         return Verdict((f"PRs {_listed(tied)} were labelled {BLOCKED_LABEL} in the same second, {newest}; which "
                         "stopped last cannot be read",))
     stopped = tied[0]
-    stop = next(e for e, n in latest if n == stopped)
-    after = marked[stopped][marked[stopped].index(stop) + 1:]
+    stop = marked[stopped][stops[stopped]]
+    after = marked[stopped][stops[stopped] + 1:]  # only `unlabeled` events: the stop is the last `labeled` one
     present = _labels_now(api, repository, stopped)
 
     problems = []
@@ -173,8 +173,9 @@ def _snapshot(api: GhApi, repository: str, plan: str, plan_pr: int, since: str
     return candidates, _window(api, repository, since, frozenset(candidates), plan_pr)
 
 
-def _last(events: list[_Event], action: str) -> int:
-    return max(i for i, e in enumerate(events) if e.action == action)
+def _last_labeled(events: list[_Event]) -> int | None:
+    """The index of the newest `labeled` event, or None when there is none."""
+    return next((i for i in range(len(events) - 1, -1, -1) if events[i].action == "labeled"), None)
 
 
 def _listed(numbers) -> str:
@@ -203,18 +204,24 @@ def _events(api: GhApi, repository: str, number: int) -> list[_Event]:
     found: list[_Event] = []
     last_id, last_at = 0, ""
     for row in rows:
-        ident = row.get("id") if isinstance(row, dict) else None
-        at = row.get("created_at") if isinstance(row, dict) else None
-        kind = row.get("event") if isinstance(row, dict) else None
-        if not (type(ident) is int and ident > 0 and isinstance(kind, str)
-                and isinstance(at, str) and mergeauthority.TIME.fullmatch(at)):
-            raise LabelCheckError(f"{what} returned unexpected JSON")
+        ident, at, kind = _header(row, what)
         if ident <= last_id or at < last_at:
             raise LabelCheckError(f"{what} are not in the order this reads them in (event {ident})")
         last_id, last_at = ident, at
         if kind in LABEL_EVENTS:
             found.append(_label_event(row, ident, at, kind, what))
     return found
+
+
+def _header(row, what: str) -> tuple[int, str, str]:
+    """A row's (id, time, kind), which every event of either list must carry, in the shapes this reads them in."""
+    ident = row.get("id") if isinstance(row, dict) else None
+    at = row.get("created_at") if isinstance(row, dict) else None
+    kind = row.get("event") if isinstance(row, dict) else None
+    if not (type(ident) is int and ident > 0 and isinstance(kind, str)
+            and isinstance(at, str) and mergeauthority.TIME.fullmatch(at)):
+        raise LabelCheckError(f"{what} returned unexpected JSON")
+    return ident, at, kind
 
 
 def _label_event(row: dict, ident: int, at: str, kind: str, what: str) -> _Event:
@@ -245,13 +252,10 @@ def _window(api: GhApi, repository: str, since: str, candidates: frozenset[int],
             raise LabelCheckError(f"{what} returned unexpected JSON")
         reached = False
         for row in rows:
-            ident = row.get("id") if isinstance(row, dict) else None
-            at = row.get("created_at") if isinstance(row, dict) else None
-            kind = row.get("event") if isinstance(row, dict) else None
-            issue = row.get("issue") if isinstance(row, dict) else None
+            ident, at, kind = _header(row, what)
+            issue = row.get("issue")
             number = issue.get("number") if isinstance(issue, dict) else None
-            if not (type(ident) is int and ident > 0 and isinstance(kind, str) and isinstance(at, str)
-                    and mergeauthority.TIME.fullmatch(at) and type(number) is int and number > 0):
+            if type(number) is not int or number < 1:
                 raise LabelCheckError(f"{what} returned unexpected JSON")
             if last_id is not None and (ident >= last_id or at > last_at):
                 raise LabelCheckError(f"{what} are not in the order this reads them in (event {ident}); a new "
@@ -313,20 +317,10 @@ def _item_prs(api: GhApi, repository: str, plan: str) -> list[int]:
 
 def _adding_pr(api: GhApi, repository: str, default: str, sha: str) -> int | str:
     """The one PR merged into the default branch that the plan's adding commit belongs to, or why there is not."""
-    what = "gh api commit pulls"
-    rows = _json(api, f"repos/{repository}/commits/{sha}/pulls", what, {"per_page": planauth.PULLS_LIMIT})
-    if not isinstance(rows, list):
-        raise LabelCheckError(f"{what} returned unexpected JSON")
-    if len(rows) >= planauth.PULLS_LIMIT:
-        raise LabelCheckError(f"{planauth.PULLS_LIMIT} or more PRs list {sha[:12]}; refusing to judge a partial list")
-    merged = []
-    for row in rows:
-        base = row.get("base") if isinstance(row, dict) else None
-        number = row.get("number") if isinstance(row, dict) else None
-        if not isinstance(base, dict) or type(number) is not int or number < 1:
-            raise LabelCheckError(f"{what} returned unexpected JSON")
-        if row.get("merged_at") is not None and base.get("ref") == default:
-            merged.append(number)
+    try:
+        merged = planauth.merged_prs_of(api, repository, default, sha)
+    except planauth.PlanAuthError as err:
+        raise LabelCheckError(str(err)) from err
     if len(merged) != 1:
         return f"the commit {sha[:12]} that added the plan belongs to {len(merged)} PRs merged into {default}, not one"
     return merged[0]
