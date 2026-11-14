@@ -13,7 +13,7 @@ earlier record lists the allow-list as open in this repository, so none is edite
 
 ## Context
 
-Until now any action from anywhere could run in this repository's workflows. An action runs
+Before the change (operator-reported) any action from anywhere could run in this repository's workflows. An action runs
 inside the job with the job's `GITHUB_TOKEN` and every secret the job can read, so a
 malicious or hijacked third-party action is code execution with those credentials.
 
@@ -21,6 +21,12 @@ The repository's workflows use three actions, each pinned by full commit SHA (ch
 `origin/main` at 655603f): `actions/checkout`, `actions/setup-python` and
 `anthropics/claude-code-action`. Dependabot keeps those pins current
 (`.github/dependabot.yml`).
+
+`claude-code-action` is a composite action and has a nested `uses:`. Read from its `action.yml`
+at the pinned SHA 4fa93a8: `oven-sh/setup-bun@0c5077e` (v2.2.0). It is not GitHub's and is not on
+the list below. GitHub applies the allow-list to actions nested in a composite action as well
+(from GitHub's documentation, not tried here), so `claude-review` is likely to fail at job start
+until the operator adds `oven-sh/setup-bun@*`.
 
 The repository is public and owned by a personal account on GitHub Pro.
 
@@ -33,8 +39,9 @@ Set, as the operator reported them:
 - "Allow actions created by GitHub": on.
 - "Allow actions by Marketplace verified creators": off.
 - Allow list: `anthropics/claude-code-action@*`.
-- "Require actions to be pinned to a full-length commit SHA": on, if the setting was
-  offered (the operator did not flag it as missing).
+- "Require actions to be pinned to a full-length commit SHA": **unconfirmed**. The task
+  was given as "on, if the setting was offered"; the operator did not report it either way.
+  Nothing below depends on it. Today's pins are full SHAs by convention and Dependabot.
 
 Unchanged: default workflow permissions are read-only, Actions cannot create or approve
 pull requests, and fork PR workflows need approval for all external contributors
@@ -49,18 +56,19 @@ the `actions/permissions` endpoints and cannot read them.
 |---|---|
 | Allow all actions and reusable workflows | Any action from anywhere runs with the job's token and secrets. It admits the whole Marketplace for the sake of three actions. |
 | Allow only actions in this account (no GitHub, no third party) | Breaks all three used actions: `actions/checkout`, `actions/setup-python` and `anthropics/claude-code-action` are not this account's. |
-| GitHub's actions plus Marketplace verified creators | Verified means GitHub knows the publisher, not that an action is safe, and it admits every action from every verified creator, far more than is used. The one non-GitHub action needed is named instead. |
+| GitHub's actions plus Marketplace verified creators | Verified means GitHub knows the publisher, not that an action is safe, and it admits every action from every verified creator, far more than is used. The non-GitHub actions needed are named instead. |
 | Disable Actions | The required checks (`lint-test`, `claude-review`, `plan-scope`, `merge-authority`) run on it; no PR could merge. |
 
 ## Consequences
 
 Accepted:
 
+- `oven-sh/setup-bun` (nested in `claude-code-action`) is likely to need adding by the admin,
+  and a `claude-code-action` bump can add or change nested actions, which fails `claude-review`
+  until each is listed. Dependabot bumps of the listed actions keep working only while their
+  nested actions stay on the list.
 - Adding a new third-party action needs the admin to add it to the list first. Until then a
   workflow using it fails at job start with an "action is not allowed" error.
-- Dependabot bumps of the three listed actions keep working: the list admits any ref of
-  `anthropics/claude-code-action` (`@*`), GitHub's actions are allowed as a class, and a bump
-  rewrites the full-SHA pin the setting requires.
 
 What this does NOT do:
 
