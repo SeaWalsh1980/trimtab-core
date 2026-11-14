@@ -127,11 +127,15 @@ The decision above judged `bin/trimtab` at the record commit's first parent. Aft
 several commits that parent can be one of the PR's own commits, so the tree the merge was judged
 against is not certain, and a wrong answer would leave the checker's paths open to an approver merge.
 
-The checker's code is now held admin-only if any of three trees holds `bin/trimtab`: the record
-commit, its first parent, and the PR's `base.sha`. A true answer from any of them only adds
-refusals. Rejected: the first parent alone (the case above); `base.sha` alone (it is the base at
-the PR's last update, not at merge, so a base change since could be missed); failing with exit 2
-whenever the record commit is not a single-parent merge (it would refuse every squash merge too).
+The checker's code is now held admin-only if any of four trees holds `bin/trimtab`: the record
+commit, its first parent, the PR's `base.sha`, and the default branch's fetched tip. A true answer
+from any of them only adds refusals. Rejected: the first parent alone (the case above); `base.sha`
+alone (it is the base at the PR's last update, not at merge, so a base change since could be
+missed, which is why the tip is a fourth tree); failing with exit 2 whenever the record commit is
+not a single-parent merge (it would refuse every squash merge too); walking the rebased commits
+back to the first one's parent (more git reads to answer a question the union already answers on
+the safe side). Residual: a checker added to the branch after the merge and removed again before
+the fetch is missed by all four.
 Accepted cost: in a repository that has the checker in its tree at any of the three, a path under
 `bin/`, `trimtab/` or `hooks/run_module.py` stops an approver merge, as it already did there. A
 commit git does not hold (a base force-pushed away) is exit 2.

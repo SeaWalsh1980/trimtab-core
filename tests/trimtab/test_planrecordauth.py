@@ -104,9 +104,14 @@ def answers(merged_by=ADMIN, reviews=None, files=None, pull_changes=None, listed
     return found
 
 
+def NO_CHECKER(sha):
+    return False
+
+
 def judge(found=None, who=WHO, record=RECORD, checker_in_tree=False, plan_gate=None, plan=PLAN, gh=None):
     return planrecordauth.judge(REPOSITORY, DEFAULT, plan, record, who, checker_in_tree,
-                                gh or FakeGh(answers() if found is None else found), plan_gate)
+                                gh or FakeGh(answers() if found is None else found), plan_gate,
+                                checker_at_base=NO_CHECKER)
 
 
 def approver_merge(**changes):
@@ -357,7 +362,7 @@ class ApproverMerge(unittest.TestCase):
         found = approver_merge(files=[file_row("trimtab/cli.py")])
 
         verdict = planrecordauth.judge(REPOSITORY, DEFAULT, PLAN, RECORD, WHO, False, FakeGh(found), PASSING_GATE,
-                                       holds_checker)
+                                       checker_at_base=holds_checker)
 
         self.assertEqual((asked, len(verdict.problems)), ([BASE_SHA], 1))
         self.assertIn("admin-only paths: trimtab/cli.py", verdict.problems[0])
@@ -366,7 +371,7 @@ class ApproverMerge(unittest.TestCase):
         found = approver_merge(files=[file_row("trimtab/cli.py")])
 
         verdict = planrecordauth.judge(REPOSITORY, DEFAULT, PLAN, RECORD, WHO, False, FakeGh(found), PASSING_GATE,
-                                       lambda sha: False)
+                                       checker_at_base=lambda sha: False)
 
         self.assertEqual(verdict.problems, ())
 
@@ -378,9 +383,9 @@ class ApproverMerge(unittest.TestCase):
             return False
 
         planrecordauth.judge(REPOSITORY, DEFAULT, PLAN, RECORD, WHO, True, FakeGh(approver_merge()), PASSING_GATE,
-                             holds_checker)
+                             checker_at_base=holds_checker)
         planrecordauth.judge(REPOSITORY, DEFAULT, PLAN, RECORD, WHO, False, FakeGh(answers()), PASSING_GATE,
-                             holds_checker)
+                             checker_at_base=holds_checker)
 
         self.assertEqual(asked, [])
 
@@ -390,11 +395,13 @@ class ApproverMerge(unittest.TestCase):
 
         with self.assertRaises(RecordAuthError):
             planrecordauth.judge(REPOSITORY, DEFAULT, PLAN, RECORD, WHO, False, FakeGh(approver_merge()),
-                                 PASSING_GATE, unreadable)
+                                 PASSING_GATE, checker_at_base=unreadable)
 
     def test_a_pull_whose_base_sha_is_not_a_commit_id_is_an_error(self):
-        with self.assertRaises(RecordAuthError):
-            judge(approver_merge(pull_changes={"base_sha": "main"}), plan_gate=PASSING_GATE)
+        for bad in ("main", None, 7):
+            with self.subTest(base_sha=bad):
+                with self.assertRaises(RecordAuthError):
+                    judge(approver_merge(pull_changes={"base_sha": bad}), plan_gate=PASSING_GATE)
 
     def test_the_approvers_login_is_compared_without_case(self):
         verdict = judge(answers(merged_by=APPROVER.upper(), reviews=[review(APPROVER.upper())]),
@@ -631,7 +638,8 @@ class FailedReads(unittest.TestCase):
         for repository, plan in (("owner/../x", PLAN), (REPOSITORY, "../x")):
             with self.subTest(repository=repository, plan=plan):
                 with self.assertRaises(RecordAuthError):
-                    planrecordauth.judge(repository, DEFAULT, plan, RECORD, WHO, False, gh)
+                    planrecordauth.judge(repository, DEFAULT, plan, RECORD, WHO, False, gh,
+                                         checker_at_base=NO_CHECKER)
 
         self.assertEqual(gh.calls, [])
 
@@ -734,6 +742,67 @@ class Wiring(tpr.Records):
         verdict = self.check()
 
         self.assertTrue(any("admin-only paths: trimtab/cli.py" in p for p in verdict.problems), verdict.problems)
+
+    def approver_merged_record(self, record_files, base_sha=None):
+        """An approver-merged record PR over files that touch the checker's code, every other condition met."""
+        sha = self.merge_branch("rec", {tpr.record_path(1, 1): tpr.record_text("item 1 complete"), **record_files})
+        self.publish()
+        self.record_pr(sha, merged_by=APPROVER, files=[file_row("trimtab/cli.py")])
+        if base_sha:
+            pulled = json.loads(self.answers[f"repos/{tpa.REPOSITORY}/pulls/{NUMBER}"])
+            pulled["base"]["sha"] = base_sha
+            self.answers[f"repos/{tpa.REPOSITORY}/pulls/{NUMBER}"] = json.dumps(pulled)
+        self.answers.update({k: v for k, v in tma.plan_scope_answers().items() if k != tma.REPOSITORY_PATH})
+        self.answers[f"repos/{tpa.REPOSITORY}/rules/branches/{tpa.DEFAULT}"] = json.dumps(rules())
+        self.answers[ruleset_path()] = json.dumps(ruleset())
+
+    def test_the_checker_is_admin_only_when_only_the_record_commit_holds_it(self):
+        """The PR that adds the record also adds the checker, so the record commit's parent lacks it."""
+        self.approver_merged_record({mergeauthority.CHECKER_MARK: "#!/bin/sh\n"})
+
+        verdict = self.check()
+
+        self.assertTrue(any("admin-only paths: trimtab/cli.py" in p for p in verdict.problems), verdict.problems)
+
+    def test_the_checker_is_admin_only_when_only_the_prs_base_holds_it_after_a_rebase_merge(self):
+        """The checker was on main at the PR's base, then removed by a commit the record's PR sits on top of."""
+        holder = self.merge_branch("checker", {mergeauthority.CHECKER_MARK: "#!/bin/sh\n"})
+        self.merge_branch("drop-checker", {}, removed=(mergeauthority.CHECKER_MARK,))
+        self.approver_merged_record({}, base_sha=holder)
+
+        verdict = self.check()
+
+        self.assertTrue(any("admin-only paths: trimtab/cli.py" in p for p in verdict.problems), verdict.problems)
+
+    def test_the_checker_is_admin_only_when_only_the_default_branch_tip_holds_it(self):
+        """The checker landed on the branch after the merge, and the PR's `base.sha` lags: no tree the merge sat on
+        holds it, but the tip does."""
+        self.approver_merged_record({})
+        mine = {k: v for k, v in self.answers.items() if k.startswith(f"repos/{tpa.REPOSITORY}/pulls/{NUMBER}")}
+        self.merge_branch("checker-later", {mergeauthority.CHECKER_MARK: "#!/bin/sh\n"})
+        self.publish()  # moves the fetched tip, and answers pull 7 as the plan's own PR
+        self.answers.update(mine)
+
+        verdict = self.check()
+
+        self.assertTrue(any("admin-only paths: trimtab/cli.py" in p for p in verdict.problems), verdict.problems)
+
+    def test_the_checker_paths_stay_open_when_none_of_the_four_trees_holds_it(self):
+        self.approver_merged_record({})
+
+        verdict = self.check()
+
+        self.assertFalse(any("admin-only" in p for p in verdict.problems), verdict.problems)
+
+    def test_a_pull_with_no_base_sha_is_an_error(self):
+        sha = self.merge_record(1, 1)
+        self.record_pr(sha, merged_by=APPROVER)
+        pulled = json.loads(self.answers[f"repos/{tpa.REPOSITORY}/pulls/{NUMBER}"])
+        del pulled["base"]["sha"]
+        self.answers[f"repos/{tpa.REPOSITORY}/pulls/{NUMBER}"] = json.dumps(pulled)
+
+        with self.assertRaises(RecordAuthError):
+            self.check()
 
 
 class Cli(tpa.GitRepository):

@@ -121,12 +121,16 @@ def check(repo: str, repository: str, plan: str, who: mergeauthority.Accounts, r
         # The checker's own code is admin-only where the repository runs it from its tree. Which tree the merge was
         # judged against is not certain after a rebase merge (the record commit's first parent may be one of the
         # PR's own commits), so the code is held admin-only if ANY of these trees holds `bin/trimtab`: the record
-        # commit, its first parent, and (in `judge`) the PR's base commit. A true answer only adds refusals.
-        checker_in_tree = (checker_at(repo, record.commit) or checker_at(repo, f"{record.commit}^1"))
+        # commit, its first parent, the default branch's tip, and (in `judge`) the PR's base commit. A true answer
+        # only adds refusals.
+        # The default branch's tip is a fourth tree: GitHub's `base.sha` can lag the base at merge time, so a
+        # checker added to the branch since then would otherwise be missed by all three.
+        checker_in_tree = (checker_at(repo, record.commit) or checker_at(repo, f"{record.commit}^1")
+                           or checker_at(repo, fetched.tip))
     except (planrecord.PlanRecordError, planscope.PlanScopeError) as err:
         raise RecordAuthError(str(err)) from err
     return judge(repository, fetched.default, plan, record, who, checker_in_tree, run, plan_gate,
-                 lambda sha: checker_at(repo, sha))
+                 checker_at_base=lambda sha: checker_at(repo, sha))
 
 
 def checker_at(repo: str, rev: str) -> bool:
@@ -139,8 +143,8 @@ def checker_at(repo: str, rev: str) -> bool:
 
 
 def judge(repository: str, default: str, plan: str, record: planrecord.Latest, who: mergeauthority.Accounts,
-          checker_in_tree: bool, run: Run | None = None, plan_gate: PlanGateRead | None = None,
-          checker_at_base: Callable[[str], bool] | None = None) -> Verdict:
+          checker_in_tree: bool, run: Run | None = None, plan_gate: PlanGateRead | None = None, *,
+          checker_at_base: Callable[[str], bool]) -> Verdict:
     """Judge `record`'s merge from the server alone. `plan_gate` reads the base's server-side plan-gate job; None,
     the only value while the base ships no such job (trimtab-core ADR 0063 section 7), fails every approver merge.
     `checker_at_base` says whether a commit's tree holds the checker; it is asked about the PR's base commit and
@@ -180,7 +184,7 @@ def judge(repository: str, default: str, plan: str, record: planrecord.Latest, w
     if merger and merger == who.admin.casefold():
         pass
     elif merger and who.approver and merger == who.approver.casefold():
-        if checker_at_base is not None and not checker_in_tree:
+        if not checker_in_tree:
             checker_in_tree = checker_at_base(pull.base_sha)
         route, wait = _approver_problems(api, repository, default, plan, record, pull, checker_in_tree, run, plan_gate)
         problems += route
@@ -365,7 +369,7 @@ def _read_pull(api: GhApi, repository: str, number: int) -> _Pull:
     except (KeyError, TypeError, AttributeError) as err:
         raise RecordAuthError(f"{what} returned unexpected JSON") from err
     if not (all(isinstance(v, str) for v in (pull.merged_at, pull.merge_commit, pull.merged_by, pull.head_ref,
-                                              pull.head, pull.head_repo, pull.base_ref))
+                                              pull.head, pull.head_repo, pull.base_ref, pull.base_sha))
             and type(pull.changed_files) is int and pull.changed_files >= 0 and planauth.SHA.fullmatch(pull.head)
             and planauth.SHA.fullmatch(pull.base_sha)
             and (not pull.merged_at or mergeauthority.TIME.fullmatch(pull.merged_at))):
