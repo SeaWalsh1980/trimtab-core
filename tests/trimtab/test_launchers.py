@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hook_fixture import hooks_with_path
+from hook_fixture import hooks_with_path, without_hook_overrides
 
 CHECKOUT = Path(__file__).resolve().parents[2]
 DECOY = "DECOY-PACKAGE-RAN"
@@ -69,7 +69,7 @@ class Launchers(unittest.TestCase):
         payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr create --fill"},
                               "tool_response": {"stdout": "", "stderr": "", "interrupted": False},
                               "cwd": str(self.cwd)})
-        env = {**os.environ, "CLAUDE_CONFIG_DIR": str(self.cwd / "config")}
+        env = {**without_hook_overrides(), "CLAUDE_CONFIG_DIR": str(self.cwd / "config")}
         out = subprocess.run([str(CHECKOUT / "hooks" / "pr-monitor-record.sh")], cwd=self.cwd, input=payload,
                              env=env, capture_output=True, text=True, timeout=60)
         self.assertNotIn(DECOY, out.stdout + out.stderr)
@@ -95,7 +95,7 @@ class Launchers(unittest.TestCase):
         # Outside a repository the real adapter records an empty snapshot and exits 0; the decoy exits 3.
         payload = json.dumps({"tool_name": "Bash", "session_id": "s1", "tool_use_id": "toolu_1",
                               "tool_input": {"command": "true"}, "cwd": str(self.cwd)})
-        env = {k: v for k, v in os.environ.items() if k != "HOOK_ALLOW_HARNESS"}
+        env = without_hook_overrides()
         (self.cwd / "config").mkdir(mode=0o700)  # Claude Code's config directory always exists
         env["CLAUDE_CONFIG_DIR"] = str(self.cwd / "config")
         out = subprocess.run([str(CHECKOUT / "hooks" / "bash-writes.sh"), "pre"], cwd=self.cwd, input=payload,
