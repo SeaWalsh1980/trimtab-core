@@ -185,6 +185,22 @@ class Actor(unittest.TestCase):
         with self.assertRaises(LabelCheckError):
             self.check(events)
 
+    def test_a_mode_1_row_that_is_not_the_expected_shape_raises(self):
+        good = event(1, "labeled", CONTINUE, AGENT)
+        for name, row in {"id zero": {**good, "id": 0}, "negative id": {**good, "id": -1},
+                          "id not an int": {**good, "id": "1"}, "no id": {k: v for k, v in good.items() if k != "id"},
+                          "no event kind": {k: v for k, v in good.items() if k != "event"},
+                          "event kind not a string": {**good, "event": 3}, "not a row": "x",
+                          "label name not a string": {**good, "label": {"name": 3}},
+                          "login not a string": {**good, "actor": {"login": 3}},
+                          "empty login": {**good, "actor": {"login": ""}}}.items():
+            with self.subTest(name), self.assertRaisesRegex(LabelCheckError, "unexpected JSON"):
+                self.check([row])
+
+    def test_a_mode_1_repeated_event_id_raises(self):
+        with self.assertRaisesRegex(LabelCheckError, "not in the order"):
+            self.check([event(1, "labeled", CONTINUE, AGENT), {**event(2, "unlabeled", CONTINUE, AGENT), "id": 101}])
+
     def test_a_label_event_with_no_label_name_raises(self):
         bad = {"id": 1, "event": "labeled", "created_at": at(1), "label": {}, "actor": {"login": AGENT}}
 
@@ -388,7 +404,7 @@ class RestartRefused(Restart):
     def test_a_plan_not_on_the_default_branch_is_refused(self):
         verdict = planlabels.check_restart(str(self.repo), REPOSITORY, "0009-nope", WHO, FakeGh(self.answers))
 
-        self.assertTrue(verdict.problems)
+        self.assertTrue(all("0009-nope is not a plan" in p for p in verdict.problems) and verdict.problems)
 
     def test_a_name_that_is_not_one_is_refused_before_any_read(self):
         gh = FakeGh()
@@ -473,12 +489,12 @@ class RestartSnapshot(Restart):
                 reads.append(argv)
                 if len(reads) > 1:  # the second read shows a newer, uncleared stop
                     base.answers[ALL_EVENTS] = json.dumps(sorted([
-                        {**e, "issue": {"number": 8}} for e in (
+                        MERGED_ROW, *({**e, "issue": {"number": 8}} for e in (
                             event(1, "labeled", BLOCKED, AGENT), event(2, "unlabeled", BLOCKED, ADMIN),
-                            event(3, "labeled", BLOCKED, AGENT))], key=lambda r: -r["id"]))
+                            event(3, "labeled", BLOCKED, AGENT)))], key=lambda r: -r["id"]))
             return base(argv, stdin)
 
-        with self.assertRaises(LabelCheckError):
+        with self.assertRaisesRegex(LabelCheckError, "changed while they were read"):
             self.check(gh=run)
 
     def test_a_pr_opened_while_the_list_was_read_raises(self):
@@ -498,7 +514,7 @@ class RestartSnapshot(Restart):
                     base.answers[issue_path(9)] = issue(9, (BLOCKED,))
             return base(argv, stdin)
 
-        with self.assertRaises(LabelCheckError):
+        with self.assertRaisesRegex(LabelCheckError, "changed while they were read"):
             self.check(gh=run)
 
 
