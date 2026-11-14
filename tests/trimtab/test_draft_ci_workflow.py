@@ -5,6 +5,11 @@ tracked workflows on purpose, because the workflows are what it checks. GitHub's
 behaviour itself is not testable here; ADR 0053 records the trial on a real PR.
 """
 
+import json
+import os
+import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -139,6 +144,74 @@ class ClaudeReviewWorkflowTest(unittest.TestCase):
         self.assertEqual(self.workflow["permissions"],
                          {"contents": "read", "pull-requests": "write", "issues": "read"})
         self.assertNotIn("permissions", self.workflow["jobs"][REVIEW_JOB])
+
+
+ASSERTION_STEP = "Fail closed when no review was posted"
+RUN_URL = "https://github.com/acme/repo/actions/runs/123"
+FINISHED = "**Claude finished @bot's task** "
+
+
+def finished_comment(cid, body):
+    return {"id": cid, "created_at": "2026-11-14T10:00:00Z", "user": {"type": "Bot"}, "body": body}
+
+
+class RunLinkedCommentMatch(unittest.TestCase):
+    """The assertion's comment filter links this run exactly, not by prefix (ADR 0081).
+
+    Runs the workflow's own `--jq` filter under jq, so the test fails when the
+    filter is weakened, not when its spelling changes.
+    """
+
+    def setUp(self):
+        self.assertTrue(shutil.which("jq"), "jq is required to test the assertion's filter")
+        workflow = yaml.safe_load((WORKFLOWS / REVIEW_WORKFLOW).read_text(encoding="utf-8"))
+        steps = workflow["jobs"][REVIEW_JOB]["steps"]
+        run = next(s for s in steps if s.get("name") == ASSERTION_STEP)["run"]
+        found = re.search(r"--jq '([^']*)'", run)
+        self.assertIsNotNone(found, "the assertion step no longer has a single-quoted --jq filter")
+        self.jq_filter = found.group(1)
+
+    def matched_ids(self, *comments):
+        env = {**os.environ, "SINCE": "2026-11-14T00:00:00Z", "RUN_URL": RUN_URL}
+        out = subprocess.run(["jq", "-r", self.jq_filter],
+                             input=json.dumps(list(comments)), env=env,
+                             capture_output=True, text=True, check=True).stdout
+        return out.split()
+
+    def test_an_exact_link_matches(self):
+        self.assertEqual(self.matched_ids(finished_comment(1, f"{FINISHED}[run]({RUN_URL}) done")), ["1"])
+
+    def test_a_link_at_the_end_of_the_body_matches(self):
+        self.assertEqual(self.matched_ids(finished_comment(1, f"{FINISHED}{RUN_URL}")), ["1"])
+
+    def test_a_link_followed_by_a_closing_paren_or_slash_matches(self):
+        for tail in (")", "/", "#job", "?x=1", "."):
+            with self.subTest(tail=tail):
+                self.assertEqual(self.matched_ids(finished_comment(1, f"{FINISHED}({RUN_URL}{tail}")), ["1"])
+
+    def test_a_longer_run_id_does_not_match(self):
+        for longer in ("4", "45", "0"):
+            with self.subTest(longer=longer):
+                self.assertEqual(self.matched_ids(finished_comment(1, f"{FINISHED}[run]({RUN_URL}{longer})")), [])
+
+    def test_a_longer_run_id_at_the_end_of_the_body_does_not_match(self):
+        self.assertEqual(self.matched_ids(finished_comment(1, f"{FINISHED}{RUN_URL}4")), [])
+
+    def test_a_body_linking_both_runs_matches_on_the_exact_link(self):
+        self.assertEqual(self.matched_ids(finished_comment(1, f"{FINISHED}{RUN_URL}4 and {RUN_URL})")), ["1"])
+
+    def test_a_different_repository_with_the_same_run_id_does_not_match(self):
+        other = RUN_URL.replace("acme/repo", "acme/other")
+
+        self.assertEqual(self.matched_ids(finished_comment(1, f"{FINISHED}{other}")), [])
+
+    def test_the_other_conditions_still_apply(self):
+        working = finished_comment(1, f"{FINISHED}{RUN_URL} Claude Code is working")
+        not_finished = finished_comment(2, f"**Claude encountered an error** {RUN_URL}")
+        human = {**finished_comment(3, f"{FINISHED}{RUN_URL}"), "user": {"type": "User"}}
+        stale = {**finished_comment(4, f"{FINISHED}{RUN_URL}"), "created_at": "2026-11-13T10:00:00Z"}
+
+        self.assertEqual(self.matched_ids(working, not_finished, human, stale), [])
 
 
 if __name__ == "__main__":
