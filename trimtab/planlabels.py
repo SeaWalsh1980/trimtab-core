@@ -123,14 +123,11 @@ def check_restart(repo: str, repository: str, plan: str, who: mergeauthority.Acc
     plan_pr = _adding_pr(api, repository, fetched.default, added)
     if isinstance(plan_pr, str):
         return Verdict((plan_pr,))
-    candidates = sorted({plan_pr, *_item_prs(api, repository, plan)})
-    if len(candidates) > CANDIDATES_LIMIT:
-        raise LabelCheckError(f"{len(candidates)} PRs could hold the plan's labels; more than {CANDIDATES_LIMIT} "
-                              "cannot all be read")
-
-    marked: dict[int, list[_Event]] = {}
-    for number in candidates:
-        marked[number] = [e for e in _events(api, repository, number) if e.label.casefold() == BLOCKED_LABEL]
+    # Read twice and require the same answer: a PR opened or a stop labelled while the first read ran would be
+    # missed, and the newest stop would then be an older, cleared one.
+    candidates, marked = _snapshot(api, repository, plan, plan_pr)
+    if _snapshot(api, repository, plan, plan_pr) != (candidates, marked):
+        raise LabelCheckError(f"the PRs or label events of plan {plan} changed while they were read; run it again")
     latest = [(es[_last(es, "labeled")], n) for n, es in marked.items() if any(e.action == "labeled" for e in es)]
     if not latest:
         return Verdict((f"nothing to restart: none of the PRs {_listed(candidates)} has a {BLOCKED_LABEL} event",))
@@ -159,6 +156,16 @@ def check_restart(repo: str, repository: str, plan: str, who: mergeauthority.Acc
     elif removal.actor.casefold() != who.admin.casefold():
         problems.append(f"{BLOCKED_LABEL} was removed from PR #{stopped} by {removal.actor}, not the admin")
     return Verdict(tuple(problems), stopped, removal.actor or "")
+
+
+def _snapshot(api: GhApi, repository: str, plan: str, plan_pr: int) -> tuple[list[int], dict[int, list[_Event]]]:
+    """Every candidate PR, and each one's `plan:blocked` events, as read now."""
+    candidates = sorted({plan_pr, *_item_prs(api, repository, plan)})
+    if len(candidates) > CANDIDATES_LIMIT:
+        raise LabelCheckError(f"{len(candidates)} PRs could hold the plan's labels; more than {CANDIDATES_LIMIT} "
+                              "cannot all be read")
+    marked = {n: [e for e in _events(api, repository, n) if e.label.casefold() == BLOCKED_LABEL] for n in candidates}
+    return candidates, marked
 
 
 def _last(events: list[_Event], action: str) -> int:

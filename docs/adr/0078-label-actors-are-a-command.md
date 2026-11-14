@@ -76,14 +76,28 @@ Fail-closed rules shared by both modes:
 - **Order stops across PRs by event id.** Rejected as the rule, kept as a within-PR check: event
   ids are one sequence, but nothing documents that they order across issues, and a guess here lets
   an older stop pass for the newest. Time ties are named instead.
+- **Read the repository-wide events list (`issues/events`) once instead of one events read per
+  candidate PR.** Rejected: the doctrine's rule against a request per row points at it, but the list
+  is newest first (so the per-PR order check does not carry over), and it grows with every event on
+  every issue and PR in the repository, not with the plan. Measured on this repository: 1,455 events
+  over 15 pages for about 180 PRs. A per-candidate read grows with the plan and is bounded by
+  `CANDIDATES_LIMIT` (100 reads, each usually one page), so a busy repository would make the batched
+  read exit 2 on its bound for good. The per-candidate loop is therefore kept as a bounded fan-out,
+  and the rule's wording is raised upstream as feedback rather than treated as met.
 - **Judge every PR that ever carried `plan:blocked`.** Rejected for this command: it asks one
   question, whether the plan's most recent stop was validly cleared. An older stop left uncleared is
   the in-flight check's concern (`plan-run/references/in-flight.md`).
 
 ## Consequences
 
-- The model no longer reads label events. `plan-run` runs the command and acts on its exit code;
-  the skill text says what each code means.
+- The model no longer reads label events for the two decisions this command judges: who added
+  `plan:continue`, and whether the plan's newest stop was cleared by the admin. `plan-run` runs the
+  command and acts on its exit code; the skill text says what each code means. The open-PR row of
+  `in-flight.md` still has the model read label events by hand, for an open PR with an older stop
+  that is not the plan's newest. That gap is accepted here and is a follow-up: it needs a command
+  that judges a named PR, not the newest stop.
+- A restart reads the PR list and every candidate's events twice and exits 2 if they differ, so a
+  stop labelled during the read cannot be missed. This doubles the reads.
 - A repository with more than 5,000 PRs, or a plan with more than 100 candidate PRs, makes
   `--restart` exit 2 until the bounds are raised. The cost of a restart check is the PR list pages
   plus one events read per candidate.

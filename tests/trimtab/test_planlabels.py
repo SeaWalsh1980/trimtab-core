@@ -436,6 +436,146 @@ class RestartReadFailures(Restart):
             self.check(who=Accounts("", APPROVER, AGENT))
 
 
+class RestartSnapshot(Restart):
+    def test_a_stop_labelled_while_the_events_were_read_raises(self):
+        self.stopped_and_cleared()
+        reads = []
+        base = FakeGh(self.answers)
+
+        def run(argv, stdin):
+            if argv[4].split("?")[0] == events_path(8):
+                reads.append(argv)
+                if len(reads) > 1:  # the second read of the stopped PR shows a newer, uncleared stop
+                    base.answers[events_path(8)] = json.dumps([
+                        event(1, "labeled", BLOCKED, AGENT), event(2, "unlabeled", BLOCKED, ADMIN),
+                        event(3, "labeled", BLOCKED, AGENT)])
+            return base(argv, stdin)
+
+        with self.assertRaises(LabelCheckError):
+            self.check(gh=run)
+
+    def test_a_pr_opened_while_the_list_was_read_raises(self):
+        self.stopped_and_cleared()
+        base = FakeGh(self.answers)
+        lists = []
+
+        def run(argv, stdin):
+            if argv[4].split("?")[0] == f"repos/{REPOSITORY}/pulls":
+                lists.append(argv)
+                if len(lists) > 1:
+                    base.answers[f"repos/{REPOSITORY}/pulls"] = json.dumps(
+                        [*self.pulls, pull_row(9, f"plan/{PLAN}/item-02-part1")])
+                    base.answers[events_path(9)] = json.dumps([event(5, "labeled", BLOCKED, AGENT)])
+                    base.answers[issue_path(9)] = issue(9, (BLOCKED,))
+            return base(argv, stdin)
+
+        with self.assertRaises(LabelCheckError):
+            self.check(gh=run)
+
+
+class AddingPr(Restart):
+    def listed(self, rows):
+        self.answers[tpa.pulls_path(self.merge)] = json.dumps(rows)
+
+    def test_a_commit_in_no_merged_pr_is_refused(self):
+        self.listed([])
+
+        self.assertIn("0 PRs", self.check().problems[0])
+
+    def test_an_unmerged_pr_or_one_into_another_base_is_not_the_plan_pr(self):
+        self.listed([tpa.listed_pull(PLAN_PR, merged_at=None), tpa.listed_pull(99, base="other")])
+
+        self.assertIn("0 PRs", self.check().problems[0])
+
+    def test_a_reply_that_is_not_a_list_raises(self):
+        self.answers[tpa.pulls_path(self.merge)] = json.dumps({"message": "x"})
+
+        with self.assertRaises(LabelCheckError):
+            self.check()
+
+    def test_a_full_page_raises(self):
+        self.listed([tpa.listed_pull(PLAN_PR), tpa.listed_pull(99, merged_at=None)])
+
+        with mock.patch.object(tpa.planauth, "PULLS_LIMIT", 2), self.assertRaises(LabelCheckError):
+            self.check()
+
+    def test_a_row_with_no_base_or_a_bad_number_raises(self):
+        for row in ({"number": PLAN_PR, "merged_at": tpa.MERGED_AT}, {**tpa.listed_pull(PLAN_PR), "number": 0},
+                    "x"):
+            with self.subTest(row=row):
+                self.listed([row])
+                with self.assertRaises(LabelCheckError):
+                    self.check()
+
+    def test_a_plan_file_git_cannot_place_raises(self):
+        with mock.patch.object(planlabels.planscope, "added_by", side_effect=planlabels.planscope.PlanScopeError("x")), \
+                self.assertRaises(LabelCheckError):
+            self.check()
+
+
+class Shapes(Restart):
+    def test_event_rows_that_are_not_the_expected_shape_raise(self):
+        good = event(1, "labeled", BLOCKED, AGENT)
+        bad_rows = {"id zero": event(0, "labeled", BLOCKED, AGENT), "negative id": event(-1, "labeled", BLOCKED, AGENT),
+                    "not a row": "x", "actor with no login": {**good, "actor": {}},
+                    "empty label name": {**good, "label": {"name": ""}},
+                    "label not an object": {**good, "label": "x"}}
+        for name, row in bad_rows.items():
+            with self.subTest(name):
+                self.put(8, [row], ref=ITEM_REF)
+                with self.assertRaises(LabelCheckError):
+                    self.check()
+
+    def test_a_repeated_event_id_raises(self):
+        self.put(8, [event(1, "labeled", BLOCKED, AGENT), event(1, "unlabeled", BLOCKED, ADMIN)], ref=ITEM_REF)
+
+        with self.assertRaises(LabelCheckError):
+            self.check()
+
+    def test_an_issue_reply_that_is_not_the_expected_shape_raises(self):
+        self.stopped_and_cleared()
+        for reply in ("[]", json.dumps({"number": 8, "pull_request": {}, "labels": "x"}),
+                      json.dumps({"number": 8, "pull_request": {}, "labels": [{}]}),
+                      json.dumps({"number": 8, "pull_request": {}, "labels": ["x"]})):
+            with self.subTest(reply=reply):
+                self.answers[issue_path(8)] = reply
+                with self.assertRaises(LabelCheckError):
+                    self.check()
+
+    def test_a_pull_number_that_is_not_a_positive_integer_raises(self):
+        self.pulls.append({"number": 0, "head": {"ref": ITEM_REF}})
+        self.sync()
+
+        with self.assertRaises(LabelCheckError):
+            self.check()
+
+    def test_label_names_are_compared_without_case(self):
+        self.put(8, [event(1, "labeled", "Plan:Blocked", AGENT), event(2, "unlabeled", "Plan:Blocked", ADMIN)],
+                 labels=("Plan:Blocked",), ref=ITEM_REF)
+
+        self.assertEqual(self.check().problems, (f"{BLOCKED} is still on PR #8",))
+
+    def test_a_label_whose_name_differs_only_in_case_is_the_label_the_actor_check_reads(self):
+        gh = FakeGh({issue_path(PR): issue(PR, ("Plan:Continue",)),
+                     events_path(PR): json.dumps([event(1, "labeled", "Plan:Continue", STRANGER)])})
+
+        verdict = planlabels.check_actor(REPOSITORY, PR, CONTINUE, WHO, gh)
+
+        self.assertIn(STRANGER, verdict.problems[0])
+
+
+class SkillAgreement(unittest.TestCase):
+    def test_restart_reference_runs_the_command_and_names_each_exit_code(self):
+        ref = Path(__file__).resolve().parents[2] / "skills" / "plan-run" / "references" / "restart.md"
+        text = " ".join(ref.read_text(encoding="utf-8").split())
+
+        self.assertIn("trimtab check-label-actor --repository <owner>/<name> --restart --plan <plan>", text)
+        self.assertIn("Exit 0 prints the stopped PR's number alone", text)
+        self.assertIn("Exit 1 names each problem", text)
+        self.assertIn("On exit 2 run `git fetch origin` once", text)
+        self.assertNotIn("gh api repos/{owner}/{repo}/issues", text)
+
+
 class Cli(Restart):
     """`trimtab check-label-actor`: the real CLI, real git and a scripted gh on PATH."""
 
@@ -535,6 +675,32 @@ class Cli(Restart):
         code, out, err = self.run_cli("--label", CONTINUE, "--pr", str(PR), "--restart", "--plan", PLAN)
 
         self.assertEqual((code, out), (2, ""), err)
+
+    def test_every_mixed_or_incomplete_argument_set_exits_2(self):
+        for argv in (("--restart",), ("--restart", "--plan", PLAN, "--pr", "3"),
+                     ("--restart", "--plan", PLAN, "--label", CONTINUE), ("--label", CONTINUE),
+                     ("--pr", "3"), ("--label", CONTINUE, "--pr", "3", "--plan", PLAN)):
+            with self.subTest(argv=argv):
+                code, out, err = self.run_cli(*argv)
+                self.assertEqual((code, out), (2, ""), err)
+
+    def test_every_bad_name_exits_1_through_the_cli(self):
+        for argv in (("--label", BLOCKED, "--pr", "3"), ("--label", CONTINUE, "--pr", "0"),
+                     ("--restart", "--plan", "a/b")):
+            with self.subTest(argv=argv):
+                code, out, err = self.run_cli(*argv)
+                self.assertEqual((code, out), (1, ""), err)
+
+    def test_an_unexpected_failure_in_a_restart_exits_2_not_1(self):
+        err = io.StringIO()
+
+        with mock.patch.dict("os.environ", {"TRIMTAB_INSTANCE": str(self.inst)}), \
+                mock.patch.object(mergeauthority, "plan_admin_problems", return_value=()), \
+                mock.patch.object(cli.planlabels, "check_restart", side_effect=RuntimeError("boom")), \
+                contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()) as out:
+            code = cli.main(["check-label-actor", "--repository", REPOSITORY, "--restart", "--plan", PLAN])
+
+        self.assertEqual((code, out.getvalue(), "RuntimeError" in err.getvalue()), (2, "", True))
 
     def test_neither_mode_exits_2(self):
         code, out, err = self.run_cli()
