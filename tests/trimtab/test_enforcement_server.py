@@ -92,6 +92,21 @@ class ServerGathers(ServerWorld):
     def test_shows_no_project_row_whose_job_failed(self):
         self.assertEqual(list(self.shown(self.gh(failing="E2"))), ["E2"])
 
+    def test_e22s_own_project_half_is_the_running_job_so_it_needs_no_push_run(self):
+        # plan-gate runs on pull_request only, so it never has a push run on the default branch to be judged by.
+        self.assertEqual(self.shown(self.gh(failing="E22")), {})
+
+    def test_e22s_project_half_needs_no_job_in_the_field_either(self):
+        field = self.derived()
+        field["jobs"].pop("E22", None)
+        self.commit_server_lock(field=field)
+
+        self.assertEqual(self.shown(), {})
+
+    def test_the_exemption_is_e22s_alone(self):
+        self.assertEqual(list(self.shown(self.gh(failing="E21"))), [])  # E21 is a base row: no project job to fail
+        self.assertEqual(list(self.shown(self.gh(failing="E4"))), ["E4"])
+
     def test_shows_no_project_row_the_field_names_no_job_for(self):
         field = self.derived()
         del field["jobs"]["E3"]

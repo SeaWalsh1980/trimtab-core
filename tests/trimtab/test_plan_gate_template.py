@@ -124,10 +124,14 @@ class WhichCodeRuns(unittest.TestCase):
 
     def test_the_base_repository_is_held_to_a_plain_owner_and_name(self):
         run = step_named("which base")["run"]
-        match = re.search(r're\.fullmatch\(r"(\[A-Za-z0-9_-\]\[A-Za-z0-9_\.-\]\*)/(\[A-Za-z0-9_-\]\[A-Za-z0-9_\.-\]\*)", repo\)',
-                          run)
+        pattern = re.search(r're\.fullmatch\(r"([^"]+)", repo\)', run)
 
-        self.assertIsNotNone(match, "each segment must open with a character that is not a dot")
+        self.assertIsNotNone(pattern)
+        shape = re.compile(pattern.group(1))
+        for bad in ("owner/..", "owner/.", "../name", "./name", "a/b\n"):
+            self.assertIsNone(shape.fullmatch(bad), bad)
+        for good in ("acme/.github", "acme/core", "a.b/c..d"):
+            self.assertIsNotNone(shape.fullmatch(good), good)
 
     def test_both_commands_run_from_the_pinned_base_checkout(self):
         for line in (l for l in commands().splitlines() if "trimtab" in l and "--server" in l):
@@ -154,6 +158,7 @@ class WhatItRuns(unittest.TestCase):
         header = TEXT.split("\non:")[0]
 
         self.assertIn("draft=false", header)
+        self.assertIn("base is the default branch", header)
         self.assertIn("plan-ready-check", header)
 
     def test_the_gate_runs_before_the_ready_check(self):

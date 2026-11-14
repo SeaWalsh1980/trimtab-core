@@ -1343,3 +1343,30 @@ ControlTower); registering E11's recorder in `settings.base.json`; Amendment 3's
   to decide, not this PR's.
 - **The first checkout keeps the token** so the later fetch can use it; it is read-only.
 - **E12's count is written twice** (`check_e12` and `planchecks.server`); a change to one must change both.
+
+**Review round 2 (three passes) changed these.** No CRITICAL; one HIGH.
+
+- **E22's project half is the running job, in `--server`.** E22 is a BOTH row, so `decide` wants a project job with a
+  passing `push` run on the default branch. `plan-gate` runs on `pull_request` only, so it has none, and the gate would
+  have failed on every run. In `--server` the row's project half is not read from job records (`gate.SERVER_JOB_ROW`);
+  its base half (the manifest entry, the base's CI) still is. Outside `--server` the row still needs a named project job
+  with a push run, which the project may satisfy with any push-triggered job that stands for adopting the workflow.
+  Rejected: excluding E22 from the command's exit decision, which would let a failed base half through; and loosening
+  the push-run rule for every project row, which the doctrine does not allow.
+- **The `base_repo` rule is the instance reader's**: only the segments `.` and `..` are refused, so `acme/.github` is a
+  valid base, and `base_sha` is matched whole (`fullmatch`), so a trailing newline is not a SHA.
+- **The template's header adds that the approver requires the PR's base to be the default branch at merge**, since a
+  retarget starts no run.
+
+**Residuals named by round 2.**
+
+- **A `ready_for_review` attempt can fail if the review or the scan job has not finished at the moment of ready.** The
+  agent marks ready only after E7 and E19 hold (E7, E19 and the ready check itself), so this is a sequencing fault of a
+  careless caller, not a bypass, but the approver's rule for telling a transient attempt from a real one is the
+  operator's.
+- **`bump --repository` is not compared with the project's origin.** A repository the instance also lists writes that
+  project's jobs into this lock; the server then fails closed, and the admin merges the bump.
+- **The code checkout's repository is compared by SHA only**, not by `base_repo`.
+- **`server()` takes the PR's draft state and base from the workflow**, not from the code.
+- **A deleted-and-recreated branch is an unreadable fact (exit 2), not E16's refusal (exit 1)**, since the reader
+  raises on a deletion first; the job fails either way.

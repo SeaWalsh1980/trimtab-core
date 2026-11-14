@@ -2,10 +2,12 @@ name: plan-gate
 
 # E22 (trimtab-core ADR 0063 §7): the server-side half of the plan-run enforcement gate. A project adopts this
 # template at `.github/workflows/plan-gate.yml`, which is a change to a security control and so the operator's.
-# The approver reads the job `plan-gate` the way it reads `plan-scope` (ADR 0058): every attempt on the PR's head
+# The approver reads the job `plan-gate` the way it reads `plan-scope` (trimtab-core ADR 0058): every attempt on the PR's head
 # passed, from this workflow's path, on the `pull_request` event. A draft's run passes without the ready check, so
 # the approver must also require one attempt on the head whose payload had draft=false, or whose plan-ready-check
-# step concluded success; "every attempt passed" alone would accept a head that only ever had a draft run.
+# step concluded success; "every attempt passed" alone would accept a head that only ever had a draft run. It
+# must also require, at merge, that the PR's base is the default branch: a retarget starts no run, so a pass
+# earned against the default branch would otherwise survive a move to another one.
 #
 # Two commands run, both from the base the project's lock pins and never from the PR's tree:
 # - `trimtab check-enforcement --server`: every row E1-E23 is shown, read from the lock's derived field
@@ -19,7 +21,7 @@ name: plan-gate
 # - A draft's run judges the gate and not the ready check. A failed run on a head the PR later marks ready would
 #   void the approver's pass, since every attempt on the head counts; the ready check runs when the PR is ready,
 #   and `ready_for_review` starts a run for it.
-# - `edited` is not a trigger (ADR 0047), and the condition is on the job, not a trigger filter: a filtered-out
+# - `edited` is not a trigger (trimtab-core ADR 0047), and the condition is on the job, not a trigger filter: a filtered-out
 #   PR would get no run, and a required check would wait on it for ever.
 # - The base repository is public, or this workflow's token can read it. A private base needs the project to
 #   change the checkout's `token` (a control change of its own).
@@ -76,7 +78,7 @@ jobs:
           repo = (lock.get("enforcement") or {}).get("base_repo")
           if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha)):
               sys.exit("the lock has no full base_sha; run /trimtab-bump")
-          if not (isinstance(repo, str) and re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*", repo)):
+          if not (isinstance(repo, str) and re.fullmatch(r"(?!\.{1,2}/)[A-Za-z0-9_.-]+/(?!\.{1,2}$)[A-Za-z0-9_.-]+", repo)):
               sys.exit("the lock has no derived enforcement.base_repo; run /trimtab-bump")
           print(f"base_sha={sha}")
           print(f"base_repo={repo}")

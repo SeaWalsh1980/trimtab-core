@@ -249,6 +249,19 @@ class Derivation(unittest.TestCase):
 
             self.assertIsNone(found, bad)
 
+    def test_a_repository_named_with_a_leading_dot_is_kept_as_the_instance_reader_keeps_it(self):
+        field = good_field()
+        field["base_repo"] = "acme/.github"
+
+        found, problems = project_config.parse(lock_text(field))
+
+        self.assertEqual((problems, found.enforcement["base_repo"]), ([], "acme/.github"))
+
+    def test_a_base_sha_with_a_trailing_newline_is_refused(self):
+        found, _ = project_config.parse(lock_text(None, base_sha=BASE_SHA + "\n"))
+
+        self.assertIsNone(found)
+
     def test_the_project_name_compares_without_case(self):
         field = gate.derive_lock_enforcement(self.base, self.v1, "OWNER/Project")
 

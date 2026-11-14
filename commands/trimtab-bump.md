@@ -37,7 +37,7 @@ stop and report.
 
 Where the instance names a doctrine record, the apply step also writes the
 lock's derived `enforcement` field (the rows, this project's jobs and the
-instance keys the server job reads, ADR 0063 Amendment 4), which is why the
+instance keys the server job reads, trimtab-core ADR 0063 Amendment 4), which is why the
 dry run needs `--repository`. The dry run says whether the field is rewritten.
 Never edit it by hand; a lock edited by hand fails the local check.
 

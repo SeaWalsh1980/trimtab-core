@@ -18,7 +18,7 @@ RETIRED = ("source", "routines")
 COMMIT_SHA = re.compile(r"^[0-9a-f]{7,40}$")
 # `base_sha` is read by consumers' CI to choose which base code runs there, so
 # only a full SHA: a short one can become ambiguous, and a ref can move.
-FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+FULL_SHA = re.compile(r"[0-9a-f]{40}")  # used with `fullmatch`: `$` would also accept a trailing newline
 
 
 def is_commit_sha(value) -> bool:
@@ -88,7 +88,7 @@ def parse(text: str, where: str = PATH) -> tuple[ProjectConfig | None, list[Prob
         return None, [Problem("bad-config", where, "unexpected field types")]
     if not isinstance(config.baseline_pr, int) or not isinstance(config.schema_version, int):
         return None, [Problem("bad-config", where, "baseline_pr and schema_version must be integers")]
-    if config.base_sha is not None and not (isinstance(config.base_sha, str) and FULL_SHA.match(config.base_sha)):
+    if config.base_sha is not None and not (isinstance(config.base_sha, str) and FULL_SHA.fullmatch(config.base_sha)):
         return None, [Problem("bad-config", where, "base_sha must be a full 40-character lower-case commit SHA; "
                                                    "remove it and re-run /trimtab-bump, which derives it")]
     if config.enforcement is not None:
@@ -120,7 +120,7 @@ def check_enforcement(value) -> str | None:
     if not isinstance(value, dict) or set(value) != FIELD_KEYS:
         return f"must be an object with exactly {', '.join(sorted(FIELD_KEYS))}"
     if (not isinstance(value["base_repo"], str) or not REPO.fullmatch(value["base_repo"])
-            or any(part.startswith(".") for part in value["base_repo"].split("/"))):  # no `..`, no dot segment
+            or any(part in (".", "..") for part in value["base_repo"].split("/"))):  # as the instance reader
         return "base_repo must be owner/name"
     rows, jobs = value["rows"], value["jobs"]
     if not isinstance(rows, dict) or tuple(rows) != ROW_IDS:

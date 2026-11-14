@@ -44,6 +44,7 @@ SHA = re.compile(r"[0-9a-f]{40}")
 BASE_WORKFLOW = ".github/workflows/ci.yml"
 BASE_JOB = "lint-test"
 BASE_BRANCH = "main"
+SERVER_JOB_ROW = "E22"  # the row whose project half is the server job itself
 CHECKED_DIRS = ("hooks", "trimtab")
 CACHE_PARTS = ("enforcement",)
 CACHE_SCHEMA = 4
@@ -346,7 +347,7 @@ def _lock(reads: _Reads, source: Path, head: str, shallow: bool) -> lock_config.
     found, problems = lock_config.parse(reads.file(source, head, lock_config.PATH, "the project", shallow))
     if found is None:
         raise GateError(f"the lock at the default-branch head: {problems[0].message if problems else 'unreadable'}")
-    if not lock_config.FULL_SHA.match(found.trimtab_sha):
+    if not lock_config.FULL_SHA.fullmatch(found.trimtab_sha):
         raise GateError("the lock's trimtab_sha must be a full SHA for the gate")
     return found
 
@@ -576,7 +577,10 @@ def _gather_server(reads: _Reads, repository: str, project: Path, code: Path, fe
         base_ci = f"this base's CI on the pinned base: {base_ci}"
     project_side = {r.id for r in rows if r.side in (PROJECT, BOTH)}
     project_jobs = {rid: reads.job_problem(repository, head, ref["workflow"], ref["job"], branch=default)
-                    for rid, ref in field["jobs"].items() if rid in project_side}
+                    for rid, ref in field["jobs"].items() if rid in project_side and rid != SERVER_JOB_ROW}
+    # E22's project half is the job running this very check, which runs on `pull_request` and so has no push run
+    # on the default branch to be judged by; the base half of the row is still judged (ADR 0063 Amendment 4).
+    project_jobs[SERVER_JOB_ROW] = None
     return Facts(rows, entries, base_ci, None, None, project_jobs, (lock.trimtab_sha, lock.base_sha, head, "server"))
 
 
