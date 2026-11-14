@@ -141,7 +141,7 @@ def _pull_problems(pull: _Pull, prefix: str, repository: str, allowed: set[str])
 def _pulls(api: GhApi, repository: str, prefix: str) -> tuple[list[_Pull], set[str]]:
     """The open PRs whose head ref starts with `prefix`, and the head refs of every PR of this repository, in any
     state, that start with it. Rows come oldest first, so a PR opened during the read lands on a later page."""
-    what = "gh api pulls"
+    what = "gh api pulls (the bound is planinflight.PULLS_LIMIT; a repository past it needs it raised)"
     rows = api.all_pages(f"repos/{repository}/pulls", {"state": "all", "sort": "created", "direction": "asc"},
                          PULLS_LIMIT, what)
     opened: list[_Pull] = []

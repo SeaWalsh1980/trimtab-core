@@ -97,6 +97,11 @@ The branch list is read before the PR list, so a PR opened between the reads is 
   the skill intended. The task brief for this item said "no open PR has it as head"; that would
   report a merged item PR's leftover branch as in flight and resume it, so the any-state reading is
   kept and the list read is the one `--restart` already reads (the same 5,000-row bound).
+- **A closed PR whose head repository was deleted does not hide a branch either.** Its head cannot be
+  compared with this repository, so it is not counted as a PR of the branch, the same as a fork's. A
+  same-named branch here then counts as never having had a PR, and is still refused unless its shape
+  is right and the plan's newest stop was cleared or there is none. Accepted: it needs a deleted
+  fork's PR to share a name with a branch that exists here.
 - **A fork's closed PR does not hide a branch of the same name.** The skill's `head=<owner>:<branch>`
   filter named the owner; here the head repository is compared.
 - **Part numbers start at 1 and take no leading zero.** The skill said `item-NN-partK` without
