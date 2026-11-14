@@ -241,7 +241,8 @@ class GitHubFacts(Facts):
                 if newer is not None and when > newer:
                     raise FactsError("the branch's activity events are not in the order this reader expects")
                 newer = when
-                out.append(planreview.Activity(before, after, login, stamp))
+                kind = row.get("activity_type")
+                out.append(planreview.Activity(before, after, login, stamp, kind if isinstance(kind, str) else ""))
             self._activity[branch] = tuple(reversed(out))
         return self._activity[branch]
 

@@ -32,14 +32,17 @@ RUN_FLAG = "TRIMTAB_PLAN_RUN"
 SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")  # hooks/session-mode.sh: sm_valid_sid
 
 
-def build_facts(cwd: Path, environ: Mapping[str, str] = os.environ) -> Facts:
-    """The real facts for the checkout at `cwd`: its origin repository, the gate's gh, the instance's keys."""
+def build_facts(cwd: Path, environ: Mapping[str, str] = os.environ, inst=None) -> Facts:
+    """The real facts for the checkout at `cwd`: its origin repository, the gate's gh, the instance's keys.
+
+    `inst` is the instance the caller already holds (the server job's, read from the lock); without it the
+    instance is the session's own."""
     try:
         git = tools.Git(environ=environ)
         repo = planfacts.repository_of(git.config_get(cwd, "remote.origin.url"))
         api = GhApi(tools.gh_runner(tools.GhAuth(environ)))
         try:
-            found = instance.load(roots.instance_root(environ=environ))
+            found = inst if inst is not None else instance.load(roots.instance_root(environ=environ))
         except (roots.InstanceError, instance.InstanceFileError):
             found = None  # the rows that need a key then refuse
         return planfacts.GitHubFacts(repo, api, git, cwd, found)

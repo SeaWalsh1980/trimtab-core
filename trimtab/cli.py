@@ -621,7 +621,7 @@ def cmd_bump(args) -> int:
         return 2
     _lock(project)  # for its warnings; bump.plan reads and checks the lock itself
     try:
-        todo = bump.plan(project, base, to.stdout.strip())
+        todo = bump.plan(project, base, to.stdout.strip(), args.repository)
     except bump.BumpError as err:
         print(f"error: {err}", file=sys.stderr)
         return 2
@@ -631,6 +631,9 @@ def cmd_bump(args) -> int:
     if not args.apply:
         print(f"bump --dry-run: {todo.old[:12]} -> {todo.new[:12]}; nothing written")
         print(f"base_sha: {(todo.base_old or 'none')[:12]} -> {todo.base_new[:12]}")
+        if todo.enforcement_new is not None:
+            print(f"enforcement field: {'rewritten' if todo.enforcement_old != todo.enforcement_new else 'unchanged'}"
+                  f" ({len(todo.enforcement_new['rows'])} rows, {len(todo.enforcement_new['jobs'])} jobs)")
         print(f"changed items: {len(todo.changes)}")
         for c in todo.changes:
             print(f"  {c.id:<10} {c.what:<10} {c.detail}")
@@ -1021,7 +1024,9 @@ def cmd_check_plan_scope_job(args) -> int:
 def cmd_check_enforcement(args) -> int:
     config = enforcement_gate.guardstate.config_dir()
     try:
-        facts = enforcement_gate.gather(args.repository, Path(args.repo), _instance(args), roots.code_root(),
+        # --server runs in a project's CI, which has no instance checkout (ADR 0015): the rows come from the lock.
+        facts = enforcement_gate.gather(args.repository, Path(args.repo), None if args.server else _instance(args),
+                                        roots.code_root(),
                                         config, server=args.server)
         results = enforcement_gate.decide(facts)
     except enforcement_gate.GateError as err:
@@ -1071,7 +1076,27 @@ def _plan_check(args, name: str, call, limits_at: str | None = None) -> int:
         return 2
 
 
+def _plan_ready_server(args) -> int:
+    """E22: the same rows, judged in the project's CI. The instance's keys come from the lock at the default
+    branch's head, and the code that judges is the base the lock pins (`gate.server_instance`)."""
+    if not args.repository:
+        print("error: --server needs --repository OWNER/NAME; nothing is vouched for", file=sys.stderr)
+        return 2
+    try:
+        found = enforcement_gate.server_instance(args.repository, Path(args.repo), roots.code_root())
+        facts = planguard.build_facts(Path(args.repo), inst=found)
+        if facts.repository().casefold() != args.repository.casefold():
+            raise planchecks.FactsError("the checkout's origin is not the repository named")
+        ctx = planacts.context(Path(args.repo), facts, args.branch, inst=found, limits_at=args.head)
+        return _plan_exit("plan-ready-check --server", planchecks.server(ctx, args.head))
+    except (enforcement_gate.GateError, planchecks.FactsError, planledger.LedgerError, planscope.PlanScopeError) as err:
+        print(f"error: {err}; nothing is vouched for", file=sys.stderr)
+        return 2
+
+
 def cmd_plan_ready_check(args) -> int:
+    if args.server:
+        return _plan_ready_server(args)
     return _plan_check(args, "plan-ready-check", lambda ctx: planchecks.ready(ctx, args.head))
 
 
@@ -1316,6 +1341,9 @@ def build_parser() -> argparse.ArgumentParser:
     bmode = bmp.add_mutually_exclusive_group()
     bmode.add_argument("--dry-run", action="store_true", help="report only (the default)")
     bmode.add_argument("--apply", action="store_true", help="write the new SHA; needs --confirm")
+    bmp.add_argument("--repository", metavar="OWNER/NAME",
+                     help="this project's repository; needed where the instance names a doctrine record, since the "
+                          "lock's derived enforcement field holds this project's jobs (ADR 0063 §7)")
     bmp.add_argument("--confirm", help="the token a dry run printed")
     bmp.add_argument("--body-file", help="in a dry run, write the draft PR's body here")
     bmp.set_defaults(func=cmd_bump)
@@ -1498,6 +1526,11 @@ def build_parser() -> argparse.ArgumentParser:
         pc.add_argument("--repo", default=".", metavar="DIR", help="the project's checkout (default: .)")
         pc.add_argument("--branch", required=True, metavar="plan/<plan>/item-NN-partK",
                         help="the part's branch")
+        if name == "plan-ready-check":
+            pc.add_argument("--server", action="store_true",
+                            help="E22, in the project's CI: every server-fact row on the whole branch, with the "
+                                 "instance's keys read from the lock (needs --repository); no ledger is read")
+            pc.add_argument("--repository", metavar="OWNER/NAME", help="with --server: the project's repository")
         if extra == "head":
             pc.add_argument("--head", required=True, metavar="SHA", help="the head the check is about")
         else:

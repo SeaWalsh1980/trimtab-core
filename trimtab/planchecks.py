@@ -177,6 +177,52 @@ def ready(ctx: Context, head: str) -> Verdict:
     return _verdict(body, notes)
 
 
+# ---- E22: the server-side job ------------------------------------------------------------------
+
+def server(ctx: Context, head: str) -> Verdict:
+    """`trimtab plan-ready-check --server`: every row that rests on server facts, on the whole branch.
+
+    The ready mark's own rows (E5, E7, E8, E9, E19) run first. E12, E14, E15 and E16 are read from the
+    activity events, where the hooks read them from one write each, and E18 on the diff from the merge-base to
+    the head, where the push check reads it on one push (ADR 0063 §7). Nothing is read from a ledger: the
+    job runs where no session's machine is."""
+    first = ready(ctx, head)
+    if not first.ok:
+        return first
+
+    def body() -> None:
+        agent = _agent(ctx)
+        _pr(ctx)  # E16: a closed PR, or none, has nothing to merge
+        if ctx.facts.branch_sha(ctx.branch) != head:
+            raise FactsError("the branch's head on the server is not the head under judgment; run again")
+        merge_base = ctx.facts.merge_base(ctx.branch)
+        events = list(ctx.facts.activity(ctx.branch))
+        pushes = list(ctx.facts.pushes(ctx.branch))
+        failing = set(ctx.facts.failing_heads(ctx.branch))
+        reviewed = set(ctx.facts.facts_run_heads(ctx.branch))
+        candidates = {p.before for p in pushes} & (failing | reviewed)
+        register_only = {h for h in candidates
+                         if all(ctx.facts.register_answer(ctx.branch, p.before, p.after) for p in pushes
+                                if p.before == h)}
+        check_server_rows(
+            events, agent=agent, merge_base=merge_base, head=head, on_default=ctx.facts.on_default,
+            counted=planrows.counted_heads(pushes, failing=failing, facts=reviewed, register_only=register_only),
+            diff=ctx.facts.change_from(merge_base, head), limits=ctx.limits)
+
+    return _verdict(body, _Notes())
+
+
+def check_server_rows(events: Sequence, *, agent: str, merge_base: str, head: str, on_default,
+                      counted: Sequence[str], diff: Sequence[Change], limits: Limits | None) -> None:
+    """E22's decision: the activity rows (E12, E14, E15, E16) and E18 on the whole diff, each judged by its own
+    row's function. One function so the manifest names it and the mutation test can replace it (ADR 0063 §7)."""
+    planrows.check_server_history(events, agent=agent, merge_base=merge_base, head=head, on_default=on_default,
+                                  counted=counted)
+    if limits is None:
+        raise Refusal("E18: the instance names no fix_limits, so the row is not shown (ADR 0063 §5)")
+    planreview.check_e18(diff, limits.markers, limits.thresholds, limits.named_lines)
+
+
 # ---- the re-request: E6, E10 -------------------------------------------------------------------
 
 def rerequest(ctx: Context, head: str) -> Verdict:

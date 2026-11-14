@@ -26,6 +26,7 @@ from typing import Mapping
 
 from trimtab import config as project_config
 from trimtab import instance as instance_file
+from trimtab.enforcement import gate
 from trimtab.items import Item
 from trimtab.lint.overrides import base_items_at, parse_entries
 from trimtab.registry.rules import OVERRIDES
@@ -54,10 +55,13 @@ class BumpPlan:
     base_old: str | None  # the lock's base_sha, if it has one
     base_new: str  # the base the instance at `new` pins
     base_repo: str
+    enforcement_old: dict | None = None  # the lock's derived enforcement field, if it has one
+    enforcement_new: dict | None = None  # what the instance and record at `new` derive, None when it names no record
 
     @property
     def is_current(self) -> bool:
-        return self.old == self.new and self.base_old == self.base_new
+        return (self.old == self.new and self.base_old == self.base_new
+                and self.enforcement_old == self.enforcement_new)
 
 
 def changes(before: Mapping[str, Item], after: Mapping[str, Item]) -> list[Change]:
@@ -78,7 +82,9 @@ def changes(before: Mapping[str, Item], after: Mapping[str, Item]) -> list[Chang
     return out
 
 
-def plan(project: Path, base_root: Path, new_sha: str) -> BumpPlan:
+def plan(project: Path, base_root: Path, new_sha: str, repository: str | None = None) -> BumpPlan:
+    """What a bump to `new_sha` changes. `repository` (owner/name, the project's own) is needed only where the
+    instance at `new_sha` names a doctrine record: it picks the jobs written into the derived enforcement field."""
     config, problems = project_config.load(project)
     if config is None:
         raise BumpError(str(problems[0]) if problems else f"{project_config.PATH} not found")
@@ -92,6 +98,18 @@ def plan(project: Path, base_root: Path, new_sha: str) -> BumpPlan:
         pinned = instance_file.at_commit(base_root, new_sha)
     except instance_file.InstanceFileError as err:
         raise BumpError(f"cannot read the base the instance pins at {new_sha[:12]}: {err}") from err
+    derived = None
+    if pinned.enforcement_record is not None:
+        if repository is None:
+            raise BumpError("the instance at the new SHA names a doctrine record, so the lock's enforcement field "
+                            "is derived: say which repository this project is (--repository owner/name)")
+        try:
+            derived = gate.derive_lock_enforcement(base_root, new_sha, repository)
+        except gate.GateError as err:
+            raise BumpError(f"cannot derive the lock's enforcement field at {new_sha[:12]}: {err}") from err
+    elif config.enforcement is not None:
+        raise BumpError("the lock holds a derived enforcement field but the instance at the new SHA names no "
+                        "doctrine record; remove the field by hand")
     found = changes(before, after)
     changed = {c.id for c in found}
     flagged = []
@@ -100,11 +118,14 @@ def plan(project: Path, base_root: Path, new_sha: str) -> BumpPlan:
         entries, _ = parse_entries(path.read_text(encoding="utf-8"))
         flagged = [(e.get("id"), n) for n, e in enumerate(entries, 1) if e.get("id") in changed]
     return BumpPlan(config.trimtab_sha, new_sha, tuple(found), tuple(flagged),
-                    config.base_sha, pinned.base_sha, pinned.base_repo)
+                    config.base_sha, pinned.base_sha, pinned.base_repo, config.enforcement, derived)
 
 
 def confirmation(todo: BumpPlan) -> str:
-    payload = json.dumps([todo.old, todo.new, todo.base_old, todo.base_new], sort_keys=True)
+    parts = [todo.old, todo.new, todo.base_old, todo.base_new]
+    if todo.enforcement_new is not None or todo.enforcement_old is not None:
+        parts += [todo.enforcement_old, todo.enforcement_new]
+    payload = json.dumps(parts, sort_keys=True)
     return hashlib.sha256(payload.encode()).hexdigest()[:12]
 
 
@@ -118,6 +139,25 @@ def _with_base(text: str, base: str) -> str:
     return text[:match.end()] + f'{separator}"base_sha": "{base}"' + text[match.end():]
 
 
+ENFORCEMENT_KEY = re.compile(r'"enforcement"\s*:\s*')
+
+
+def _with_enforcement(text: str, value: dict) -> str:
+    """`text` with the derived field set: its value replaced where the key is, else added after base_sha."""
+    rendered = json.dumps(value, separators=(", ", ": "))
+    found = ENFORCEMENT_KEY.search(text)
+    if found:
+        try:
+            _, end = json.JSONDecoder().raw_decode(text, found.end())
+        except ValueError as err:
+            raise BumpError("the lock's enforcement field cannot be read; edit the lock by hand") from err
+        return text[:found.end()] + rendered + text[end:]
+    match = BASE_VALUE.search(text)
+    line = text[text.rfind("\n", 0, match.start()) + 1:match.start()]
+    separator = ",\n" + line if not line.strip() else ", "
+    return text[:match.end()] + f'{separator}"enforcement": {rendered}' + text[match.end():]
+
+
 def apply(project: Path, todo: BumpPlan, confirm: str) -> None:
     if confirm != confirmation(todo):
         raise BumpError("the confirmation does not match this bump; run --dry-run again")
@@ -126,12 +166,18 @@ def apply(project: Path, todo: BumpPlan, confirm: str) -> None:
     match, base = SHA_VALUE.search(text), BASE_VALUE.search(text)
     if match is None or match.group(2) != todo.old or (base.group(2) if base else None) != todo.base_old:
         raise BumpError("the lock changed since the dry run; run --dry-run again")
+    held, _ = project_config.parse(text, where=str(path))
+    if held is None or held.enforcement != todo.enforcement_old:
+        raise BumpError("the lock changed since the dry run; run --dry-run again")
     text = _with_base(SHA_VALUE.sub(lambda m: m.group(1) + todo.new + m.group(3), text, count=1), todo.base_new)
+    if todo.enforcement_new is not None:
+        text = _with_enforcement(text, todo.enforcement_new)
     # The rewrite is textual, so read it back before writing: a nested or duplicate
     # key could take the new value instead of the lock's own, and a consumer's CI
     # runs whatever base_sha says.
     written, _ = project_config.parse(text, where=str(path))
-    if written is None or (written.trimtab_sha, written.base_sha) != (todo.new, todo.base_new):
+    if written is None or (written.trimtab_sha, written.base_sha, written.enforcement) != (
+            todo.new, todo.base_new, todo.enforcement_new):
         raise BumpError("the rewritten lock would not read back as the new SHAs (a nested or duplicate "
                         "key?); nothing written, so edit the lock by hand")
     path.write_text(text, encoding="utf-8")

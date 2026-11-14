@@ -46,6 +46,10 @@ class ProjectConfig:
     # Derived, never chosen: the base SHA the instance at `trimtab_sha` pins,
     # written by `trimtab bump` for a reader with no access to the instance.
     base_sha: str | None = None
+    # Derived, never chosen: E1-E23 as the doctrine record at `trimtab_sha` states them, the project's jobs for
+    # them, and the base's repository, written by `trimtab bump` so `check-enforcement --server` needs no
+    # instance checkout (ADR 0063 §2, §7). Shape: `check_enforcement`.
+    enforcement: dict | None = None
     warnings: tuple[str, ...] = field(default=(), compare=False)
 
 
@@ -87,7 +91,73 @@ def parse(text: str, where: str = PATH) -> tuple[ProjectConfig | None, list[Prob
     if config.base_sha is not None and not (isinstance(config.base_sha, str) and FULL_SHA.match(config.base_sha)):
         return None, [Problem("bad-config", where, "base_sha must be a full 40-character lower-case commit SHA; "
                                                    "remove it and re-run /trimtab-bump, which derives it")]
+    if config.enforcement is not None:
+        why = check_enforcement(config.enforcement)
+        if why is None and config.base_sha is None:
+            why = "it needs base_sha, which names the base its rows are judged against"
+        if why is not None:
+            return None, [Problem("bad-config", where, f"enforcement: {why}; remove it and re-run "
+                                                       "/trimtab-bump, which derives it")]
     return config, []
+
+
+ROW_IDS = tuple(f"E{n}" for n in range(1, 24))
+ROW_KEYS = {"owner", "sha256"}
+JOB_KEYS = {"workflow", "job"}
+FIELD_KEYS = {"base_repo", "rows", "jobs", "instance"}
+# The instance keys the plan-run rows read, which the server job has no instance to read them from.
+PLAN_KEYS = ("accounts", "secret_scan", "review", "fix_limits")
+DIGEST = re.compile(r"^[0-9a-f]{64}$")
+REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+WORKFLOW = re.compile(r"^\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$")
+JOB_NAME = re.compile(r"^[^\x00-\x1f]{1,100}$")
+
+
+def check_enforcement(value) -> str | None:
+    """Why `value` is not a derived enforcement field, or None. Pure; the owners are the record reader's."""
+    from trimtab.enforcement.record import OWNERS  # the one place the owner names are written
+
+    if not isinstance(value, dict) or set(value) != FIELD_KEYS:
+        return f"must be an object with exactly {', '.join(sorted(FIELD_KEYS))}"
+    if not isinstance(value["base_repo"], str) or not REPO.fullmatch(value["base_repo"]):
+        return "base_repo must be owner/name"
+    rows, jobs = value["rows"], value["jobs"]
+    if not isinstance(rows, dict) or tuple(rows) != ROW_IDS:
+        missing = [r for r in ROW_IDS if not isinstance(rows, dict) or r not in rows]
+        return f"rows must be exactly E1-E23, in order (missing: {', '.join(missing) or 'none'})"
+    for rid, row in rows.items():
+        if not isinstance(row, dict) or set(row) != ROW_KEYS:
+            return f"{rid} must be an object with owner and sha256"
+        if row["owner"] not in OWNERS:
+            return f"{rid}: owner is not one the base knows"
+        if not isinstance(row["sha256"], str) or not DIGEST.fullmatch(row["sha256"]):
+            return f"{rid}: sha256 must be a 64-character lower-case digest"
+    if not isinstance(jobs, dict):
+        return "jobs must be an object"
+    for rid, ref in jobs.items():
+        if rid not in rows:
+            return f"jobs names {rid!r}, which is not a row"
+        if not isinstance(ref, dict) or set(ref) != JOB_KEYS:
+            return f"{rid}: a job needs workflow and job"
+        if not isinstance(ref["workflow"], str) or not WORKFLOW.fullmatch(ref["workflow"]):
+            return f"{rid}: workflow must be .github/workflows/<file>.yml"
+        if not isinstance(ref["job"], str) or not JOB_NAME.fullmatch(ref["job"]):
+            return f"{rid}: job must be a name of 1-100 printable characters"
+    return _check_instance_keys(value["instance"])
+
+
+def _check_instance_keys(keys) -> str | None:
+    from trimtab import instance  # the instance file's own reader decides what each key may hold
+
+    if not isinstance(keys, dict) or not set(keys) <= set(PLAN_KEYS):
+        return f"instance must be an object holding only {', '.join(PLAN_KEYS)}"
+    placeholder = "owner/name"  # the keys are judged alone; the file's own repo and base are not in question
+    try:
+        instance.parse({"schema_version": instance.SCHEMA_VERSION, "repo": placeholder,
+                        "base": {"repo": placeholder, "sha": "0" * 40}, **keys})
+    except instance.InstanceFileError as err:
+        return f"instance: {err}"
+    return None
 
 
 def load(project: Path) -> tuple[ProjectConfig | None, list[Problem]]:
