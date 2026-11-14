@@ -430,18 +430,18 @@ class RestartReadFailures(Restart):
         self.stopped_and_cleared()
         rows = [{**event(1, "labeled", BLOCKED, AGENT), "issue": {"number": 8}},
                 {**event(2, "unlabeled", BLOCKED, ADMIN), "issue": {"number": 8}}]  # oldest first: not newest first
-        self.answers[ALL_EVENTS] = json.dumps(rows)
+        self.answers[ALL_EVENTS] = json.dumps([*rows, MERGED_ROW])  # the merge ends it, so only the order can fail
 
-        with self.assertRaises(LabelCheckError):
+        with self.assertRaisesRegex(LabelCheckError, "not in the order"):
             self.check()
 
     def test_a_time_that_rises_down_the_list_raises(self):
         self.stopped_and_cleared()
         rows = [{**event(2, "unlabeled", BLOCKED, ADMIN, at(1)), "issue": {"number": 8}},
                 {**event(1, "labeled", BLOCKED, AGENT, at(2)), "issue": {"number": 8}}]
-        self.answers[ALL_EVENTS] = json.dumps(rows)
+        self.answers[ALL_EVENTS] = json.dumps([*rows, MERGED_ROW])
 
-        with self.assertRaises(LabelCheckError):
+        with self.assertRaisesRegex(LabelCheckError, "not in the order"):
             self.check()
 
     def test_a_plan_pr_with_no_merge_time_raises(self):
@@ -552,9 +552,36 @@ class RestartBoundaries(Restart):
         full = [self.row(9, "labeled", 50, label="bug"), self.row(8, "labeled", 51, label="bug")]
         self.answers[ALL_EVENTS] = [json.dumps(full)] * 4
 
+        gh = FakeGh(self.answers)
+
         with mock.patch.object(planlabels, "EVENTS_PAGE", 2), mock.patch.object(planlabels, "WINDOW_PAGES_LIMIT", 1), \
-                self.assertRaises(LabelCheckError):
-            self.check()
+                self.assertRaisesRegex(LabelCheckError, "more than 1 pages"):
+            self.check(gh=gh)
+
+        pages = [query_of(argv)["page"] for argv in gh.argvs() if path_of(argv) == ALL_EVENTS]
+        self.assertEqual(pages, ["1"])  # the cap stops the read: no second page is asked for
+
+    def test_one_prs_events_split_across_pages_are_read_oldest_first(self):
+        self.stopped_and_cleared()
+        # The removal is on page 1 (newer), the stop on page 2 (older); the verdict needs them stop-then-removal.
+        self.pages([self.row(3, "labeled", 52, label="bug"), self.row(2, "unlabeled", 8, ADMIN)],
+                   [self.row(1, "labeled", 8), self.row(0, "labeled", 53, label="bug")])
+
+        with mock.patch.object(planlabels, "EVENTS_PAGE", 2):
+            verdict = self.check()
+
+        self.assertEqual((verdict.problems, verdict.pr), ((), 8))
+
+    def test_the_merge_row_ending_a_full_page_before_an_empty_one_is_a_whole_window(self):
+        self.stopped_and_cleared()
+        page1 = [self.row(2, "unlabeled", 8, ADMIN), self.row(1, "labeled", 8)]
+        page2 = [self.row(0, "labeled", 53, label="bug"), MERGED_ROW]  # full, ends with the plan's merge
+        self.answers[ALL_EVENTS] = [json.dumps(page1), json.dumps(page2), "[]"] * 2
+
+        with mock.patch.object(planlabels, "EVENTS_PAGE", 2):
+            verdict = self.check()
+
+        self.assertEqual((verdict.problems, verdict.pr), ((), 8))
 
     def test_a_row_repeated_across_a_page_boundary_raises_naming_the_shift(self):
         self.stopped_and_cleared()
@@ -630,8 +657,8 @@ class RestartBoundaries(Restart):
                           "issue without a number": {**good, "issue": {}},
                           "number 0": {**good, "issue": {"number": 0}}}.items():
             with self.subTest(name):
-                self.answers[ALL_EVENTS] = json.dumps([row])
-                with self.assertRaises(LabelCheckError):
+                self.answers[ALL_EVENTS] = json.dumps([row, MERGED_ROW])
+                with self.assertRaisesRegex(LabelCheckError, "unexpected JSON"):
                     self.check()
 
     def test_a_label_row_of_a_pr_that_is_not_a_candidate_is_not_judged(self):
@@ -723,24 +750,24 @@ class Shapes(Restart):
                     "event kind not a string": {**good, "event": 3}}
         for name, row in bad_rows.items():
             with self.subTest(name):
-                self.answers[ALL_EVENTS] = json.dumps([row])
-                with self.assertRaises(LabelCheckError):
+                self.answers[ALL_EVENTS] = json.dumps([row, MERGED_ROW])
+                with self.assertRaisesRegex(LabelCheckError, "unexpected JSON"):
                     self.check()
 
     def test_a_repeated_event_id_raises(self):
         self.stopped_and_cleared()
         rows = [{**event(1, "labeled", BLOCKED, AGENT), "issue": {"number": 8}},
                 {**event(1, "unlabeled", BLOCKED, ADMIN), "issue": {"number": 8}}]
-        self.answers[ALL_EVENTS] = json.dumps(rows)
+        self.answers[ALL_EVENTS] = json.dumps([*rows, MERGED_ROW])
 
-        with self.assertRaises(LabelCheckError):
+        with self.assertRaisesRegex(LabelCheckError, "not in the order"):
             self.check()
 
     def test_a_reply_that_is_not_a_list_raises(self):
         self.stopped_and_cleared()
         self.answers[ALL_EVENTS] = json.dumps({"message": "x"})
 
-        with self.assertRaises(LabelCheckError):
+        with self.assertRaisesRegex(LabelCheckError, "unexpected JSON"):
             self.check()
 
     def test_an_issue_reply_that_is_not_the_expected_shape_raises(self):

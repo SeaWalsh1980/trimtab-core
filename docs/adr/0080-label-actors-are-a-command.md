@@ -64,7 +64,7 @@ Fail-closed rules shared by both modes:
   without being the last, or a list missing its tail is exit 2, never a shorter window. Reaching an
   event older than the merge is also a proof, since every older row was then seen.
 - The ids of the repository-wide list fall strictly from the newest row to the oldest across
-  issues, and its times never rise: measured over all 1,475 rows of this repository's list (15
+  issues, and its times never rise: measured over all 1,475 rows of this repository's list (the same run, 15
   pages), 0 breaks of either. That is a property of this server read, not a documented guarantee,
   so a list that breaks it makes `--restart` exit 2 until the check changes. Ids are still never
   used to order stops across PRs (see the options below): the order check only refuses a list that
@@ -106,7 +106,7 @@ Fail-closed rules shared by both modes:
   above, so the defence fell. A batched GraphQL read of the candidates' timelines is out:
   `GhApi` allows repository-scoped REST only, because cloud sessions refuse GraphQL.
 - **Read the whole repository-wide events list and filter.** Rejected as the rule, kept as the
-  fallback shape: measured on this repository it is 1,455 events over 15 pages for about 180 PRs,
+  fallback shape: measured on this repository (2026-11-14, one run) it is 1,475 events over 15 pages for about 180 PRs,
   and it grows with the repository for ever, where the window the plan's merge opens grows only
   with activity since that merge.
 - **Judge every PR that ever carried `plan:blocked`.** Rejected for this command: it asks one

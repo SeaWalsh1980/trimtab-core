@@ -232,9 +232,9 @@ def _window(api: GhApi, repository: str, since: str, candidates: frozenset[int],
             ) -> dict[int, list[_Event]]:
     """Each candidate PR's `plan:blocked` events, oldest first, taken from the repository-wide issue events (one
     list, newest first) read page by page until an event older than `since` (the plan's merge) is seen, or the list
-    ends having shown the plan PR's own `merged` event. Events older than `since` are dropped, and so are other PRs' events. Whole-list rules, since this is one
-    list: every row needs an id, a time and an issue number; ids must fall and times must not rise from row to
-    row. Past the page cap without reaching `since` is an error, never a shorter window."""
+    ends having shown the plan PR's own `merged` event. Events older than `since` are dropped, and so are other
+    PRs' events. Whole-list rules, since this is one list: every row needs an id, a time and an issue number; ids
+    must fall and times must not rise from row to row. Past the page cap without reaching `since` is an error, never a shorter window."""
     what = "gh api repository issue events"
     found: dict[int, list[_Event]] = {n: [] for n in candidates}
     last_id, last_at = None, None
