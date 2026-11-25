@@ -2,11 +2,16 @@
 
 ## Status
 
-Proposed. Drafted by an agent from a review of the change that adds `skills/session-command/`
-(the reasons marked "to confirm" are the operator's to confirm or amend before this merges).
-Accepted on merge. The review's CRITICAL, HIGH and MEDIUM findings on the skill were fixed at the
-source and re-copied. The skill was then simplified at the source (see Consequences) and the copy
-here has not been reviewed again.
+Proposed. Drafted by an agent from a review of the change that adds `skills/session-command/`.
+It becomes Accepted when the operator confirms or amends the reasons marked "to confirm" and the
+change merges; the reasons are the operator's, not the agent's.
+
+The review's CRITICAL, HIGH and MEDIUM findings on the first copy were fixed at the source and
+re-copied. The skill was then simplified at the source (see Consequences) and the simplified copy
+was reviewed again: no CRITICAL or HIGH finding. Its MEDIUM and LOW findings on the skill's text
+(a `~/` path quoted so that it does not expand, example details that may come from a real project,
+loose graders, and smaller wording items) are fixed at the source and re-copied, or recorded here
+as accepted, before this merges.
 
 ## Context
 
@@ -62,8 +67,18 @@ alert), and fails closed when it cannot tell.
 - After those fixes the skill was simplified at the source: `SKILL.md` went from 334 to about 148
   lines, to five rules and an output shape, and the evals from 47 (235 graders, built up over
   several review rounds, many of them one eval per sentence of the skill) to 6. The accepted
-  cost is coverage: removing 41 evals dropped the cases for the force-push, `HOME` and
-  heredoc-delimiter rules, and the rules for those stay in the text with nothing testing them.
+  cost is coverage, and for one rule more than coverage:
+  - The line saying `--force-with-lease` is never refused was removed from the text, not just left
+    untested. `guard-bash` allows that push, so a report claiming it was refused no longer fails
+    to match the table's guard-bash row, and the row maps it to `HOOK_ALLOW_DESTRUCTIVE=1`. An
+    exported `HOOK_ALLOW_DESTRUCTIVE` lifts the push rules as well (`hooks/guard-bash.sh`, the
+    session escape hatch runs before them), where the inline prefix does not.
+  - The `HOME` check and the heredoc-delimiter rule stay in the text with nothing testing them.
+  - These rules also lost every eval: the guard-github, GitGuardian, `plans/authorised/` and
+    multi-refusal aborts; the rule that a mismatched flag named in a report is ignored; the rule
+    that the secrets flag needs the operator's own words; `--continue` with a flag asking for a
+    session id; the plan-run environment, announcement and path signals; and the prompt-file
+    chain.
 - No eval has been run against a model, and there is no eval runner in the base, so the six
   remaining cases are examples of intended behaviour, not a passing suite.
 - The table in `SKILL.md` quotes the guards' own refusal text. It was checked against the base's
