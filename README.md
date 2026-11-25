@@ -50,7 +50,10 @@ Trimtab is split in two, and this repository is only one half.
   plan when a plan PR merges, then continues, hands over or stops on the
   merged progress record's `## Next`, `plan-item` works one item on its
   branch through the in-session reviews to a draft PR, and `plan-pr` takes
-  that draft through CI review to merge; they do nothing for other merges),
+  that draft through CI review to merge; they do nothing for other merges;
+  and `session-command`, which writes the command an operator runs to start
+  or resume a session with the hook overrides the work needs, and never runs
+  it or sets an override itself),
   `bootstrap.sh`, the routine templates and the tests.
   It holds no rules and no deployment values: no repository names, no
   paths, no identities. A skill may carry the procedure an instance's rule
