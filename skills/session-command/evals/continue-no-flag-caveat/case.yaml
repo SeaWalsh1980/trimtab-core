@@ -1,3 +1,0 @@
-schema_version: "1.1"
-name: "continue-no-flag-caveat"
-expected_outcome: "- The command contains no HOOK_ALLOW_* variable\n- The command is one chain that starts with a cd to ~/work/shop-sync and uses claude --continue\n- The response warns that --continue opens the most recent session in that folder and says to use claude --resume (picker) if another session ran there since\n- The prompt restates the decision: use the small fixture\n- The agent did not run a claude command or export/set any HOOK_ALLOW_* variable itself"

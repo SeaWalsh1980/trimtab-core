@@ -5,7 +5,8 @@
 Proposed. Drafted by an agent from a review of the change that adds `skills/session-command/`
 (the reasons marked "to confirm" are the operator's to confirm or amend before this merges).
 Accepted on merge. The review's CRITICAL, HIGH and MEDIUM findings on the skill were fixed at the
-source and re-copied; six LOW findings remain open (see Consequences).
+source and re-copied. The skill was then simplified at the source (see Consequences) and the copy
+here has not been reviewed again.
 
 ## Context
 
@@ -23,8 +24,8 @@ stays in the instance. No instance rule requires this skill: the overrides it na
 guards the base itself ships (guard-security, guard-paths, guard-bash, guard-secrets, guard-mcp).
 
 It also departs from the shape ADR [0070](0070-plan-skills-follow-the-run-owns-its-pr-flow.md)
-set for the plan skills: `SKILL.md` is about 290 lines, there is no `references/` directory, and
-it ships its evals (42 cases) inside the skill directory. `tests/trimtab/test_skills.py` scopes those
+set for the plan skills: `SKILL.md` is about 150 lines, there is no `references/` directory, and
+it ships its evals (6 cases) inside the skill directory. `tests/trimtab/test_skills.py` scopes those
 conventions to the three plan skills, so nothing enforces them here.
 
 ## Decision
@@ -43,7 +44,7 @@ alert), and fails closed when it cannot tell.
 | :-- | :-- |
 | Keep it in the instance only | Operators of other instances meet the same guard refusals and have no helper that stays within the operator-only rule; each would write its own, and the copies would drift. |
 | Ship no skill | The relaunch command is easy to get wrong (quoting, `--resume` against `--continue`, an override wider than the refusal) and the mistakes widen a guard. |
-| Ship it with a shape like the plan skills (short entry, `references/`) | Not rejected on merit; the evals and the file size are kept as they are so the copy stays checkable against its source. Reshaping is a later change. |
+| Ship it with a shape like the plan skills (short entry, `references/`) | Not rejected on merit; the copy is kept in the shape of its source so it stays checkable against it. Reshaping is a later change. |
 
 ## Consequences
 
@@ -58,9 +59,15 @@ alert), and fails closed when it cannot tell.
   plan-run test that did not rule out every session-mode signal, deployment values in the examples,
   a non-credential claim taken from the pasted report, and accuracy and quoting items. The skill
   now cites the doctrine by item ID, because the base holds no rules.
-- Six LOW findings from the last review are not fixed and are listed in the source repository's
-  pull request: quoting gaps with no eval, a vacuous bullet and compound bullets in some evals, an
-  unset `HOME` creating a literal `~` directory, a model-chosen heredoc delimiter, and trust in a
-  report-supplied path. No eval has been run against a model; there is no eval runner in the base.
+- After those fixes the skill was simplified at the source: `SKILL.md` went from 334 to about 148
+  lines, to five rules and an output shape, and the evals from 47 (235 graders, built up over
+  several review rounds, many of them one eval per sentence of the skill) to 6. The accepted
+  cost is coverage: removing 41 evals dropped the cases for the force-push, `HOME` and
+  heredoc-delimiter rules, and the rules for those stay in the text with nothing testing them.
+- No eval has been run against a model, and there is no eval runner in the base, so the six
+  remaining cases are examples of intended behaviour, not a passing suite.
+- The table in `SKILL.md` quotes the guards' own refusal text. It was checked against the base's
+  hooks (`guard-paths`, `guard-bash`); the refusal text of `bash-writes` is not quoted, so a
+  refusal from that hook is not matched by string.
 - Rolling it out to an instance that still installs its own `session-command` needs that copy
   removed first, or bootstrap refuses it.

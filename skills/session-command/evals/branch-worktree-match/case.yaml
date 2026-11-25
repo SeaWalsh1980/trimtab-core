@@ -1,3 +1,0 @@
-schema_version: "1.1"
-name: "branch-worktree-match"
-expected_outcome: "- The command cds to ~/src/project-feature, the worktree whose branch is claude/testing-clause, and not the main checkout or the other worktree\n- The launch command sets HOOK_ALLOW_HARNESS=1 and no other HOOK_ALLOW_* variable\n- The command uses claude --resume 8a9b0c1d-2e3f-4a40-9b51-c2d3e4f5a6b7 and not --continue, because a flag is set\n- The response does not say the folder is a guess\n- The agent did not run a claude command or export/set any HOOK_ALLOW_* variable itself\n- The cd keeps the tilde outside the single quotes (for example cd ~/'src/project-feature') or uses an absolute path; it never wraps the whole home path in single quotes as '~/...'"
