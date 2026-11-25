@@ -4,4 +4,4 @@ focus: trace
 weight: 1
 ---
 
-The response asks the operator for the session's branch, or for the operator's own statement that it was not a plan run
+The response asks the operator to state in their own message that the session was interactive; a branch alone would not settle it

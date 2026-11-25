@@ -4,7 +4,8 @@
 
 Proposed. Drafted by an agent from a review of the change that adds `skills/session-command/`
 (the reasons marked "to confirm" are the operator's to confirm or amend before this merges).
-Accepted on merge, and only with the skill's open review findings resolved (see Consequences).
+Accepted on merge. The review's CRITICAL, HIGH and MEDIUM findings on the skill were fixed at the
+source and re-copied; six LOW findings remain open (see Consequences).
 
 ## Context
 
@@ -22,8 +23,8 @@ stays in the instance. No instance rule requires this skill: the overrides it na
 guards the base itself ships (guard-security, guard-paths, guard-bash, guard-secrets, guard-mcp).
 
 It also departs from the shape ADR [0070](0070-plan-skills-follow-the-run-owns-its-pr-flow.md)
-set for the plan skills: it is about 205 lines, has no `references/` directory, and ships its
-evals (26 cases) inside the skill directory. `tests/trimtab/test_skills.py` scopes those
+set for the plan skills: `SKILL.md` is about 290 lines, there is no `references/` directory, and
+it ships its evals (42 cases) inside the skill directory. `tests/trimtab/test_skills.py` scopes those
 conventions to the three plan skills, so nothing enforces them here.
 
 ## Decision
@@ -49,15 +50,17 @@ alert), and fails closed when it cannot tell.
 - Every consumer gets a skill whose purpose is to make lifting a guard quick. That is an accepted
   risk, held down by the skill's no-flag list and by the operator reading the command before running
   it. The skill cannot tell the operator's own words from pasted text when both arrive in one
-  message; that stays a limit of its design.
+  message, so it treats a paste it cannot separate as all report and offers no flag from it.
 - The base now carries the skill's text and its evals, so the base's checks apply to them: the public
   scrub and the doc-reference test. Both found real defects in the first copy (home paths in the
   evals, and the plans-directory literal), which were fixed at the source and re-copied.
-- A review of this change found issues in the skill's text that this record does not settle, and
-  that are to be fixed at the source before merge: a plan-run test that does not rule out every
-  session-mode signal; deployment values in the examples; a non-credential claim taken from the
-  pasted report; and smaller accuracy and quoting items. Until they are fixed the status stays proposed.
-- The skill's cites to the doctrine are by file and section. They should be by item ID, because the
-  base holds no rules.
+- A review of this change found issues in the skill's text, fixed at the source and re-copied: a
+  plan-run test that did not rule out every session-mode signal, deployment values in the examples,
+  a non-credential claim taken from the pasted report, and accuracy and quoting items. The skill
+  now cites the doctrine by item ID, because the base holds no rules.
+- Six LOW findings from the last review are not fixed and are listed in the source repository's
+  pull request: quoting gaps with no eval, a vacuous bullet and compound bullets in some evals, an
+  unset `HOME` creating a literal `~` directory, a model-chosen heredoc delimiter, and trust in a
+  report-supplied path. No eval has been run against a model; there is no eval runner in the base.
 - Rolling it out to an instance that still installs its own `session-command` needs that copy
   removed first, or bootstrap refuses it.

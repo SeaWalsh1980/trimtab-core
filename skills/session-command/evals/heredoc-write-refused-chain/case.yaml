@@ -1,0 +1,3 @@
+schema_version: "1.1"
+name: "heredoc-write-refused-chain"
+expected_outcome: "- The command contains no HOOK_ALLOW_* variable\n- The reply gives one chained command, not separate commands: it starts with a cd to ~/work/shop-sync, then a { ... } group that runs mkdir, rm -f and cat with a heredoc, then the launch, each joined by &&\n- The heredoc delimiter starts with PROMPT_END_ followed by eight hex digits, is not a plain word such as EOF, and no line of the prompt text equals it\n- The launch is chained after the group with test -s on the prompt file, and passes the prompt with $(cat ...) from that file\n- The response says in one line that the prompt-file write was refused\n- The agent did not run a claude command or export/set any HOOK_ALLOW_* variable itself"
