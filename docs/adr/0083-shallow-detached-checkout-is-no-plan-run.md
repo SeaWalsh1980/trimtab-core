@@ -73,5 +73,8 @@ still refuses every command it is sent while the gate fails, and the manifest do
 - A git that fails any other way inside a repository is still a run. Strict, never looser.
 - `symbolic_head` is a second git read that skips `check`. It returns a name and runs no object read;
   the pins and environment that `config_get` relies on apply to it too.
+- `head_branch`, `branch_unreadable`, `push_branch` and `pr_branch` still read through the checked git
+  and are unchanged. In a shallow detached checkout a bare push or a `HEAD` refspec still fails to resolve
+  a branch, as before; only the run decision (E21) changed.
 - The change reaches installs only when the instance moves its pin to a base with it.
 - Accepted: a run cannot read GitHub while the gate fails, as before; that is the follow-up issue.
