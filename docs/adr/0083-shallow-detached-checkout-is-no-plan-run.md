@@ -89,3 +89,11 @@ still refuses every command it is sent while the gate fails, and the manifest do
   refuses a review skill in a shallow detached checkout. Not changed here; it is the follow-up issue.
 - The change reaches installs only when the instance moves its pin to a base with it.
 - Accepted: a run cannot read GitHub while the gate fails, as before; that is the follow-up issue.
+
+## Amendment (2026-11-26, issue 195)
+
+`PlanSupport.branch_unreadable` now reads through `Git.symbolic_head` too, when no git is injected, by
+the same `_on_plan_branch_unchecked` read `in_run` uses. So guard-paths' review recorder and the E13 resume
+check no longer refuse in a shallow detached checkout. It stays True on a shallow `plan/*` branch (where
+`head_branch` is None and callers allow whenever it is False) and on a failed read inside a repository. The
+bullet above that leaves `branch_unreadable` unchanged is superseded by this amendment.
