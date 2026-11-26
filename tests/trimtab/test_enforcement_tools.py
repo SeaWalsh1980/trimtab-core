@@ -113,6 +113,12 @@ class ReadsTheCheckedOutBranch(Repo):
             with self.assertRaises(ToolError):
                 self.git.symbolic_head(self.repo)
 
+    def test_raises_when_a_clean_exit_names_no_branch(self):
+        with mock.patch.object(tools.subprocess, "run",
+                               return_value=subprocess.CompletedProcess([], 0, b"\n", b"")):
+            with self.assertRaises(ToolError):
+                self.git.symbolic_head(self.repo)
+
 
 class BuildsItsEnvironment(unittest.TestCase):
     def test_git_keeps_no_steering_or_config_variable(self):

@@ -9,10 +9,12 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from test_scrub import isolate_git
 from trimtab import planguard
 from trimtab.adapters import guard_github
+from trimtab.enforcement import tools
 from trimtab.enforcement.tools import ToolError
 
 SESSION_MODE = Path(__file__).resolve().parents[2] / "hooks" / "session-mode.sh"
@@ -265,6 +267,36 @@ class ShallowCheckout(unittest.TestCase):
 
         self.assertEqual((code, message), (guard_github.ALLOW, ""))
         self.assertNotIn("E21", message)
+
+    def test_a_shallow_checkout_on_a_named_branch_that_is_not_a_plan_branch_is_not_a_run(self):
+        self.assertFalse(self.support().in_run())
+
+    def test_a_tag_with_the_plan_branchs_name_does_not_hide_it_in_a_shallow_checkout(self):
+        git(self.clone, "tag", BRANCH)  # `--short` then prints `heads/<name>`
+        self.plan_branch()
+
+        self.assertTrue(self.support().in_run())
+
+    def test_the_plan_prefix_is_read_without_regard_to_case_in_a_shallow_checkout(self):
+        git(self.clone, "checkout", "-q", "-b", "PLAN/0008-slug/item-02-part1")
+
+        self.assertTrue(self.support().in_run())
+
+    def test_a_branch_read_that_fails_inside_a_repository_is_a_run(self):
+        # No real failure leaves a repository readable to `rev-parse` yet unreadable to `symbolic-ref`,
+        # so the read is made to fail at its own seam; the caller must fail closed (SEC-2.5).
+        self.detach()
+
+        with mock.patch.object(tools.Git, "symbolic_head", side_effect=ToolError("exited 128")):
+            self.assertTrue(self.support().in_run())
+
+    def test_a_branch_read_that_fails_outside_any_repository_is_not_a_run(self):
+        plain = self.tmp / "plain"
+        plain.mkdir()
+
+        sup = planguard.PlanSupport(plain, environ=self.environ, session_id=SID)
+
+        self.assertFalse(sup.in_run())
 
 
 if __name__ == "__main__":

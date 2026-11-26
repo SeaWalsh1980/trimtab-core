@@ -242,7 +242,10 @@ class Git:
             return None
         if done.returncode != 0:
             raise ToolError(f"git symbolic-ref in {repo.name} exited {done.returncode}{_stderr(done)}")
-        return done.stdout.decode("utf-8", "replace").strip() or None
+        name = done.stdout.decode("utf-8", "replace").strip()
+        if not name:  # exit 0 names a branch; an empty answer is a failed read, never "detached"
+            raise ToolError(f"git symbolic-ref in {repo.name} named no branch")
+        return name
 
     def ls_remote(self, cwd: Path, url: str, ref: str, timeout: float, auth: "GhAuth | None" = None) -> str:
         """The SHA a remote ref points at, under `timeout`, read without the object checks: nothing it
