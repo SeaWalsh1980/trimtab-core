@@ -256,7 +256,8 @@ class PlanSupport:
         return os.path.islink(record) or record.exists()
 
     def branch_unreadable(self, cwd: Path | None = None) -> bool:
-        """Whether git failed to say which branch is checked out, as against there being none to name.
+        """Whether the checkout cannot be confirmed to be no `plan/*` branch: git failed to say which branch
+        is checked out, as against there being none to name.
 
         `head_branch` answers None for three different things: no repository here, a detached HEAD (the
         checkout CI and a bisect leave behind), and a git that failed. Only the last is a refusal: a detached

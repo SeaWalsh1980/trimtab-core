@@ -96,4 +96,16 @@ still refuses every command it is sent while the gate fails, and the manifest do
 the same `_on_plan_branch_unchecked` read `in_run` uses. So guard-paths' review recorder and the E13 resume
 check no longer refuse in a shallow detached checkout. It stays True on a shallow `plan/*` branch (where
 `head_branch` is None and callers allow whenever it is False) and on a failed read inside a repository. The
-bullet above that leaves `branch_unreadable` unchanged is superseded by this amendment.
+two bullets above that leave `branch_unreadable` unchanged (the shared-callers bullet and the review-recorder
+bullet) are superseded by this amendment, as to `branch_unreadable` only.
+
+Options considered:
+
+- Read `head_branch` unchecked. Rejected: the bare-push and `HEAD` refspec resolution (`push_branch`,
+  `pr_branch`) is built on it, and this record kept that on the checked git.
+- Have the review recorder and the E13 resume check call `in_run` or `_on_plan_branch` directly. Rejected:
+  it moves the decision into two callers and leaves `branch_unreadable` wrong for any later caller.
+
+Consequence accepted: with no injected git, `branch_unreadable` is True on a readable shallow `plan/*`
+branch (the checked git cannot confirm it is no plan branch), so the callers' "cannot be read" message is
+inexact there.
