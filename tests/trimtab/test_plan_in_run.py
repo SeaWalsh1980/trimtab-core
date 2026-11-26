@@ -13,7 +13,7 @@ from unittest import mock
 
 from test_scrub import isolate_git
 from trimtab import planguard
-from trimtab.adapters import guard_github
+from trimtab.adapters import guard_github, plan_review_record
 from trimtab.enforcement import tools
 from trimtab.enforcement.tools import ToolError
 
@@ -297,6 +297,53 @@ class ShallowCheckout(unittest.TestCase):
         sup = planguard.PlanSupport(plain, environ=self.environ, session_id=SID)
 
         self.assertFalse(sup.in_run())
+
+    def review_call(self):
+        return {"tool_name": "Skill", "hook_event_name": "PostToolUse", "cwd": str(self.clone),
+                "tool_input": {"skill": "code-review"}}
+
+    def test_a_shallow_detached_checkout_has_a_readable_branch(self):
+        self.detach()
+
+        self.assertFalse(self.support().branch_unreadable())
+
+    def test_a_shallow_checkout_on_a_non_plan_branch_has_a_readable_branch(self):
+        self.assertFalse(self.support().branch_unreadable())
+
+    def test_a_shallow_checkout_on_a_plan_branch_stays_unreadable(self):
+        # `head_branch` is None here (tools.Git refuses the shallow clone), and callers allow whenever
+        # this is False, so it must stay True on a plan branch.
+        self.plan_branch()
+
+        self.assertTrue(self.support().branch_unreadable())
+
+    def test_a_branch_read_that_fails_inside_a_repository_is_unreadable(self):
+        self.detach()
+
+        with mock.patch.object(tools.Git, "symbolic_head", side_effect=ToolError("exited 128")):
+            self.assertTrue(self.support().branch_unreadable())
+
+    def test_a_branch_read_outside_any_repository_is_not_unreadable(self):
+        plain = self.tmp / "plain"
+        plain.mkdir()
+
+        sup = planguard.PlanSupport(plain, environ=self.environ, session_id=SID)
+
+        self.assertFalse(sup.branch_unreadable())
+
+    def test_the_review_recorder_allows_a_pass_in_a_shallow_detached_checkout(self):
+        self.detach()
+
+        result = plan_review_record.decide(self.review_call(), self.support())
+
+        self.assertEqual(result, (plan_review_record.ALLOW, ""))
+
+    def test_the_review_recorder_blocks_a_pass_in_a_shallow_checkout_on_a_plan_branch(self):
+        self.plan_branch()
+
+        code, _ = plan_review_record.decide(self.review_call(), self.support())
+
+        self.assertEqual(code, plan_review_record.BLOCK)
 
 
 if __name__ == "__main__":

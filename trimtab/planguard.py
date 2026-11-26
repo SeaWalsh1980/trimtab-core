@@ -256,15 +256,24 @@ class PlanSupport:
         return os.path.islink(record) or record.exists()
 
     def branch_unreadable(self, cwd: Path | None = None) -> bool:
-        """Whether git failed to say which branch is checked out, as against there being none to name.
+        """Whether the checkout cannot be confirmed to be no `plan/*` branch: git failed to say which branch
+        is checked out, as against there being none to name.
 
         `head_branch` answers None for three different things: no repository here, a detached HEAD (the
         checkout CI and a bisect leave behind), and a git that failed. Only the last is a refusal: a detached
         HEAD is no `plan/*` branch (guard-paths already refuses a run's file writes off one), and refusing it
-        would stop a run from running even the command that switches back (review round 3)."""
+        would stop a run from running even the command that switches back (review round 3).
+
+        Without an injected git the answer is `_on_plan_branch_unchecked`, the read `in_run` makes: a shallow
+        clone is refused by the checked git, so `head_branch` is None there even on a `plan/*` branch, and
+        callers allow whenever this is False. The unchecked read is True on a `plan/*` branch or a failed
+        read inside a repository, and False for a detached HEAD, another branch or no repository
+        (ADR 0083 Amendment, issue 195). With a git injected, `head_branch` answers as before."""
         where = cwd or self.cwd
         if self.head_branch(where) is not None:
             return False
+        if self._git is None:
+            return self._on_plan_branch_unchecked(where)
         if self._run(where, "rev-parse", "--git-dir") is not None:
             return False  # git answers, so the checkout is simply detached
         return self._is_repository(where)
