@@ -76,5 +76,16 @@ still refuses every command it is sent while the gate fails, and the manifest do
 - `head_branch`, `branch_unreadable`, `push_branch` and `pr_branch` still read through the checked git
   and are unchanged. In a shallow detached checkout a bare push or a `HEAD` refspec still fails to resolve
   a branch, as before; only the run decision (E21) changed.
+- The two guards still differ on spelling, in the strict direction only: guard-github strips a `heads/`
+  prefix and compares without regard to case, where the classifier reads the full ref and compares
+  exactly. So a branch such as `PLAN/x` is a run to guard-github and interactive to the classifier. The
+  claim that a session is a run to both guards or to neither holds for the shallow and detached cases
+  this record changes, not for those spellings.
+- A session can make its checkout detached with `git checkout --detach`. In a full clone that already
+  made it interactive to guard-github; now a shallow clone does too. The recorded-session signal
+  (`_recorded`) and the run flag are the backstops, as they were for full clones. Accepted: treating a
+  detached shallow clone as unknown would bring issue 190 back.
+- The guard-paths review recorder (`branch_unreadable`) still reads through the checked git and so still
+  refuses a review skill in a shallow detached checkout. Not changed here; it is the follow-up issue.
 - The change reaches installs only when the instance moves its pin to a base with it.
 - Accepted: a run cannot read GitHub while the gate fails, as before; that is the follow-up issue.

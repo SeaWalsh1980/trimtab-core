@@ -1218,8 +1218,10 @@ right:
   refuses them, which `in_run` reads as a git failure and fails closed; the shell classifier reads without
   those checks and says interactive. So an interactive session in such a clone has every GitHub command
   refused once the gate runs. Strict, never looser.
-  Superseded in part by ADR 0083 for the branch read: a shallow or detached checkout is no run unless its
-  branch is `plan/*`. A git that fails otherwise inside a repository is still a run.
+  *Status (2026-11-26): the sentence above is superseded in part by ADR 0083, for the branch read only.*
+  *A shallow or detached checkout is no run unless its branch is `plan/*`, so an interactive session there*
+  *is no longer refused. A git that fails otherwise inside a repository is still a run, and a partial clone*
+  *or one with alternates is read the same way as a shallow one.*
 - **The measurements are still the round-1 figures**, and the `ls-remote` probe's `git init` runs outside
   its 3 s bound. Re-taking them (ENG-6.1) needs a run with a real default-branch head.
 - **The E9 hunk is read by line number, the activity read is bounded at 20 pages, and a round whose result
