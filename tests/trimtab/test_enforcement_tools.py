@@ -80,6 +80,40 @@ class ResistsRedirection(Repo):
         self.assertEqual(steered(self.repo, "show", "HEAD:f"), "genuine\n")
 
 
+class ReadsTheCheckedOutBranch(Repo):
+    def test_names_the_branch_checked_out(self):
+        self.assertEqual(self.git.symbolic_head(self.repo), "main")
+
+    def test_answers_none_on_a_detached_head(self):
+        git(self.repo, "checkout", "-q", "--detach")
+
+        self.assertIsNone(self.git.symbolic_head(self.repo))
+
+    def test_answers_in_a_shallow_clone_that_the_checked_read_refuses(self):
+        commit(self.repo, "g", "x\n")
+        clone = self.tmp / "clone"
+        subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{self.repo}", str(clone)], check=True)
+
+        self.assertEqual(self.git.symbolic_head(clone), "main")
+        with self.assertRaises(ToolError):
+            self.git(clone, "symbolic-ref", "HEAD")
+
+    def test_raises_outside_a_repository(self):
+        with self.assertRaises(ToolError):
+            self.git.symbolic_head(self.tmp)
+
+    def test_raises_on_any_exit_but_zero_or_one(self):
+        with mock.patch.object(tools.subprocess, "run",
+                               return_value=subprocess.CompletedProcess([], 128, b"", b"fatal")):
+            with self.assertRaises(ToolError):
+                self.git.symbolic_head(self.repo)
+
+    def test_raises_when_git_cannot_run(self):
+        with mock.patch.object(tools.subprocess, "run", side_effect=subprocess.TimeoutExpired("git", 1)):
+            with self.assertRaises(ToolError):
+                self.git.symbolic_head(self.repo)
+
+
 class BuildsItsEnvironment(unittest.TestCase):
     def test_git_keeps_no_steering_or_config_variable(self):
         env = tools.git_env({"HOME": "/h", "GIT_DIR": "/x", "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "a",

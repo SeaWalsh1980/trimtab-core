@@ -201,8 +201,11 @@ class PlanSupport:
 
         guard-paths asks the classifier itself; guard-github asks this, so a session is a run to both of
         them or to neither. A git that cannot be read inside a repository counts as a run, never as
-        interactive: `tools.Git` refuses a shallow clone, alternates or a partial clone, and a session must
-        not be able to make itself interactive to one guard by breaking those reads."""
+        interactive, so a session cannot make itself interactive to one guard by breaking the read. The
+        branch is read with `Git.symbolic_head`, which skips the object checks that refuse a shallow clone,
+        alternates or a partial clone: it names no object, and the classifier reads the same way, so a
+        shallow detached checkout is interactive to both (ADR 0082). With a git injected, `head_branch`
+        answers as before."""
         where = cwd or self.cwd
         if self.plan_run:
             return True
@@ -211,12 +214,24 @@ class PlanSupport:
         return self._in_run[str(where)]
 
     def _on_plan_branch(self, cwd: Path) -> bool:
+        if self._git is None:
+            return self._on_plan_branch_unchecked(cwd)
         branch = self.head_branch(cwd)
         if branch is not None:
             return branch.casefold().startswith(planrows.PLAN_PREFIX)
         if self._run(cwd, "rev-parse", "--git-dir") is not None:
             return False  # git answers, so there is simply no branch: a detached HEAD is no run by itself
         return self._is_repository(cwd)  # git fails in a repository: fail closed
+
+    def _on_plan_branch_unchecked(self, cwd: Path) -> bool:
+        """The branch read as the classifier reads it, without `tools.Git`'s refusal of a shallow clone, so
+        a shallow checkout (CI's) is no run unless its branch is `plan/*` (ADR 0082). Exit 1 is a detached
+        HEAD, which is no run by itself; any other failure inside a repository still fails closed."""
+        try:
+            found = tools.Git(environ=self._environ).symbolic_head(cwd)
+        except (tools.ToolError, OSError):
+            return self._is_repository(cwd)  # git fails in a repository: fail closed
+        return found is not None and found.removeprefix("heads/").casefold().startswith(planrows.PLAN_PREFIX)
 
     def _recorded(self) -> bool:
         """Whether the session-mode hook recorded this session as autonomous, read as `sm_recorded` reads

@@ -228,6 +228,22 @@ class Git:
             return False
         return True
 
+    def symbolic_head(self, repo: Path) -> str | None:
+        """The checked-out branch's name, or None on a detached HEAD, read without the object checks: it
+        names no object the gate then trusts, and a shallow clone (CI's checkout) must still answer, as the
+        shell classifier's read does (ADR 0082). Exit 1 is git's "not a symbolic ref"; any other failure,
+        including no repository at all, raises."""
+        argv = self.argv(repo, "symbolic-ref", "--short", "-q", "HEAD")
+        try:
+            done = subprocess.run(argv, capture_output=True, timeout=self._timeout, env=self._env)
+        except (OSError, subprocess.TimeoutExpired) as err:
+            raise ToolError(f"git symbolic-ref in {repo.name} failed ({type(err).__name__})") from err
+        if done.returncode == 1:
+            return None
+        if done.returncode != 0:
+            raise ToolError(f"git symbolic-ref in {repo.name} exited {done.returncode}{_stderr(done)}")
+        return done.stdout.decode("utf-8", "replace").strip() or None
+
     def ls_remote(self, cwd: Path, url: str, ref: str, timeout: float, auth: "GhAuth | None" = None) -> str:
         """The SHA a remote ref points at, under `timeout`, read without the object checks: nothing it
         returns is read as an object. It runs in a bare repository made here inside `cwd`, so only

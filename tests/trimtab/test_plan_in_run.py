@@ -10,9 +10,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from test_scrub import isolate_git
 from trimtab import planguard
+from trimtab.adapters import guard_github
 from trimtab.enforcement.tools import ToolError
 
+SESSION_MODE = Path(__file__).resolve().parents[2] / "hooks" / "session-mode.sh"
 BRANCH = "plan/0008-slug/item-02-part1"
 SID = "session-abc_123"
 HEAD_REF = ("symbolic-ref", "--short", "-q", "HEAD")
@@ -199,6 +202,69 @@ class InRun(unittest.TestCase):
         sup.in_run(), sup.in_run()
 
         self.assertEqual(len([c for c in calls if c == HEAD_REF]), 1)
+
+
+def git(repo, *args):
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+class ShallowCheckout(unittest.TestCase):
+    """A shallow clone in CI's detached shape. `tools.Git` refuses its history, but the classifier reads
+    without that check and says interactive; guard-github must agree (issue 190). Real clones, no injected git."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.tmp)])
+        isolate_git(self, self.tmp)
+        origin = self.tmp / "origin"
+        origin.mkdir()
+        git(origin, "init", "-q", "-b", "main")
+        for name in ("a", "b"):  # two commits, so depth 1 really is shallow
+            (origin / name).write_text(name)
+            git(origin, "add", name)
+            git(origin, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", name)
+        self.clone = self.tmp / "clone"
+        subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{origin}", str(self.clone)], check=True)
+        self.assertEqual(git(self.clone, "rev-parse", "--is-shallow-repository"), "true")
+        self.environ = {"HOME": str(self.tmp), "CLAUDE_CONFIG_DIR": str(self.tmp / "config")}
+
+    def detach(self):
+        git(self.clone, "checkout", "-q", "--detach")
+
+    def plan_branch(self):
+        git(self.clone, "checkout", "-q", "-b", BRANCH)
+
+    def support(self):
+        return planguard.PlanSupport(self.clone, environ=self.environ, session_id=SID)
+
+    def classify(self):
+        script = f'source "{SESSION_MODE}"; sm_classify "{self.clone}" "" 0; printf %s "$sm_mode"'
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.tmp), "CLAUDE_CONFIG_DIR": str(self.tmp / "config")}
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, check=True).stdout
+
+    def test_a_shallow_detached_checkout_is_not_a_run(self):
+        self.detach()
+
+        self.assertFalse(self.support().in_run())
+
+    def test_a_shallow_checkout_on_a_plan_branch_is_a_run(self):
+        self.plan_branch()
+
+        self.assertTrue(self.support().in_run())
+
+    def test_the_classifier_says_interactive_for_the_same_shallow_detached_clone(self):
+        self.detach()
+
+        self.assertEqual(self.classify(), "interactive")
+
+    def test_guard_github_allows_a_read_in_a_shallow_detached_checkout_without_e21(self):
+        self.detach()
+        payload = {"tool_name": "Bash", "tool_input": {"command": "gh pr view 7"}, "cwd": str(self.clone)}
+
+        code, message = guard_github.decide(payload, self.support())
+
+        self.assertEqual((code, message), (guard_github.ALLOW, ""))
+        self.assertNotIn("E21", message)
 
 
 if __name__ == "__main__":
