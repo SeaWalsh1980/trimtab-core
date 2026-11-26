@@ -204,7 +204,7 @@ class PlanSupport:
         interactive, so a session cannot make itself interactive to one guard by breaking the read. The
         branch is read with `Git.symbolic_head`, which skips the object checks that refuse a shallow clone,
         alternates or a partial clone: it names no object, and the classifier reads the same way, so a
-        shallow detached checkout is interactive to both (ADR 0082). With a git injected, `head_branch`
+        shallow detached checkout is interactive to both (ADR 0083). With a git injected, `head_branch`
         answers as before."""
         where = cwd or self.cwd
         if self.plan_run:
@@ -225,7 +225,7 @@ class PlanSupport:
 
     def _on_plan_branch_unchecked(self, cwd: Path) -> bool:
         """The branch read as the classifier reads it, without `tools.Git`'s refusal of a shallow clone, so
-        a shallow checkout (CI's) is no run unless its branch is `plan/*` (ADR 0082). Exit 1 is a detached
+        a shallow checkout (CI's) is no run unless its branch is `plan/*` (ADR 0083). Exit 1 is a detached
         HEAD, which is no run by itself; any other failure inside a repository still fails closed."""
         try:
             found = tools.Git(environ=self._environ).symbolic_head(cwd)

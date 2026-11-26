@@ -1001,7 +1001,7 @@ and its lock field, so the gate cannot pass yet.
   would otherwise judge as writes. guard-paths already refuses the whole shell in a run without a
   pass, so this is the half that holds where only guard-github is registered, and it needs no
   read-versus-write reading of its own.
-  Forward link: ADR 0082 keeps this and narrows which sessions are runs for it, so a shallow, detached
+  Forward link: ADR 0083 keeps this and narrows which sessions are runs for it, so a shallow, detached
   checkout is no run.
 
 **Measurements (ENG-6.1).** Taken before review round 1 and **not** repeated since: rounds 1 and 2 added a
@@ -1218,7 +1218,7 @@ right:
   refuses them, which `in_run` reads as a git failure and fails closed; the shell classifier reads without
   those checks and says interactive. So an interactive session in such a clone has every GitHub command
   refused once the gate runs. Strict, never looser.
-  Superseded in part by ADR 0082 for the branch read: a shallow or detached checkout is no run unless its
+  Superseded in part by ADR 0083 for the branch read: a shallow or detached checkout is no run unless its
   branch is `plan/*`. A git that fails otherwise inside a repository is still a run.
 - **The measurements are still the round-1 figures**, and the `ls-remote` probe's `git init` runs outside
   its 3 s bound. Re-taking them (ENG-6.1) needs a run with a real default-branch head.

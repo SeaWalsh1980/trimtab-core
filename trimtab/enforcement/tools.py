@@ -231,7 +231,7 @@ class Git:
     def symbolic_head(self, repo: Path) -> str | None:
         """The checked-out branch's name, or None on a detached HEAD, read without the object checks: it
         names no object the gate then trusts, and a shallow clone (CI's checkout) must still answer, as the
-        shell classifier's read does (ADR 0082). Exit 1 is git's "not a symbolic ref"; any other failure,
+        shell classifier's read does (ADR 0083). Exit 1 is git's "not a symbolic ref"; any other failure,
         including no repository at all, raises."""
         argv = self.argv(repo, "symbolic-ref", "--short", "-q", "HEAD")
         try:
